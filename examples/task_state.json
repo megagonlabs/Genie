@@ -1,0 +1,61 @@
+{
+    "task_id": "task-dinner-001",
+    "global_goal": "Cook a spaghetti dinner for 4 people",
+    "status": "running",
+    "context_data": {
+        "table_number": 5,
+        "dietary_notes": "No allergies"
+    },
+    "updated_at": 1780006530.123456,
+    "sub_tasks": [
+        {
+            "sub_task_id": "sub-prep-water",
+            "title": "Boil water",
+            "assigned_agent": "PrepChef",
+            "status": "completed",
+            "dependencies": [],
+            "inputs": {
+                "pot_size": "large"
+            },
+            "outputs": {
+                "status": "water is boiling at 212F"
+            },
+            "error": null
+        },
+        {
+            "sub_task_id": "sub-cook-pasta",
+            "title": "Cook pasta",
+            "assigned_agent": "LineCook",
+            "status": "running",
+            "dependencies": ["sub-prep-water"],
+            "inputs": {
+                "pasta_type": "spaghetti",
+                "cook_time_mins": 10
+            },
+            "outputs": {},
+            "error": null
+        },
+        {
+            "sub_task_id": "sub-cook-sauce",
+            "title": "Sauce",
+            "assigned_agent": "SauceChef",
+            "status": "running",
+            "dependencies": [],
+            "inputs": {
+                "sauce_base": "marinara"
+            },
+            "outputs": {},
+            "error": null
+        },
+        {
+            "sub_task_id": "sub-serve",
+            "title": "Serve Dinner",
+            "assigned_agent": "WaitStaff",
+            "status": "pending",
+            "dependencies": ["sub-cook-pasta", "sub-cook-sauce"],
+            "inputs": {},
+            "outputs": {},
+            "error": null
+        }
+    ]
+}
