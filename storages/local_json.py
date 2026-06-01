@@ -136,9 +136,10 @@ class LocalJSONStorage(BaseMemoryStorage):
         for item in raw_items:
             mem_item = MemoryItem.model_validate(item)
             if mem_item.scope == scope:
-                if session_id and mem_item.session_id != session_id:
+                # STRICT ISOLATION: Fail closed. If no ID is provided, or they don't match, block it.
+                if scope == MemoryScope.SESSION and (not session_id or mem_item.session_id != session_id):
                     continue
-                if user_id and mem_item.user_id != user_id:
+                if scope == MemoryScope.USER and (not user_id or mem_item.user_id != user_id):
                     continue
                 corpus.append(mem_item)
 

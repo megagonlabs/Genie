@@ -11,7 +11,7 @@ import os
 from storages.local_json import LocalJSONStorage, HAS_FASTEMBED
 from models.memory import MemoryItem, MemoryScope
 from models.task import TaskState, SubTaskState, TaskStatus
-from routings.context import ContextProvider
+from routes.context import ContextProvider
 
 
 class TestContextProviderWithTrueHybridSearch(unittest.TestCase):
@@ -64,13 +64,13 @@ class TestContextProviderWithTrueHybridSearch(unittest.TestCase):
         # Arrange: Create three highly specific test documents
 
         # 1. High Keyword match, zero conceptual match (Keyword Stuffing)
-        doc_lexical = MemoryItem(scope=MemoryScope.SESSION, content="I bought an apple from the apple store to eat while looking at my apple.")
+        doc_lexical = MemoryItem(scope=MemoryScope.SESSION, session_id=self.dinner_task.task_id, content="I bought an apple from the apple store to eat while looking at my apple.")
 
         # 2. Zero Keyword match, perfect conceptual match (Semantic)
-        doc_semantic = MemoryItem(scope=MemoryScope.SESSION, content="The tech company based in Cupertino makes great smartphones.")
+        doc_semantic = MemoryItem(scope=MemoryScope.SESSION, session_id=self.dinner_task.task_id, content="The tech company based in Cupertino makes great smartphones.")
 
         # 3. High Keyword match, high conceptual match (The Hybrid Winner)
-        doc_hybrid = MemoryItem(scope=MemoryScope.SESSION, content="Apple releases a new iPhone every year.")
+        doc_hybrid = MemoryItem(scope=MemoryScope.SESSION, session_id=self.dinner_task.task_id, content="Apple releases a new iPhone every year.")
 
         self.storage.save(doc_lexical)
         self.storage.save(doc_semantic)
