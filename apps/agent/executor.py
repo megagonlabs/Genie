@@ -16,6 +16,7 @@ class AgentExecutor:
         self.orchestrator = orchestrator
         self.system_prompt = system_prompt
         self.model = "gpt-4o"
+        self.node_aliases: Dict[str, str] = {}
 
         self.available_functions = {
             "create_workspace": self.orchestrator.create_workspace,
@@ -56,6 +57,7 @@ class AgentExecutor:
                         continue
 
                     function_args = json.loads(tool_call.function.arguments)
+                    self._resolve_node_references(function_name, function_args)
                     logger.info(f"Executing tool: {function_name} with args: {function_args}")
 
                     try:
@@ -64,6 +66,7 @@ class AgentExecutor:
                         if hasattr(function_response, 'model_dump'):
                             function_response = function_response.model_dump()
 
+                        self._remember_node_alias(function_name, function_args, function_response)
                         response_str = json.dumps(function_response)
 
                     except Exception as e:
@@ -87,3 +90,32 @@ class AgentExecutor:
                 logger.info("Agent has reached a final conclusion.")
                 # We know content is a string here because there are no tool calls
                 return response_message.content or "Task completed with no text output."
+
+    def _resolve_node_references(self, function_name: str, function_args: Dict[str, Any]) -> None:
+        node_ref_fields = {
+            "create_workspace": ["parent_id"],
+            "save_memory": ["workspace_node_id"],
+            "search_memory": ["scope_node_id"],
+        }
+
+        for field_name in node_ref_fields.get(function_name, []):
+            node_ref = function_args.get(field_name)
+            if isinstance(node_ref, str) and node_ref in self.node_aliases:
+                function_args[field_name] = self.node_aliases[node_ref]
+
+    def _remember_node_alias(self, function_name: str, function_args: Dict[str, Any], function_response: Any) -> None:
+        if not isinstance(function_response, dict):
+            return
+
+        node_id = function_response.get("node_id")
+        name = function_response.get("name")
+
+        if isinstance(node_id, str):
+            self.node_aliases[node_id] = node_id
+
+            if isinstance(name, str) and name:
+                self.node_aliases[name] = node_id
+
+            requested_name = function_args.get("name")
+            if function_name == "create_workspace" and isinstance(requested_name, str) and requested_name:
+                self.node_aliases[requested_name] = node_id

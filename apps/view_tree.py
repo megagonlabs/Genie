@@ -57,9 +57,18 @@ def load_memory_graph() -> Dict[str, Any]:
     all_keys = [decode_redis_value(key) for key in redis_client.scan_iter("node:*")]
 
     nodes: Dict[str, Dict[str, Any]] = {}
+    child_edges: Dict[str, List[str]] = {}
     root_nodes: List[str] = []
 
     for key in all_keys:
+        if key.endswith(":children"):
+            parent_ref = key.removeprefix("node:").removesuffix(":children")
+            child_edges[parent_ref] = [
+                decode_redis_value(child_id)
+                for child_id in redis_client.smembers(key)
+            ]
+            continue
+
         node_id = node_id_from_key(key)
         if not node_id:
             continue
@@ -115,10 +124,45 @@ def load_memory_graph() -> Dict[str, Any]:
         except (json.JSONDecodeError, TypeError):
             continue
 
+    name_to_node_id = {
+        node["name"]: node_id
+        for node_id, node in nodes.items()
+        if node.get("name")
+    }
+
+    def resolve_node_ref(node_ref: Any) -> Optional[str]:
+        if not node_ref:
+            return None
+
+        node_ref_str = str(node_ref)
+        if node_ref_str in nodes:
+            return node_ref_str
+
+        return name_to_node_id.get(node_ref_str)
+
+    attached_nodes = set()
+
+    for parent_ref, child_ids in child_edges.items():
+        parent_id = resolve_node_ref(parent_ref)
+        if not parent_id:
+            continue
+
+        for child_ref in child_ids:
+            child_id = resolve_node_ref(child_ref)
+            if not child_id or child_id == parent_id:
+                continue
+            if child_id not in attached_nodes:
+                nodes[parent_id]["children"].append(nodes[child_id])
+                attached_nodes.add(child_id)
+
     for node_id, node in nodes.items():
-        parent_id = node["parent_id"]
-        if parent_id and parent_id in nodes:
+        if node_id in attached_nodes:
+            continue
+
+        parent_id = resolve_node_ref(node["parent_id"])
+        if parent_id and parent_id != node_id:
             nodes[parent_id]["children"].append(node)
+            attached_nodes.add(node_id)
         else:
             root_nodes.append(node_id)
 
