@@ -1,11 +1,13 @@
 from typing import List
 from fastembed import TextEmbedding
 
+from genie.interfaces.embedder import IEmbedder
 
-class EmbeddingPipeline:
+
+class FastEmbedPipeline(IEmbedder):
     def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5", threads: int = 4):
         """
-        Initializes the local embedding model.
+        Initializes the local FastEmbed model.
         `threads` controls ONNX runtime parallelization.
         """
         self.model = TextEmbedding(model_name=model_name, threads=threads)

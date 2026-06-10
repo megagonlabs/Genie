@@ -4,18 +4,21 @@ from typing import Optional, List, Dict, Any
 from genie.interfaces.index_manager import IIndexManager
 from genie.interfaces.json_source import IJsonSource
 from genie.interfaces.vector_source import IVectorSource
-from genie.pipelines.embedding import EmbeddingPipeline
+from genie.pipelines.fastembed_pipeline import FastEmbedPipeline
+from genie.interfaces.embedder import IEmbedder
 from genie.models.node import Node
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryOrchestrator:
-    def __init__(self, json_source: IJsonSource, vector_source: IVectorSource, index_manager: IIndexManager, embedder: Optional[EmbeddingPipeline] = None):
+    def __init__(self, json_source: IJsonSource, vector_source: IVectorSource, index_manager: IIndexManager, embedder: Optional[IEmbedder] = None):  # <-- 2. Type hint the Interface
         self._json_source = json_source
         self._vector_source = vector_source
         self._index_manager = index_manager
-        self._embedder = embedder or EmbeddingPipeline()
+
+        # Default to our built-in pipeline if they don't provide a custom one
+        self._embedder = embedder or FastEmbedPipeline()
 
     def setup(self):
         """
