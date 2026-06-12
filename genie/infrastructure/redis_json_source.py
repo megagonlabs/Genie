@@ -1,3 +1,5 @@
+"""Redis-backed hierarchical node storage implementation for Genie."""
+
 from collections import deque
 from typing import List, Optional
 import json
@@ -7,6 +9,13 @@ from genie.models.node import Node
 
 
 class RedisJsonSource(IJsonSource):
+    """Persist Genie nodes in Redis hashes and sets.
+
+    This backend stores node payloads in Redis hashes and maintains child
+    relationships in Redis sets. When Lua scripting is available, the class
+    uses atomic server-side scripts for structural mutations.
+    """
+
     UPSERT_NODE_SCRIPT = """
 local node_id = ARGV[1]
 local name = ARGV[2]
@@ -188,18 +197,39 @@ for index = #nodes, 1, -1 do
 end
 
 return 1
-"""
+    """
 
     def __init__(self, redis_client):
+        """Create a Redis-backed JSON source.
+
+        Parameters:
+        redis_client:
+            Connected Redis client used for all persistence operations.
+        """
         self.client = redis_client
 
     @staticmethod
     def _decode(value) -> str:
+        """Decode Redis bytes into UTF-8 text, preserving readable fallbacks."""
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="replace")
         return str(value)
 
     def upsert_node(self, node: Node, record_status: Optional[str] = None, last_error: Optional[str] = None) -> Node:
+        """Create or update a node and its structural bookkeeping.
+
+        Parameters:
+        node:
+            The node to persist.
+        record_status:
+            Optional lifecycle state for search indexing.
+        last_error:
+            Optional diagnostic message associated with the lifecycle state.
+
+        Returns:
+        Node
+            The persisted node.
+        """
         try:
             if self._supports_eval():
                 self.client.eval(
@@ -223,6 +253,7 @@ return 1
         return node
 
     def get_node(self, node_id: str) -> Optional[Node]:
+        """Load a node from Redis and reconstruct its model representation."""
         redis_key = f"node:{node_id}"
         try:
             raw_data = self.client.hgetall(redis_key)
@@ -234,6 +265,7 @@ return 1
             decoded_data = {}
             for key, value in raw_data.items():
                 field_name = self._decode(key)
+                # The binary embedding blob is stored for search, but not part of the Node model.
                 if field_name == "embedding":
                     continue
                 decoded_data[field_name] = self._decode(value)
@@ -252,12 +284,14 @@ return 1
             raise StorageError(f"Failed to deserialize node '{node_id}'.") from exc
 
     def get_children(self, parent_id: str) -> List[str]:
+        """Return sorted direct child identifiers for a parent node."""
         try:
             return sorted(self._decode(mem) for mem in self.client.smembers(f"node:{parent_id}:children"))
         except Exception as exc:
             raise StorageError(f"Failed to read children for node '{parent_id}'.") from exc
 
     def delete_node(self, node_id: str) -> bool:
+        """Delete a node and its subtree from Redis."""
         try:
             if self._supports_eval():
                 return bool(self.client.eval(self.DELETE_SUBTREE_SCRIPT, 0, node_id))
@@ -266,6 +300,7 @@ return 1
             raise StorageError(f"Failed to delete node '{node_id}'.") from exc
 
     def get_absolute_path(self, node_id: str) -> str:
+        """Resolve the absolute path of a node by traversing its parent chain."""
         try:
             if not self.client.exists(f"node:{node_id}"):
                 raise ValueError(f"node_id '{node_id}' does not exist.")
@@ -292,6 +327,7 @@ return 1
         return "/" + "/".join(path)
 
     def set_record_status(self, node_id: str, record_status: str, last_error: Optional[str] = None) -> None:
+        """Update the persisted indexing lifecycle state for a node."""
         try:
             if self._supports_eval():
                 updated = self.client.eval(
@@ -309,6 +345,7 @@ return 1
             self._raise_domain_error(exc)
 
     def _ensure_acyclic_parentage(self, node_id: str, parent_id: str) -> None:
+        """Ensure that a proposed parent assignment does not create a cycle."""
         current_id = parent_id
         visited = {node_id}
         try:
@@ -330,9 +367,11 @@ return 1
             ) from exc
 
     def _supports_eval(self) -> bool:
+        """Return ``True`` when the Redis client supports Lua script execution."""
         return callable(getattr(self.client, "eval", None))
 
     def _upsert_node_fallback(self, node: Node, record_status: Optional[str], last_error: Optional[str]) -> None:
+        """Fallback Python implementation of node upsert when Lua is unavailable."""
         redis_key = f"node:{node.node_id}"
         if node.parent_id == node.node_id:
             raise ValueError(f"Node '{node.node_id}' cannot be its own parent.")
@@ -366,9 +405,11 @@ return 1
             self.client.srem(f"node:{existing_parent}:children", node.node_id)
         if node.parent_id:
             self.client.sadd(f"node:{node.parent_id}:children", node.node_id)
+        # Reparenting changes every descendant path, so refresh the cached subtree paths.
         self._rewrite_subtree_paths(node.node_id, new_path)
 
     def _rewrite_subtree_paths(self, root_node_id: str, root_path: str) -> None:
+        """Rewrite cached paths for an entire subtree after reparenting."""
         nodes_to_process = deque([(root_node_id, root_path)])
         visited = set()
         while nodes_to_process:
@@ -381,6 +422,7 @@ return 1
                 nodes_to_process.append((child_id, f"{current_path}/{child_id}"))
 
     def _set_record_status_fallback(self, node_id: str, record_status: str, last_error: Optional[str]) -> None:
+        """Fallback Python implementation of lifecycle state updates."""
         redis_key = f"node:{node_id}"
         if not self.client.exists(redis_key):
             raise ValueError(f"node_id '{node_id}' does not exist.")
@@ -393,6 +435,7 @@ return 1
         )
 
     def _delete_node_fallback(self, node_id: str) -> bool:
+        """Fallback Python implementation of subtree deletion."""
         if not self.client.exists(f"node:{node_id}"):
             return False
         nodes_to_process = deque([node_id])
@@ -417,6 +460,7 @@ return 1
         return True
 
     def _raise_domain_error(self, exc: Exception) -> None:
+        """Translate low-level Redis/script errors into Genie exceptions."""
         error_text = str(exc)
         if "cannot be its own parent" in error_text or "does not exist" in error_text or "would create a cycle" in error_text:
             raise ValueError(error_text) from exc

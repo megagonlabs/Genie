@@ -1,3 +1,5 @@
+"""Custom exception types used throughout the Genie package."""
+
 class GenieError(Exception):
     """Base exception for Genie library errors."""
 

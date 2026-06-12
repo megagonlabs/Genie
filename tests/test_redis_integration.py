@@ -34,9 +34,64 @@ def vector_source(redis_client):
 class TestRedisIntegration:
     def test_index_manager_initialization(self, redis_client):
         manager = RedisIndexManager(redis_client, index_name="genie_idx")
-        manager.initialize_index()
+        manager.create_index()
         info = redis_client.ft("genie_idx").info()
         assert info.get("index_name") in [b"genie_idx", "genie_idx"]
+
+    def test_versioned_index_name_and_custom_prefix(self, redis_client):
+        custom_index_name = "genie_idx_prod_v1"
+        custom_prefix = "tenant_a:node:"
+        try:
+            redis_client.ft(custom_index_name).dropindex(dd=True)
+        except Exception:
+            pass
+
+        manager = RedisIndexManager(
+            redis_client,
+            index_name=custom_index_name,
+            prefix=custom_prefix,
+        )
+        vector_source = RedisVectorSource(
+            redis_client,
+            index_name=custom_index_name,
+            key_prefix=custom_prefix,
+        )
+
+        manager.create_index()
+        vector = [0.15] * 384
+        vector_source.upsert_document(
+            "doc_custom_1",
+            "custom prefix vector record",
+            vector,
+            "/tenant_a/workspace/doc_custom_1",
+            record_status="ready",
+            last_error="",
+        )
+
+        results = vector_source.hybrid_search(
+            query_text="custom prefix",
+            query_vector=vector,
+            path_filter="/tenant_a/workspace",
+            top_k=3,
+        )
+
+        assert any(result["node_id"] == "doc_custom_1" for result in results)
+
+    def test_verify_only_against_preexisting_index(self, redis_client):
+        custom_index_name = "genie_idx_startup_v1"
+        try:
+            redis_client.ft(custom_index_name).dropindex(dd=True)
+        except Exception:
+            pass
+
+        provisioning_manager = RedisIndexManager(redis_client, index_name=custom_index_name)
+        provisioning_manager.create_index()
+        startup_manager = RedisIndexManager(redis_client, index_name=custom_index_name)
+
+        startup_manager.verify_index()
+
+        info = redis_client.ft(custom_index_name).info()
+        assert info.get("index_name") in [custom_index_name.encode(), custom_index_name]
 
     def test_deep_tree_creation_and_pathing(self, json_source):
         json_source.upsert_node(Node(node_id="org_root", name="Organization", metadata={"owner": "ops"}), record_status="ready", last_error="")
@@ -107,7 +162,7 @@ class TestRedisIntegration:
             redis_client.ft("genie_idx").dropindex(dd=True)
         except Exception:
             pass
-        RedisIndexManager(redis_client, index_name="genie_idx").initialize_index()
+        RedisIndexManager(redis_client, index_name="genie_idx").create_index()
         vector_gpu = [0.1] * 384
         vector_cpu = [-0.1] * 384
         vector_source.upsert_document("doc_alpha_1", "Nvidia tensor cores are fast", vector_gpu, "/workspace_alpha/doc_alpha_1")
@@ -127,7 +182,7 @@ class TestRedisIntegration:
             redis_client.ft("genie_idx").dropindex(dd=True)
         except Exception:
             pass
-        RedisIndexManager(redis_client, index_name="genie_idx").initialize_index()
+        RedisIndexManager(redis_client, index_name="genie_idx").create_index()
         vector = [0.2] * 384
         vector_source.upsert_document("doc_ready", "alpha beta", vector, "/scope/doc_ready", record_status="ready", last_error="")
         vector_source.upsert_document("doc_pending", "alpha beta", vector, "/scope/doc_pending", record_status="pending", last_error="retry")

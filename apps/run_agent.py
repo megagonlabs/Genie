@@ -33,8 +33,12 @@ def main():
         redis_client.ping()
     except redis.ConnectionError:
         sys.exit(1)
-    orchestrator = MemoryOrchestrator(json_source=RedisJsonSource(redis_client), vector_source=RedisVectorSource(redis_client), index_manager=RedisIndexManager(redis_client))
-    orchestrator.setup()
+    orchestrator = MemoryOrchestrator(
+        json_source=RedisJsonSource(redis_client),
+        vector_source=RedisVectorSource(redis_client),
+        index_manager=RedisIndexManager(redis_client),
+    )
+    orchestrator.provision()
     openai_client = OpenAI()
     agent = AgentExecutor(openai_client=openai_client, orchestrator=orchestrator, system_prompt=system_prompt)
     final_report = agent.run(user_query)

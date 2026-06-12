@@ -29,7 +29,11 @@ class TestMemoryOrchestrator:
 
     def test_setup_initializes_index(self, orchestrator, mock_index_manager):
         orchestrator.setup()
-        mock_index_manager.initialize_index.assert_called_once()
+        mock_index_manager.verify_index.assert_called_once()
+
+    def test_provision_creates_index(self, orchestrator, mock_index_manager):
+        orchestrator.provision()
+        mock_index_manager.create_index.assert_called_once()
 
     def test_create_workspace(self, orchestrator, mock_json_source, mock_vector_source):
         node = orchestrator.create_workspace(name="Strategic Plans", parent_id="org_root")
@@ -49,6 +53,7 @@ class TestMemoryOrchestrator:
     def test_save_memory_success_and_uuid_format(self, orchestrator, mock_json_source, mock_vector_source):
         workspace_id = "workspace_alpha"
         content = "Agent discovered a new paradigm in neural networks."
+        orchestrator._is_setup = True
         node = orchestrator.save_memory(workspace_id, content)
         assert node is not None
         assert node.payload["text"] == content
@@ -64,7 +69,8 @@ class TestMemoryOrchestrator:
             record_status="ready",
             last_error="",
         )
-        orchestrator._index_manager.initialize_index.assert_called_once()
+        orchestrator._index_manager.verify_index.assert_not_called()
+        orchestrator._index_manager.create_index.assert_not_called()
 
     def test_save_memory_rejects_missing_workspace(self, orchestrator, mock_json_source, mock_vector_source):
         mock_json_source.get_node.return_value = None
@@ -81,11 +87,13 @@ class TestMemoryOrchestrator:
         mock_json_source.upsert_node.assert_called_once_with(node, record_status="pending", last_error="")
         mock_json_source.set_record_status.assert_called_once_with(node.node_id, "ready", "")
         mock_vector_source.upsert_document.assert_not_called()
-        orchestrator._index_manager.initialize_index.assert_not_called()
+        orchestrator._index_manager.verify_index.assert_not_called()
+        orchestrator._index_manager.create_index.assert_not_called()
 
     def test_save_memory_marks_failed_on_vector_failure(self, orchestrator, mock_json_source, mock_vector_source):
         workspace_id = "workspace_gamma"
         content = "This text will cause a simulated vector database timeout."
+        orchestrator._is_setup = True
         mock_vector_source.upsert_document.side_effect = Exception("Vector DB Connection Timeout")
         with pytest.raises(Exception, match="Vector DB Connection Timeout"):
             orchestrator.save_memory(workspace_id, content)
@@ -96,12 +104,13 @@ class TestMemoryOrchestrator:
 
     def test_search_memory_encapsulation(self, orchestrator, mock_json_source, mock_vector_source):
         mock_vector_source.hybrid_search.return_value = [{"node_id": "node_xyz", "score": 0.01, "text": "found target memory"}]
+        orchestrator._is_setup = True
         results = orchestrator.search_memory(query_text="Find GPU info", scope_node_id="workspace_alpha", top_k=3)
         assert len(results) == 1
         assert results[0]["node_id"] == "node_xyz"
         mock_json_source.get_absolute_path.assert_called_once_with("workspace_alpha")
         mock_vector_source.hybrid_search.assert_called_once_with(query_text="Find GPU info", query_vector=[0.05] * 384, path_filter="/mock_workspace/mock_node", top_k=3)
-        orchestrator._index_manager.initialize_index.assert_called_once()
+        orchestrator._index_manager.verify_index.assert_not_called()
 
     def test_search_memory_rejects_missing_scope(self, orchestrator, mock_json_source, mock_vector_source):
         mock_json_source.get_node.return_value = None
@@ -139,19 +148,20 @@ class TestMemoryOrchestrator:
             index_manager=mock_index_manager,
             embedder=mock_embedder,
         )
+        orchestrator._is_setup = True
 
         with pytest.raises(ConfigurationError, match="does not match index dimension 384"):
             orchestrator.search_memory(query_text="Find GPU info")
 
         mock_vector_source.hybrid_search.assert_not_called()
 
-    def test_search_memory_initializes_index_once(self, orchestrator, mock_vector_source):
-        mock_vector_source.hybrid_search.return_value = []
+    def test_search_memory_requires_explicit_setup(self, orchestrator):
+        with pytest.raises(ConfigurationError, match="Call setup\\(\\) to verify indexes or provision\\(\\) to create them explicitly"):
+            orchestrator.search_memory(query_text="first")
 
-        orchestrator.search_memory(query_text="first")
-        orchestrator.search_memory(query_text="second")
-
-        orchestrator._index_manager.initialize_index.assert_called_once()
+    def test_save_memory_requires_explicit_setup_for_indexed_content(self, orchestrator):
+        with pytest.raises(ConfigurationError, match="Call setup\\(\\) to verify indexes or provision\\(\\) to create them explicitly"):
+            orchestrator.save_memory("workspace_alpha", "payload")
 
     def test_save_memory_does_not_mask_initial_insert_failure(self, orchestrator, mock_json_source):
         mock_json_source.upsert_node.side_effect = RuntimeError("insert failed")
@@ -160,3 +170,10 @@ class TestMemoryOrchestrator:
             orchestrator.save_memory("workspace_alpha", "payload")
 
         mock_json_source.set_record_status.assert_not_called()
+
+    def test_save_memory_after_setup_succeeds(self, orchestrator, mock_vector_source):
+        orchestrator._is_setup = True
+        node = orchestrator.save_memory("workspace_alpha", "payload")
+
+        assert node is not None
+        mock_vector_source.upsert_document.assert_called_once()

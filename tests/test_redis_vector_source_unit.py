@@ -78,3 +78,22 @@ class TestRedisVectorSourceUnit:
         mapping = client.hset.call_args.kwargs["mapping"]
         assert mapping["record_status"] == "ready"
         assert mapping["last_error"] == ""
+
+    def test_upsert_document_uses_configured_key_prefix(self):
+        client = MagicMock()
+        source = RedisVectorSource(client, index_name="genie_idx_prod_v1", key_prefix="tenant_a:node:")
+
+        source.upsert_document(
+            node_id="mem_1",
+            raw_text="alpha beta",
+            dense_vector=[0.1, 0.2],
+            path_string="/workspace/mem_1",
+        )
+
+        assert client.hset.call_args.args[0] == "tenant_a:node:mem_1"
+
+    def test_extract_node_id_removes_full_configured_prefix(self):
+        client = MagicMock()
+        source = RedisVectorSource(client, index_name="genie_idx_prod_v1", key_prefix="tenant_a:node:")
+
+        assert source._extract_node_id("tenant_a:node:mem_1") == "mem_1"
