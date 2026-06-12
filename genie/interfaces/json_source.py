@@ -5,7 +5,7 @@ from genie.models.node import Node
 
 class IJsonSource(ABC):
     @abstractmethod
-    def upsert_node(self, node: Node) -> Node:
+    def upsert_node(self, node: Node, record_status: Optional[str] = None, last_error: Optional[str] = None) -> Node:
         pass
 
     @abstractmethod
@@ -22,4 +22,8 @@ class IJsonSource(ABC):
 
     @abstractmethod
     def get_absolute_path(self, node_id: str) -> str:
+        pass
+
+    @abstractmethod
+    def set_record_status(self, node_id: str, record_status: str, last_error: Optional[str] = None) -> None:
         pass

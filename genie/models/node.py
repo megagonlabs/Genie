@@ -9,7 +9,8 @@ class Node(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     relationships: Dict[str, List[str]] = Field(default_factory=dict)
+    child_ids: List[str] = Field(default_factory=list)
 
     @property
     def is_leaf(self) -> bool:
-        return not bool(self.relationships.get("children", []))
+        return not bool(self.child_ids)

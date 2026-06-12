@@ -1,5 +1,6 @@
 import pytest
 import redis
+from genie.exceptions import DataCorruptionError
 from genie.models.node import Node
 from genie.infrastructure.redis_index_manager import RedisIndexManager
 from genie.infrastructure.redis_json_source import RedisJsonSource
@@ -38,16 +39,19 @@ class TestRedisIntegration:
         assert info.get("index_name") in [b"genie_idx", "genie_idx"]
 
     def test_deep_tree_creation_and_pathing(self, json_source):
-        json_source.upsert_node(Node(node_id="org_root", name="Organization"))
+        json_source.upsert_node(Node(node_id="org_root", name="Organization", metadata={"owner": "ops"}), record_status="ready", last_error="")
         json_source.upsert_node(Node(node_id="proj_x", name="Project X", parent_id="org_root"))
         json_source.upsert_node(Node(node_id="session_42", name="Session 42", parent_id="proj_x"))
         json_source.upsert_node(Node(node_id="mem_99", name="Final Thought", parent_id="session_42", payload={"status": "complete"}))
         path = json_source.get_absolute_path("mem_99")
         assert path == "/org_root/proj_x/session_42/mem_99"
         leaf = json_source.get_node("mem_99")
+        root = json_source.get_node("org_root")
         assert leaf.name == "Final Thought"
         assert leaf.payload["status"] == "complete"
         assert leaf.is_leaf is True
+        assert root.metadata == {"owner": "ops"}
+        assert root.is_leaf is False
 
     def test_rejects_missing_parent_reference(self, json_source):
         with pytest.raises(ValueError, match="parent_id 'Missing Workspace' does not exist"):
@@ -75,19 +79,28 @@ class TestRedisIntegration:
         assert json_source.get_node("mem_99") is None
         assert json_source.get_node("org_root") is not None
 
-    def test_circular_reference_circuit_breaker(self, json_source, redis_client):
+    def test_rejects_descendant_cycle_on_reparent(self, json_source, redis_client):
         json_source.upsert_node(Node(node_id="node_a", name="A"))
         json_source.upsert_node(Node(node_id="node_b", name="B", parent_id="node_a"))
-        redis_client.hset("node:node_a", "parent_id", "node_b")
-        path = json_source.get_absolute_path("node_b")
-        assert "node_a" in path
-        assert "node_b" in path
+        with pytest.raises(ValueError, match="would create a cycle"):
+            json_source.upsert_node(Node(node_id="node_a", name="A", parent_id="node_b"))
+
+    def test_reparenting_rewrites_subtree_paths(self, json_source):
+        json_source.upsert_node(Node(node_id="root_a", name="A"))
+        json_source.upsert_node(Node(node_id="root_b", name="B"))
+        json_source.upsert_node(Node(node_id="branch", name="Branch", parent_id="root_a"))
+        json_source.upsert_node(Node(node_id="leaf", name="Leaf", parent_id="branch"))
+
+        json_source.upsert_node(Node(node_id="branch", name="Branch", parent_id="root_b"))
+
+        assert json_source.get_absolute_path("branch") == "/root_b/branch"
+        assert json_source.get_absolute_path("leaf") == "/root_b/branch/leaf"
 
     def test_malformed_json_recovery(self, json_source, redis_client):
         json_source.upsert_node(Node(node_id="corrupt_node", name="Will Corrupt"))
         redis_client.hset("node:corrupt_node", "payload", "{broken_json: True, missing_quotes}")
-        node = json_source.get_node("corrupt_node")
-        assert node is None
+        with pytest.raises(DataCorruptionError, match="malformed JSON"):
+            json_source.get_node("corrupt_node")
 
     def test_strict_boundary_semantic_filtering(self, redis_client, vector_source):
         try:
@@ -108,3 +121,19 @@ class TestRedisIntegration:
         returned_ids = [res["node_id"] for res in results_root]
         assert "doc_alpha_1" in returned_ids
         assert "doc_beta_1" in returned_ids
+
+    def test_pending_records_are_hidden_from_hybrid_search(self, redis_client, vector_source):
+        try:
+            redis_client.ft("genie_idx").dropindex(dd=True)
+        except Exception:
+            pass
+        RedisIndexManager(redis_client, index_name="genie_idx").initialize_index()
+        vector = [0.2] * 384
+        vector_source.upsert_document("doc_ready", "alpha beta", vector, "/scope/doc_ready", record_status="ready", last_error="")
+        vector_source.upsert_document("doc_pending", "alpha beta", vector, "/scope/doc_pending", record_status="pending", last_error="retry")
+
+        results = vector_source.hybrid_search(query_text="alpha beta", query_vector=vector, path_filter="/scope", top_k=5)
+        returned_ids = [res["node_id"] for res in results]
+
+        assert "doc_ready" in returned_ids
+        assert "doc_pending" not in returned_ids

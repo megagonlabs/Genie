@@ -7,11 +7,17 @@ from genie.interfaces.index_manager import IIndexManager
 
 class RedisIndexManager(IIndexManager):
 
-    def __init__(self, redis_client: Redis, index_name: str = "genie_idx", prefix: str = "node:"):
+    def __init__(self, redis_client: Redis, index_name: str = "genie_idx", prefix: str = "node:", vector_dimension: int = 384):
         self.connection = redis_client
         self.index_name = index_name
         self.prefix = prefix
-        self.schema = [TextField("search_text"), TagField("path", separator="|"), VectorField("embedding", "HNSW", {"TYPE": "FLOAT32", "DIM": 384, "DISTANCE_METRIC": "COSINE"})]
+        self.vector_dimension = vector_dimension
+        self.schema = [
+            TextField("search_text"),
+            TagField("path", separator="|"),
+            TagField("record_status", separator="|"),
+            VectorField("embedding", "HNSW", {"TYPE": "FLOAT32", "DIM": self.vector_dimension, "DISTANCE_METRIC": "COSINE"}),
+        ]
 
     def initialize_index(self):
         try:
