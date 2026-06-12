@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from openai import OpenAI
@@ -29,19 +29,21 @@ def make_completion(*, content=None, tool_calls=None):
         model_dump=lambda exclude_unset=True: {
             "role": "assistant",
             "content": content,
-            "tool_calls": [
-                {
-                    "id": tool_call.id,
-                    "type": tool_call.type,
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments,
-                    },
-                }
-                for tool_call in (tool_calls or [])
-            ]
-            if tool_calls is not None
-            else None,
+            "tool_calls": (
+                [
+                    {
+                        "id": tool_call.id,
+                        "type": tool_call.type,
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments,
+                        },
+                    }
+                    for tool_call in (tool_calls or [])
+                ]
+                if tool_calls is not None
+                else None
+            ),
         },
     )
     return SimpleNamespace(choices=[SimpleNamespace(message=message)])
@@ -81,9 +83,7 @@ class TestToolLoopExecutor:
             tools=MEMORY_TOOLS,
             available_functions=available_functions,
         )
-        result = executor.run(
-            [{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Analyze superconductors."}]
-        )
+        result = executor.run([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Analyze superconductors."}])
 
         assert mock_openai_client.chat.completions.create.call_count == 3
         available_functions["create_workspace"].assert_called_once_with(name="Quantum Research")
@@ -94,12 +94,33 @@ class TestToolLoopExecutor:
         )
         assert result == "Research completely structured and finalized."
 
-    def test_tool_loop_executor_serializes_pydantic_tool_results(self, mock_openai_client):
+    def test_tool_loop_executor_run_detailed_captures_trace(self, mock_openai_client):
         available_functions = {
-            "create_workspace": MagicMock(
-                return_value=ToolResultModel(node_id="workspace_999", name="Structured Workspace")
-            )
+            "create_workspace": MagicMock(return_value={"node_id": "workspace_123"}),
+            "search_memory": MagicMock(return_value=[{"node_id": "node_456"}]),
         }
+        mock_openai_client.chat.completions.create.side_effect = [
+            make_completion(tool_calls=[make_tool_call("create_workspace", {"name": "Quantum Research"}, "call_one")]),
+            make_completion(tool_calls=[make_tool_call("search_memory", {"query_text": "superconductors"}, "call_two")]),
+            make_completion(content="Done tracing.", tool_calls=None),
+        ]
+
+        executor = ToolLoopExecutor(
+            openai_client=mock_openai_client,
+            model="gpt-4o",
+            tools=MEMORY_TOOLS,
+            available_functions=available_functions,
+        )
+        result = executor.run_detailed([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Analyze superconductors."}])
+
+        assert result.final_output == "Done tracing."
+        assert result.assistant_turn_count == 3
+        assert [trace.tool_name for trace in result.tool_calls] == ["create_workspace", "search_memory"]
+        assert result.tool_calls[0].returned_node_id == "workspace_123"
+        assert result.tool_calls[1].result == [{"node_id": "node_456"}]
+
+    def test_tool_loop_executor_serializes_pydantic_tool_results(self, mock_openai_client):
+        available_functions = {"create_workspace": MagicMock(return_value=ToolResultModel(node_id="workspace_999", name="Structured Workspace"))}
         mock_openai_client.chat.completions.create.side_effect = [
             make_completion(tool_calls=[make_tool_call("create_workspace", {"name": "Structured Workspace"}, "call_one")]),
             make_completion(content="Done.", tool_calls=None),
@@ -111,9 +132,7 @@ class TestToolLoopExecutor:
             tools=MEMORY_TOOLS,
             available_functions=available_functions,
         )
-        result = executor.run(
-            [{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Create a workspace."}]
-        )
+        result = executor.run([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Create a workspace."}])
 
         assert result == "Done."
         second_call_messages = mock_openai_client.chat.completions.create.call_args_list[1].kwargs["messages"]
@@ -124,9 +143,7 @@ class TestToolLoopExecutor:
         }
 
     def test_tool_loop_executor_surfaces_tool_errors_back_to_model(self, mock_openai_client):
-        available_functions = {
-            "search_memory": MagicMock(side_effect=RuntimeError("redis timeout"))
-        }
+        available_functions = {"search_memory": MagicMock(side_effect=RuntimeError("redis timeout"))}
         mock_openai_client.chat.completions.create.side_effect = [
             make_completion(tool_calls=[make_tool_call("search_memory", {"query_text": "gpu roadmap"}, "call_one")]),
             make_completion(content="Recovered.", tool_calls=None),
@@ -138,9 +155,7 @@ class TestToolLoopExecutor:
             tools=MEMORY_TOOLS,
             available_functions=available_functions,
         )
-        result = executor.run(
-            [{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Find GPU roadmap."}]
-        )
+        result = executor.run([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Find GPU roadmap."}])
 
         assert result == "Recovered."
         second_call_messages = mock_openai_client.chat.completions.create.call_args_list[1].kwargs["messages"]
@@ -160,9 +175,7 @@ class TestToolLoopExecutor:
             tools=MEMORY_TOOLS,
             available_functions={},
         )
-        result = executor.run(
-            [{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Do something."}]
-        )
+        result = executor.run([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Do something."}])
 
         assert result == "Finished without using the unknown tool."
 
@@ -175,16 +188,12 @@ class TestToolLoopExecutor:
             tools=MEMORY_TOOLS,
             available_functions={},
         )
-        result = executor.run(
-            [{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Do something."}]
-        )
+        result = executor.run([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Do something."}])
 
         assert result == "Task completed with no text output."
 
     def test_tool_loop_executor_rejects_endless_loop(self, mock_openai_client):
-        mock_openai_client.chat.completions.create.return_value = make_completion(
-            tool_calls=[make_tool_call("unknown_tool", {"x": 1}, "call_one")]
-        )
+        mock_openai_client.chat.completions.create.return_value = make_completion(tool_calls=[make_tool_call("unknown_tool", {"x": 1}, "call_one")])
 
         executor = ToolLoopExecutor(
             openai_client=mock_openai_client,
@@ -195,9 +204,7 @@ class TestToolLoopExecutor:
         )
 
         with pytest.raises(RuntimeError, match="maximum of 2 assistant turns"):
-            executor.run(
-                [{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Do something."}]
-            )
+            executor.run([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Do something."}])
 
 
 class TestDeepResearchAgent:
@@ -275,6 +282,7 @@ class TestDeepResearchAgent:
         )
         mock_orchestrator.search_memory.assert_called_once_with(
             query_text="quantum findings",
+            scope_node_id=None,
             top_k=8,
         )
         assert mock_openai_client.chat.completions.create.call_count == 5
@@ -305,5 +313,176 @@ class TestDeepResearchAgent:
         assert result == "Final report."
         mock_orchestrator.search_memory.assert_called_once_with(
             query_text="valid query",
+            scope_node_id=None,
             top_k=8,
         )
+
+    def test_deep_research_agent_run_with_audit_returns_verification_bundle(
+        self,
+        mock_openai_client,
+        mock_orchestrator,
+    ):
+        planning_payload = {
+            "topic_title": "Quantum Research",
+            "goal": "Research the topic.",
+            "report_spec": {
+                "audience": "executive team",
+                "deliverable": "comprehensive report",
+                "success_criteria": ["structured findings"],
+            },
+            "workspace_tree": [{"name": "quantum_research", "children": ["evidence"]}],
+            "subtasks": [
+                {
+                    "id": "task_1",
+                    "title": "Collect findings",
+                    "objective": "Gather evidence",
+                    "workspace": "evidence",
+                    "questions": ["What happened?"],
+                    "deliverables": ["saved notes"],
+                }
+            ],
+            "report_outline": [{"section": "Summary", "purpose": "overview"}],
+            "final_search_queries": ["quantum findings"],
+        }
+        mock_openai_client.chat.completions.create.side_effect = [
+            make_completion(content=json.dumps(planning_payload), tool_calls=None),
+            make_completion(
+                tool_calls=[
+                    make_tool_call(
+                        "create_workspace",
+                        {"name": "quantum_research", "parent_id": "workspace_research_root"},
+                        "call_one",
+                    )
+                ]
+            ),
+            make_completion(
+                tool_calls=[
+                    make_tool_call(
+                        "save_memory",
+                        {
+                            "workspace_node_id": "workspace_123",
+                            "content_text": "A saved finding.",
+                            "name": "finding_1",
+                        },
+                        "call_two",
+                    )
+                ]
+            ),
+            make_completion(
+                tool_calls=[
+                    make_tool_call(
+                        "search_memory",
+                        {
+                            "query_text": "quantum findings",
+                            "scope_node_id": "workspace_research_root",
+                            "top_k": 3,
+                        },
+                        "call_three",
+                    )
+                ]
+            ),
+            make_completion(content="Execution finished with structured notes.", tool_calls=None),
+            make_completion(content="Final comprehensive report.", tool_calls=None),
+        ]
+        mock_orchestrator.search_memory.side_effect = [
+            [{"node_id": "node_456", "text": "saved fact"}],
+            [{"node_id": "node_456", "text": "saved fact"}],
+        ]
+
+        agent = DeepResearchAgent(
+            openai_client=mock_openai_client,
+            orchestrator=mock_orchestrator,
+        )
+        agent._initialize_run_tree = MagicMock(
+            return_value={
+                "audit_root_id": "workspace_run_root",
+                "research_root_id": "workspace_research_root",
+                "audit_workspace_id": "workspace_audit",
+                "plan_workspace_id": "workspace_plan",
+                "execution_workspace_id": "workspace_execution",
+                "recall_workspace_id": "workspace_recall",
+                "report_workspace_id": "workspace_report",
+                "verification_workspace_id": "workspace_verification",
+            }
+        )
+        agent._persist_artifact = MagicMock(
+            side_effect=[
+                "node_plan",
+                "node_execution",
+                "node_final_report",
+                "node_verification",
+            ]
+        )
+        agent._persist_recall_artifacts = MagicMock(return_value=(["node_recall"], ["node_456"]))
+
+        result = agent.run_with_audit("Research quantum computing.")
+
+        assert result.final_report == "Final comprehensive report."
+        assert result.research_root_node_id == "workspace_research_root"
+        assert result.verification.status == "warn"
+        assert result.verification.metrics["memory_write_count"] == 1
+        assert result.verification.metrics["overlap_node_ids"] == ["node_456"]
+        assert any(check.name == "recalled_memories_overlap_saved_work" and check.status == "pass" for check in result.verification.checks)
+        assert "saving more intermediate notes would strengthen provenance" in " ".join(result.verification.warnings).lower()
+        assert mock_orchestrator.search_memory.call_args_list == [
+            call(query_text="quantum findings", scope_node_id="workspace_research_root", top_k=3),
+            call(query_text="quantum findings", scope_node_id="workspace_research_root", top_k=8),
+        ]
+
+    def test_deep_research_agent_verification_flags_single_shot_like_runs(
+        self,
+        mock_openai_client,
+        mock_orchestrator,
+    ):
+        planning_payload = {
+            "topic_title": "Humidity Research",
+            "goal": "Research the topic.",
+            "report_spec": {
+                "audience": "growers",
+                "deliverable": "report",
+                "success_criteria": ["useful"],
+            },
+            "workspace_tree": [],
+            "subtasks": [
+                {
+                    "id": "task_1",
+                    "title": "Direct answer",
+                    "objective": "Answer immediately",
+                    "workspace": "root",
+                    "questions": ["What is the answer?"],
+                    "deliverables": ["report"],
+                }
+            ],
+            "report_outline": [],
+            "final_search_queries": [],
+        }
+        mock_openai_client.chat.completions.create.side_effect = [
+            make_completion(content=json.dumps(planning_payload), tool_calls=None),
+            make_completion(content="Execution finished immediately.", tool_calls=None),
+            make_completion(content="Final report.", tool_calls=None),
+        ]
+
+        agent = DeepResearchAgent(
+            openai_client=mock_openai_client,
+            orchestrator=mock_orchestrator,
+            max_tool_round_trips=1,
+        )
+        agent._initialize_run_tree = MagicMock(
+            return_value={
+                "audit_root_id": "workspace_run_root",
+                "research_root_id": "workspace_research_root",
+                "audit_workspace_id": "workspace_audit",
+                "plan_workspace_id": "workspace_plan",
+                "execution_workspace_id": "workspace_execution",
+                "recall_workspace_id": "workspace_recall",
+                "report_workspace_id": "workspace_report",
+                "verification_workspace_id": "workspace_verification",
+            }
+        )
+        agent._persist_artifact = MagicMock(return_value=None)
+        agent._persist_recall_artifacts = MagicMock(return_value=([], []))
+
+        result = agent.run_with_audit("Research humidity and photosynthesis.")
+
+        assert result.verification.status == "fail"
+        assert any(check.name == "intermediate_memories_saved" and check.status == "fail" for check in result.verification.checks)

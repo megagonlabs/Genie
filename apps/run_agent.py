@@ -65,8 +65,19 @@ def main() -> None:
         sys.exit(1)
 
     agent = build_agent(orchestrator)
-    final_report = agent.run(user_query)
-    print(final_report)
+    run_result = agent.run_with_audit(user_query)
+    print(run_result.final_report)
+    print("\n=== Verification Summary ===")
+    print(f"Run ID: {run_result.run_id}")
+    print(f"Verification status: {run_result.verification.status}")
+    if run_result.audit_root_node_id:
+        print(f"Audit root node: {run_result.audit_root_node_id}")
+    if run_result.research_root_node_id:
+        print(f"Research root node: {run_result.research_root_node_id}")
+    for check in run_result.verification.checks:
+        print(f"- [{check.status}] {check.name}: {check.details}")
+    for warning in run_result.verification.warnings:
+        print(f"- [warn] {warning}")
 
 
 if __name__ == "__main__":

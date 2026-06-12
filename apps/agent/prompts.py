@@ -58,6 +58,8 @@ Operating rules:
 6. Before final synthesis, search memory deliberately using the provided final search queries.
 7. When you are confident that the memory tree is rich enough, return a concise execution summary
    that lists what was researched, where it was stored, and what remains uncertain.
+8. For every subtask, save at least one concrete intermediate memory before moving on.
+9. Do not behave like a single-shot writer. The final report must be the product of stored intermediate work.
 
 Be disciplined about structure. The memory tree should read like a well-organized research notebook.
 """
@@ -93,7 +95,11 @@ def build_planning_user_prompt(user_request: str) -> str:
     return f"User request:\n{user_request}\n\nReturn the research plan JSON now."
 
 
-def build_execution_user_prompt(user_request: str, serialized_plan: str) -> str:
+def build_execution_user_prompt(
+    user_request: str,
+    serialized_plan: str,
+    research_root_node_id: str | None = None,
+) -> str:
     """Build the execution-stage user prompt.
 
     Parameters:
@@ -101,18 +107,29 @@ def build_execution_user_prompt(user_request: str, serialized_plan: str) -> str:
         The original user research request.
     serialized_plan:
         JSON string representing the structured plan.
+    research_root_node_id:
+        Optional workspace node id that should anchor the run's entire research subtree.
 
     Returns:
     str
         Prompt text for the execution stage.
     """
-    return (
+    prompt = (
         "Original user request:\n"
         f"{user_request}\n\n"
         "Structured research plan:\n"
         f"{serialized_plan}\n\n"
         "Execute the plan using the memory tools and return the execution summary when done."
     )
+    if research_root_node_id:
+        prompt += (
+            "\n\nExecution anchor:\n"
+            f"- A dedicated research root workspace already exists: `{research_root_node_id}`.\n"
+            "- Create all research workspaces under this node.\n"
+            f"- Your first created workspace should use `parent_id` = `{research_root_node_id}`.\n"
+            "- Keep the run inside this subtree so the resulting hierarchy is auditable."
+        )
+    return prompt
 
 
 def build_synthesis_user_prompt(
