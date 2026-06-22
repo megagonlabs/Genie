@@ -17,11 +17,11 @@ Before running the example, make sure you have:
 
 1. A running Redis instance.
 2. An OpenAI API key stored in `openai.env` as `OPENAI_API_KEY` at the project root.
-3. The project dependencies installed in the Conda environment defined in `agents.md`.
+3. The project dependencies installed.
 
 `apps/run_agent.py` loads credentials from `openai.env` and connects to Redis at `redis://localhost:6379/0` by default.
 
-If you are installing app dependencies with pip instead of Conda, use:
+If you are installing app dependencies with pip, use:
 
 ```bash
 pip install -r apps/requirements.txt
