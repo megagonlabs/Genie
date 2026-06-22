@@ -7,6 +7,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from apps.agent.executor import ToolLoopExecutor
+from apps.agent.models import ProgressEvent
 from apps.agent.research_agent import DeepResearchAgent
 from apps.agent.tools import MEMORY_TOOLS
 from genie.core.orchestrator import MemoryOrchestrator
@@ -118,6 +119,29 @@ class TestToolLoopExecutor:
         assert [trace.tool_name for trace in result.tool_calls] == ["create_workspace", "search_memory"]
         assert result.tool_calls[0].returned_node_id == "workspace_123"
         assert result.tool_calls[1].result == [{"node_id": "node_456"}]
+
+    def test_tool_loop_executor_emits_progress_events(self, mock_openai_client):
+        available_functions = {
+            "create_workspace": MagicMock(return_value={"node_id": "workspace_123"}),
+        }
+        mock_openai_client.chat.completions.create.side_effect = [
+            make_completion(tool_calls=[make_tool_call("create_workspace", {"name": "Quantum Research"}, "call_one")]),
+            make_completion(content="Done tracing.", tool_calls=None),
+        ]
+        progress_events: list[ProgressEvent] = []
+
+        executor = ToolLoopExecutor(
+            openai_client=mock_openai_client,
+            model="gpt-4o",
+            tools=MEMORY_TOOLS,
+            available_functions=available_functions,
+            on_progress=progress_events.append,
+        )
+        executor.run_detailed([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Analyze superconductors."}])
+
+        assert any(event.stage == "execution" and event.status == "started" for event in progress_events)
+        assert any(event.tool_name == "create_workspace" and event.step_number == 1 for event in progress_events)
+        assert any(event.stage == "execution" and event.status == "completed" and "final assistant response" in event.message.lower() for event in progress_events)
 
     def test_tool_loop_executor_serializes_pydantic_tool_results(self, mock_openai_client):
         available_functions = {"create_workspace": MagicMock(return_value=ToolResultModel(node_id="workspace_999", name="Structured Workspace"))}
@@ -486,3 +510,64 @@ class TestDeepResearchAgent:
 
         assert result.verification.status == "fail"
         assert any(check.name == "intermediate_memories_saved" and check.status == "fail" for check in result.verification.checks)
+
+    def test_deep_research_agent_emits_lifecycle_progress_events(
+        self,
+        mock_openai_client,
+        mock_orchestrator,
+    ):
+        planning_payload = {
+            "topic_title": "Quantum Research",
+            "goal": "Research the topic.",
+            "report_spec": {"audience": "team", "deliverable": "report", "success_criteria": ["done"]},
+            "workspace_tree": [],
+            "subtasks": [],
+            "report_outline": [],
+            "final_search_queries": ["quantum findings"],
+        }
+        mock_openai_client.chat.completions.create.side_effect = [
+            make_completion(content=json.dumps(planning_payload), tool_calls=None),
+            make_completion(tool_calls=[make_tool_call("create_workspace", {"name": "quantum_research"}, "call_one")]),
+            make_completion(content="Execution finished.", tool_calls=None),
+            make_completion(content="Final report.", tool_calls=None),
+        ]
+        mock_orchestrator.search_memory.return_value = [{"node_id": "node_1", "text": "saved fact"}]
+        progress_events: list[ProgressEvent] = []
+
+        agent = DeepResearchAgent(
+            openai_client=mock_openai_client,
+            orchestrator=mock_orchestrator,
+            on_progress=progress_events.append,
+        )
+        agent._initialize_run_tree = MagicMock(
+            return_value={
+                "audit_root_id": "workspace_run_root",
+                "research_root_id": "workspace_research_root",
+                "audit_workspace_id": "workspace_audit",
+                "plan_workspace_id": "workspace_plan",
+                "execution_workspace_id": "workspace_execution",
+                "recall_workspace_id": "workspace_recall",
+                "report_workspace_id": "workspace_report",
+                "verification_workspace_id": "workspace_verification",
+            }
+        )
+        agent._persist_artifact = MagicMock(return_value=None)
+        agent._persist_recall_artifacts = MagicMock(return_value=([], ["node_1"]))
+
+        result = agent.run_with_audit("Research quantum computing.")
+
+        assert result.final_report == "Final report."
+        observed_stages = {(event.stage, event.status) for event in progress_events}
+        assert ("run", "started") in observed_stages
+        assert ("planning", "started") in observed_stages
+        assert ("planning", "completed") in observed_stages
+        assert ("execution", "started") in observed_stages
+        assert ("execution", "completed") in observed_stages
+        assert ("recall", "started") in observed_stages
+        assert ("recall", "completed") in observed_stages
+        assert ("synthesis", "started") in observed_stages
+        assert ("synthesis", "completed") in observed_stages
+        assert ("verification", "started") in observed_stages
+        assert ("verification", "completed") in observed_stages
+        assert ("run", "completed") in observed_stages
+        assert any(event.tool_name == "create_workspace" for event in progress_events)

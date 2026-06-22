@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, cast
 
 import redis
 import streamlit as st
 
-
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 DEFAULT_KEY_PREFIX = "node:"
+
+
+def iter_sync_keys(client: redis.Redis, key_prefix: str) -> Iterable[Any]:
+    """Return a synchronously iterable Redis key stream for the configured prefix."""
+    return cast(Iterable[Any], client.scan_iter(match=f"{key_prefix}*"))
+
+
+def read_sync_hash(client: redis.Redis, redis_key: Any) -> Mapping[Any, Any]:
+    """Return a synchronously readable Redis hash mapping."""
+    return cast(Mapping[Any, Any], client.hgetall(redis_key))
+
+
+def read_sync_set_members(client: redis.Redis, redis_key: str) -> Iterable[Any]:
+    """Return synchronously iterable Redis set members."""
+    return cast(Iterable[Any], client.smembers(redis_key))
 
 
 def get_redis_client(redis_url: str) -> redis.Redis:
@@ -59,22 +73,19 @@ def load_tree_data(client: redis.Redis, key_prefix: str) -> Dict[str, Dict[str, 
     """
     nodes: Dict[str, Dict[str, Any]] = {}
 
-    for redis_key in sorted(client.scan_iter(match=f"{key_prefix}*")):
+    for redis_key in sorted(iter_sync_keys(client, key_prefix)):
         key_text = decode_value(redis_key)
         if key_text.endswith(":children"):
             continue
         if decode_value(client.type(redis_key)) != "hash":
             continue
 
-        raw_hash = client.hgetall(redis_key)
-        node_id = key_text[len(key_prefix):]
+        raw_hash = read_sync_hash(client, redis_key)
+        node_id = key_text[len(key_prefix) :]
         node_data: Dict[str, Any] = {
             "node_id": node_id,
             "redis_key": key_text,
-            "children": sorted(
-                decode_value(child_id)
-                for child_id in client.smembers(f"{key_text}:children")
-            ),
+            "children": sorted(decode_value(child_id) for child_id in read_sync_set_members(client, f"{key_text}:children")),
         }
 
         for field_name_raw, field_value_raw in raw_hash.items():
@@ -130,15 +141,8 @@ def render_node_tree(
     normalized_search = search_text.lower().strip()
 
     # Filter on either node title or node identifier without hiding descendants entirely.
-    if (
-        normalized_search
-        and normalized_search not in visible_text.lower()
-        and normalized_search not in node_id.lower()
-    ):
-        descendant_matches = any(
-            has_matching_descendant(nodes, child_id, normalized_search)
-            for child_id in node.get("children", [])
-        )
+    if normalized_search and normalized_search not in visible_text.lower() and normalized_search not in node_id.lower():
+        descendant_matches = any(has_matching_descendant(nodes, child_id, normalized_search) for child_id in node.get("children", []))
         if not descendant_matches:
             return
 
@@ -191,11 +195,7 @@ def has_matching_descendant(
     if normalized_search in label.lower() or normalized_search in node_id.lower():
         return True
 
-    return any(
-        has_matching_descendant(nodes, child_id, normalized_search, active_path)
-        for child_id in node.get("children", [])
-        if child_id in nodes
-    )
+    return any(has_matching_descendant(nodes, child_id, normalized_search, active_path) for child_id in node.get("children", []) if child_id in nodes)
 
 
 def render_node_details(node: Optional[Dict[str, Any]]) -> None:
@@ -341,10 +341,7 @@ def main() -> None:
 
     with left_col:
         st.subheader("Hierarchy")
-        st.caption(
-            f"{len(nodes)} node(s), {len(root_ids)} root node(s), "
-            f"filter: {search_text or 'none'}"
-        )
+        st.caption(f"{len(nodes)} node(s), {len(root_ids)} root node(s), " f"filter: {search_text or 'none'}")
         for root_id in root_ids:
             render_node_tree(nodes, root_id, search_text=search_text)
 

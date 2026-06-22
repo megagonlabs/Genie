@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import json
 import re
 import uuid
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -16,6 +16,7 @@ from genie.models.node import Node
 
 from apps.agent.executor import ToolLoopExecutor
 from apps.agent.models import (
+    ProgressEvent,
     ResearchRunResult,
     ResearchRunVerification,
     ToolLoopResult,
@@ -30,6 +31,8 @@ from apps.agent.prompts import (
     build_synthesis_user_prompt,
 )
 from apps.agent.tools import MEMORY_TOOLS, build_memory_tool_registry
+
+ProgressCallback = Callable[[ProgressEvent], None]
 
 
 class DeepResearchAgent:
@@ -58,17 +61,21 @@ class DeepResearchAgent:
         execution_model: str = "gpt-4o",
         synthesis_model: str = "gpt-4o",
         max_tool_round_trips: int = 30,
+        on_progress: Optional[ProgressCallback] = None,
     ) -> None:
         self.client = openai_client
         self.orchestrator = orchestrator
         self.planning_model = planning_model
         self.synthesis_model = synthesis_model
+        self.on_progress = on_progress
+        self._active_run_id: Optional[str] = None
         self.tool_executor = ToolLoopExecutor(
             openai_client=openai_client,
             model=execution_model,
             tools=MEMORY_TOOLS,
             available_functions=build_memory_tool_registry(orchestrator),
             max_round_trips=max_tool_round_trips,
+            on_progress=self._handle_executor_progress,
         )
 
     def run(self, user_request: str) -> str:
@@ -96,130 +103,244 @@ class DeepResearchAgent:
             Final report together with execution trace and verification details.
         """
         run_id = f"run_{uuid.uuid4().hex}"
-        plan = self._build_plan(user_request)
-        serialized_plan = json.dumps(plan, indent=2)
-        audit_ids = self._initialize_run_tree(run_id=run_id, user_request=user_request, plan=plan)
-        self._persist_artifact(
-            artifact_name="plan",
-            parent_id=audit_ids.get("plan_workspace_id"),
-            title="research_plan",
-            content_text=serialized_plan,
-            metadata={
-                "run_id": run_id,
-                "stage": "planning",
-                "artifact_type": "research_plan",
-                "created_at": self._timestamp(),
-                "user_request": user_request,
-            },
-        )
-
-        execution_trace = self._execute_plan(
-            user_request=user_request,
-            serialized_plan=serialized_plan,
-            research_root_node_id=self._normalize_optional_id(audit_ids.get("research_root_id")),
-        )
-        execution_summary = execution_trace.final_output
-        saved_memory_ids = self._collect_returned_node_ids(execution_trace.tool_calls, "save_memory")
-        created_workspace_ids = self._collect_returned_node_ids(execution_trace.tool_calls, "create_workspace")
-        self._persist_artifact(
-            artifact_name="execution",
-            parent_id=audit_ids.get("execution_workspace_id"),
-            title="execution_summary",
-            content_text=execution_summary,
-            metadata={
-                "run_id": run_id,
-                "stage": "execution",
-                "artifact_type": "execution_summary",
-                "created_at": self._timestamp(),
-                "assistant_turn_count": execution_trace.assistant_turn_count,
-                "tool_call_count": len(execution_trace.tool_calls),
-            },
-            relationships={
-                "saved_memory_node_ids": saved_memory_ids,
-                "created_workspace_node_ids": created_workspace_ids,
-            },
-        )
-
-        recalled_memories = self._recall_memories(
-            plan,
-            scope_node_id=self._normalize_optional_id(audit_ids.get("research_root_id")),
-        )
-        recall_artifact_ids, recalled_node_ids = self._persist_recall_artifacts(
+        self._active_run_id = run_id
+        self._emit_progress(
+            stage="run",
+            status="started",
+            message="Started deep research run.",
             run_id=run_id,
-            recall_workspace_id=audit_ids.get("recall_workspace_id"),
-            recalled_memories=recalled_memories,
         )
-        final_report = self._synthesize_report(
-            user_request=user_request,
-            serialized_plan=serialized_plan,
-            execution_summary=execution_summary,
-            recalled_memories=json.dumps(recalled_memories, indent=2),
-        )
-        final_report_artifact_id = self._persist_artifact(
-            artifact_name="final_report",
-            parent_id=audit_ids.get("report_workspace_id"),
-            title="final_report",
-            content_text=final_report,
-            metadata={
-                "run_id": run_id,
-                "stage": "report",
-                "artifact_type": "final_report",
-                "created_at": self._timestamp(),
-            },
-            relationships={
-                "source_node_ids": recalled_node_ids,
-                "recall_artifact_ids": recall_artifact_ids,
-                "saved_memory_node_ids": saved_memory_ids,
-            },
-        )
-        verification = self._verify_run(
-            run_id=run_id,
-            plan=plan,
-            execution_trace=execution_trace,
-            recalled_memories=recalled_memories,
-            audit_root_node_id=audit_ids.get("audit_root_id"),
-            research_root_node_id=audit_ids.get("research_root_id"),
-            artifact_node_ids={
-                "plan_workspace": audit_ids.get("plan_workspace_id", ""),
-                "execution_workspace": audit_ids.get("execution_workspace_id", ""),
-                "recall_workspace": audit_ids.get("recall_workspace_id", ""),
-                "report_workspace": audit_ids.get("report_workspace_id", ""),
-                "verification_workspace": audit_ids.get("verification_workspace_id", ""),
-                "final_report": final_report_artifact_id or "",
-            },
-        )
-        verification_artifact_id = self._persist_artifact(
-            artifact_name="verification",
-            parent_id=audit_ids.get("verification_workspace_id"),
-            title="verification_summary",
-            content_text=json.dumps(verification.model_dump(), indent=2),
-            metadata={
-                "run_id": run_id,
-                "stage": "verification",
-                "artifact_type": "verification_summary",
-                "created_at": self._timestamp(),
-                "verification_status": verification.status,
-            },
-            relationships={
-                "final_report_artifact_ids": [final_report_artifact_id] if final_report_artifact_id else [],
-                "saved_memory_node_ids": saved_memory_ids,
-                "recalled_node_ids": recalled_node_ids,
-            },
-        )
-        if verification_artifact_id:
-            verification.artifact_node_ids["verification_summary"] = verification_artifact_id
+        try:
+            self._emit_progress(
+                stage="planning",
+                status="started",
+                message="Building structured research plan.",
+                run_id=run_id,
+            )
+            plan = self._build_plan(user_request)
+            self._emit_progress(
+                stage="planning",
+                status="completed",
+                message="Structured research plan created.",
+                run_id=run_id,
+                data={"subtask_count": len(plan.get("subtasks", [])) if isinstance(plan.get("subtasks"), list) else 0},
+            )
+            serialized_plan = json.dumps(plan, indent=2)
 
-        return ResearchRunResult(
-            run_id=run_id,
-            final_report=final_report,
-            plan=plan,
-            execution_summary=execution_summary,
-            recalled_memories=recalled_memories,
-            execution_trace=execution_trace,
-            verification=verification,
-            audit_root_node_id=audit_ids.get("audit_root_id"),
-            research_root_node_id=audit_ids.get("research_root_id"),
-        )
+            self._emit_progress(
+                stage="setup",
+                status="started",
+                message="Creating audit and research workspaces for this run.",
+                run_id=run_id,
+            )
+            audit_ids = self._initialize_run_tree(run_id=run_id, user_request=user_request, plan=plan)
+            self._emit_progress(
+                stage="setup",
+                status="completed",
+                message="Run workspace tree is ready.",
+                run_id=run_id,
+                data={"research_root_node_id": audit_ids.get("research_root_id")},
+            )
+            self._persist_artifact(
+                artifact_name="plan",
+                parent_id=audit_ids.get("plan_workspace_id"),
+                title="research_plan",
+                content_text=serialized_plan,
+                metadata={
+                    "run_id": run_id,
+                    "stage": "planning",
+                    "artifact_type": "research_plan",
+                    "created_at": self._timestamp(),
+                    "user_request": user_request,
+                },
+            )
+
+            self._emit_progress(
+                stage="execution",
+                status="started",
+                message="Executing research plan with memory tools.",
+                run_id=run_id,
+            )
+            execution_trace = self._execute_plan(
+                user_request=user_request,
+                serialized_plan=serialized_plan,
+                research_root_node_id=self._normalize_optional_id(audit_ids.get("research_root_id")),
+            )
+            execution_summary = execution_trace.final_output
+            saved_memory_ids = self._collect_returned_node_ids(execution_trace.tool_calls, "save_memory")
+            created_workspace_ids = self._collect_returned_node_ids(execution_trace.tool_calls, "create_workspace")
+            self._emit_progress(
+                stage="execution",
+                status="completed",
+                message="Execution phase completed.",
+                run_id=run_id,
+                data={
+                    "tool_call_count": len(execution_trace.tool_calls),
+                    "saved_memory_count": len(saved_memory_ids),
+                    "created_workspace_count": len(created_workspace_ids),
+                },
+            )
+            self._persist_artifact(
+                artifact_name="execution",
+                parent_id=audit_ids.get("execution_workspace_id"),
+                title="execution_summary",
+                content_text=execution_summary,
+                metadata={
+                    "run_id": run_id,
+                    "stage": "execution",
+                    "artifact_type": "execution_summary",
+                    "created_at": self._timestamp(),
+                    "assistant_turn_count": execution_trace.assistant_turn_count,
+                    "tool_call_count": len(execution_trace.tool_calls),
+                },
+                relationships={
+                    "saved_memory_node_ids": saved_memory_ids,
+                    "created_workspace_node_ids": created_workspace_ids,
+                },
+            )
+
+            self._emit_progress(
+                stage="recall",
+                status="started",
+                message="Recalling stored memories for synthesis.",
+                run_id=run_id,
+            )
+            recalled_memories = self._recall_memories(
+                plan,
+                scope_node_id=self._normalize_optional_id(audit_ids.get("research_root_id")),
+            )
+            recall_artifact_ids, recalled_node_ids = self._persist_recall_artifacts(
+                run_id=run_id,
+                recall_workspace_id=audit_ids.get("recall_workspace_id"),
+                recalled_memories=recalled_memories,
+            )
+            self._emit_progress(
+                stage="recall",
+                status="completed",
+                message="Recall phase completed.",
+                run_id=run_id,
+                data={
+                    "query_count": len(recalled_memories),
+                    "recalled_node_count": len(recalled_node_ids),
+                },
+            )
+
+            self._emit_progress(
+                stage="synthesis",
+                status="started",
+                message="Writing final report from stored work.",
+                run_id=run_id,
+            )
+            final_report = self._synthesize_report(
+                user_request=user_request,
+                serialized_plan=serialized_plan,
+                execution_summary=execution_summary,
+                recalled_memories=json.dumps(recalled_memories, indent=2),
+            )
+            self._emit_progress(
+                stage="synthesis",
+                status="completed",
+                message="Final report generated.",
+                run_id=run_id,
+                data={"report_preview": final_report[:160]},
+            )
+            final_report_artifact_id = self._persist_artifact(
+                artifact_name="final_report",
+                parent_id=audit_ids.get("report_workspace_id"),
+                title="final_report",
+                content_text=final_report,
+                metadata={
+                    "run_id": run_id,
+                    "stage": "report",
+                    "artifact_type": "final_report",
+                    "created_at": self._timestamp(),
+                },
+                relationships={
+                    "source_node_ids": recalled_node_ids,
+                    "recall_artifact_ids": recall_artifact_ids,
+                    "saved_memory_node_ids": saved_memory_ids,
+                },
+            )
+            self._emit_progress(
+                stage="verification",
+                status="started",
+                message="Verifying that the run used multi-step memory-backed work.",
+                run_id=run_id,
+            )
+            verification = self._verify_run(
+                run_id=run_id,
+                plan=plan,
+                execution_trace=execution_trace,
+                recalled_memories=recalled_memories,
+                audit_root_node_id=audit_ids.get("audit_root_id"),
+                research_root_node_id=audit_ids.get("research_root_id"),
+                artifact_node_ids={
+                    "plan_workspace": audit_ids.get("plan_workspace_id", ""),
+                    "execution_workspace": audit_ids.get("execution_workspace_id", ""),
+                    "recall_workspace": audit_ids.get("recall_workspace_id", ""),
+                    "report_workspace": audit_ids.get("report_workspace_id", ""),
+                    "verification_workspace": audit_ids.get("verification_workspace_id", ""),
+                    "final_report": final_report_artifact_id or "",
+                },
+            )
+            verification_artifact_id = self._persist_artifact(
+                artifact_name="verification",
+                parent_id=audit_ids.get("verification_workspace_id"),
+                title="verification_summary",
+                content_text=json.dumps(verification.model_dump(), indent=2),
+                metadata={
+                    "run_id": run_id,
+                    "stage": "verification",
+                    "artifact_type": "verification_summary",
+                    "created_at": self._timestamp(),
+                    "verification_status": verification.status,
+                },
+                relationships={
+                    "final_report_artifact_ids": [final_report_artifact_id] if final_report_artifact_id else [],
+                    "saved_memory_node_ids": saved_memory_ids,
+                    "recalled_node_ids": recalled_node_ids,
+                },
+            )
+            if verification_artifact_id:
+                verification.artifact_node_ids["verification_summary"] = verification_artifact_id
+            self._emit_progress(
+                stage="verification",
+                status="completed",
+                message=f"Verification completed with status {verification.status}.",
+                run_id=run_id,
+                data={"verification_status": verification.status},
+            )
+
+            result = ResearchRunResult(
+                run_id=run_id,
+                final_report=final_report,
+                plan=plan,
+                execution_summary=execution_summary,
+                recalled_memories=recalled_memories,
+                execution_trace=execution_trace,
+                verification=verification,
+                audit_root_node_id=audit_ids.get("audit_root_id"),
+                research_root_node_id=audit_ids.get("research_root_id"),
+            )
+            self._emit_progress(
+                stage="run",
+                status="completed",
+                message="Deep research run finished.",
+                run_id=run_id,
+                data={"verification_status": verification.status},
+            )
+            return result
+        except Exception as exc:
+            self._emit_progress(
+                stage="run",
+                status="failed",
+                message=f"Deep research run failed: {exc}",
+                run_id=run_id,
+                data={"error_message": str(exc)},
+            )
+            raise
+        finally:
+            self._active_run_id = None
 
     def _build_plan(self, user_request: str) -> Dict[str, Any]:
         """Generate a structured research plan from the user request."""
@@ -335,15 +456,31 @@ class DeepResearchAgent:
         for query in queries:
             if not isinstance(query, str) or not query.strip():
                 continue
+            normalized_query = query.strip()
+            self._emit_progress(
+                stage="recall",
+                status="info",
+                message=f"Searching memory for '{normalized_query}'.",
+                run_id=self._active_run_id,
+                data={"query": normalized_query, "scope_node_id": scope_node_id},
+            )
+            results = self.orchestrator.search_memory(
+                query_text=normalized_query,
+                scope_node_id=scope_node_id,
+                top_k=8,
+            )
             recalled_results.append(
                 {
-                    "query": query,
-                    "results": self.orchestrator.search_memory(
-                        query_text=query,
-                        scope_node_id=scope_node_id,
-                        top_k=8,
-                    ),
+                    "query": normalized_query,
+                    "results": results,
                 }
+            )
+            self._emit_progress(
+                stage="recall",
+                status="info",
+                message=f"Recall query '{normalized_query}' returned {len(results)} result(s).",
+                run_id=self._active_run_id,
+                data={"query": normalized_query, "result_count": len(results)},
             )
         return recalled_results
 
@@ -631,3 +768,41 @@ class DeepResearchAgent:
     def _normalize_optional_id(self, value: Optional[str]) -> Optional[str]:
         """Treat blank identifier strings as missing values."""
         return value or None
+
+    def _handle_executor_progress(self, event: ProgressEvent) -> None:
+        """Forward executor progress while attaching the active run context."""
+        self._emit_progress(
+            stage=event.stage,
+            status=event.status,
+            message=event.message,
+            run_id=self._active_run_id,
+            step_number=event.step_number,
+            tool_name=event.tool_name,
+            data=event.data,
+        )
+
+    def _emit_progress(
+        self,
+        *,
+        stage: str,
+        status: str,
+        message: str,
+        run_id: Optional[str] = None,
+        step_number: Optional[int] = None,
+        tool_name: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Emit a structured progress event when a listener is configured."""
+        if self.on_progress is None:
+            return
+        self.on_progress(
+            ProgressEvent(
+                stage=stage,
+                status=status,
+                message=message,
+                run_id=run_id,
+                step_number=step_number,
+                tool_name=tool_name,
+                data=data or {},
+            )
+        )

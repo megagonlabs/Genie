@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
+from typing import Callable, Optional
 
 import redis
 from dotenv import load_dotenv
@@ -18,7 +20,7 @@ from genie.infrastructure.redis_index_manager import RedisIndexManager
 from genie.infrastructure.redis_json_source import RedisJsonSource
 from genie.infrastructure.redis_vector_source import RedisVectorSource
 
-from apps.agent import DeepResearchAgent
+from apps.agent import DeepResearchAgent, ProgressEvent
 
 load_dotenv(PROJECT_ROOT / "openai.env")
 
@@ -45,11 +47,34 @@ def build_orchestrator(redis_url: str = "redis://localhost:6379/0") -> MemoryOrc
     return orchestrator
 
 
-def build_agent(orchestrator: MemoryOrchestrator) -> DeepResearchAgent:
+def format_progress_event(event: ProgressEvent) -> str:
+    """Render a concise CLI line for a structured progress event."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    stage_label = event.stage.upper()
+    if event.stage == "execution" and event.tool_name and event.step_number is not None:
+        return (
+            f"[{timestamp}] [{stage_label}] "
+            f"step {event.step_number} {event.status}: {event.tool_name} "
+            f"- {event.message}"
+        )
+    return f"[{timestamp}] [{stage_label}] {event.status}: {event.message}"
+
+
+def print_progress_event(event: ProgressEvent) -> None:
+    """Print a progress event to stdout for the interactive CLI."""
+    print(format_progress_event(event), flush=True)
+
+
+def build_agent(
+    orchestrator: MemoryOrchestrator,
+    *,
+    on_progress: Optional[Callable[[ProgressEvent], None]] = None,
+) -> DeepResearchAgent:
     """Construct the reusable deep-research agent used by the CLI."""
     return DeepResearchAgent(
         openai_client=OpenAI(),
         orchestrator=orchestrator,
+        on_progress=on_progress,
     )
 
 
@@ -64,7 +89,7 @@ def main() -> None:
     except redis.ConnectionError:
         sys.exit(1)
 
-    agent = build_agent(orchestrator)
+    agent = build_agent(orchestrator, on_progress=print_progress_event)
     run_result = agent.run_with_audit(user_query)
     print(run_result.final_report)
     print("\n=== Verification Summary ===")

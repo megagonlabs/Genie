@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Tuple, cast
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, cast
 
 from openai import OpenAI
 from openai.types.chat import (
@@ -11,9 +11,10 @@ from openai.types.chat import (
     ChatCompletionToolParam,
 )
 
-from apps.agent.models import ToolCallTrace, ToolLoopResult
+from apps.agent.models import ProgressEvent, ToolCallTrace, ToolLoopResult
 
 ToolCallable = Callable[..., Any]
+ProgressCallback = Callable[[ProgressEvent], None]
 
 
 class ToolLoopExecutor:
@@ -39,12 +40,14 @@ class ToolLoopExecutor:
         tools: Iterable[Mapping[str, Any]],
         available_functions: Mapping[str, ToolCallable],
         max_round_trips: int = 20,
+        on_progress: Optional[ProgressCallback] = None,
     ) -> None:
         self.client = openai_client
         self.model = model
         self.tools = cast(List[ChatCompletionToolParam], list(tools))
         self.available_functions = dict(available_functions)
         self.max_round_trips = max_round_trips
+        self.on_progress = on_progress
 
     def run(self, messages: List[ChatCompletionMessageParam]) -> str:
         """Run the assistant/tool loop until the model returns a final answer.
@@ -73,6 +76,12 @@ class ToolLoopExecutor:
         trace: List[ToolCallTrace] = []
 
         for round_index in range(self.max_round_trips):
+            self._emit_progress(
+                stage="execution",
+                status="info",
+                message=f"Starting assistant turn {round_index + 1}.",
+                data={"assistant_turn": round_index + 1},
+            )
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -84,8 +93,19 @@ class ToolLoopExecutor:
             messages.append(cast(ChatCompletionMessageParam, assistant_message))
 
             if not response_message.tool_calls:
+                final_output = response_message.content or "Task completed with no text output."
+                self._emit_progress(
+                    stage="execution",
+                    status="completed",
+                    message="Execution loop completed with a final assistant response.",
+                    data={
+                        "assistant_turn_count": round_index + 1,
+                        "tool_call_count": len(trace),
+                        "final_output_preview": final_output[:160],
+                    },
+                )
                 return ToolLoopResult(
-                    final_output=response_message.content or "Task completed with no text output.",
+                    final_output=final_output,
                     tool_calls=trace,
                     assistant_turn_count=round_index + 1,
                 )
@@ -97,6 +117,15 @@ class ToolLoopExecutor:
                 function_name = tool_call.function.name
                 function_to_call = self.available_functions.get(function_name)
                 step_number = len(trace) + 1
+                parsed_arguments = self._parse_tool_arguments(tool_call.function.arguments)
+                self._emit_progress(
+                    stage="execution",
+                    status="started",
+                    message=f"Running tool {function_name} (step {step_number}).",
+                    step_number=step_number,
+                    tool_name=function_name,
+                    data={"arguments": parsed_arguments},
+                )
                 if function_to_call is None:
                     response_str = f"Error executing tool: Unknown tool '{function_name}'."
                     trace.append(
@@ -104,12 +133,20 @@ class ToolLoopExecutor:
                             step_number=step_number,
                             tool_call_id=tool_call.id,
                             tool_name=function_name,
-                            arguments=self._parse_tool_arguments(tool_call.function.arguments),
+                            arguments=parsed_arguments,
                             result=None,
                             response_text=response_str,
                             succeeded=False,
                             error_message=f"Unknown tool '{function_name}'.",
                         )
+                    )
+                    self._emit_progress(
+                        stage="execution",
+                        status="failed",
+                        message=f"Tool {function_name} is not registered.",
+                        step_number=step_number,
+                        tool_name=function_name,
+                        data={"arguments": parsed_arguments},
                     )
                     messages.append(
                         cast(
@@ -132,6 +169,22 @@ class ToolLoopExecutor:
                     step_number=step_number,
                 )
                 trace.append(trace_entry)
+                self._emit_progress(
+                    stage="execution",
+                    status="completed" if trace_entry.succeeded else "failed",
+                    message=(
+                        f"Tool {function_name} completed."
+                        if trace_entry.succeeded
+                        else f"Tool {function_name} failed: {trace_entry.error_message}"
+                    ),
+                    step_number=step_number,
+                    tool_name=function_name,
+                    data={
+                        "arguments": trace_entry.arguments,
+                        "returned_node_id": trace_entry.returned_node_id,
+                        "error_message": trace_entry.error_message,
+                    },
+                )
                 messages.append(
                     cast(
                         ChatCompletionMessageParam,
@@ -146,6 +199,30 @@ class ToolLoopExecutor:
 
         raise RuntimeError(
             f"Tool loop exceeded the maximum of {self.max_round_trips} assistant turns."
+        )
+
+    def _emit_progress(
+        self,
+        *,
+        stage: str,
+        status: str,
+        message: str,
+        step_number: Optional[int] = None,
+        tool_name: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Emit a progress callback event when a listener is configured."""
+        if self.on_progress is None:
+            return
+        self.on_progress(
+            ProgressEvent(
+                stage=stage,
+                status=status,
+                message=message,
+                step_number=step_number,
+                tool_name=tool_name,
+                data=data or {},
+            )
         )
 
     def _parse_tool_arguments(self, raw_arguments: str) -> Dict[str, Any]:

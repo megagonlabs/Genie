@@ -1,4 +1,4 @@
-"""Data models for deep-research execution traces and audit verification."""
+"""Data models for deep-research progress, traces, and audit verification."""
 
 from __future__ import annotations
 
@@ -57,6 +57,35 @@ class ToolLoopResult(BaseModel):
     final_output: str
     tool_calls: List[ToolCallTrace] = Field(default_factory=list)
     assistant_turn_count: int
+
+
+class ProgressEvent(BaseModel):
+    """Structured progress event emitted during agent execution.
+
+    Parameters:
+    stage:
+        High-level lifecycle stage such as ``planning`` or ``execution``.
+    status:
+        Event status such as ``started``, ``completed``, ``info``, or ``failed``.
+    message:
+        Human-readable summary suitable for logging or UI display.
+    run_id:
+        Optional stable identifier for the active research run.
+    step_number:
+        Optional sequential step number, typically for tool calls.
+    tool_name:
+        Optional tool name associated with the event.
+    data:
+        Optional structured payload with additional event metadata.
+    """
+
+    stage: str
+    status: str
+    message: str
+    run_id: Optional[str] = None
+    step_number: Optional[int] = None
+    tool_name: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
 
 
 class VerificationCheck(BaseModel):
