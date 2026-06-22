@@ -1,0 +1,5 @@
+# Install the example apps plus the Genie backend extras they rely on.
+-e ..[redis,fastembed]
+openai>=1.30
+python-dotenv>=1.0
+streamlit>=1.36

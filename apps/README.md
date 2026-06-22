@@ -21,6 +21,12 @@ Before running the example, make sure you have:
 
 `apps/run_agent.py` loads credentials from `openai.env` and connects to Redis at `redis://localhost:6379/0` by default.
 
+If you are installing app dependencies with pip instead of Conda, use:
+
+```bash
+pip install -r apps/requirements.txt
+```
+
 ### Run The Agent
 
 From the project root:
