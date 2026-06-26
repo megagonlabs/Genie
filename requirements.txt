@@ -1,2 +1,0 @@
-# Install the library with common optional backend integrations and test tools.
--e .[redis,fastembed,test]
