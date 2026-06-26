@@ -1,114 +1,34 @@
-"""Tool schemas and helper registry builders for agent workflows."""
+"""Compatibility wrapper around the reusable Genie agent-tool integration API."""
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, Mapping
+from typing import Any, Callable, Dict, Iterable
+
+from genie.integrations.agent_tools import (
+    build_memory_tool_registry as build_genie_memory_tool_registry,
+    get_memory_tool_schemas,
+)
 
 
-MEMORY_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "create_workspace",
-            "description": (
-                "Create a workspace node to organize the research hierarchy. "
-                "Use this before saving memories so the work is grouped into logical folders."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": (
-                            "Human-readable workspace title such as "
-                            "'market_landscape', 'evidence', or 'report_outline'."
-                        ),
-                    },
-                    "parent_id": {
-                        "type": "string",
-                        "description": (
-                            "Exact parent node_id returned by Genie. Omit or pass null for a root workspace."
-                        ),
-                    },
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_memory",
-            "description": (
-                "Save a concrete finding, note, source summary, decision, or draft paragraph "
-                "inside the most relevant workspace."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "workspace_node_id": {
-                        "type": "string",
-                        "description": "Exact workspace node_id where the note should be stored.",
-                    },
-                    "content_text": {
-                        "type": "string",
-                        "description": "The content to store for later recall and synthesis.",
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "A short descriptive label for the saved memory node.",
-                    },
-                },
-                "required": ["workspace_node_id", "content_text", "name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_memory",
-            "description": (
-                "Search previously saved memories semantically. Use this before writing the "
-                "final answer and whenever you need to recover prior findings."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query_text": {
-                        "type": "string",
-                        "description": "Natural language search query.",
-                    },
-                    "scope_node_id": {
-                        "type": "string",
-                        "description": (
-                            "Optional exact workspace node_id to restrict results to a subtree."
-                        ),
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return.",
-                    },
-                },
-                "required": ["query_text"],
-            },
-        },
-    },
-]
+# Keep the demo app import surface stable while sourcing the actual schemas
+# from the reusable Genie integration module.
+MEMORY_TOOLS = get_memory_tool_schemas()
 
 
-def build_memory_tool_registry(orchestrator: Any) -> Dict[str, Callable[..., Any]]:
-    """Build the callable tool registry for a Genie-backed memory agent.
+def build_memory_tool_registry(
+    orchestrator: Any,
+    tool_names: Iterable[str] | None = None,
+) -> Dict[str, Callable[..., Any]]:
+    """Build the callable tool registry for the demo agent.
 
     Parameters:
     orchestrator:
-        Memory orchestrator instance exposing the supported tool methods.
+        Genie-compatible orchestrator exposing the selected memory methods.
+    tool_names:
+        Optional ordered subset of Genie tool names to expose.
 
     Returns:
     dict[str, Callable[..., Any]]
         Mapping from tool names to bound orchestrator methods.
     """
-    return {
-        "create_workspace": orchestrator.create_workspace,
-        "save_memory": orchestrator.save_memory,
-        "search_memory": orchestrator.search_memory,
-    }
+    return build_genie_memory_tool_registry(orchestrator, tool_names=tool_names)

@@ -11,6 +11,11 @@ from apps.agent.models import ProgressEvent
 from apps.agent.research_agent import DeepResearchAgent
 from apps.agent.tools import MEMORY_TOOLS
 from genie.core.orchestrator import MemoryOrchestrator
+from genie.integrations.agent_tools import (
+    DEFAULT_MEMORY_TOOL_NAMES,
+    build_memory_tool_registry,
+    get_memory_tool_schemas,
+)
 
 
 class ToolResultModel(BaseModel):
@@ -229,6 +234,41 @@ class TestToolLoopExecutor:
 
         with pytest.raises(RuntimeError, match="maximum of 2 assistant turns"):
             executor.run([{"role": "system", "content": "Test Prompt"}, {"role": "user", "content": "Do something."}])
+
+
+class TestGenieAgentTooling:
+    def test_get_memory_tool_schemas_returns_default_reusable_set(self):
+        schemas = get_memory_tool_schemas()
+
+        assert [schema["function"]["name"] for schema in schemas] == list(DEFAULT_MEMORY_TOOL_NAMES)
+        assert schemas is not MEMORY_TOOLS
+        assert [schema["function"]["name"] for schema in MEMORY_TOOLS] == list(DEFAULT_MEMORY_TOOL_NAMES)
+
+    def test_get_memory_tool_schemas_supports_ordered_subset(self):
+        schemas = get_memory_tool_schemas(["search_memory", "create_workspace"])
+
+        assert [schema["function"]["name"] for schema in schemas] == [
+            "search_memory",
+            "create_workspace",
+        ]
+
+    def test_build_memory_tool_registry_uses_selected_subset(self):
+        orchestrator = MagicMock(spec=MemoryOrchestrator)
+
+        registry = build_memory_tool_registry(
+            orchestrator,
+            tool_names=["search_memory", "create_workspace"],
+        )
+
+        assert list(registry) == ["search_memory", "create_workspace"]
+        assert registry["search_memory"] is orchestrator.search_memory
+        assert registry["create_workspace"] is orchestrator.create_workspace
+
+    def test_build_memory_tool_registry_rejects_unknown_tool_name(self):
+        orchestrator = MagicMock(spec=MemoryOrchestrator)
+
+        with pytest.raises(ValueError, match="Unknown Genie tool name"):
+            build_memory_tool_registry(orchestrator, tool_names=["unknown_tool"])
 
 
 class TestDeepResearchAgent:

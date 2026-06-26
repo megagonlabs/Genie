@@ -12,6 +12,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from genie.core.orchestrator import MemoryOrchestrator
+from genie.integrations.agent_tools import build_memory_tool_registry, get_memory_tool_schemas
 from genie.models.node import Node
 
 from apps.agent.executor import ToolLoopExecutor
@@ -30,7 +31,6 @@ from apps.agent.prompts import (
     build_planning_user_prompt,
     build_synthesis_user_prompt,
 )
-from apps.agent.tools import MEMORY_TOOLS, build_memory_tool_registry
 
 ProgressCallback = Callable[[ProgressEvent], None]
 
@@ -72,7 +72,7 @@ class DeepResearchAgent:
         self.tool_executor = ToolLoopExecutor(
             openai_client=openai_client,
             model=execution_model,
-            tools=MEMORY_TOOLS,
+            tools=get_memory_tool_schemas(),
             available_functions=build_memory_tool_registry(orchestrator),
             max_round_trips=max_tool_round_trips,
             on_progress=self._handle_executor_progress,
