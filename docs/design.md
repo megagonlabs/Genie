@@ -6,7 +6,7 @@ opinionated long-term memory product. Its job is to define the core memory
 model, scoped access semantics, and extension contracts that other systems can
 build on.
 
-The library is designed to:
+Design objectives:
 
 - Provide a small, stable memory model that can be persisted in many backends.
 - Treat memory as structured, hierarchical, and permissioned by default.
@@ -16,7 +16,7 @@ The library is designed to:
 - Fail closed for access control and operational safety.
 - Stay dependency-light in the core package.
 
-Genie deliberately does not try to:
+Non-goals:
 
 - prescribe a single database
 - provide durable production storage in core
@@ -51,7 +51,7 @@ The key rule is:
 Memory is the full system. MemoryScope is a capability-bearing handle to part of it.
 ```
 
-Application code should generally keep `Memory` at trust boundaries and pass
+Recommended integration pattern: keep `Memory` at trust boundaries and pass
 `MemoryScope` into agents or sub-agents.
 
 ## Package Layout
@@ -138,7 +138,7 @@ supports JSON-compatible values:
 - `list`
 - `dict` with string keys
 
-Custom types can be supported through codecs.
+Custom type support is provided through codecs.
 
 ```python
 memory.put(type="preference", value={"style": "concise"})
@@ -166,8 +166,7 @@ and recursive operations. The in-memory backend rejects parent cycles.
 memory.link(requirement, outline, "informs")
 ```
 
-Links are useful when a relationship should not imply ownership or subtree
-membership.
+Use links for relationships that do not imply ownership or subtree membership.
 
 ## Public API
 
@@ -229,7 +228,7 @@ explicitly configured otherwise.
 
 ## Scoped Access
 
-Scopes are the main safety boundary in Genie.
+Scopes define the primary safety boundary in Genie.
 
 ```python
 project_scope = memory.scope(root=project)
@@ -292,7 +291,7 @@ memory.search(
 
 ## Filter Operators
 
-Application code can use human-friendly operators:
+Application-facing filters accept human-friendly operators:
 
 ```python
 filters={
@@ -323,7 +322,7 @@ Supported aliases:
 | `<=` | `$lte` |
 | `in` | `$in` |
 
-Adapters can rely on the canonical operator names. The in-memory backend
+Adapters receive canonical operator names. The in-memory backend
 implements a small portable subset and fails closed for incompatible
 comparisons.
 
@@ -358,8 +357,8 @@ LinkStore
   links
 ```
 
-The important design choice is that storage and indexing are conceptually
-separate even when one concrete backend implements both.
+The backend model separates storage and indexing conceptually, even when one
+concrete backend implements both.
 
 ### Store vs Index
 
@@ -371,7 +370,7 @@ It answers questions like:
 What block has this id?
 What is the current value and metadata?
 What is this block's parent?
-What should be persisted, updated, or deleted?
+Which state is persisted, updated, or deleted?
 ```
 
 An index is a retrieval or traversal projection over that truth.
@@ -382,11 +381,12 @@ It answers questions like:
 Which blocks match this text query?
 Which blocks are semantically similar?
 Which descendants are under this root?
-Which linked blocks should be returned?
+Which linked blocks are returned?
 Which blocks match this metadata filter efficiently?
 ```
 
-Those responsibilities are related, but they are not the same.
+These responsibilities have different correctness, rebuild, and availability
+requirements.
 
 For example:
 
@@ -398,31 +398,31 @@ Postgres + pgvector
   can store blocks and also provide vector retrieval.
 
 S3 or object storage
-  may be a store for large values, but not a good search index.
+  can store large values while relying on another system for search.
 
 Elasticsearch
   may be an index for text retrieval, but not the source of truth.
 
 Neo4j
-  may be excellent for graph traversal and links, but a different system may own blobs.
+  can own graph traversal and links while a different system owns blobs.
 
 Vector databases
-  may retrieve similar blocks, but usually should not be the only source of truth for full memory state.
+  can retrieve similar blocks without acting as the source of truth for full memory state.
 ```
 
-Keeping stores and indexes separate in the design is good because it preserves
-clear ownership:
+The separation defines ownership and recovery behavior:
 
 - writes go to the source of truth
 - indexes can be rebuilt from stored blocks
 - search failures do not necessarily imply data loss
-- adapter authors can use the best database feature for each capability
-- simple deployments can still use one database for everything
+- adapter authors can use the appropriate database capability for each operation
+- single-database deployments can still implement every capability in one place
 - advanced deployments can compose multiple systems without changing the public API
 
-This is also an operational safety choice. If an index is stale, corrupted, or
-temporarily unavailable, the system should still know where authoritative memory
-lives. The store owns correctness; indexes optimize retrieval.
+Operationally, this separates authoritative state from derived retrieval
+structures. If an index is stale, corrupted, or temporarily unavailable, the
+system still has a separate authoritative memory source. The store owns
+correctness; indexes optimize retrieval.
 
 ### One Public Backend, Multiple Internal Capabilities
 
@@ -432,11 +432,11 @@ The core API does not require users to choose separate store/index objects:
 memory = Memory(backend=PostgresBackend(...))
 ```
 
-That keeps the user-facing setup simple. A developer using Genie should not
-need to understand the internal storage topology just to pass memory into an
-agent.
+This keeps backend topology internal to adapter configuration. A developer using
+Genie does not need to understand the internal storage topology just to pass
+memory into an agent.
 
-But inside the backend, the implementation can still be split:
+Inside the backend, the implementation can still be split:
 
 ```python
 class CompositeBackend:
@@ -469,8 +469,8 @@ Adapter implementation layer
   implement store, traversal, search, and link capabilities however the database stack requires
 ```
 
-This lets Genie stay database-agnostic without making the public API feel like
-plumbing.
+As a result, Genie remains database-agnostic while backend composition stays out
+of the public API.
 
 ### Example Backend Shapes
 
@@ -503,10 +503,10 @@ It provides:
 - parent/child traversal
 - descendant traversal
 - link storage
-- simple text search
-- simple metadata filters
+- basic text search
+- basic metadata filters
 
-It is not durable and should not be treated as production storage.
+It is not durable and is intended for tests, examples, and local prototypes.
 
 Operational safety currently includes:
 
@@ -549,7 +549,7 @@ Important defaults:
 - Recursive delete requires write access to every block that would be deleted.
 
 Root write access does not automatically imply write access to descendants.
-That inheritance model can be added later, but it should be explicit.
+That inheritance model can be added later as an explicit policy mode.
 
 ## Hooks
 
@@ -587,8 +587,7 @@ Common hook use cases:
 - redaction
 - result reranking
 
-Hooks should be treated as extension points, not as a replacement for backend
-transactions.
+Hooks are extension points, not a replacement for backend transactions.
 
 ## Codecs
 
@@ -630,8 +629,8 @@ The current implementation favors conservative behavior:
 - JSON encoding rejects `NaN` and `Infinity`
 - incompatible filter comparisons produce no matches
 
-These are intentionally simple rules that adapter authors can preserve in more
-advanced storage systems.
+These rules define the baseline safety behavior for adapter authors targeting
+more advanced storage systems.
 
 ## Future TODOs
 
@@ -647,5 +646,5 @@ advanced storage systems.
 - optional vector-search integration
 - first-party SQLite/Postgres adapters
 
-The current design keeps these additions possible without making the core
-memory model depend on one database or retrieval strategy.
+These additions remain compatible with the current core abstractions without
+making the memory model depend on one database or retrieval strategy.
