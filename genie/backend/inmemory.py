@@ -33,7 +33,8 @@ class InMemoryBackend:
         return block
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        return self._blocks.get(block_id)
+        block = self._blocks.get(block_id)
+        return _copy_block(block) if block is not None else None
 
     def update_block(self, block: MemoryBlock) -> MemoryBlock:
         previous = self._blocks.get(block.id)
@@ -60,7 +61,7 @@ class InMemoryBackend:
                 self._links.pop(link_id, None)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
-        return [self._blocks[child_id] for child_id in self._children.get(block_id, ())]
+        return [_copy_block(self._blocks[child_id]) for child_id in self._children.get(block_id, ())]
 
     def ancestors(self, block_id: str) -> list[MemoryBlock]:
         ancestors: list[MemoryBlock] = []
@@ -69,14 +70,14 @@ class InMemoryBackend:
             parent = self._blocks.get(block.parent_id)
             if parent is None:
                 break
-            ancestors.append(parent)
+            ancestors.append(_copy_block(parent))
             block = parent
         return ancestors
 
     def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
         blocks: list[MemoryBlock] = []
         if include_self and block_id in self._blocks:
-            blocks.append(self._blocks[block_id])
+            blocks.append(_copy_block(self._blocks[block_id]))
         for child_id in self._children.get(block_id, ()):
             blocks.extend(self.descendants(child_id, include_self=True))
         return blocks
@@ -93,9 +94,9 @@ class InMemoryBackend:
             raise MemoryConflict(f"Target memory block {link.target_id!r} does not exist.")
         link = _copy_link(link)
         self._links[link.id] = link
-        return link
+        return _copy_link(link)
 
-    def links(
+    def list_links(
         self,
         block_id: str,
         *,
@@ -133,7 +134,7 @@ class InMemoryBackend:
                     continue
                 score = float(haystack.count(text) or 1)
                 reason = "matched text"
-            results.append(SearchResult(block=block, score=score, reason=reason))
+            results.append(SearchResult(block=_copy_block(block), score=score, reason=reason))
         results.sort(key=lambda result: result.score, reverse=True)
         return results[: query.limit]
 
@@ -150,7 +151,7 @@ class InMemoryBackend:
             return [self._blocks[query.root_id], *self.ancestors(query.root_id)]
         if query.scope == Scope.LINKS:
             block_ids: set[str] = set()
-            for link in self.links(query.root_id, direction="both"):
+            for link in self.list_links(query.root_id, direction="both"):
                 block_ids.add(link.source_id)
                 block_ids.add(link.target_id)
             return [self._blocks[block_id] for block_id in block_ids if block_id in self._blocks]

@@ -163,7 +163,7 @@ and recursive operations. The in-memory backend rejects parent cycles.
 `MemoryLink` represents typed non-hierarchical relationships.
 
 ```python
-memory.link(requirement, outline, "informs")
+memory.add_link(requirement, outline, "informs")
 ```
 
 Use links for relationships that do not imply ownership or subtree membership.
@@ -187,8 +187,8 @@ It exposes:
 - `delete`
 - `children`
 - `ancestors`
-- `link`
-- `links`
+- `add_link`
+- `list_links`
 - `search`
 - `scope`
 
@@ -218,8 +218,8 @@ It supports normal CRUD/search operations:
 - `delete`
 - `children`
 - `ancestors`
-- `link`
-- `links`
+- `add_link`
+- `list_links`
 - `search`
 - `scope`
 
@@ -354,7 +354,7 @@ SearchIndex
 
 LinkStore
   add_link
-  links
+  list_links
 ```
 
 The backend model separates storage and indexing conceptually, even when one
@@ -443,7 +443,7 @@ class CompositeBackend:
     store = SQLiteBlockStore(...)
     traversal = SQLiteTraversalIndex(...)
     search = ElasticsearchIndex(...)
-    links = SQLiteLinkStore(...)
+    link_store = SQLiteLinkStore(...)
 ```
 
 or implemented as one class:
@@ -455,6 +455,7 @@ class PostgresBackend:
     def children(...): ...
     def search(...): ...
     def add_link(...): ...
+    def list_links(...): ...
 ```
 
 Both shapes satisfy the same `MemoryBackend` contract.
@@ -626,6 +627,8 @@ The current implementation favors conservative behavior:
 - returned JSON values and metadata are copied
 - in-memory reparenting rejects cycles
 - link directions are validated
+- link listing hides relationships whose endpoints are not readable by the principal
+- scoped link listing and linked-memory search remain inside the scope root
 - JSON encoding rejects `NaN` and `Infinity`
 - incompatible filter comparisons produce no matches
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from genie.memory.block import MemoryBlock
@@ -88,7 +89,7 @@ class MemoryScope:
         self._require_in_subtree(actual_id)
         return self._as_principal().ancestors(actual_id)
 
-    def link(
+    def add_link(
         self,
         source: str | MemoryBlock,
         target: str | MemoryBlock,
@@ -98,9 +99,9 @@ class MemoryScope:
     ) -> MemoryLink:
         self._require_in_subtree(_block_id(source))
         self._require_in_subtree(_block_id(target))
-        return self._as_principal().link(source, target, relation, metadata=metadata)
+        return self._as_principal().add_link(source, target, relation, metadata=metadata)
 
-    def links(
+    def list_links(
         self,
         block_id: str | MemoryBlock,
         *,
@@ -109,7 +110,15 @@ class MemoryScope:
     ) -> list[MemoryLink]:
         actual_id = _block_id(block_id)
         self._require_in_subtree(actual_id)
-        return self._as_principal().links(actual_id, relation=relation, direction=direction)
+        links = self._as_principal().list_links(actual_id, relation=relation, direction=direction)
+        if self.root_id is None:
+            return links
+        return [
+            link
+            for link in links
+            if self._memory.contains(self.root_id, link.source_id)
+            and self._memory.contains(self.root_id, link.target_id)
+        ]
 
     def search(
         self,
@@ -119,20 +128,28 @@ class MemoryScope:
         root: str | MemoryBlock | None = None,
         **kwargs: Any,
     ) -> list[SearchResult]:
-        selected_scope = Scope(scope or self.default_scope)
-        root_id = _block_id(root) if root is not None else self.root_id
+        if isinstance(query, MemoryQuery):
+            selected_scope = Scope(scope or query.scope)
+            root_id = _block_id(root) if root is not None else query.root_id or self.root_id
+            query = replace(query, root_id=root_id, scope=selected_scope)
+        else:
+            selected_scope = Scope(scope or self.default_scope)
+            root_id = _block_id(root) if root is not None else self.root_id
         if selected_scope == Scope.GLOBAL and not self.allow_global:
             raise AccessDenied("This memory scope does not allow global search.")
         if selected_scope == Scope.ANCESTORS and not self.allow_up:
             raise AccessDenied("This memory scope does not allow ancestor search.")
-        if root_id is not None and selected_scope not in {Scope.GLOBAL, Scope.ANCESTORS}:
+        if root_id is not None and selected_scope != Scope.GLOBAL:
             self._require_in_subtree(root_id)
-        return self._as_principal().search(
+        results = self._as_principal().search(
             query,
             root=root_id,
             scope=selected_scope,
             **kwargs,
         )
+        if self.root_id is None or selected_scope in {Scope.GLOBAL, Scope.ANCESTORS}:
+            return results
+        return [result for result in results if self._memory.contains(self.root_id, result.block.id)]
 
     def scope(
         self,

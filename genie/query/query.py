@@ -21,3 +21,5 @@ class MemoryQuery:
         if isinstance(self.types, list):
             object.__setattr__(self, "types", tuple(self.types))
         object.__setattr__(self, "filters", normalize_filters(self.filters))
+        if self.limit < 0:
+            raise ValueError("MemoryQuery limit must be greater than or equal to zero.")

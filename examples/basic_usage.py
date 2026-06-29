@@ -94,7 +94,7 @@ def main() -> None:
     assert [result.block.id for result in filtered] == [requirement.id]
 
     print_header("Links model cross-memory relationships")
-    memory.link(requirement, outline, "informs")
+    memory.add_link(requirement, outline, "informs")
     linked = memory.search("sections", root=requirement, scope="links")
     print_blocks(linked)
     assert [result.block.id for result in linked] == [outline.id]

@@ -39,7 +39,7 @@ class SearchIndex(Protocol):
 class LinkStore(Protocol):
     def add_link(self, link: MemoryLink) -> MemoryLink: ...
 
-    def links(
+    def list_links(
         self,
         block_id: str,
         *,

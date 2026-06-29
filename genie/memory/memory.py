@@ -158,7 +158,7 @@ class Memory:
             if self.policy_engine.allows(Operation.READ, ancestor, self.principal)
         ]
 
-    def link(
+    def add_link(
         self,
         source: str | MemoryBlock,
         target: str | MemoryBlock,
@@ -179,7 +179,7 @@ class Memory:
             )
         )
 
-    def links(
+    def list_links(
         self,
         block_id: str | MemoryBlock,
         *,
@@ -188,7 +188,11 @@ class Memory:
     ) -> list[MemoryLink]:
         block = self._require_raw(_block_id(block_id))
         self.policy_engine.require(Operation.READ, block, self.principal)
-        return self.backend.links(block.id, relation=relation, direction=direction)
+        return [
+            link
+            for link in self.backend.list_links(block.id, relation=relation, direction=direction)
+            if self._can_read_link_endpoints(link)
+        ]
 
     def search(
         self,
@@ -290,6 +294,13 @@ class Memory:
     def _decode_block(self, block: MemoryBlock) -> MemoryBlock:
         decoded = self.codecs.decode(EncodedValue(block.content_type, block.value))
         return block.with_updates(value=decoded, metadata=deepcopy(block.metadata))
+
+    def _can_read_link_endpoints(self, link: MemoryLink) -> bool:
+        for block_id in (link.source_id, link.target_id):
+            block = self.backend.get_block(block_id)
+            if block is None or not self.policy_engine.allows(Operation.READ, block, self.principal):
+                return False
+        return True
 
 
 @overload

@@ -123,6 +123,8 @@ Genie is designed so the core abstractions fail closed where possible:
 - Recursive delete requires write access to every block in the deleted subtree.
 - In-memory hierarchy updates reject parent cycles.
 - Link direction values are validated.
+- Link listing hides relationships whose endpoints are not readable by the principal.
+- Scoped link listing and linked-memory search do not expose blocks outside the scope.
 - JSON encoding rejects non-finite floats such as `NaN` and `Infinity`.
 - Unknown codecs and incompatible query filters raise clear errors or produce no matches.
 
