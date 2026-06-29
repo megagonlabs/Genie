@@ -1,3 +1,5 @@
+"""Tests for the in-memory backend reference implementation."""
+
 from __future__ import annotations
 
 import pytest
@@ -7,6 +9,8 @@ from genie.memory.errors import MemoryConflict
 
 
 def test_backends_can_be_shared_between_memory_instances() -> None:
+    """Multiple Memory handles can share one backend."""
+
     backend = InMemoryBackend()
     writer = Memory(backend=backend, principal="writer")
     reader = Memory(backend=backend, principal="reader")
@@ -19,6 +23,8 @@ def test_backends_can_be_shared_between_memory_instances() -> None:
 
 
 def test_backend_parent_moves_update_children_indexes() -> None:
+    """Reparenting updates old and new child indexes."""
+
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
     old_parent = memory.put(type="root", value="old")
@@ -34,6 +40,8 @@ def test_backend_parent_moves_update_children_indexes() -> None:
 
 
 def test_backend_rejects_reparenting_cycles() -> None:
+    """Reparenting rejects self-parenting and descendant cycles."""
+
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
     root = memory.put(type="root", value="root")
@@ -51,6 +59,8 @@ def test_backend_rejects_reparenting_cycles() -> None:
 
 
 def test_inmemory_backend_read_paths_return_defensive_copies() -> None:
+    """Backend reads, traversal, and search return defensive copies."""
+
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
     root = memory.put(

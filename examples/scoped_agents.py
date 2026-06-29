@@ -21,14 +21,32 @@ from genie import AccessDenied, Memory, MemoryBlock, MemoryScope
 
 @dataclass
 class Agent:
+    """Tiny example agent that receives only a scoped memory handle.
+
+    Attributes:
+        name: Human-readable agent name used in written notes.
+        memory: Scoped memory handle passed in by the application.
+    """
+
     name: str
     memory: MemoryScope
 
     def remember(self, text: str) -> MemoryBlock:
+        """Write a note into the agent's scoped memory.
+
+        Args:
+            text: Note text.
+
+        Returns:
+            Created memory block.
+        """
+
         return self.memory.put(type="note", value=f"{self.name}: {text}")
 
 
 def main() -> None:
+    """Run a focused scoped-agent walkthrough."""
+
     memory = Memory(principal="system")
     project = memory.put(type="project", value="Project workspace")
     task = memory.put(parent=project, type="task", value="Write summary")

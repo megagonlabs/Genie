@@ -1,3 +1,5 @@
+"""Tests for core memory CRUD behavior."""
+
 from __future__ import annotations
 
 import pytest
@@ -7,6 +9,8 @@ from genie.memory.errors import MemoryConflict, MemoryNotFound
 
 
 def test_put_get_and_patch_memory_block() -> None:
+    """Memory blocks can be created, read, patched, and versioned."""
+
     memory = Memory()
 
     block = memory.put(type="preference", value={"style": "concise"})
@@ -21,6 +25,8 @@ def test_put_get_and_patch_memory_block() -> None:
 
 
 def test_set_delete_and_recursive_cleanup() -> None:
+    """Set and recursive delete update blocks, children, and links."""
+
     memory = Memory()
     root = memory.put(type="root", value="old")
     child = memory.put(parent=root, type="child", value="child")
@@ -40,6 +46,8 @@ def test_set_delete_and_recursive_cleanup() -> None:
 
 
 def test_delete_requires_write_access_for_descendants() -> None:
+    """Recursive delete fails if any descendant denies write access."""
+
     memory = Memory()
     root = memory.put(type="root", value="root")
     child = memory.put(
@@ -57,6 +65,8 @@ def test_delete_requires_write_access_for_descendants() -> None:
 
 
 def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
+    """Missing ids and duplicate ids raise explicit memory errors."""
+
     memory = Memory()
     block = memory.put(type="note", value="exists", id="fixed")
 
@@ -69,6 +79,8 @@ def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
 
 
 def test_patch_requires_dict_values() -> None:
+    """Value patches are accepted only for dictionary values."""
+
     memory = Memory()
     block = memory.put(type="note", value="plain text")
 
@@ -77,6 +89,8 @@ def test_patch_requires_dict_values() -> None:
 
 
 def test_returned_blocks_do_not_mutate_stored_values_or_metadata() -> None:
+    """Returned block values and metadata are defensive copies."""
+
     memory = Memory()
     block = memory.put(
         type="note",

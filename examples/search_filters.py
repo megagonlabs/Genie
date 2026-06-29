@@ -18,6 +18,8 @@ from genie import Memory
 
 
 def main() -> None:
+    """Run a focused search and filter walkthrough."""
+
     memory = Memory()
     project = memory.put(type="project", value="Proposal workspace")
     selected = memory.put(

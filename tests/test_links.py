@@ -1,3 +1,5 @@
+"""Tests for typed memory links and linked-memory search."""
+
 from __future__ import annotations
 
 from typing import Any, cast
@@ -8,6 +10,8 @@ from genie import AccessDenied, AccessRule, Memory, MemoryPolicy
 
 
 def test_public_link_api_uses_explicit_operation_names() -> None:
+    """The public API exposes add/list link names without old aliases."""
+
     memory = Memory()
     scope = memory.scope()
 
@@ -22,6 +26,8 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
 
 
 def test_links_support_direction_filters_and_link_scope_search() -> None:
+    """Links support direction filtering and linked-memory search."""
+
     memory = Memory()
     source = memory.put(type="note", value="source")
     target = memory.put(type="note", value="linked needle")
@@ -42,6 +48,8 @@ def test_links_support_direction_filters_and_link_scope_search() -> None:
 
 
 def test_link_metadata_is_defensively_copied() -> None:
+    """Link metadata cannot be mutated through input or returned objects."""
+
     memory = Memory()
     source = memory.put(type="note", value="source")
     target = memory.put(type="note", value="target")
@@ -59,6 +67,8 @@ def test_link_metadata_is_defensively_copied() -> None:
 
 
 def test_list_links_hides_links_to_unreadable_endpoints() -> None:
+    """Link listing hides links whose endpoints are unreadable."""
+
     owner = Memory(principal="owner")
     source = owner.put(type="note", value="source")
     target = owner.put(
@@ -80,6 +90,8 @@ def test_list_links_hides_links_to_unreadable_endpoints() -> None:
 
 
 def test_scope_list_links_and_link_search_stay_inside_scope() -> None:
+    """Scoped link listing and search do not expose out-of-scope blocks."""
+
     memory = Memory()
     root = memory.put(type="root", value="root")
     child = memory.put(parent=root, type="note", value="inside")
@@ -96,6 +108,8 @@ def test_scope_list_links_and_link_search_stay_inside_scope() -> None:
 
 
 def test_links_reject_invalid_directions() -> None:
+    """Invalid link directions are rejected."""
+
     memory = Memory()
     block = memory.put(type="note", value="source")
 
@@ -104,6 +118,8 @@ def test_links_reject_invalid_directions() -> None:
 
 
 def test_scope_linking_cannot_cross_scope_boundaries() -> None:
+    """A scope cannot create links to blocks outside its subtree."""
+
     memory = Memory()
     root = memory.put(type="root", value="root")
     child = memory.put(parent=root, type="note", value="child")

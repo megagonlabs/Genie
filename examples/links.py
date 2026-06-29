@@ -18,6 +18,8 @@ from genie import Memory
 
 
 def main() -> None:
+    """Run a focused link creation and linked search walkthrough."""
+
     memory = Memory()
     requirement = memory.put(type="requirement", value="Mention deployment tradeoffs.")
     outline = memory.put(type="outline", value="Sections: context, tradeoffs, next steps.")

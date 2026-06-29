@@ -1,3 +1,5 @@
+"""Tests for scoped memory handles and delegated authority."""
+
 from __future__ import annotations
 
 import pytest
@@ -6,6 +8,8 @@ from genie import AccessDenied, Memory, MemoryQuery, Scope
 
 
 def test_subtree_scope_limits_search_scope() -> None:
+    """A subtree scope searches only below its root by default."""
+
     memory = Memory()
     root = memory.put(type="root", value="workspace")
     task = memory.put(parent=root, type="task", value="launch task")
@@ -20,6 +24,8 @@ def test_subtree_scope_limits_search_scope() -> None:
 
 
 def test_scope_can_optionally_search_ancestors() -> None:
+    """Ancestor search is available only when explicitly enabled."""
+
     memory = Memory()
     root = memory.put(type="root", value="project launch context")
     task = memory.put(parent=root, type="task", value="implementation task")
@@ -35,6 +41,8 @@ def test_scope_can_optionally_search_ancestors() -> None:
 
 
 def test_subscopes_can_narrow_but_not_escape_parent_scope() -> None:
+    """Sub-scopes can narrow roots but cannot escape their parent scope."""
+
     memory = Memory()
     project = memory.put(type="project", value="project")
     task = memory.put(parent=project, type="task", value="task")
@@ -58,6 +66,8 @@ def test_subscopes_can_narrow_but_not_escape_parent_scope() -> None:
 
 
 def test_subscopes_cannot_widen_parent_global_or_ancestor_access() -> None:
+    """Sub-scopes cannot add global or ancestor permissions."""
+
     memory = Memory()
     root = memory.put(type="root", value="root context")
     task = memory.put(parent=root, type="task", value="task")
@@ -82,6 +92,8 @@ def test_subscopes_cannot_widen_parent_global_or_ancestor_access() -> None:
 
 
 def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
+    """Prebuilt queries cannot smuggle wider roots through a scope."""
+
     memory = Memory()
     root = memory.put(type="root", value="root")
     child = memory.put(parent=root, type="child", value="child")
@@ -104,6 +116,8 @@ def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
 
 
 def test_subscopes_cannot_change_principal_identity() -> None:
+    """Sub-scopes cannot replace the delegated principal."""
+
     memory = Memory()
     root = memory.put(type="root", value="root")
     scope = memory.scope(root=root, principal="agent:worker")
@@ -113,6 +127,8 @@ def test_subscopes_cannot_change_principal_identity() -> None:
 
 
 def test_rootless_scope_requires_explicit_roots_for_traversal() -> None:
+    """Rootless scopes require explicit roots for tree traversal."""
+
     scope = Memory().scope(root=None)
 
     with pytest.raises(AccessDenied):

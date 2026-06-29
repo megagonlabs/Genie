@@ -18,6 +18,8 @@ from genie import Memory
 
 
 def main() -> None:
+    """Run a minimal CRUD walkthrough."""
+
     memory = Memory(principal="agent:demo")
 
     project = memory.put(type="project", value={"name": "Launch notes"})

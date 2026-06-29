@@ -1,3 +1,5 @@
+"""Shared path setup for runnable examples."""
+
 from __future__ import annotations
 
 from pathlib import Path

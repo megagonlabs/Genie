@@ -46,48 +46,106 @@ from genie import (
 
 @dataclass(frozen=True)
 class StylePreference:
+    """Custom preference value used by the integrated walkthrough.
+
+    Attributes:
+        tone: Desired writing tone.
+        length: Desired response length.
+    """
+
     tone: str
     length: str
 
 
 class StylePreferenceCodec(MemoryCodec):
+    """Codec that stores `StylePreference` values as JSON-compatible data."""
+
     content_type = "application/vnd.genie.style-preference+json"
 
     def can_encode(self, value: Any) -> bool:
+        """Return whether this codec can encode the value."""
+
         return isinstance(value, StylePreference)
 
     def encode(self, value: Any) -> EncodedValue:
+        """Encode a `StylePreference` value.
+
+        Args:
+            value: Style preference instance.
+
+        Returns:
+            Encoded style preference payload.
+        """
+
         return EncodedValue(
             self.content_type,
             {"tone": value.tone, "length": value.length},
         )
 
     def decode(self, value: EncodedValue) -> Any:
+        """Decode a stored style preference payload."""
+
         return StylePreference(**value.data)
 
 
 class AuditHook(MemoryHook):
+    """Hook that records creation and deletion events."""
+
     def __init__(self) -> None:
+        """Create an empty audit hook."""
+
         self.events: list[str] = []
 
     def after_put(self, block: MemoryBlock) -> None:
+        """Record a block creation event."""
+
         self.events.append(f"created:{block.type}:{block.id}")
 
     def after_delete(self, block: MemoryBlock) -> None:
+        """Record a block deletion event."""
+
         self.events.append(f"deleted:{block.type}:{block.id}")
 
 
 @dataclass
 class Agent:
+    """Small example agent that depends only on `MemoryScope`.
+
+    Attributes:
+        name: Agent name used in printed output.
+        memory: Scoped memory handle assigned by the application.
+    """
+
     name: str
     memory: MemoryScope
 
     def remember(self, type: str, value: object, **metadata: object) -> MemoryBlock:
+        """Write a block into this agent's scoped memory.
+
+        Args:
+            type: Block type.
+            value: Block value.
+            **metadata: Metadata fields to attach.
+
+        Returns:
+            Created memory block.
+        """
+
         block = self.memory.put(type=type, value=value, metadata=metadata)
         print(f"{self.name} wrote {block.type}: {block.value}")
         return block
 
     def recall(self, text: str, **search_options: Any) -> list[MemoryBlock]:
+        """Search this agent's scoped memory.
+
+        Args:
+            text: Text query.
+            **search_options: Additional options passed to `MemoryScope.search`.
+
+        Returns:
+            Matching memory blocks.
+        """
+
         results = self.memory.search(text, **search_options)
         blocks = [result.block for result in results]
         print(f"{self.name} recalled {len(blocks)} block(s) for {text!r}")
@@ -95,6 +153,8 @@ class Agent:
 
 
 def main() -> None:
+    """Run the integrated Genie walkthrough."""
+
     audit = AuditHook()
     memory = Memory(
         backend=InMemoryBackend(),
@@ -206,10 +266,22 @@ def main() -> None:
 
 
 def section(title: str) -> None:
+    """Print a section heading.
+
+    Args:
+        title: Heading text.
+    """
+
     print(f"\n== {title} ==")
 
 
 def print_results(results: list[SearchResult]) -> None:
+    """Print search results in a compact form.
+
+    Args:
+        results: Search results to print.
+    """
+
     for result in results:
         block = result.block
         print(f"- {block.type} {block.id}: {block.value}")

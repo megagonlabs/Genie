@@ -1,3 +1,5 @@
+"""Tests for principals, roles, and block-level policies."""
+
 from __future__ import annotations
 
 import pytest
@@ -6,6 +8,8 @@ from genie import AccessDenied, AccessRule, Memory, MemoryPolicy, Principal
 
 
 def test_block_policy_denies_read_to_other_principal() -> None:
+    """Read policies deny principals that are not explicitly allowed."""
+
     owner_memory = Memory(principal="owner")
     private_policy = MemoryPolicy(read=AccessRule.only(principals={"owner"}))
     private = owner_memory.put(type="secret", value="hidden", policy=private_policy)
@@ -23,6 +27,8 @@ def test_block_policy_denies_read_to_other_principal() -> None:
 
 
 def test_write_policy_blocks_set_patch_and_delete() -> None:
+    """Write policies protect set, patch, and delete operations."""
+
     owner = Memory(principal="owner")
     block = owner.put(
         type="note",
@@ -50,6 +56,8 @@ def test_write_policy_blocks_set_patch_and_delete() -> None:
 
 
 def test_children_ancestors_and_search_filter_inaccessible_blocks() -> None:
+    """Traversal and search filter results by read and search policies."""
+
     owner = Memory(principal="owner")
     root = owner.put(type="root", value="root")
     public_child = owner.put(parent=root, type="note", value="needle public")
@@ -87,6 +95,8 @@ def test_children_ancestors_and_search_filter_inaccessible_blocks() -> None:
 
 
 def test_policy_roles_allow_access_without_principal_id_match() -> None:
+    """Role-based policies allow matching roles without id matches."""
+
     owner = Memory(principal="owner")
     policy = MemoryPolicy(read=AccessRule.only(roles={"reader"}))
     block = owner.put(type="note", value="role gated", policy=policy)
@@ -105,6 +115,8 @@ def test_policy_roles_allow_access_without_principal_id_match() -> None:
 
 
 def test_policy_can_deny_parent_writes_and_traversal() -> None:
+    """Policies can deny child writes and downward traversal."""
+
     memory = Memory()
     parent = memory.put(
         type="root",

@@ -1,3 +1,5 @@
+"""Tests for search queries and portable filter behavior."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -8,6 +10,8 @@ from genie import InMemoryBackend, Memory, MemoryQuery, Scope, SearchResult
 
 
 def test_search_filters_types_scopes_and_limits() -> None:
+    """Search combines text, type filters, subtree roots, and limits."""
+
     memory = Memory()
     root = memory.put(type="root", value="workspace")
     high = memory.put(
@@ -48,6 +52,8 @@ def test_search_filters_types_scopes_and_limits() -> None:
 
 
 def test_filter_operators_cover_common_comparisons() -> None:
+    """Human-friendly filter operators behave as expected."""
+
     memory = Memory()
     memory.put(type="note", value="low", metadata={"priority": 1, "owner": "team"})
     mid = memory.put(type="note", value="mid", metadata={"priority": 2, "owner": "team"})
@@ -67,6 +73,8 @@ def test_filter_operators_cover_common_comparisons() -> None:
 
 
 def test_canonical_filter_operators_still_work() -> None:
+    """Canonical adapter-facing filter operators remain supported."""
+
     memory = Memory()
     block = memory.put(type="note", value="canonical", metadata={"priority": 2})
 
@@ -76,12 +84,18 @@ def test_canonical_filter_operators_still_work() -> None:
 
 
 def test_backends_receive_normalized_filter_operators() -> None:
+    """Backends receive normalized canonical filter operators."""
+
     class RecordingBackend(InMemoryBackend):
+        """Backend that records the filters it receives."""
+
         def __init__(self) -> None:
             super().__init__()
             self.seen_filters: dict[str, Any] | None = None
 
         def search(self, query: MemoryQuery) -> list[SearchResult]:
+            """Record filters before delegating to the in-memory backend."""
+
             self.seen_filters = query.filters
             return super().search(query)
 
@@ -96,6 +110,8 @@ def test_backends_receive_normalized_filter_operators() -> None:
 
 
 def test_query_accepts_tuple_types_and_string_scope() -> None:
+    """MemoryQuery normalizes string scopes and preserves tuple types."""
+
     query = MemoryQuery(scope="subtree", types=("note",))
 
     assert query.scope == Scope.SUBTREE
@@ -103,6 +119,8 @@ def test_query_accepts_tuple_types_and_string_scope() -> None:
 
 
 def test_filter_incompatible_comparisons_fail_closed() -> None:
+    """Incompatible filter comparisons produce no matches."""
+
     memory = Memory()
     memory.put(type="note", value="note", metadata={"priority": "high"})
 

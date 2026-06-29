@@ -1,3 +1,5 @@
+"""Smoke tests for runnable example scripts."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,6 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
     ],
 )
 def test_example_runs_as_a_script(example: str) -> None:
+    """Every example script runs successfully from the repository root."""
+
     result = subprocess.run(
         [sys.executable, str(REPO_ROOT / "examples" / example)],
         cwd=REPO_ROOT,

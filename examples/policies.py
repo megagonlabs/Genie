@@ -18,6 +18,8 @@ from genie import AccessDenied, AccessRule, Memory, MemoryPolicy, Principal
 
 
 def main() -> None:
+    """Run a principal and role based policy walkthrough."""
+
     owner = Memory(principal="agent:owner")
     public = owner.put(type="note", value="Public context")
     private = owner.put(
