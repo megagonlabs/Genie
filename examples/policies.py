@@ -14,13 +14,13 @@ else:
 
 ensure_repo_on_path()
 
-from genie import AccessDenied, AccessRule, Memory, MemoryPolicy, Principal
+from genie import AccessDenied, AccessRule, InMemoryBackend, Memory, MemoryPolicy, Principal
 
 
 def main() -> None:
     """Run a principal and role based policy walkthrough."""
 
-    owner = Memory(principal="agent:owner")
+    owner = Memory(backend=InMemoryBackend(), principal="agent:owner")
     public = owner.put(type="note", value="Public context")
     private = owner.put(
         type="note",

@@ -16,7 +16,7 @@ else:
 
 ensure_repo_on_path()
 
-from genie import AccessDenied, Memory, MemoryBlock, MemoryScope
+from genie import AccessDenied, InMemoryBackend, Memory, MemoryBlock, MemoryScope
 
 
 @dataclass
@@ -47,7 +47,7 @@ class Agent:
 def main() -> None:
     """Run a focused scoped-agent walkthrough."""
 
-    memory = Memory(principal="system")
+    memory = Memory(backend=InMemoryBackend(), principal="system")
     project = memory.put(type="project", value="Project workspace")
     task = memory.put(parent=project, type="task", value="Write summary")
     sibling = memory.put(parent=project, type="task", value="Unrelated task")

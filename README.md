@@ -13,12 +13,16 @@ The core package defines the memory structure and extension contracts:
 - `MemoryHook`: lifecycle extension points around writes, reads, deletes, and search.
 - `MemoryCodec`: value encoders/decoders for custom Python objects and storage-safe payloads.
 
+Genie intentionally does not provide a full agent framework, durable production
+storage in core, built-in embeddings, semantic search, planning, tool calling,
+or a universal memory taxonomy.
+
 ## Quick Start
 
 ```python
-from genie import Memory
+from genie import InMemoryBackend, Memory
 
-memory = Memory()
+memory = Memory(backend=InMemoryBackend())
 
 root = memory.put(type="task", value={"name": "write proposal"})
 note = memory.put(
@@ -33,6 +37,10 @@ worker_memory.put(type="observation", value="The task has one design note.")
 results = worker_memory.search("database-agnostic")
 assert results[0].block.id == note.id
 ```
+
+`Memory()` defaults to `InMemoryBackend()` when no backend is provided. The
+examples pass `backend=InMemoryBackend()` explicitly so first-time readers can
+see where storage comes from.
 
 ## Examples
 
@@ -122,8 +130,15 @@ outside the parent scope's subtree.
 
 ## Backends
 
-The included `InMemoryBackend` is useful for tests and prototypes. Database
-adapters should implement the backend capabilities in `genie.backend`:
+Users configure one top-level backend object:
+
+```python
+memory = Memory(backend=InMemoryBackend())
+```
+
+The included `InMemoryBackend` is useful for tests, examples, and local
+prototypes. It is not durable storage. Database adapters should implement the
+backend capabilities in `genie.backend`:
 
 - `BlockStore`
 - `TraversalIndex`
@@ -137,6 +152,7 @@ while still allowing users to configure one top-level backend.
 
 Genie is designed so the core abstractions fail closed where possible:
 
+- Scopes cannot widen delegated authority.
 - Returned JSON values and metadata are copied so callers cannot mutate stored state accidentally.
 - Recursive delete requires write access to every block in the deleted subtree.
 - In-memory hierarchy updates reject parent cycles.
@@ -160,7 +176,7 @@ not the unrestricted `Memory` object, into agents.
 Hooks customize behavior around memory operations.
 
 ```python
-from genie import MemoryHook
+from genie import InMemoryBackend, Memory, MemoryHook
 
 
 class AuditHook(MemoryHook):
@@ -168,7 +184,7 @@ class AuditHook(MemoryHook):
         print(f"created {block.id}")
 
 
-memory = Memory(hooks=[AuditHook()])
+memory = Memory(backend=InMemoryBackend(), hooks=[AuditHook()])
 ```
 
 ## Codecs
@@ -179,7 +195,14 @@ Codecs translate user-level Python objects into storage-safe values and back.
 from dataclasses import dataclass
 from typing import Any
 
-from genie import CodecRegistry, EncodedValue, JsonCodec, Memory, MemoryCodec
+from genie import (
+    CodecRegistry,
+    EncodedValue,
+    InMemoryBackend,
+    JsonCodec,
+    Memory,
+    MemoryCodec,
+)
 
 
 @dataclass(frozen=True)
@@ -201,7 +224,10 @@ class PreferenceCodec(MemoryCodec):
         return Preference(**value.data)
 
 
-memory = Memory(codecs=CodecRegistry([JsonCodec(), PreferenceCodec()]))
+memory = Memory(
+    backend=InMemoryBackend(),
+    codecs=CodecRegistry([JsonCodec(), PreferenceCodec()]),
+)
 memory.put(type="preference", value=Preference("style", "concise"))
 ```
 

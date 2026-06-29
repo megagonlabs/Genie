@@ -14,13 +14,13 @@ else:
 
 ensure_repo_on_path()
 
-from genie import Memory
+from genie import InMemoryBackend, Memory
 
 
 def main() -> None:
     """Run a minimal CRUD walkthrough."""
 
-    memory = Memory(principal="agent:demo")
+    memory = Memory(backend=InMemoryBackend(), principal="agent:demo")
 
     project = memory.put(type="project", value={"name": "Launch notes"})
     note = memory.put(

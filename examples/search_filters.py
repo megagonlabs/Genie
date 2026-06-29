@@ -14,13 +14,13 @@ else:
 
 ensure_repo_on_path()
 
-from genie import Memory
+from genie import InMemoryBackend, Memory
 
 
 def main() -> None:
     """Run a focused search and filter walkthrough."""
 
-    memory = Memory()
+    memory = Memory(backend=InMemoryBackend())
     project = memory.put(type="project", value="Proposal workspace")
     selected = memory.put(
         parent=project,

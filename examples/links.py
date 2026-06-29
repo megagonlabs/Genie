@@ -14,13 +14,13 @@ else:
 
 ensure_repo_on_path()
 
-from genie import Memory
+from genie import InMemoryBackend, Memory
 
 
 def main() -> None:
     """Run a focused link creation and linked search walkthrough."""
 
-    memory = Memory()
+    memory = Memory(backend=InMemoryBackend())
     requirement = memory.put(type="requirement", value="Mention deployment tradeoffs.")
     outline = memory.put(type="outline", value="Sections: context, tradeoffs, next steps.")
     note = memory.put(type="note", value="Deployment note is linked from requirement.")

@@ -17,7 +17,15 @@ else:
 
 ensure_repo_on_path()
 
-from genie import CodecRegistry, EncodedValue, JsonCodec, Memory, MemoryCodec, MemoryHook
+from genie import (
+    CodecRegistry,
+    EncodedValue,
+    InMemoryBackend,
+    JsonCodec,
+    Memory,
+    MemoryCodec,
+    MemoryHook,
+)
 
 
 @dataclass(frozen=True)
@@ -102,6 +110,7 @@ def main() -> None:
 
     audit = AuditHook()
     memory = Memory(
+        backend=InMemoryBackend(),
         hooks=[audit],
         codecs=CodecRegistry([JsonCodec(), PreferenceCodec()]),
     )
