@@ -651,3 +651,22 @@ more advanced storage systems.
 
 These additions remain compatible with the current core abstractions without
 making the memory model depend on one database or retrieval strategy.
+
+## FAQ / Common Implementation Questions
+
+### How does policy inheritance work?
+
+Root write access does not automatically grant write access to descendant blocks. Genie evaluates permissions per block, meaning that holding access to a parent block does not imply authorization for its children.
+
+### Where do I draw the line between Store and Index?
+
+The Store acts as your source of truth; all writes and updates must target the Store to ensure data integrity. The Index is a derived projection optimized for retrieval. When implementing custom backends, ensure that your Store methods are authoritative, while your Index methods (search, traversal) can be rebuilt or reindexed without loss of data.
+
+### What happens if I link to something I cannot read?
+
+Genie prioritizes security by design. list_links will exclude relationships where the principal lacks read access to either endpoint. If a search traversal encounters a link to an unauthorized block, that link is treated as if it does not exist for the current principal.
+
+### How do I register a custom codec at runtime?
+
+You can register custom codecs by accessing the registry directly. For example:
+memory.codecs.register(PreferenceCodec())
