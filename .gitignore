@@ -203,6 +203,10 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Generated document QA/intermediate artifacts
+docs/*.raw.docx
+docs/rendered_*/
+
 # Ruff stuff:
 .ruff_cache/
 
