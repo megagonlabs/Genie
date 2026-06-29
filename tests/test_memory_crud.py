@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from genie import AccessRule, Memory, MemoryPolicy
+from genie import AccessDenied, AccessRule, Memory, MemoryPolicy
 from genie.memory.errors import MemoryConflict, MemoryNotFound
 
 
@@ -49,7 +49,7 @@ def test_delete_requires_write_access_for_descendants() -> None:
         policy=MemoryPolicy(write=AccessRule.deny()),
     )
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(AccessDenied):
         memory.delete(root)
 
     assert memory.get(root.id) is not None

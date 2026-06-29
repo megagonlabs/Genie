@@ -1,5 +1,8 @@
+"""Exception types raised by Genie memory operations."""
+
+
 class GenieError(Exception):
-    """Base exception for Genie."""
+    """Base exception for all Genie-specific errors."""
 
 
 class MemoryNotFound(GenieError):

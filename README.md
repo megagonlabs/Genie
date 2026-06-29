@@ -34,6 +34,24 @@ results = worker_memory.search("database-agnostic")
 assert results[0].block.id == note.id
 ```
 
+## Examples
+
+Focused runnable examples live in [examples](examples):
+
+- `crud_blocks.py`: CRUD, patching, delete, and child traversal.
+- `scoped_agents.py`: top-level agents and sub-agents using `MemoryScope`.
+- `search_filters.py`: text search, types, scopes, and metadata filters.
+- `links.py`: typed links and linked-memory search.
+- `policies.py`: principal and role based access control.
+- `hooks_codecs.py`: lifecycle hooks and custom value codecs.
+- `basic_usage.py`: integrated workflow that combines the main features.
+
+Run one directly from the repository root:
+
+```bash
+conda run -n "genie" python examples/basic_usage.py
+```
+
 ## Core Model
 
 Genie treats memory as a permissioned, typed, hierarchical graph of blocks.

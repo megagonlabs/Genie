@@ -1,3 +1,5 @@
+"""Public memory system API."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -22,7 +24,12 @@ if TYPE_CHECKING:
 
 
 class Memory:
-    """Public API for working with Genie memory."""
+    """Full Genie memory system handle.
+
+    `Memory` owns the backend, policy engine, hooks, and codecs. Applications
+    typically keep this object at trust boundaries and pass `MemoryScope`
+    objects to agents.
+    """
 
     def __init__(
         self,
@@ -33,6 +40,17 @@ class Memory:
         hooks: list[MemoryHook] | HookRegistry | None = None,
         codecs: CodecRegistry | None = None,
     ) -> None:
+        """Create a memory system.
+
+        Args:
+            backend: Backend adapter. Defaults to `InMemoryBackend`.
+            principal: Acting principal for operations through this handle.
+            policy_engine: Policy evaluator. Defaults to `PolicyEngine`.
+            hooks: Hook list or registry.
+            codecs: Codec registry. Defaults to a registry containing
+                `JsonCodec`.
+        """
+
         self.backend: MemoryBackend = backend or InMemoryBackend()
         self.principal = Principal.coerce(principal)
         self.policy_engine = policy_engine or PolicyEngine()
@@ -53,6 +71,26 @@ class Memory:
         content_type: str | None = None,
         id: str | None = None,
     ) -> MemoryBlock:
+        """Create a new memory block.
+
+        Args:
+            type: Application-defined block type.
+            value: User-level value to encode and store.
+            parent: Optional parent block or id.
+            metadata: Optional metadata used for filtering or indexing.
+            policy: Optional block-level access policy.
+            content_type: Optional explicit codec content type.
+            id: Optional caller-provided block id.
+
+        Returns:
+            Stored block with decoded value.
+
+        Raises:
+            AccessDenied: If the principal cannot write under the parent.
+            MemoryNotFound: If the parent id does not exist.
+            TypeError: If no codec can encode the value.
+        """
+
         parent_id = _block_id(parent)
         if parent_id is not None:
             parent_block = self._require_raw(parent_id)
@@ -75,6 +113,19 @@ class Memory:
         return self._decode_block(stored)
 
     def get(self, block_id: str | MemoryBlock) -> MemoryBlock | None:
+        """Fetch a memory block by id.
+
+        Args:
+            block_id: Block or block id.
+
+        Returns:
+            Decoded block, or `None` when missing.
+
+        Raises:
+            AccessDenied: If the principal cannot read the block.
+            TypeError: If no codec can decode the stored value.
+        """
+
         actual_id = _block_id(block_id)
         self.hooks.before_get(actual_id)
         block = self.backend.get_block(actual_id)
@@ -93,6 +144,22 @@ class Memory:
         *,
         content_type: str | None = None,
     ) -> MemoryBlock:
+        """Replace a block's value.
+
+        Args:
+            block_id: Block or block id to update.
+            value: New user-level value.
+            content_type: Optional explicit codec content type.
+
+        Returns:
+            Updated decoded block.
+
+        Raises:
+            AccessDenied: If the principal cannot write the block.
+            MemoryNotFound: If the block does not exist.
+            TypeError: If no codec can encode the value.
+        """
+
         block = self._require_raw(_block_id(block_id))
         self.policy_engine.require(Operation.WRITE, block, self.principal)
         encoded = self.codecs.encode(value, content_type)
@@ -112,6 +179,23 @@ class Memory:
         value: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryBlock:
+        """Merge updates into a dictionary value or metadata.
+
+        Args:
+            block_id: Block or block id to patch.
+            value: Dict fields to merge into the existing decoded value.
+            metadata: Metadata fields to merge.
+
+        Returns:
+            Updated decoded block.
+
+        Raises:
+            AccessDenied: If the principal cannot write the block.
+            MemoryNotFound: If the block does not exist.
+            TypeError: If `value` is provided and the existing decoded value is
+                not a dictionary.
+        """
+
         block = self._require_raw(_block_id(block_id))
         self.policy_engine.require(Operation.WRITE, block, self.principal)
         decoded_value = self.codecs.decode(EncodedValue(block.content_type, block.value))
@@ -131,6 +215,19 @@ class Memory:
         return self._decode_block(stored)
 
     def delete(self, block_id: str | MemoryBlock) -> None:
+        """Delete a block and its descendants.
+
+        Recursive delete requires write access to every block that would be
+        removed.
+
+        Args:
+            block_id: Block or block id to delete.
+
+        Raises:
+            AccessDenied: If any affected block denies write access.
+            MemoryNotFound: If the block does not exist.
+        """
+
         block = self._require_raw(_block_id(block_id))
         blocks_to_delete = self.backend.descendants(block.id, include_self=True)
         for candidate in blocks_to_delete:
@@ -141,6 +238,20 @@ class Memory:
         self.hooks.after_delete(decoded_block)
 
     def children(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
+        """Return readable direct children for a block.
+
+        Args:
+            block_id: Parent block or id.
+
+        Returns:
+            Decoded child blocks the principal can read.
+
+        Raises:
+            AccessDenied: If the principal cannot traverse downward from the
+                parent.
+            MemoryNotFound: If the parent does not exist.
+        """
+
         block = self._require_raw(_block_id(block_id))
         self.policy_engine.require(Operation.TRAVERSE_DOWN, block, self.principal)
         return [
@@ -150,6 +261,20 @@ class Memory:
         ]
 
     def ancestors(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
+        """Return readable ancestors for a block.
+
+        Args:
+            block_id: Block or id whose parents should be traversed.
+
+        Returns:
+            Decoded ancestor blocks the principal can read.
+
+        Raises:
+            AccessDenied: If the principal cannot traverse upward from the
+                block.
+            MemoryNotFound: If the block does not exist.
+        """
+
         block = self._require_raw(_block_id(block_id))
         self.policy_engine.require(Operation.TRAVERSE_UP, block, self.principal)
         return [
@@ -166,6 +291,23 @@ class Memory:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
+        """Create a typed non-hierarchical relationship between two blocks.
+
+        Args:
+            source: Source block or id.
+            target: Target block or id.
+            relation: Application-defined relation type.
+            metadata: Optional relationship metadata.
+
+        Returns:
+            Stored memory link.
+
+        Raises:
+            AccessDenied: If the principal cannot write the source or read the
+                target.
+            MemoryNotFound: If either endpoint is missing.
+        """
+
         source_block = self._require_raw(_block_id(source))
         target_block = self._require_raw(_block_id(target))
         self.policy_engine.require(Operation.WRITE, source_block, self.principal)
@@ -186,6 +328,24 @@ class Memory:
         relation: str | None = None,
         direction: Literal["out", "in", "both"] = "out",
     ) -> list[MemoryLink]:
+        """List readable links connected to a block.
+
+        Links are returned only when the principal can read both endpoints.
+
+        Args:
+            block_id: Block or id to inspect.
+            relation: Optional relation type filter.
+            direction: Link direction relative to `block_id`.
+
+        Returns:
+            Matching links.
+
+        Raises:
+            AccessDenied: If the principal cannot read `block_id`.
+            MemoryNotFound: If `block_id` does not exist.
+            ValueError: If `direction` is invalid.
+        """
+
         block = self._require_raw(_block_id(block_id))
         self.policy_engine.require(Operation.READ, block, self.principal)
         return [
@@ -205,6 +365,27 @@ class Memory:
         filters: dict[str, Any] | None = None,
         limit: int = 20,
     ) -> list[SearchResult]:
+        """Search memory blocks.
+
+        Args:
+            query: Optional `MemoryQuery` or text query string.
+            text: Text query when `query` is not a string.
+            root: Optional root block or id for scoped search.
+            scope: Search scope.
+            types: Optional block types to include.
+            filters: Optional metadata or block-field filters.
+            limit: Maximum result count.
+
+        Returns:
+            Search results with decoded blocks.
+
+        Raises:
+            AccessDenied: If the principal cannot search or traverse from the
+                query root.
+            MemoryNotFound: If the query root does not exist.
+            ValueError: If the scope is invalid or limit is negative.
+        """
+
         memory_query = self._coerce_query(
             query,
             text=text,
@@ -216,6 +397,8 @@ class Memory:
         )
         self._authorize_query(memory_query)
         memory_query = self.hooks.before_search(memory_query)
+        # Hooks may return a freshly constructed query. Normalize once more so
+        # backends receive canonical filter operators.
         memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
         raw_results = self.backend.search(memory_query)
         decoded_results = [
@@ -235,6 +418,20 @@ class Memory:
         allow_up: bool = False,
         allow_global: bool = False,
     ) -> "MemoryScope":
+        """Create a scoped memory handle for delegation.
+
+        Args:
+            root: Optional root block or id that bounds the scope.
+            principal: Principal for operations through the scope. Defaults to
+                this `Memory` handle's principal.
+            default_scope: Default search scope used by the returned scope.
+            allow_up: Whether ancestor traversal/search is allowed.
+            allow_global: Whether global search is allowed.
+
+        Returns:
+            A `MemoryScope` backed by this memory system.
+        """
+
         from genie.memory.scope import MemoryScope
 
         return MemoryScope(
@@ -247,6 +444,16 @@ class Memory:
         )
 
     def contains(self, root: str | MemoryBlock, block_id: str | MemoryBlock) -> bool:
+        """Return whether one block is inside another block's subtree.
+
+        Args:
+            root: Potential subtree root block or id.
+            block_id: Candidate block or id.
+
+        Returns:
+            `True` when `block_id` is equal to or below `root`.
+        """
+
         return self.backend.contains(_block_id(root), _block_id(block_id))
 
     def _coerce_query(
@@ -260,6 +467,8 @@ class Memory:
         filters: dict[str, Any] | None,
         limit: int,
     ) -> MemoryQuery:
+        """Convert friendly search arguments into a `MemoryQuery`."""
+
         if isinstance(query, MemoryQuery):
             return query
         if isinstance(query, str):
@@ -274,6 +483,8 @@ class Memory:
         )
 
     def _authorize_query(self, query: MemoryQuery) -> None:
+        """Check access required by a query root and scope."""
+
         if query.root_id is None:
             return
         root = self._require_raw(query.root_id)
@@ -286,16 +497,22 @@ class Memory:
             self.policy_engine.require(Operation.READ, root, self.principal)
 
     def _require_raw(self, block_id: str) -> MemoryBlock:
+        """Fetch an encoded block or raise `MemoryNotFound`."""
+
         block = self.backend.get_block(block_id)
         if block is None:
             raise MemoryNotFound(f"Memory block {block_id!r} does not exist.")
         return block
 
     def _decode_block(self, block: MemoryBlock) -> MemoryBlock:
+        """Decode a stored block value and isolate metadata."""
+
         decoded = self.codecs.decode(EncodedValue(block.content_type, block.value))
         return block.with_updates(value=decoded, metadata=deepcopy(block.metadata))
 
     def _can_read_link_endpoints(self, link: MemoryLink) -> bool:
+        """Return whether the current principal can read both link endpoints."""
+
         for block_id in (link.source_id, link.target_id):
             block = self.backend.get_block(block_id)
             if block is None or not self.policy_engine.allows(Operation.READ, block, self.principal):
@@ -312,6 +529,8 @@ def _block_id(block: None) -> None: ...
 
 
 def _block_id(block: str | MemoryBlock | None) -> str | None:
+    """Return a block id from a block object, id string, or `None`."""
+
     if isinstance(block, MemoryBlock):
         return block.id
     return block

@@ -1,3 +1,5 @@
+"""Hook interfaces and dispatch registry."""
+
 from genie.hooks.base import MemoryHook
 from genie.hooks.registry import HookRegistry
 

@@ -1,3 +1,5 @@
+"""Portable filter normalization and matching helpers."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,7 +19,16 @@ OPERATOR_ALIASES = {
 
 
 def normalize_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
-    """Return filters with human-friendly operators normalized to canonical names."""
+    """Return filters with human-friendly operators normalized.
+
+    Args:
+        filters: Filter mapping supplied by user code.
+
+    Returns:
+        A new filter mapping where aliases such as `">="` and `"in"` are
+        rewritten to canonical adapter-facing operators such as `"$gte"` and
+        `"$in"`.
+    """
 
     normalized: dict[str, Any] = {}
     for key, expected in (filters or {}).items():
@@ -36,6 +47,13 @@ def matches_filters(block: MemoryBlock, filters: dict[str, Any]) -> bool:
 
     Adapter authors can implement richer filtering in their own backend. The
     in-memory backend intentionally supports a small portable subset.
+
+    Args:
+        block: Block to evaluate.
+        filters: Normalized or user-facing filters.
+
+    Returns:
+        `True` when the block satisfies every filter.
     """
 
     for key, expected in filters.items():
@@ -49,6 +67,8 @@ def matches_filters(block: MemoryBlock, filters: dict[str, Any]) -> bool:
 
 
 def _read_filter_value(block: MemoryBlock, key: str) -> Any:
+    """Read a filter field from a block or its metadata."""
+
     if key.startswith("metadata."):
         return block.metadata.get(key.removeprefix("metadata."))
     if hasattr(block, key):
@@ -57,6 +77,11 @@ def _read_filter_value(block: MemoryBlock, key: str) -> Any:
 
 
 def _matches_operator(actual: Any, operators: dict[str, Any]) -> bool:
+    """Evaluate operator filters against one value.
+
+    Incompatible comparisons fail closed by returning `False`.
+    """
+
     try:
         for op, expected in operators.items():
             op = OPERATOR_ALIASES.get(op, op)
