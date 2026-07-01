@@ -183,3 +183,16 @@ class LinkStore(Protocol):
         """
 
         ...
+
+    def delete_links_for_block(self, block_id: str) -> None:
+        """Delete links connected to a block.
+
+        Backend adapters should remove both incoming and outgoing links for the
+        block. `Memory.delete` uses this capability to keep link indexes from
+        retaining dangling relationships after recursive deletes.
+
+        Args:
+            block_id: Block id whose connected links should be removed.
+        """
+
+        ...

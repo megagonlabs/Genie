@@ -173,11 +173,14 @@ authoritative store route.
 Genie is designed so the core abstractions fail closed where possible:
 
 - Scopes cannot widen delegated authority.
+- Non-rootless scopes require an existing root block.
 - Returned JSON values and metadata are copied so callers cannot mutate stored state accidentally.
 - Recursive delete requires write access to every block in the deleted subtree.
 - Recursive delete does not follow symbolic mounts.
+- Recursive delete dispatches delete hooks for every removed block.
 - In-memory hierarchy updates reject parent cycles.
 - Link direction values are validated.
+- Backend link stores expose cleanup for links connected to deleted blocks.
 - Link listing hides relationships whose endpoints are not readable by the principal.
 - Scoped link listing and linked-memory search do not expose blocks outside the scope.
 - JSON encoding rejects non-finite floats such as `NaN` and `Infinity`.

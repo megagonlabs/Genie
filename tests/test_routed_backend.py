@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -18,6 +18,7 @@ from genie import (
     Memory,
     MemoryCodec,
     MemoryHook,
+    MemoryLink,
     MemoryPolicy,
     MemoryQuery,
     RoutedBackend,
@@ -91,6 +92,38 @@ class RecordingSearchIndex:
 
         self.queries.append(query)
         return list(self.results)
+
+
+class RecordingLinkStore:
+    """Shared link store that records cleanup calls."""
+
+    def __init__(self) -> None:
+        """Create an empty recording link store."""
+
+        self.inner = InMemoryLinkStore()
+        self.deleted_blocks: list[str] = []
+
+    def add_link(self, link: MemoryLink) -> MemoryLink:
+        """Store a link in the inner link store."""
+
+        return self.inner.add_link(link)
+
+    def list_links(
+        self,
+        block_id: str,
+        *,
+        relation: str | None = None,
+        direction: Literal["out", "in", "both"] = "out",
+    ) -> list[MemoryLink]:
+        """List links from the inner link store."""
+
+        return self.inner.list_links(block_id, relation=relation, direction=direction)
+
+    def delete_links_for_block(self, block_id: str) -> None:
+        """Record and clean links connected to a block."""
+
+        self.deleted_blocks.append(block_id)
+        self.inner.delete_links_for_block(block_id)
 
 
 def test_routed_backend_routes_root_blocks_to_authoritative_stores() -> None:
@@ -284,7 +317,7 @@ def test_routed_backend_discovers_preexisting_route_blocks() -> None:
 def test_routed_backend_delete_cleans_catalog_and_shared_links() -> None:
     """Recursive delete removes catalog state and shared links for descendants."""
 
-    link_store = InMemoryLinkStore()
+    link_store = RecordingLinkStore()
     backend = RoutedBackend(
         {"a": InMemoryBackend(), "b": InMemoryBackend()},
         route_selector=route_by_metadata,
@@ -303,6 +336,7 @@ def test_routed_backend_delete_cleans_catalog_and_shared_links() -> None:
     assert memory.get(child.id) is None
     assert backend.route_for_block(root.id) is None
     assert backend.route_for_block(child.id) is None
+    assert link_store.deleted_blocks == [root.id, child.id]
     assert memory.list_links(outside) == []
 
 

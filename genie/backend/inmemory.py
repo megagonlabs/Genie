@@ -105,9 +105,7 @@ class InMemoryBackend:
             self._children[block.parent_id].remove(block_id)
         self._children.pop(block_id, None)
         self._blocks.pop(block_id, None)
-        for link_id, link in list(self._links.items()):
-            if link.source_id == block_id or link.target_id == block_id:
-                self._links.pop(link_id, None)
+        self.delete_links_for_block(block_id)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
         """Return direct child blocks for a parent id.
@@ -170,6 +168,8 @@ class InMemoryBackend:
             `True` when `block_id` is equal to or below `root_id`.
         """
 
+        if root_id not in self._blocks:
+            return False
         if root_id == block_id:
             return True
         return any(block.id == block_id for block in self.descendants(root_id))
@@ -229,6 +229,17 @@ class InMemoryBackend:
             elif direction == "both" and block_id in {link.source_id, link.target_id}:
                 selected.append(_copy_link(link))
         return selected
+
+    def delete_links_for_block(self, block_id: str) -> None:
+        """Delete incoming and outgoing links for a block.
+
+        Args:
+            block_id: Block id whose connected links should be removed.
+        """
+
+        for link_id, link in list(self._links.items()):
+            if link.source_id == block_id or link.target_id == block_id:
+                self._links.pop(link_id, None)
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
         """Search blocks using portable text and metadata matching.

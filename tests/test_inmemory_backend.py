@@ -77,6 +77,14 @@ def test_backend_rejects_reparenting_to_missing_parent() -> None:
     assert unchanged.parent_id == root.id
 
 
+def test_backend_contains_requires_existing_root() -> None:
+    """Containment returns false when the potential root does not exist."""
+
+    backend = InMemoryBackend()
+
+    assert backend.contains("missing", "missing") is False
+
+
 def test_backend_links_return_defensive_metadata_copies() -> None:
     """Backend link reads cannot mutate stored link metadata."""
 
@@ -99,6 +107,24 @@ def test_backend_links_return_defensive_metadata_copies() -> None:
 
     relisted = backend.list_links(source.id)
     assert relisted[0].metadata == {"tags": ["initial"]}
+
+
+def test_backend_can_delete_links_for_a_block() -> None:
+    """Backends expose explicit cleanup for links connected to a block."""
+
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend)
+    source = memory.put(type="source", value="source")
+    target = memory.put(type="target", value="target")
+    incoming = memory.put(type="incoming", value="incoming")
+    backend.add_link(MemoryLink(source_id=source.id, target_id=target.id, relation="out"))
+    backend.add_link(MemoryLink(source_id=incoming.id, target_id=source.id, relation="in"))
+
+    backend.delete_links_for_block(source.id)
+
+    assert backend.list_links(source.id, direction="both") == []
+    assert backend.list_links(target.id, direction="both") == []
+    assert backend.list_links(incoming.id, direction="both") == []
 
 
 def test_inmemory_backend_read_paths_return_defensive_copies() -> None:

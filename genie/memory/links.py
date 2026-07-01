@@ -14,10 +14,9 @@ class LinkRelations:
     """Reserved Genie link relation constants.
 
     Attributes:
-        MOUNT: Symbolic mount relation. Mount links point from a local mount
-            point to another memory root. They do not imply parent ownership,
-            subtree membership, recursive delete ownership, or access
-            inheritance.
+        MOUNT: Symbolic mount relation. Mount links point from a source block
+            to another memory root. They do not imply parent ownership, subtree
+            membership, recursive delete ownership, or access inheritance.
     """
 
     MOUNT = "genie.mount"

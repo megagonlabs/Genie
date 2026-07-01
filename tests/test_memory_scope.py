@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from genie import AccessDenied, Memory, MemoryQuery, Scope
+from genie import AccessDenied, Memory, MemoryNotFound, MemoryQuery, Scope
 
 
 def test_subtree_scope_limits_search_scope() -> None:
@@ -135,3 +135,12 @@ def test_rootless_scope_requires_explicit_roots_for_traversal() -> None:
         scope.children()
     with pytest.raises(AccessDenied):
         scope.ancestors()
+
+
+def test_scope_root_must_exist() -> None:
+    """Non-rootless scopes fail early when their root block is missing."""
+
+    memory = Memory()
+
+    with pytest.raises(MemoryNotFound):
+        memory.scope(root="missing")

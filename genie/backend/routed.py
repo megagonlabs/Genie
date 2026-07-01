@@ -233,7 +233,7 @@ class RoutedBackend:
         self.routes[route].delete_block(block_id)
         for block in descendants:
             self._catalog.pop(block.id, None)
-            if isinstance(self.link_store, InMemoryLinkStore):
+            if self.link_store is not None:
                 self.link_store.delete_links_for_block(block.id)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
@@ -353,6 +353,21 @@ class RoutedBackend:
         if route is None:
             return []
         return self.routes[route].list_links(block_id, relation=relation, direction=direction)
+
+    def delete_links_for_block(self, block_id: str) -> None:
+        """Delete links connected to a block.
+
+        Args:
+            block_id: Block id whose connected links should be removed.
+        """
+
+        if self.link_store is not None:
+            self.link_store.delete_links_for_block(block_id)
+            return
+        route = self._route_for_existing_block(block_id, missing_ok=True)
+        if route is None:
+            return
+        self.routes[route].delete_links_for_block(block_id)
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
         """Search through the shared search index or route-local indexes.

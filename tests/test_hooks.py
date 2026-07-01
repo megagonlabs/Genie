@@ -68,7 +68,7 @@ def test_search_hooks_can_rewrite_and_trim_results() -> None:
 
 
 def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
-    """Lifecycle hooks observe missing gets and successful deletes."""
+    """Lifecycle hooks observe missing gets and every deleted subtree block."""
 
     class LifecycleHook(MemoryHook):
         """Hook that records get and delete lifecycle events."""
@@ -76,6 +76,7 @@ def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
         def __init__(self) -> None:
             self.before_get_calls: list[str] = []
             self.after_get_calls: list[str | None] = []
+            self.before_deleted: list[str] = []
             self.deleted: list[str] = []
 
         def before_get(self, block_id: str) -> None:
@@ -88,6 +89,11 @@ def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
 
             self.after_get_calls.append(block.id if block is not None else None)
 
+        def before_delete(self, block: Any) -> None:
+            """Record ids before deletion."""
+
+            self.before_deleted.append(block.id)
+
         def after_delete(self, block: Any) -> None:
             """Record deleted block ids."""
 
@@ -96,13 +102,15 @@ def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
     hook = LifecycleHook()
     memory = Memory(hooks=[hook])
     block = memory.put(type="note", value="note")
+    child = memory.put(parent=block, type="note", value="child")
 
     assert memory.get("missing") is None
     memory.delete(block)
 
     assert hook.before_get_calls == ["missing"]
     assert hook.after_get_calls == [None]
-    assert hook.deleted == [block.id]
+    assert hook.before_deleted == [block.id, child.id]
+    assert hook.deleted == [block.id, child.id]
 
 
 def test_hook_registry_runs_hooks_in_registration_order() -> None:

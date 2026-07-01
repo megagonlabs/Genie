@@ -379,6 +379,7 @@ SearchIndex
 LinkStore
   add_link
   list_links
+  delete_links_for_block
 ```
 
 The backend model separates storage and indexing conceptually, even when one
@@ -480,6 +481,7 @@ class PostgresBackend:
     def search(...): ...
     def add_link(...): ...
     def list_links(...): ...
+    def delete_links_for_block(...): ...
 ```
 
 Both shapes satisfy the same `MemoryBackend` contract.
@@ -731,12 +733,15 @@ name.
 The current implementation favors conservative behavior:
 
 - scopes cannot widen authority
+- non-rootless scopes require an existing root block
 - unknown memory blocks raise clear errors for write-like operations
 - recursive delete checks every affected block
 - recursive delete does not follow symbolic mounts
+- recursive delete dispatches delete hooks for every removed block
 - returned JSON values and metadata are copied
 - in-memory reparenting rejects cycles
 - link directions are validated
+- backend link stores expose cleanup for links connected to deleted blocks
 - link listing hides relationships whose endpoints are not readable by the principal
 - scoped link listing and linked-memory search remain inside the scope root
 - JSON encoding rejects `NaN` and `Infinity`

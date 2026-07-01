@@ -232,10 +232,12 @@ class Memory:
         blocks_to_delete = self.backend.descendants(block.id, include_self=True)
         for candidate in blocks_to_delete:
             self.policy_engine.require(Operation.WRITE, candidate, self.principal)
-        decoded_block = self._decode_block(block)
-        self.hooks.before_delete(decoded_block)
+        decoded_blocks = [self._decode_block(candidate) for candidate in blocks_to_delete]
+        for decoded_block in decoded_blocks:
+            self.hooks.before_delete(decoded_block)
         self.backend.delete_block(block.id)
-        self.hooks.after_delete(decoded_block)
+        for decoded_block in decoded_blocks:
+            self.hooks.after_delete(decoded_block)
 
     def children(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
         """Return readable direct children for a block.
@@ -511,13 +513,19 @@ class Memory:
 
         Returns:
             A `MemoryScope` backed by this memory system.
+
+        Raises:
+            MemoryNotFound: If `root` is provided and does not exist.
         """
 
         from genie.memory.scope import MemoryScope
 
+        root_id = _block_id(root) if root is not None else None
+        if root_id is not None:
+            self._require_raw(root_id)
         return MemoryScope(
             memory=self,
-            root_id=_block_id(root) if root is not None else None,
+            root_id=root_id,
             principal=Principal.coerce(principal) if principal is not None else self.principal,
             default_scope=Scope(default_scope),
             allow_up=allow_up,
