@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from genie import HookRegistry, Memory, MemoryHook, MemoryQuery
+import pytest
+
+from genie import (
+    AccessDenied,
+    AccessRule,
+    HookRegistry,
+    Memory,
+    MemoryHook,
+    MemoryPolicy,
+    MemoryQuery,
+    Scope,
+    SearchResult,
+)
 
 
 def test_hooks_can_transform_and_observe_blocks() -> None:
@@ -33,6 +45,33 @@ def test_hooks_can_transform_and_observe_blocks() -> None:
 
     assert block.metadata["hooked"] is True
     assert hook.created == [block.id]
+
+
+def test_before_put_hook_cannot_change_parent_after_authorization() -> None:
+    """Put hooks cannot reparent a block after scope and policy checks."""
+
+    class ReparentHook(MemoryHook):
+        """Hook that tries to move new blocks to another parent."""
+
+        def __init__(self, parent_id: str) -> None:
+            self.parent_id = parent_id
+
+        def before_put(self, block):
+            """Attempt to change the authorized parent."""
+
+            return block.with_updates(parent_id=self.parent_id)
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    outside = memory.put(type="root", value="outside")
+    memory.hooks.register(ReparentHook(outside.id))
+    scope = memory.scope(root=root)
+
+    with pytest.raises(ValueError, match="parent_id"):
+        scope.put(type="note", value="should not be stored")
+
+    assert memory.children(root) == []
+    assert memory.children(outside) == []
 
 
 def test_search_hooks_can_rewrite_and_trim_results() -> None:
@@ -65,6 +104,93 @@ def test_search_hooks_can_rewrite_and_trim_results() -> None:
 
     assert [result.block.id for result in results] == [first.id]
     assert hook.calls == [("before", "ignored"), ("after", "needle")]
+
+
+def test_before_search_hook_cannot_widen_query_after_authorization() -> None:
+    """Search hooks cannot switch a query to an unauthorized root after checks."""
+
+    class EscalatingHook(MemoryHook):
+        """Hook that tries to redirect search into a private subtree."""
+
+        def __init__(self, private_root_id: str) -> None:
+            self.private_root_id = private_root_id
+
+        def before_search(self, query: MemoryQuery) -> MemoryQuery:
+            """Replace the authorized query with a private subtree query."""
+
+            return MemoryQuery(
+                text="secret",
+                root_id=self.private_root_id,
+                scope=Scope.SUBTREE,
+                limit=query.limit,
+            )
+
+    owner = Memory(principal="owner")
+    public_root = owner.put(type="root", value="public")
+    private_root = owner.put(
+        type="root",
+        value="private",
+        policy=MemoryPolicy(
+            search=AccessRule.only(principals={"owner"}),
+            traverse_down=AccessRule.only(principals={"owner"}),
+        ),
+    )
+    owner.put(parent=private_root, type="note", value="secret")
+    reader = Memory(
+        backend=owner.backend,
+        principal="reader",
+        policy_engine=owner.policy_engine,
+        hooks=[EscalatingHook(private_root.id)],
+        codecs=owner.codecs,
+    )
+
+    with pytest.raises(AccessDenied):
+        reader.search("public", root=public_root, scope="subtree")
+
+
+def test_after_search_hook_results_are_rechecked_for_policy_and_scope() -> None:
+    """Search results returned by hooks stay inside policy and query scope."""
+
+    class InjectingHook(MemoryHook):
+        """Hook that tries to add unreadable and out-of-scope results."""
+
+        def __init__(self, injected: list[SearchResult]) -> None:
+            self.injected = injected
+
+        def after_search(
+            self,
+            query: MemoryQuery,
+            results: list[SearchResult],
+        ) -> list[SearchResult]:
+            """Append injected results after normal policy filtering."""
+
+            return [*results, *self.injected]
+
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root")
+    inside = owner.put(parent=root, type="note", value="needle inside")
+    private_inside = owner.put(
+        parent=root,
+        type="note",
+        value="needle private",
+        policy=MemoryPolicy(read=AccessRule.only(principals={"owner"})),
+    )
+    outside = owner.put(type="note", value="needle outside")
+    injected = [
+        SearchResult(block=private_inside, score=99, reason="injected private"),
+        SearchResult(block=outside, score=98, reason="injected outside"),
+    ]
+    reader = Memory(
+        backend=owner.backend,
+        principal="reader",
+        policy_engine=owner.policy_engine,
+        hooks=[InjectingHook(injected)],
+        codecs=owner.codecs,
+    )
+
+    results = reader.search("needle", root=root, scope="subtree")
+
+    assert [result.block.id for result in results] == [inside.id]
 
 
 def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:

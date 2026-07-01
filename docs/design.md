@@ -762,6 +762,11 @@ around memory creates, reads, deletes, and searches. Backend adapters can add
 database-native logging when an application needs every underlying Redis,
 Postgres, or graph database operation recorded.
 
+Hooks run inside the public operation flow. Genie keeps structural and access
+checks around hook execution: `before_put` hooks cannot change parent
+placement after it has been authorized, and search queries/results are checked
+against policy and scope after search hooks run.
+
 Available hook points:
 
 - `before_put`
@@ -845,11 +850,13 @@ The current implementation favors conservative behavior:
 - bounded scopes require an existing root block
 - unbounded scopes must be created explicitly and require an explicit root for
   non-global search
-- `get` returns `None` for missing blocks, while operations that require an
-  existing block raise clear errors
-- recursive delete checks every affected block
+- full `Memory.get` returns `None` for missing blocks; rooted scopes treat
+  missing or out-of-scope ids as denied before fetching
+- recursive delete requires write access to every affected block
 - recursive delete does not follow symbolic mounts
 - recursive delete dispatches delete hooks for every removed block
+- `before_put` hooks cannot change parent placement after authorization
+- search hooks are re-authorized and results are re-filtered by policy and scope
 - returned JSON values and metadata are copied
 - in-memory reparenting rejects cycles
 - link directions are validated

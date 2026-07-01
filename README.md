@@ -33,7 +33,7 @@ plug into:
 - `MemoryScope`: a scoped CRUD/search handle intended to be passed into agents or sub-agents.
 - `MemoryBackend`: the adapter contract for SQL, document, graph, vector, or composite backends.
 - `RoutedBackend`: an optional composition backend for routing blocks across multiple stores.
-- `MemoryHook`: lifecycle extension points around writes, reads, deletes, and search.
+- `MemoryHook`: lifecycle extension points around creates, reads, deletes, and search.
 - `MemoryCodec`: value encoders/decoders for custom Python objects and storage-safe payloads.
 
 The following are out of scope for the core package: full agent frameworks,
@@ -230,6 +230,8 @@ Genie is designed so the core abstractions fail closed where possible:
 - Recursive delete requires write access to every block in the deleted subtree.
 - Recursive delete does not follow symbolic mounts.
 - Recursive delete dispatches delete hooks for every removed block.
+- `before_put` hooks cannot change parent placement after authorization.
+- Search hooks are re-authorized and results are re-filtered by policy and scope.
 - In-memory parent updates reject cycles.
 - Link direction values are validated.
 - Backend link stores expose cleanup for links connected to deleted blocks.

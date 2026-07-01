@@ -18,6 +18,9 @@ class MemoryHook:
     def before_put(self, block: MemoryBlock) -> MemoryBlock:
         """Run before a block is stored.
 
+        Hooks may annotate or rewrite non-structural fields, but they must not
+        change `parent_id`; parent placement is authorized before hooks run.
+
         Args:
             block: Block about to be stored.
 

@@ -111,6 +111,8 @@ class Memory:
             created_by=self.principal.id,
         )
         block = self.hooks.before_put(block)
+        if block.parent_id != parent_id:
+            raise ValueError("before_put hooks cannot change a block's parent_id.")
         stored = self.backend.put_block(block)
         self.hooks.after_put(stored)
         return self._decode_block(stored)
@@ -539,16 +541,18 @@ class Memory:
         self._authorize_query(memory_query)
         memory_query = self.hooks.before_search(memory_query)
         # Hooks may return a freshly constructed query. Normalize once more so
-        # backends receive canonical filter operators.
+        # backends receive canonical filter operators, then authorize again so
+        # hooks cannot accidentally widen the query root or scope.
         memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
+        self._authorize_query(memory_query)
         raw_results = self.backend.search(memory_query)
         decoded_results = [
             replace(result, block=self._decode_block(result.block))
             for result in raw_results
-            if self.policy_engine.allows(Operation.SEARCH, result.block, self.principal)
-            and self.policy_engine.allows(Operation.READ, result.block, self.principal)
         ]
-        return self.hooks.after_search(memory_query, decoded_results)
+        visible_results = self._filter_visible_results(memory_query, decoded_results)
+        hooked_results = self.hooks.after_search(memory_query, visible_results)
+        return self._filter_visible_results(memory_query, hooked_results)
 
     def scope(
         self,
@@ -751,6 +755,47 @@ class Memory:
         if target is None:
             return True
         return self.policy_engine.allows(Operation.READ, target, self.principal)
+
+    def _filter_visible_results(
+        self,
+        query: MemoryQuery,
+        results: list[SearchResult],
+    ) -> list[SearchResult]:
+        """Filter search results by stored block visibility and query scope."""
+
+        return [result for result in results if self._can_return_search_result(query, result)]
+
+    def _can_return_search_result(self, query: MemoryQuery, result: SearchResult) -> bool:
+        """Return whether a result is visible for the current query/principal."""
+
+        stored = self.backend.get_block(result.block.id)
+        if stored is None:
+            return False
+        if not self.policy_engine.allows(Operation.SEARCH, stored, self.principal):
+            return False
+        if not self.policy_engine.allows(Operation.READ, stored, self.principal):
+            return False
+        return self._result_in_query_scope(query, stored.id)
+
+    def _result_in_query_scope(self, query: MemoryQuery, block_id: str) -> bool:
+        """Return whether a block id belongs to the requested search scope."""
+
+        if query.root_id is None or query.scope == Scope.GLOBAL:
+            return True
+        if query.scope == Scope.SELF:
+            return block_id == query.root_id
+        if query.scope == Scope.SUBTREE:
+            return self.backend.contains(query.root_id, block_id)
+        if query.scope == Scope.ANCESTORS:
+            return block_id == query.root_id or self.backend.contains(block_id, query.root_id)
+        if query.scope == Scope.LINKS:
+            if block_id == query.root_id:
+                return True
+            return any(
+                block_id in {link.source_id, link.target_id}
+                for link in self.backend.list_links(query.root_id, direction="both")
+            )
+        return False
 
 
 @overload
