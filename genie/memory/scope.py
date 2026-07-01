@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 from genie.memory.block import MemoryBlock
 from genie.memory.links import MemoryLink
 from genie.policy.engine import AccessDenied
+from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
 from genie.query import MemoryQuery, Scope, SearchResult
 
@@ -61,7 +62,9 @@ class MemoryScope:
         value: Any,
         parent: str | MemoryBlock | None = None,
         metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
+        policy: MemoryPolicy | None = None,
+        content_type: str | None = None,
+        id: str | None = None,
     ) -> MemoryBlock:
         """Create a block inside this scope.
 
@@ -69,17 +72,23 @@ class MemoryScope:
 
         Args:
             type: Application-defined block type.
-            value: User-level value.
+            value: User-level value to encode and store.
             parent: Optional parent block or id inside the scope.
-            metadata: Optional metadata.
-            **kwargs: Additional arguments forwarded to `Memory.put`.
+            metadata: Optional metadata used for filtering or indexing.
+            policy: Optional block-level access policy.
+            content_type: Optional explicit codec content type.
+            id: Optional caller-provided block id.
 
         Returns:
-            Created block.
+            Stored block with decoded value.
 
         Raises:
             AccessDenied: If the parent is outside the scope or policy denies
-                the write.
+                the write. In rooted scopes, unknown parent ids are treated as
+                outside the scope before the underlying lookup is reached.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                parent id.
+            TypeError: If no codec can encode the value.
         """
 
         parent_id = _block_id(parent) if parent is not None else self.root_id
@@ -90,7 +99,9 @@ class MemoryScope:
             value=value,
             parent=parent_id,
             metadata=metadata,
-            **kwargs,
+            policy=policy,
+            content_type=content_type,
+            id=id,
         )
 
     def get(self, block_id: str | MemoryBlock) -> MemoryBlock | None:
@@ -100,58 +111,85 @@ class MemoryScope:
             block_id: Block or id to fetch.
 
         Returns:
-            Decoded block, or `None` when missing.
+            Decoded block, or `None` when missing in a rootless scope. Rooted
+            scopes reject ids outside their subtree before fetching the block.
 
         Raises:
             AccessDenied: If the block is outside the scope or policy denies
                 read access.
+            TypeError: If no codec can decode the stored value.
         """
 
         actual_id = _block_id(block_id)
         self._require_in_subtree(actual_id)
         return self._as_principal().get(actual_id)
 
-    def set(self, block_id: str | MemoryBlock, value: Any, **kwargs: Any) -> MemoryBlock:
+    def set(
+        self,
+        block_id: str | MemoryBlock,
+        value: Any,
+        *,
+        content_type: str | None = None,
+    ) -> MemoryBlock:
         """Replace a block value inside this scope.
 
         Args:
             block_id: Block or id to update.
             value: New user-level value.
-            **kwargs: Additional arguments forwarded to `Memory.set`.
+            content_type: Optional explicit codec content type.
 
         Returns:
-            Updated block.
+            Updated decoded block.
 
         Raises:
             AccessDenied: If the block is outside the scope or policy denies
-                write access.
+                write access. In rooted scopes, unknown block ids are treated
+                as outside the scope before the underlying lookup is reached.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                block.
+            TypeError: If no codec can encode the value.
         """
 
         actual_id = _block_id(block_id)
         self._require_in_subtree(actual_id)
-        return self._as_principal().set(actual_id, value, **kwargs)
+        return self._as_principal().set(actual_id, value, content_type=content_type)
 
-    def patch(self, block_id: str | MemoryBlock, **kwargs: Any) -> MemoryBlock:
-        """Patch a block inside this scope.
+    def patch(
+        self,
+        block_id: str | MemoryBlock,
+        *,
+        value: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryBlock:
+        """Merge updates into a dictionary value or metadata inside this scope.
 
         Args:
             block_id: Block or id to patch.
-            **kwargs: Patch arguments forwarded to `Memory.patch`.
+            value: Dict fields to merge into the existing decoded value.
+            metadata: Metadata fields to merge.
 
         Returns:
-            Updated block.
+            Updated decoded block.
 
         Raises:
             AccessDenied: If the block is outside the scope or policy denies
-                write access.
+                write access. In rooted scopes, unknown block ids are treated
+                as outside the scope before the underlying lookup is reached.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                block.
+            TypeError: If `value` is provided and the existing decoded value is
+                not a dictionary.
         """
 
         actual_id = _block_id(block_id)
         self._require_in_subtree(actual_id)
-        return self._as_principal().patch(actual_id, **kwargs)
+        return self._as_principal().patch(actual_id, value=value, metadata=metadata)
 
     def delete(self, block_id: str | MemoryBlock) -> None:
-        """Delete a block inside this scope.
+        """Delete a block and its descendants inside this scope.
+
+        Recursive delete is delegated to the underlying `Memory` handle and
+        requires write access to every block that would be removed.
 
         Args:
             block_id: Block or id to delete.
@@ -159,6 +197,8 @@ class MemoryScope:
         Raises:
             AccessDenied: If the block is outside the scope or policy denies
                 write access for any affected block.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                block.
         """
 
         actual_id = _block_id(block_id)
@@ -166,17 +206,20 @@ class MemoryScope:
         return self._as_principal().delete(actual_id)
 
     def children(self, block_id: str | MemoryBlock | None = None) -> list[MemoryBlock]:
-        """Return children for a block inside this scope.
+        """Return readable direct children for a block inside this scope.
 
         Args:
             block_id: Optional block or id. Defaults to the scope root.
 
         Returns:
-            Readable child blocks.
+            Decoded child blocks the principal can read.
 
         Raises:
             AccessDenied: If the scope is rootless and no block is provided, or
-                if the block is outside the scope.
+                if the block is outside the scope or policy denies downward
+                traversal.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                parent.
         """
 
         actual_id = _block_id(block_id) if block_id is not None else self.root_id
@@ -186,18 +229,21 @@ class MemoryScope:
         return self._as_principal().children(actual_id)
 
     def ancestors(self, block_id: str | MemoryBlock | None = None) -> list[MemoryBlock]:
-        """Return ancestors when this scope allows upward traversal.
+        """Return readable ancestors when this scope allows upward traversal.
 
         Args:
-            block_id: Optional block or id. Defaults to the scope root.
+            block_id: Optional block or id whose parents should be traversed.
+                Defaults to the scope root.
 
         Returns:
-            Readable ancestor blocks.
+            Decoded ancestor blocks the principal can read.
 
         Raises:
             AccessDenied: If ancestor traversal is disabled, the scope is
                 rootless and no block is provided, or the block is outside the
-                scope.
+                scope or policy denies upward traversal.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                block.
         """
 
         if not self.allow_up:
@@ -216,7 +262,7 @@ class MemoryScope:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Create a link between two blocks inside this scope.
+        """Create a typed non-hierarchical relationship inside this scope.
 
         Args:
             source: Source block or id inside the scope.
@@ -230,6 +276,8 @@ class MemoryScope:
         Raises:
             AccessDenied: If either endpoint is outside the scope or policy
                 denies the operation.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                endpoint.
         """
 
         self._require_in_subtree(_block_id(source))
@@ -245,7 +293,24 @@ class MemoryScope:
     ) -> list[MemoryLink]:
         """List links connected to a block inside this scope.
 
-        Links whose other endpoint falls outside the scope are hidden.
+        Links whose other endpoint falls outside the scope are hidden. The
+        underlying `Memory` handle also returns links only when the principal
+        can read both endpoints.
+
+        Args:
+            block_id: Block or id to inspect.
+            relation: Optional relation type filter.
+            direction: Link direction relative to `block_id`.
+
+        Returns:
+            Matching links visible through this scope.
+
+        Raises:
+            AccessDenied: If the block is outside the scope or policy denies
+                read access.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                block.
+            ValueError: If `direction` is invalid.
         """
 
         actual_id = _block_id(block_id)
@@ -283,6 +348,8 @@ class MemoryScope:
         Raises:
             AccessDenied: If mount access is disabled, the source is outside
                 the scope, or policy denies the write/read operation.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                endpoint.
         """
 
         self._require_mounts_allowed()
@@ -296,7 +363,15 @@ class MemoryScope:
             source: Source block or id inside the scope.
 
         Returns:
-            Readable outgoing mount links.
+            Readable outgoing mount links. Mounts whose target route has not
+            been registered yet are returned as pending symbolic references;
+            resolving them returns `None` until the target becomes available.
+
+        Raises:
+            AccessDenied: If mount access is disabled, the source is outside
+                the scope, or policy denies read access.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                source block.
         """
 
         self._require_mounts_allowed()
@@ -327,7 +402,10 @@ class MemoryScope:
 
         Raises:
             AccessDenied: If mount access is disabled, the scan root is outside
-                the scope, or a rootless scope cannot infer a default root.
+                the scope, a rootless scope cannot infer a default root, or
+                policy denies search or downward traversal.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                scan root.
         """
 
         self._require_mounts_allowed()
@@ -352,8 +430,10 @@ class MemoryScope:
             exists.
 
         Raises:
-            AccessDenied: If mount access is disabled or the mount source is
-                outside the scope.
+            ValueError: If `mount` is not a mount link.
+            AccessDenied: If mount access is disabled, the mount source is
+                outside the scope, or policy denies source/target read access.
+            MemoryNotFound: If the source block no longer exists.
         """
 
         self._require_mounts_allowed()
@@ -364,17 +444,23 @@ class MemoryScope:
         self,
         query: MemoryQuery | str | None = None,
         *,
+        text: str | None = None,
         scope: Scope | str | None = None,
         root: str | MemoryBlock | None = None,
-        **kwargs: Any,
+        types: list[str] | tuple[str, ...] = (),
+        filters: dict[str, Any] | None = None,
+        limit: int = 20,
     ) -> list[SearchResult]:
         """Search through this scope.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
+            text: Text query when `query` is not a string.
             scope: Optional search scope overriding the scope default.
             root: Optional root inside this scope.
-            **kwargs: Additional arguments forwarded to `Memory.search`.
+            types: Optional block types to include.
+            filters: Optional metadata or block-field filters.
+            limit: Maximum result count.
 
         Returns:
             Search results visible through the scope.
@@ -382,6 +468,8 @@ class MemoryScope:
         Raises:
             AccessDenied: If the requested root or search mode would escape the
                 scope's authority.
+            MemoryNotFound: If the query root does not exist.
+            ValueError: If the scope is invalid or limit is negative.
         """
 
         if isinstance(query, MemoryQuery):
@@ -401,9 +489,12 @@ class MemoryScope:
         # smuggle a wider root or global scope through a prebuilt MemoryQuery.
         results = self._as_principal().search(
             query,
+            text=text,
             root=root_id,
             scope=selected_scope,
-            **kwargs,
+            types=types,
+            filters=filters,
+            limit=limit,
         )
         if self.root_id is None or selected_scope in {Scope.GLOBAL, Scope.ANCESTORS}:
             return results
@@ -413,13 +504,26 @@ class MemoryScope:
         self,
         *,
         root: str | MemoryBlock | None = None,
-        **kwargs: Any,
+        principal: Principal | str | None = None,
+        default_scope: Scope | str = Scope.SUBTREE,
+        allow_up: bool = False,
+        allow_global: bool = False,
+        allow_mounts: bool = False,
     ) -> "MemoryScope":
         """Create a narrower sub-scope.
 
         Args:
             root: Optional new root. It must be inside this scope.
-            **kwargs: Scope options forwarded to `Memory.scope`.
+            principal: Principal for operations through the sub-scope. It must
+                match this scope's principal when provided.
+            default_scope: Default search scope used by the returned scope.
+            allow_up: Whether ancestor traversal/search is allowed. A
+                sub-scope cannot enable it unless this scope already allows it.
+            allow_global: Whether global search is allowed. A sub-scope cannot
+                enable it unless this scope already allows it.
+            allow_mounts: Whether symbolic mount operations are allowed. A
+                sub-scope cannot enable them unless this scope already allows
+                them.
 
         Returns:
             A new `MemoryScope` with equal or smaller authority.
@@ -428,19 +532,25 @@ class MemoryScope:
             AccessDenied: If the requested sub-scope would widen authority.
         """
 
-        requested_principal = kwargs.get("principal")
-        if requested_principal is not None and Principal.coerce(requested_principal) != self.principal:
+        if principal is not None and Principal.coerce(principal) != self.principal:
             raise AccessDenied("A sub-scope cannot change principal.")
-        if kwargs.get("allow_up") and not self.allow_up:
+        if allow_up and not self.allow_up:
             raise AccessDenied("A sub-scope cannot add ancestor access.")
-        if kwargs.get("allow_global") and not self.allow_global:
+        if allow_global and not self.allow_global:
             raise AccessDenied("A sub-scope cannot add global access.")
-        if kwargs.get("allow_mounts") and not self.allow_mounts:
+        if allow_mounts and not self.allow_mounts:
             raise AccessDenied("A sub-scope cannot add mount access.")
         root_id = _block_id(root) if root is not None else self.root_id
         if root_id is not None:
             self._require_in_subtree(root_id)
-        return self._as_principal().scope(root=root_id, **kwargs)
+        return self._as_principal().scope(
+            root=root_id,
+            principal=principal,
+            default_scope=default_scope,
+            allow_up=allow_up,
+            allow_global=allow_global,
+            allow_mounts=allow_mounts,
+        )
 
     def _as_principal(self) -> "Memory":
         """Create a full memory handle that shares state but uses this principal."""

@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from genie import AccessDenied, Memory, MemoryNotFound, MemoryQuery, Scope
+from genie import (
+    AccessDenied,
+    AccessRule,
+    Memory,
+    MemoryNotFound,
+    MemoryPolicy,
+    MemoryQuery,
+    Scope,
+)
 
 
 def test_subtree_scope_limits_search_scope() -> None:
@@ -63,6 +71,70 @@ def test_subscopes_can_narrow_but_not_escape_parent_scope() -> None:
         task_scope.get(sibling)
     with pytest.raises(AccessDenied):
         project_scope.scope(root=outside)
+
+
+def test_scope_put_and_set_forward_codec_options() -> None:
+    """Scoped writes accept the same explicit codec options as full memory writes."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    scope = memory.scope(root=root)
+
+    child = scope.put(
+        type="note",
+        value={"status": "draft"},
+        content_type="application/json",
+        id="note:explicit",
+    )
+    updated = scope.set(child, {"status": "done"}, content_type="application/json")
+
+    assert child.id == "note:explicit"
+    assert child.content_type == "application/json"
+    assert updated.content_type == "application/json"
+    assert updated.value == {"status": "done"}
+
+
+def test_scope_put_forwards_block_policy() -> None:
+    """Scoped block creation can attach the same policy object as `Memory.put`."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    writer_scope = memory.scope(root=root, principal="agent:writer")
+
+    private = writer_scope.put(
+        type="note",
+        value="private",
+        policy=MemoryPolicy(read=AccessRule.only(principals={"agent:allowed"})),
+    )
+
+    blocked_scope = memory.scope(root=root, principal="agent:blocked")
+    allowed_scope = memory.scope(root=root, principal="agent:allowed")
+
+    with pytest.raises(AccessDenied):
+        blocked_scope.get(private)
+    visible = allowed_scope.get(private)
+    assert visible is not None
+    assert visible.value == "private"
+
+
+def test_scope_search_accepts_full_search_arguments() -> None:
+    """Scoped search exposes text, type, filter, and limit arguments."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    scope = memory.scope(root=root)
+    memory.put(parent=root, type="note", value="needle first", metadata={"priority": 1})
+    memory.put(parent=root, type="note", value="needle second", metadata={"priority": 2})
+    memory.put(parent=root, type="task", value="needle task", metadata={"priority": 3})
+
+    results = scope.search(
+        text="needle",
+        types=["note"],
+        filters={"priority": {">=": 2}},
+        limit=1,
+    )
+
+    assert [result.block.value for result in results] == ["needle second"]
 
 
 def test_subscopes_cannot_widen_parent_global_or_ancestor_access() -> None:
