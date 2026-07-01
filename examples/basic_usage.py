@@ -4,7 +4,7 @@ This example combines the main concepts shown in the smaller examples:
 
 - a full `Memory` object kept at the application boundary
 - scoped memory handles passed to agents
-- hierarchical blocks for project/task/note structure
+- parent/child containment for project/task/note structure
 - text search, metadata filters, and linked-memory search
 - typed links between memory blocks
 - policies for principal-specific access control
@@ -195,7 +195,7 @@ def main() -> None:
         source="draft",
     )
 
-    section("Search inside the scoped hierarchy")
+    section("Search inside the scoped containment")
     local_results = writer.recall("sections")
     assert [block.id for block in local_results] == [outline.id]
 

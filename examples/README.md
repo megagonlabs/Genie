@@ -31,8 +31,8 @@ Recommended reading order:
 
 Integrated example:
 
-- `basic_usage.py`: combines scopes, hierarchy, search, links, policies, hooks,
-  dataclass codecs, and stdlib codecs in one agent workflow.
+- `basic_usage.py`: combines scopes, parent/child containment, search, links,
+  policies, hooks, dataclass codecs, and stdlib codecs in one agent workflow.
 
 Conventions used throughout:
 

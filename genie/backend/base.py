@@ -12,5 +12,7 @@ class MemoryBackend(BlockStore, TraversalIndex, SearchIndex, LinkStore, Protocol
     """Backend contract for Genie adapters.
 
     A concrete backend can be a single database adapter or a composition of
-    store/search/traversal implementations.
+    store/search/traversal implementations. The backend boundary keeps Genie
+    independent of any specific database, storage topology, or retrieval
+    strategy.
     """

@@ -1,8 +1,9 @@
 """Memory block primitives.
 
 This module contains the core addressable memory unit used throughout Genie.
-`MemoryBlock` is intentionally storage-neutral: adapters may persist it in SQL,
-documents, graph nodes, object stores, or another representation.
+`MemoryBlock` is intentionally storage-neutral and content-agnostic: adapters
+may persist it in SQL, documents, graph nodes, object stores, or another
+representation, and applications decide what each block type and value mean.
 """
 
 from __future__ import annotations
@@ -39,15 +40,17 @@ def utc_now() -> datetime:
 class MemoryBlock:
     """The smallest independently addressable unit of Genie memory.
 
-    A block represents the unit at which identity, hierarchy, metadata,
-    provenance, access policy, and lifecycle are tracked.
+    A block represents the unit at which identity, parent placement, metadata,
+    provenance, access policy, and lifecycle are tracked. Genie enforces the
+    structural block and parent/child containment model; applications define
+    the domain meaning of block types and values.
 
     Attributes:
         type: Application-defined category such as `"note"` or `"task"`.
         value: Encoded memory payload. Public `Memory` methods return decoded
             values; backends store encoded values.
         id: Stable block identifier.
-        parent_id: Optional parent block id for hierarchical placement.
+        parent_id: Optional parent block id for containment placement.
         content_type: Codec content type used to decode `value`.
         metadata: Arbitrary JSON-compatible metadata used for filtering and
             adapter-specific indexing.

@@ -1,14 +1,23 @@
 # Genie Design
 
-Genie is a database-agnostic foundation for hierarchical agent memory. It is
-not intended to be a full agent framework, vector database, graph database, or
-opinionated long-term memory product. It defines the core memory model, scoped
-access semantics, and extension contracts that other systems can build on.
+Genie is a utility library for developers building their own agent memory
+systems around memory blocks, parent/child containment, and scoped access. It
+is not intended to be a full agent framework, vector database, graph database,
+or opinionated long-term memory product. It defines a memory block model,
+containment semantics, scoped access semantics, and extension contracts that
+other systems can build on.
+
+Genie keeps application behavior outside the core package. Product-specific
+business logic, memory taxonomies, agent workflows, retrieval strategies,
+storage topology, and value types remain application-owned. Genie supplies the
+structural primitives and adapter boundaries those systems can compose.
 
 Design objectives:
 
 - Provide a small, stable memory model that can be persisted in many backends.
-- Treat memory as structured, hierarchical, and permissioned by default.
+- Treat parent/child containment as the default ownership structure for scoped
+  access and recursive operations.
+- Keep business logic, memory taxonomy, and agent behavior application-owned.
 - Give agents scoped memory handles rather than unrestricted access to the full memory system.
 - Keep storage, traversal, search, policy, hooks, and value encoding separable.
 - Let adapter authors support SQL, document, graph, vector, or hybrid backends.
@@ -21,11 +30,15 @@ Non-goals:
 - Provide durable production storage in core.
 - Implement embeddings or semantic search by default.
 - Manage agent execution, planning, or tool calling.
+- Own application business logic or system design.
 - Define one universal memory taxonomy.
 
 ## Mental Model
 
-Genie models memory as a typed, hierarchical graph of blocks.
+Genie models memory as a typed graph of blocks. Parent/child relationships
+provide containment for scoped access; links and mounts provide non-containment
+relationships. The `type` field is application-defined, and the `value` payload
+is content-agnostic behind the codec interface.
 
 ```text
 Memory
@@ -58,7 +71,7 @@ Recommended integration pattern: keep `Memory` at trust boundaries and pass
 ```text
 genie/
   memory/
-    block.py        # MemoryBlock identity, hierarchy, metadata, policy
+    block.py        # MemoryBlock identity, parent placement, metadata, policy
     links.py        # MemoryLink relation model
     memory.py       # Memory public API
     scope.py        # MemoryScope scoped API
@@ -95,7 +108,9 @@ genie/
 
 ### MemoryBlock
 
-`MemoryBlock` is the smallest independently addressable unit of memory.
+`MemoryBlock` is the smallest independently addressable unit of memory. It is
+the primitive Genie uses to track parent/child containment; applications decide
+what each block means and how block types map to their own domain model.
 
 ```python
 MemoryBlock(
@@ -146,9 +161,9 @@ memory.put(type="preference", value={"style": "concise"})
 memory.put(type="note", value="Keep the proposal short.")
 ```
 
-### Hierarchy
+### Parent/Child Containment
 
-Blocks form a parent/child hierarchy through `parent_id`.
+Blocks form parent/child containment through `parent_id`.
 
 ```text
 project
@@ -156,8 +171,9 @@ project
     note
 ```
 
-The hierarchy is used for scoped access, subtree search, ancestor traversal,
-and recursive operations. The in-memory backend rejects parent cycles.
+Parent/child containment is used for scoped access, subtree search, ancestor
+traversal, and recursive operations. The in-memory backend rejects parent
+cycles.
 
 ### Links
 
@@ -524,10 +540,10 @@ Examples:
 
 ```text
 Postgres backend
-  blocks, hierarchy, metadata filters, full-text search
+  blocks, parent placement, metadata filters, full-text search
 
 Postgres + pgvector backend
-  blocks, hierarchy, filters, vector index
+  blocks, parent placement, filters, vector index
 
 Neo4j backend
   graph relationships and traversal

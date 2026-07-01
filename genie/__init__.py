@@ -1,8 +1,13 @@
 """Genie public API.
 
-Genie provides database-agnostic primitives for hierarchical, scoped, and
-policy-aware agent memory. Most applications start with `Memory` and pass
-`MemoryScope` instances to agents.
+Genie provides database-agnostic primitives for developers building their own
+scoped, policy-aware agent memory systems. The core package defines memory
+blocks, parent/child containment, and extension contracts; applications provide
+their own business logic, memory taxonomy, storage adapters, retrieval
+strategy, and value types.
+
+Most applications start with `Memory` and pass bounded `MemoryScope` instances
+to agents.
 """
 
 from genie.backend import (

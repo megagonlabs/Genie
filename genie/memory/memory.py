@@ -27,8 +27,11 @@ class Memory:
     """Full Genie memory system handle.
 
     `Memory` owns the backend, policy engine, hooks, and codecs. Applications
-    typically keep this object at trust boundaries and pass `MemoryScope`
-    objects to agents.
+    typically keep this object at trust boundaries and pass bounded
+    `MemoryScope` objects to agents. It coordinates parent/child containment,
+    scoped access, and extension points without owning application business
+    logic, memory taxonomy, storage topology, retrieval strategy, or value
+    semantics.
     """
 
     def __init__(

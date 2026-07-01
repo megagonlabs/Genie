@@ -1,6 +1,14 @@
 # Genie
 
-Genie is a database-agnostic foundation for hierarchical agent memory.
+Genie is a utility library for developers building their own agent memory
+systems around memory blocks, parent/child containment, and scoped access.
+
+Its core responsibility is deliberately narrow: define memory blocks, enforce
+parent/child containment for ownership-style memory structure, and provide
+extension contracts for scoped access, storage, search, links, hooks, policies,
+and value encoding. Applications keep ownership of their business logic, memory
+taxonomy, agent behavior, storage topology, retrieval strategy, and value
+types.
 
 For a deeper architecture overview, see [docs/design.md](docs/design.md).
 
@@ -16,7 +24,7 @@ The core package defines the memory structure and extension contracts:
 
 Genie intentionally does not provide a full agent framework, durable production
 storage in core, built-in embeddings, semantic search, planning, tool calling,
-or a universal memory taxonomy.
+application business logic, or a universal memory taxonomy.
 
 ## Quick Start
 
@@ -65,9 +73,11 @@ conda run -n "genie" python examples/basic_usage.py
 
 ## Core Model
 
-Genie treats memory as a permissioned, typed, hierarchical graph of blocks.
-Each block has identity, content, metadata, optional policy, and parent/child
-placement. Blocks can also be connected with typed links.
+Genie treats memory as a permissioned, typed graph of blocks. Parent/child
+relationships define containment for scoped access and recursive operations.
+Each block has identity, an application-defined `type`, content-agnostic
+`value`, metadata, optional policy, and optional parent placement. Blocks can
+also be connected with typed links for non-containment relationships.
 
 ```python
 block = memory.put(
@@ -206,7 +216,7 @@ Genie is designed so the core abstractions fail closed where possible:
 - Recursive delete requires write access to every block in the deleted subtree.
 - Recursive delete does not follow symbolic mounts.
 - Recursive delete dispatches delete hooks for every removed block.
-- In-memory hierarchy updates reject parent cycles.
+- In-memory parent updates reject cycles.
 - Link direction values are validated.
 - Backend link stores expose cleanup for links connected to deleted blocks.
 - Link listing hides relationships whose endpoints are not readable by the principal.

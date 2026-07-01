@@ -59,7 +59,7 @@ def test_backend_rejects_reparenting_cycles() -> None:
 
 
 def test_backend_rejects_reparenting_to_missing_parent() -> None:
-    """Reparenting to a missing parent leaves the existing hierarchy unchanged."""
+    """Reparenting to a missing parent leaves existing parent placement unchanged."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
