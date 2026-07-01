@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
         "routed_backend.py",
         "policies.py",
         "hooks_codecs.py",
+        "stdlib_codecs.py",
         "basic_usage.py",
     ],
 )

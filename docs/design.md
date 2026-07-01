@@ -85,6 +85,7 @@ genie/
   codecs/
     base.py         # MemoryCodec and CodecRegistry
     json.py         # JSON-compatible default codec
+    stdlib.py       # opt-in standard-library value codecs
 
   hooks/
     base.py         # MemoryHook extension methods
@@ -709,6 +710,21 @@ codec whether it can encode the value.
 
 The default `JsonCodec` defensively copies encoded and decoded values so callers
 cannot mutate stored state through returned objects.
+
+`Memory()` registers only `JsonCodec` by default. Additional dependency-free
+codecs live in `genie.codecs.stdlib` and are opt-in:
+
+- `BytesCodec`
+- `DatetimeCodec`
+- `DecimalCodec`
+- `UUIDCodec`
+- `DataclassCodec`
+- `EnumCodec`
+
+Stdlib codecs encode values into portable payload shapes, usually JSON-compatible
+data. `DataclassCodec` and `EnumCodec` require trusted application types to be
+registered with the codec; decoding does not import arbitrary Python classes by
+name.
 
 ## Operational Safety
 

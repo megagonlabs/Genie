@@ -8,7 +8,7 @@ This example combines the main concepts shown in the smaller examples:
 - text search, metadata filters, and linked-memory search
 - typed links between memory blocks
 - policies for principal-specific access control
-- hooks and codecs as extension points
+- hooks, dataclass codecs, and stdlib codecs as extension points
 
 Run from the repository root:
 
@@ -18,7 +18,10 @@ Run from the repository root:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import datetime as dt
+from decimal import Decimal
 from typing import Any
+import uuid
 
 if __package__ in {None, ""}:
     from _bootstrap import ensure_repo_on_path
@@ -31,16 +34,20 @@ from genie import (
     AccessDenied,
     AccessRule,
     CodecRegistry,
-    EncodedValue,
     InMemoryBackend,
     JsonCodec,
     Memory,
     MemoryBlock,
-    MemoryCodec,
     MemoryHook,
     MemoryPolicy,
     MemoryScope,
     SearchResult,
+)
+from genie.codecs.stdlib import (
+    DataclassCodec,
+    DatetimeCodec,
+    DecimalCodec,
+    UUIDCodec,
 )
 
 
@@ -55,37 +62,6 @@ class StylePreference:
 
     tone: str
     length: str
-
-
-class StylePreferenceCodec(MemoryCodec):
-    """Codec that stores `StylePreference` values as JSON-compatible data."""
-
-    content_type = "application/vnd.genie.style-preference+json"
-
-    def can_encode(self, value: Any) -> bool:
-        """Return whether this codec can encode the value."""
-
-        return isinstance(value, StylePreference)
-
-    def encode(self, value: Any) -> EncodedValue:
-        """Encode a `StylePreference` value.
-
-        Args:
-            value: Style preference instance.
-
-        Returns:
-            Encoded style preference payload.
-        """
-
-        return EncodedValue(
-            self.content_type,
-            {"tone": value.tone, "length": value.length},
-        )
-
-    def decode(self, value: EncodedValue) -> Any:
-        """Decode a stored style preference payload."""
-
-        return StylePreference(**value.data)
 
 
 class AuditHook(MemoryHook):
@@ -160,15 +136,31 @@ def main() -> None:
         backend=InMemoryBackend(),
         principal="agent:root",
         hooks=[audit],
-        codecs=CodecRegistry([JsonCodec(), StylePreferenceCodec()]),
+        codecs=CodecRegistry(
+            [
+                DatetimeCodec(),
+                DecimalCodec(),
+                UUIDCodec(),
+                DataclassCodec([StylePreference]),
+                JsonCodec(),
+            ]
+        ),
     )
 
     section("Seed application-owned memory")
+    request_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
     project = memory.put(
         type="project",
         value={"name": "Proposal draft", "deadline": "Friday"},
-        metadata={"workspace": "demo"},
+        metadata={"workspace": "demo", "request_id": str(request_id)},
     )
+    memory.put(parent=project, type="request_id", value=request_id)
+    due_at = memory.put(
+        parent=project,
+        type="deadline",
+        value=dt.datetime(2026, 7, 3, 17, 0, tzinfo=dt.timezone.utc),
+    )
+    budget = memory.put(parent=project, type="budget", value=Decimal("1250.75"))
     requirement = memory.put(
         parent=project,
         type="requirement",
@@ -237,14 +229,29 @@ def main() -> None:
     except AccessDenied as exc:
         print(f"blocked private note read: {exc}")
 
-    section("Patch data and decode custom values")
+    section("Patch data and decode typed values")
     updated_task = writer.memory.patch(task, value={"status": "in_progress"})
     decoded_style = planner.memory.get(style)
+    decoded_due_at = planner.memory.get(due_at)
+    decoded_budget = planner.memory.get(budget)
     assert decoded_style is not None
+    assert decoded_due_at is not None
+    assert decoded_budget is not None
     print(f"updated task: {updated_task.value}")
     print(f"decoded style preference: {decoded_style.value}")
+    print(f"decoded deadline: {decoded_due_at.value.isoformat()}")
+    print(f"decoded budget: {decoded_budget.value}")
     assert updated_task.value["status"] == "in_progress"
     assert decoded_style.value == StylePreference(tone="warm", length="short")
+    assert decoded_due_at.value == dt.datetime(
+        2026,
+        7,
+        3,
+        17,
+        0,
+        tzinfo=dt.timezone.utc,
+    )
+    assert decoded_budget.value == Decimal("1250.75")
 
     section("Scopes prevent accidental escape")
     other_project = memory.put(type="project", value={"name": "Other project"})

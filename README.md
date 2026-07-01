@@ -53,7 +53,8 @@ Focused runnable examples live in [examples](examples):
 - `links.py`: typed links, symbolic mounts, and linked-memory search.
 - `routed_backend.py`: route blocks across multiple backend stores.
 - `policies.py`: principal and role based access control.
-- `hooks_codecs.py`: lifecycle hooks and custom value codecs.
+- `hooks_codecs.py`: lifecycle hooks with custom and stdlib value codecs.
+- `stdlib_codecs.py`: opt-in stdlib codecs with decoded and raw payload examples.
 - `basic_usage.py`: integrated workflow that combines the main features.
 
 Run one directly from the repository root:
@@ -210,6 +211,27 @@ memory = Memory(backend=InMemoryBackend(), hooks=[AuditHook()])
 ## Codecs
 
 Codecs translate user-level Python objects into storage-safe values and back.
+`Memory()` registers only `JsonCodec` by default. Additional standard-library
+codecs are opt-in:
+
+```python
+from decimal import Decimal
+
+from genie import InMemoryBackend, Memory
+from genie.codecs import CodecRegistry, JsonCodec
+from genie.codecs.stdlib import DatetimeCodec, DecimalCodec, UUIDCodec
+
+memory = Memory(
+    backend=InMemoryBackend(),
+    codecs=CodecRegistry([DatetimeCodec(), DecimalCodec(), UUIDCodec(), JsonCodec()]),
+)
+
+memory.put(type="amount", value=Decimal("0.1000000000000000001"))
+```
+
+The stdlib module includes `BytesCodec`, `DatetimeCodec`, `DecimalCodec`,
+`UUIDCodec`, `DataclassCodec`, and `EnumCodec`. Register dataclass and enum
+types explicitly so decoding only reconstructs trusted application types.
 
 ```python
 from dataclasses import dataclass

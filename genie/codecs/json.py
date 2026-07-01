@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import enum
 import math
 from typing import Any
 
@@ -69,6 +70,8 @@ class JsonCodec:
 def _is_json_compatible(value: Any) -> bool:
     """Return whether a value can be represented as strict JSON data."""
 
+    if isinstance(value, enum.Enum):
+        return False
     if value is None or isinstance(value, str | bool | int):
         return True
     if isinstance(value, float):
