@@ -211,20 +211,20 @@ def test_routed_backend_supports_cross_route_mounts_as_symbolic_links() -> None:
     )
     memory = Memory(backend=backend)
     local_root = memory.put(type="project", value="local", metadata={"route": "a"})
-    mount_point = memory.put(parent=local_root, type="mount-point", value="remote")
+    mount_source = memory.put(parent=local_root, type="reference", value="remote")
     remote_root = memory.put(type="project", value="remote", metadata={"route": "b"})
     remote_child = memory.put(parent=remote_root, type="note", value="remote child")
 
-    mount = memory.add_mount(mount_point, remote_root)
+    mount = memory.add_mount(mount_source, remote_root)
 
-    assert memory.list_mounts(mount_point) == [mount]
-    assert [block.id for block in memory.children(local_root)] == [mount_point.id]
+    assert memory.list_mounts(mount_source) == [mount]
+    assert [block.id for block in memory.children(local_root)] == [mount_source.id]
     assert remote_root.id not in {block.id for block in backend.descendants(local_root.id)}
 
     memory.delete(local_root)
 
     assert memory.get(local_root) is None
-    assert memory.get(mount_point) is None
+    assert memory.get(mount_source) is None
     assert memory.get(remote_root) is not None
     assert memory.get(remote_child) is not None
 

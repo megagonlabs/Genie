@@ -14,7 +14,14 @@ else:
 
 ensure_repo_on_path()
 
-from genie import InMemoryBackend, InMemoryLinkStore, Memory, MemoryBlock, RoutedBackend
+from genie import (
+    InMemoryBackend,
+    InMemoryLinkStore,
+    LinkRelations,
+    Memory,
+    MemoryBlock,
+    RoutedBackend,
+)
 
 
 def route_by_region(block: MemoryBlock) -> str | None:
@@ -59,15 +66,25 @@ def main() -> None:
         type="note",
         value="EU launch requires data residency review.",
     )
+    # The symbolic link is the MemoryLink returned by add_mount. It is attached
+    # to a source block and points at the EU project, but it does not create a
+    # local child block and does not make the EU tree part of the US subtree.
+    eu_rollout_link = memory.add_mount(
+        us_project,
+        eu_project,
+        metadata={"label": "EU rollout", "reason": "shared rollout context"},
+    )
 
     global_results = memory.search("launch", scope="global")
     eu_results = memory.search("data residency", root=eu_project, scope="subtree")
-    mount = memory.add_mount(us_project, eu_project, metadata={"reason": "shared rollout context"})
-    mounted_root = memory.resolve_mount(mount)
+    us_results = memory.search("data residency", root=us_project, scope="subtree")
+    linked_results = memory.search("rollout", root=us_project, scope="links")
+    mounted_root = memory.resolve_mount(eu_rollout_link)
 
     print(f"US project route: {backend.route_for_block(us_project.id)}")
     print(f"EU project route: {backend.route_for_block(eu_project.id)}")
     print(f"US note inherited route: {backend.route_for_block(us_note.id)}")
+    print(f"Mount link relation: {eu_rollout_link.relation}")
     print(f"EU subtree search: {eu_results[0].block.value}")
     print(f"Mounted route target: {mounted_root.value if mounted_root else None}")
 
@@ -79,8 +96,15 @@ def main() -> None:
     assert us_store.get_block(eu_project.id) is None
     assert eu_store.get_block(eu_project.id) is not None
     assert eu_store.get_block(us_project.id) is None
+    assert [block.id for block in memory.children(us_project)] == [us_note.id]
     assert {result.block.id for result in global_results} >= {us_project.id, eu_note.id}
     assert [result.block.id for result in eu_results] == [eu_note.id]
+    assert us_results == []
+    assert [result.block.id for result in linked_results] == [eu_project.id]
+    assert eu_rollout_link.relation == LinkRelations.MOUNT
+    assert eu_rollout_link.source_id == us_project.id
+    assert eu_rollout_link.target_id == eu_project.id
+    assert memory.list_mounts(us_project) == [eu_rollout_link]
     assert mounted_root is not None
     assert mounted_root.id == eu_project.id
 

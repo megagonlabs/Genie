@@ -78,14 +78,15 @@ block = memory.put(
 updated = memory.patch(block, value={"tone": "warm"})
 ```
 
-Mounts are symbolic links between memory trees. They point to another block
-without making that block an owned child, so subtree search and recursive delete
-do not follow them by default.
+Mounts are symbolic links between memory trees. The mount itself is a
+`MemoryLink`; its source can be any memory block, and no special block `type` is
+required. It points to another block without making that block an owned child,
+so subtree search and recursive delete do not follow mounts by default.
 
 ```python
-local_mount_point = memory.put(type="mount_point", value="external docs")
+local_block = memory.put(type="project", value="local project")
 remote_root = memory.put(type="project", value="external project")
-mount = memory.add_mount(local_mount_point, remote_root)
+mount = memory.add_mount(local_block, remote_root)
 mounted_root = memory.resolve_mount(mount)
 ```
 

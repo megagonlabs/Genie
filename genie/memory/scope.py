@@ -43,7 +43,7 @@ class MemoryScope:
             allow_up: Whether ancestor traversal/search is allowed.
             allow_global: Whether global search is allowed.
             allow_mounts: Whether this scope can create, list, and resolve
-                symbolic mounts from local mount points.
+                symbolic mounts from local source blocks.
         """
 
         self._memory = memory
@@ -273,7 +273,7 @@ class MemoryScope:
         part of this scope's subtree; callers must explicitly resolve the mount.
 
         Args:
-            source: Local mount point block or id inside the scope.
+            source: Source block or id inside the scope.
             target: Mounted target block or id.
             metadata: Optional mount metadata.
 
@@ -293,7 +293,7 @@ class MemoryScope:
         """List symbolic mounts whose source is inside this scope.
 
         Args:
-            source: Local mount point block or id inside the scope.
+            source: Source block or id inside the scope.
 
         Returns:
             Readable outgoing mount links.

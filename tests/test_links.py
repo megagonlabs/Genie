@@ -141,17 +141,17 @@ def test_mounts_are_symbolic_and_not_recursive_ownership() -> None:
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
-    mount_point = memory.put(parent=local_root, type="mount-point", value="remote docs")
+    mount_source = memory.put(parent=local_root, type="reference", value="remote docs")
     remote_root = memory.put(type="project", value="remote")
     remote_child = memory.put(parent=remote_root, type="note", value="remote needle")
 
-    mount = memory.add_mount(mount_point, remote_root, metadata={"label": "docs"})
+    mount = memory.add_mount(mount_source, remote_root, metadata={"label": "docs"})
     subtree_results = memory.search("remote needle", root=local_root, scope="subtree")
-    link_results = memory.search("project", root=mount_point, scope="links")
+    link_results = memory.search("project", root=mount_source, scope="links")
     resolved = memory.resolve_mount(mount)
 
     assert mount.relation == LinkRelations.MOUNT
-    assert memory.list_mounts(mount_point) == [mount]
+    assert memory.list_mounts(mount_source) == [mount]
     assert subtree_results == []
     assert [result.block.id for result in link_results] == [remote_root.id]
     assert resolved is not None
@@ -159,7 +159,7 @@ def test_mounts_are_symbolic_and_not_recursive_ownership() -> None:
 
     memory.delete(local_root)
 
-    assert memory.get(mount_point) is None
+    assert memory.get(mount_source) is None
     assert memory.get(remote_root) is not None
     assert memory.get(remote_child) is not None
 
@@ -169,20 +169,20 @@ def test_scope_mounts_require_explicit_mount_access() -> None:
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
-    mount_point = memory.put(parent=local_root, type="mount-point", value="remote docs")
+    mount_source = memory.put(parent=local_root, type="reference", value="remote docs")
     remote_root = memory.put(type="project", value="remote")
     plain_scope = memory.scope(root=local_root)
     mount_scope = memory.scope(root=local_root, allow_mounts=True)
 
     with pytest.raises(AccessDenied):
-        plain_scope.add_mount(mount_point, remote_root)
+        plain_scope.add_mount(mount_source, remote_root)
     with pytest.raises(AccessDenied):
-        plain_scope.list_mounts(mount_point)
+        plain_scope.list_mounts(mount_source)
 
-    mount = mount_scope.add_mount(mount_point, remote_root)
+    mount = mount_scope.add_mount(mount_source, remote_root)
     resolved = mount_scope.resolve_mount(mount)
 
-    assert mount_scope.list_mounts(mount_point) == [mount]
+    assert mount_scope.list_mounts(mount_source) == [mount]
     assert resolved is not None
     assert resolved.id == remote_root.id
     with pytest.raises(AccessDenied):
@@ -194,11 +194,11 @@ def test_resolve_mount_requires_stored_mount_link() -> None:
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
-    mount_point = memory.put(parent=local_root, type="mount-point", value="remote docs")
+    mount_source = memory.put(parent=local_root, type="reference", value="remote docs")
     remote_root = memory.put(type="project", value="remote")
     scope = memory.scope(root=local_root, allow_mounts=True)
     forged = MemoryLink(
-        source_id=mount_point.id,
+        source_id=mount_source.id,
         target_id=remote_root.id,
         relation=LinkRelations.MOUNT,
     )
@@ -212,8 +212,8 @@ def test_scope_mount_resolution_requires_local_mount_source() -> None:
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
-    memory.put(parent=local_root, type="mount-point", value="inside")
-    outside_source = memory.put(type="mount-point", value="outside")
+    memory.put(parent=local_root, type="reference", value="inside")
+    outside_source = memory.put(type="reference", value="outside")
     remote_root = memory.put(type="project", value="remote")
     outside_mount = memory.add_mount(outside_source, remote_root)
     scope = memory.scope(root=local_root, allow_mounts=True)

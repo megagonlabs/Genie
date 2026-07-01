@@ -169,18 +169,20 @@ memory.add_link(requirement, outline, "informs")
 
 Use links for relationships that do not imply ownership or subtree membership.
 
-Mounts are a reserved link pattern for symbolic cross-tree references:
+Mounts are a reserved link pattern for symbolic cross-tree references. The
+mount itself is a `MemoryLink`; its source can be any memory block, and no
+special block `type` is required.
 
 ```python
-mount = memory.add_mount(local_mount_point, remote_root)
+mount = memory.add_mount(local_block, remote_root)
 remote_root = memory.resolve_mount(mount)
 ```
 
-A mount points from a local block to another memory root. The target does not
-become a child of the source. Subtree traversal, subtree search, and recursive
-delete do not follow mounts by default. Deleting the local mount point deletes
-the mount link, not the mounted target tree. This matches filesystem symbolic
-link behavior and keeps ownership separate from reference.
+A mount points from a local source block to another memory root. The target does
+not become a child of the source. Subtree traversal, subtree search, and
+recursive delete do not follow mounts by default. Deleting the source block
+deletes the mount link, not the mounted target tree. This matches filesystem
+symbolic link behavior and keeps ownership separate from reference.
 
 ## Public API
 

@@ -369,7 +369,7 @@ class Memory:
         recursive delete.
 
         Args:
-            source: Local mount point block or id.
+            source: Source block or id where the mount link starts.
             target: Mounted target root block or id.
             metadata: Optional mount metadata.
 
@@ -388,7 +388,7 @@ class Memory:
         """List symbolic mounts that start from a block.
 
         Args:
-            source: Local mount point block or id.
+            source: Source block or id where the mount link starts.
 
         Returns:
             Readable outgoing mount links.
