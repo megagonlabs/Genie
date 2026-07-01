@@ -156,6 +156,54 @@ def test_bytes_codec_round_trips_base64_payloads() -> None:
     assert retrieved.value == payload
 
 
+def test_stdlib_codecs_reject_malformed_encoded_payloads() -> None:
+    """Stdlib codecs fail clearly when stored payloads are malformed."""
+
+    malformed_cases = [
+        (BytesCodec(), EncodedValue(BytesCodec.content_type, "not base64!"), ValueError),
+        (BytesCodec(), EncodedValue(BytesCodec.content_type, 123), TypeError),
+        (
+            DatetimeCodec(),
+            EncodedValue(DatetimeCodec.content_type, {"kind": "duration", "value": "PT1H"}),
+            ValueError,
+        ),
+        (
+            DatetimeCodec(),
+            EncodedValue(DatetimeCodec.content_type, {"kind": "date", "value": 123}),
+            TypeError,
+        ),
+        (DecimalCodec(), EncodedValue(DecimalCodec.content_type, 123), TypeError),
+        (
+            DecimalCodec(),
+            EncodedValue(DecimalCodec.content_type, "not-a-decimal"),
+            decimal.InvalidOperation,
+        ),
+        (UUIDCodec(), EncodedValue(UUIDCodec.content_type, "not-a-uuid"), ValueError),
+        (
+            DataclassCodec([DataclassPreference]),
+            EncodedValue(DataclassCodec.content_type, {"type": "missing", "fields": {}}),
+            TypeError,
+        ),
+        (
+            EnumCodec([Priority]),
+            EncodedValue(EnumCodec.content_type, {"type": f"{Priority.__module__}:Priority"}),
+            TypeError,
+        ),
+        (
+            EnumCodec([Priority]),
+            EncodedValue(
+                EnumCodec.content_type,
+                {"type": f"{Priority.__module__}:Priority", "name": "MISSING"},
+            ),
+            KeyError,
+        ),
+    ]
+
+    for codec, encoded, error_type in malformed_cases:
+        with pytest.raises(error_type):
+            codec.decode(encoded)
+
+
 def test_datetime_codec_round_trips_datetime_date_and_time() -> None:
     """DatetimeCodec preserves concrete datetime/date/time value classes."""
 

@@ -70,6 +70,19 @@ def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
     memory = Memory()
     block = memory.put(type="note", value="exists", id="fixed")
 
+    assert memory.get("missing") is None
+    with pytest.raises(MemoryNotFound):
+        memory.set("missing", "value")
+    with pytest.raises(MemoryNotFound):
+        memory.patch("missing", value={"field": "value"})
+    with pytest.raises(MemoryNotFound):
+        memory.children("missing")
+    with pytest.raises(MemoryNotFound):
+        memory.ancestors("missing")
+    with pytest.raises(MemoryNotFound):
+        memory.list_links("missing")
+    with pytest.raises(MemoryNotFound):
+        memory.discover_mounts("missing")
     with pytest.raises(MemoryNotFound):
         memory.delete("missing")
     with pytest.raises(MemoryConflict):

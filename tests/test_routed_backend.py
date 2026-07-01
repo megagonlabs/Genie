@@ -127,6 +127,43 @@ class RecordingLinkStore:
         self.inner.delete_links_for_block(block_id)
 
 
+class RecordingTraversalIndex:
+    """Shared traversal index with explicit cross-route relationships."""
+
+    def __init__(self) -> None:
+        """Create an empty recording traversal index."""
+
+        self.children_by_root: dict[str, list[MemoryBlock]] = {}
+        self.ancestors_by_block: dict[str, list[MemoryBlock]] = {}
+        self.descendants_by_root: dict[tuple[str, bool], list[MemoryBlock]] = {}
+        self.contains_pairs: set[tuple[str, str]] = set()
+        self.calls: list[tuple[str, str]] = []
+
+    def children(self, block_id: str) -> list[MemoryBlock]:
+        """Return configured children for `block_id`."""
+
+        self.calls.append(("children", block_id))
+        return list(self.children_by_root.get(block_id, ()))
+
+    def ancestors(self, block_id: str) -> list[MemoryBlock]:
+        """Return configured ancestors for `block_id`."""
+
+        self.calls.append(("ancestors", block_id))
+        return list(self.ancestors_by_block.get(block_id, ()))
+
+    def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
+        """Return configured descendants for `block_id`."""
+
+        self.calls.append(("descendants", block_id))
+        return list(self.descendants_by_root.get((block_id, include_self), ()))
+
+    def contains(self, root_id: str, block_id: str) -> bool:
+        """Return configured containment for a root/candidate pair."""
+
+        self.calls.append(("contains", root_id))
+        return root_id == block_id or (root_id, block_id) in self.contains_pairs
+
+
 def test_routed_backend_routes_root_blocks_to_authoritative_stores() -> None:
     """Independent root blocks can live in different authoritative stores."""
 
@@ -212,6 +249,38 @@ def test_routed_backend_delegates_to_shared_search_index() -> None:
     assert results[0].score == 7.0
     assert len(search_index.queries) == 1
     assert search_index.queries[0].text == "ignored"
+
+
+def test_routed_backend_delegates_to_shared_traversal_index() -> None:
+    """Shared traversal indexes can define containment across routes."""
+
+    traversal_index = RecordingTraversalIndex()
+    backend = RoutedBackend(
+        {"a": InMemoryBackend(), "b": InMemoryBackend()},
+        route_selector=route_by_metadata,
+        default_route="a",
+        traversal_index=traversal_index,
+    )
+    memory = Memory(backend=backend)
+    root = memory.put(type="root", value="root", metadata={"route": "a"})
+    cross_route_child = memory.put(type="note", value="child", metadata={"route": "b"})
+    traversal_index.children_by_root[root.id] = [cross_route_child]
+    traversal_index.ancestors_by_block[cross_route_child.id] = [root]
+    traversal_index.descendants_by_root[(root.id, True)] = [root, cross_route_child]
+    traversal_index.contains_pairs.add((root.id, cross_route_child.id))
+
+    scope = memory.scope(root=root)
+
+    assert [block.id for block in memory.children(root)] == [cross_route_child.id]
+    assert [block.id for block in memory.ancestors(cross_route_child)] == [root.id]
+    assert [block.id for block in backend.descendants(root.id, include_self=True)] == [
+        root.id,
+        cross_route_child.id,
+    ]
+    assert memory.contains(root, cross_route_child) is True
+    assert scope.get(cross_route_child) is not None
+    assert ("children", root.id) in traversal_index.calls
+    assert ("contains", root.id) in traversal_index.calls
 
 
 def test_routed_backend_supports_cross_route_links_with_shared_link_store() -> None:

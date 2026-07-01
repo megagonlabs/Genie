@@ -2,9 +2,8 @@
 
 Genie is a database-agnostic foundation for hierarchical agent memory. It is
 not intended to be a full agent framework, vector database, graph database, or
-opinionated long-term memory product. Its job is to define the core memory
-model, scoped access semantics, and extension contracts that other systems can
-build on.
+opinionated long-term memory product. It defines the core memory model, scoped
+access semantics, and extension contracts that other systems can build on.
 
 Design objectives:
 
@@ -18,11 +17,11 @@ Design objectives:
 
 Non-goals:
 
-- prescribe a single database
-- provide durable production storage in core
-- implement embeddings or semantic search by default
-- manage agent execution, planning, or tool calling
-- define one universal memory taxonomy
+- Prescribe a single database.
+- Provide durable production storage in core.
+- Implement embeddings or semantic search by default.
+- Manage agent execution, planning, or tool calling.
+- Define one universal memory taxonomy.
 
 ## Mental Model
 
@@ -217,6 +216,8 @@ It exposes:
 - `resolve_mount`
 - `search`
 - `scope`
+- `unbounded_scope`
+- `contains`
 
 `Memory` owns shared infrastructure:
 
@@ -255,6 +256,14 @@ It supports normal CRUD/search operations:
 
 The difference is that every operation is constrained to the scope root unless
 explicitly configured otherwise.
+
+`Memory.scope(root=...)` requires a concrete root. Unbounded delegated access is
+created with `Memory.unbounded_scope(...)` so administrative, routing,
+migration, or other trusted workflows are explicit at the call site.
+
+Mount operations on a `MemoryScope` are available only when the scope is created
+with `allow_mounts=True`. Resolving a mount remains explicit and does not widen
+ordinary subtree search, traversal, or delete behavior.
 
 ## Scoped Access
 
@@ -581,9 +590,12 @@ adapter and registers it with `register_route(route, backend)`. Existing
 `Memory` and `MemoryScope` handles that share the routed backend can use the
 new route immediately.
 
-By default, child blocks stay in the same route as their parent. This preserves
-subtree traversal, recursive delete, and scoped access semantics. Independent
-root blocks can route to different stores.
+By default, `RoutedBackend(enforce_tree_route=True)` keeps child blocks in the
+same route as their parent. This preserves subtree traversal, recursive delete,
+and scoped access semantics. Independent root blocks can route to different
+stores. Advanced adapters may disable this setting, but then traversal,
+containment, scoped access, and delete semantics must be handled by shared
+indexes or equivalent backend logic.
 
 Routed backends can use one or more indexes:
 
@@ -601,7 +613,7 @@ Hybrid indexes
   useful for tenant, region, or workload isolation
 ```
 
-Multiple stores and multiple indexes are therefore a coherent design. Stores
+The routed model can therefore use multiple stores and multiple indexes. Stores
 own authoritative block state; indexes remain derived retrieval or traversal
 structures. A routed backend may have several store authorities, but only one
 authority for any given block.
@@ -622,6 +634,13 @@ registers the target route. If a target block is known but not readable,
 discovery hides that mount from the current principal. Following mounts during
 traversal/search and deleting mounted target trees are not implemented in the
 current library.
+
+The public `Memory.add_mount()` and `MemoryScope.add_mount()` methods validate
+both endpoints through the active backend. Pending mounts to not-yet-registered
+routes are therefore represented by adapter, migration, or import code that can
+write a symbolic `MemoryLink` to a shared `LinkStore` before the target route is
+opened. After `register_route()` adds the route, the same mount can resolve
+through the public memory API.
 
 `register_route()` updates the set of authoritative stores. It does not
 backfill external shared search or traversal indexes. Applications that provide
@@ -788,8 +807,11 @@ name.
 The current implementation favors conservative behavior:
 
 - scopes cannot widen authority
-- non-rootless scopes require an existing root block
-- unknown memory blocks raise clear errors for write-like operations
+- bounded scopes require an existing root block
+- unbounded scopes must be created explicitly and require an explicit root for
+  non-global search
+- `get` returns `None` for missing blocks, while operations that require an
+  existing block raise clear errors
 - recursive delete checks every affected block
 - recursive delete does not follow symbolic mounts
 - recursive delete dispatches delete hooks for every removed block
@@ -828,17 +850,31 @@ making the memory model depend on one database or retrieval strategy.
 
 ### How does policy inheritance work?
 
-Root write access does not automatically grant write access to descendant blocks. Genie evaluates permissions per block, meaning that holding access to a parent block does not imply authorization for its children.
+Root write access does not automatically grant write access to descendant
+blocks. Genie evaluates permissions per block, so access to a parent block does
+not imply authorization for its children.
 
 ### Where do I draw the line between Store and Index?
 
-The Store acts as your source of truth; all writes and updates must target the Store to ensure data integrity. The Index is a derived projection optimized for retrieval. When implementing custom backends, ensure that your Store methods are authoritative, while your Index methods (search, traversal) can be rebuilt or reindexed without loss of data.
+A store is the source of truth. Writes and updates should target the store so
+the authoritative memory state remains consistent. An index is a derived
+projection optimized for retrieval or traversal. Adapter implementations should
+treat store methods as authoritative and index methods as rebuildable from
+stored state.
 
 ### What happens if I link to something I cannot read?
 
-Genie prioritizes security by design. list_links will exclude relationships where the principal lacks read access to either endpoint. If a search traversal encounters a link to an unauthorized block, that link is treated as if it does not exist for the current principal.
+`list_links` excludes relationships when the principal lacks read access to
+either endpoint. If linked search encounters an unauthorized block, that block
+is omitted from the current principal's results.
 
 ### How do I register a custom codec at runtime?
 
-You can register custom codecs by accessing the registry directly. For example:
+Custom codecs can be registered on the codec registry used by a `Memory`
+handle:
+
+```python
 memory.codecs.register(PreferenceCodec())
+```
+
+Existing scopes created from that `Memory` share the same codec registry.

@@ -38,7 +38,7 @@ class MemoryScope:
 
         Args:
             memory: Underlying full memory system.
-            root_id: Optional root block id. `None` means rootless.
+            root_id: Optional root block id. `None` means unbounded.
             principal: Principal for operations through this scope.
             default_scope: Search scope used when callers omit `scope`.
             allow_up: Whether ancestor traversal/search is allowed.
@@ -111,7 +111,7 @@ class MemoryScope:
             block_id: Block or id to fetch.
 
         Returns:
-            Decoded block, or `None` when missing in a rootless scope. Rooted
+            Decoded block, or `None` when missing in an unbounded scope. Rooted
             scopes reject ids outside their subtree before fetching the block.
 
         Raises:
@@ -215,7 +215,7 @@ class MemoryScope:
             Decoded child blocks the principal can read.
 
         Raises:
-            AccessDenied: If the scope is rootless and no block is provided, or
+            AccessDenied: If the scope is unbounded and no block is provided, or
                 if the block is outside the scope or policy denies downward
                 traversal.
             MemoryNotFound: If the underlying memory handle reaches a missing
@@ -224,7 +224,7 @@ class MemoryScope:
 
         actual_id = _block_id(block_id) if block_id is not None else self.root_id
         if actual_id is None:
-            raise AccessDenied("A rootless memory scope cannot infer which children to fetch.")
+            raise AccessDenied("An unbounded memory scope cannot infer which children to fetch.")
         self._require_in_subtree(actual_id)
         return self._as_principal().children(actual_id)
 
@@ -240,7 +240,7 @@ class MemoryScope:
 
         Raises:
             AccessDenied: If ancestor traversal is disabled, the scope is
-                rootless and no block is provided, or the block is outside the
+                unbounded and no block is provided, or the block is outside the
                 scope or policy denies upward traversal.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
@@ -250,7 +250,7 @@ class MemoryScope:
             raise AccessDenied("This memory scope does not allow ancestor traversal.")
         actual_id = _block_id(block_id) if block_id is not None else self.root_id
         if actual_id is None:
-            raise AccessDenied("A rootless memory scope cannot infer which ancestors to fetch.")
+            raise AccessDenied("An unbounded memory scope cannot infer which ancestors to fetch.")
         self._require_in_subtree(actual_id)
         return self._as_principal().ancestors(actual_id)
 
@@ -402,7 +402,7 @@ class MemoryScope:
 
         Raises:
             AccessDenied: If mount access is disabled, the scan root is outside
-                the scope, a rootless scope cannot infer a default root, or
+                the scope, an unbounded scope cannot infer a default root, or
                 policy denies search or downward traversal.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 scan root.
@@ -411,7 +411,7 @@ class MemoryScope:
         self._require_mounts_allowed()
         actual_id = _block_id(root) if root is not None else self.root_id
         if actual_id is None:
-            raise AccessDenied("A rootless memory scope cannot infer which subtree to scan.")
+            raise AccessDenied("An unbounded memory scope cannot infer which subtree to scan.")
         self._require_in_subtree(actual_id)
         return self._as_principal().discover_mounts(actual_id, include_self=include_self)
 
@@ -467,7 +467,8 @@ class MemoryScope:
 
         Raises:
             AccessDenied: If the requested root or search mode would escape the
-                scope's authority.
+                scope's authority, or if an unbounded scope cannot infer a
+                non-global search root.
             MemoryNotFound: If the query root does not exist.
             ValueError: If the scope is invalid or limit is negative.
         """
@@ -483,6 +484,8 @@ class MemoryScope:
             raise AccessDenied("This memory scope does not allow global search.")
         if selected_scope == Scope.ANCESTORS and not self.allow_up:
             raise AccessDenied("This memory scope does not allow ancestor search.")
+        if root_id is None and selected_scope != Scope.GLOBAL:
+            raise AccessDenied("An unbounded memory scope cannot infer which subtree to search.")
         if root_id is not None and selected_scope != Scope.GLOBAL:
             self._require_in_subtree(root_id)
         # Rebuild query objects with the selected scope/root so a caller cannot
@@ -543,6 +546,14 @@ class MemoryScope:
         root_id = _block_id(root) if root is not None else self.root_id
         if root_id is not None:
             self._require_in_subtree(root_id)
+        if root_id is None:
+            return self._as_principal().unbounded_scope(
+                principal=principal,
+                default_scope=default_scope,
+                allow_up=allow_up,
+                allow_global=allow_global,
+                allow_mounts=allow_mounts,
+            )
         return self._as_principal().scope(
             root=root_id,
             principal=principal,

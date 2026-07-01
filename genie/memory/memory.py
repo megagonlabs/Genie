@@ -550,17 +550,17 @@ class Memory:
     def scope(
         self,
         *,
-        root: str | MemoryBlock | None = None,
+        root: str | MemoryBlock,
         principal: Principal | str | None = None,
         default_scope: Scope | str = Scope.SUBTREE,
         allow_up: bool = False,
         allow_global: bool = False,
         allow_mounts: bool = False,
     ) -> "MemoryScope":
-        """Create a scoped memory handle for delegation.
+        """Create a bounded scoped memory handle for delegation.
 
         Args:
-            root: Optional root block or id that bounds the scope.
+            root: Root block or id that bounds the scope.
             principal: Principal for operations through the scope. Defaults to
                 this `Memory` handle's principal.
             default_scope: Default search scope used by the returned scope.
@@ -573,19 +573,59 @@ class Memory:
             A `MemoryScope` backed by this memory system.
 
         Raises:
-            MemoryNotFound: If `root` is provided and does not exist.
+            ValueError: If `root` is `None`.
+            MemoryNotFound: If `root` does not exist.
         """
 
-        from genie.memory.scope import MemoryScope
-
-        root_id = _block_id(root) if root is not None else None
-        if root_id is not None:
-            self._require_raw(root_id)
-        return MemoryScope(
-            memory=self,
+        root_id = _block_id(root)
+        if root_id is None:
+            raise ValueError(
+                "Memory.scope() requires a root. Use Memory.unbounded_scope() "
+                "for explicit unbounded access."
+            )
+        self._require_raw(root_id)
+        return self._new_scope(
             root_id=root_id,
-            principal=Principal.coerce(principal) if principal is not None else self.principal,
-            default_scope=Scope(default_scope),
+            principal=principal,
+            default_scope=default_scope,
+            allow_up=allow_up,
+            allow_global=allow_global,
+            allow_mounts=allow_mounts,
+        )
+
+    def unbounded_scope(
+        self,
+        *,
+        principal: Principal | str | None = None,
+        default_scope: Scope | str = Scope.SUBTREE,
+        allow_up: bool = False,
+        allow_global: bool = False,
+        allow_mounts: bool = False,
+    ) -> "MemoryScope":
+        """Create an explicit unbounded scoped memory handle.
+
+        An unbounded scope has no default subtree root. It can still be limited
+        by principal policies and by capability flags such as `allow_global`.
+        Non-global searches through an unbounded scope must provide an explicit
+        root.
+
+        Args:
+            principal: Principal for operations through the scope. Defaults to
+                this `Memory` handle's principal.
+            default_scope: Default search scope used by the returned scope.
+            allow_up: Whether ancestor traversal/search is allowed.
+            allow_global: Whether global search is allowed.
+            allow_mounts: Whether the scope can create, list, and resolve
+                symbolic mounts whose source is visible through the scope.
+
+        Returns:
+            An unbounded `MemoryScope` backed by this memory system.
+        """
+
+        return self._new_scope(
+            root_id=None,
+            principal=principal,
+            default_scope=default_scope,
             allow_up=allow_up,
             allow_global=allow_global,
             allow_mounts=allow_mounts,
@@ -603,6 +643,30 @@ class Memory:
         """
 
         return self.backend.contains(_block_id(root), _block_id(block_id))
+
+    def _new_scope(
+        self,
+        *,
+        root_id: str | None,
+        principal: Principal | str | None,
+        default_scope: Scope | str,
+        allow_up: bool,
+        allow_global: bool,
+        allow_mounts: bool,
+    ) -> "MemoryScope":
+        """Construct a `MemoryScope` after root validation is complete."""
+
+        from genie.memory.scope import MemoryScope
+
+        return MemoryScope(
+            memory=self,
+            root_id=root_id,
+            principal=Principal.coerce(principal) if principal is not None else self.principal,
+            default_scope=Scope(default_scope),
+            allow_up=allow_up,
+            allow_global=allow_global,
+            allow_mounts=allow_mounts,
+        )
 
     def _coerce_query(
         self,

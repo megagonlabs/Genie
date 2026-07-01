@@ -13,7 +13,7 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
     """The public API exposes add/list link names without old aliases."""
 
     memory = Memory()
-    scope = memory.scope()
+    scope = memory.unbounded_scope()
 
     assert callable(memory.add_link)
     assert callable(memory.list_links)
@@ -258,18 +258,18 @@ def test_scope_discover_mounts_requires_mount_access_and_stays_in_scope() -> Non
     plain_scope = memory.scope(root=local_root)
     mount_scope = memory.scope(root=local_root, allow_mounts=True)
     child_scope = mount_scope.scope(root=local_child, allow_mounts=True)
-    rootless_scope = memory.scope(allow_mounts=True)
+    unbounded_scope = memory.unbounded_scope(allow_mounts=True)
 
     with pytest.raises(AccessDenied):
         plain_scope.discover_mounts()
     with pytest.raises(AccessDenied):
         mount_scope.discover_mounts(outside_source)
     with pytest.raises(AccessDenied):
-        rootless_scope.discover_mounts()
+        unbounded_scope.discover_mounts()
 
     assert mount_scope.discover_mounts() == [local_mount]
     assert child_scope.discover_mounts() == [local_mount]
-    assert rootless_scope.discover_mounts(local_root) == [local_mount]
+    assert unbounded_scope.discover_mounts(local_root) == [local_mount]
 
 
 def test_resolve_mount_requires_stored_mount_link() -> None:

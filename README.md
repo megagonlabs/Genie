@@ -10,7 +10,7 @@ The core package defines the memory structure and extension contracts:
 - `Memory`: the public API for creating, reading, updating, linking, and searching blocks.
 - `MemoryScope`: a scoped CRUD/search handle intended to be passed into agents or sub-agents.
 - `MemoryBackend`: the adapter contract for SQL, document, graph, vector, or composite backends.
-- `RoutedBackend`: a composition backend for routing blocks across multiple stores.
+- `RoutedBackend`: an optional composition backend for routing blocks across multiple stores.
 - `MemoryHook`: lifecycle extension points around writes, reads, deletes, and search.
 - `MemoryCodec`: value encoders/decoders for custom Python objects and storage-safe payloads.
 
@@ -148,6 +148,13 @@ Sub-scopes can narrow access, but cannot widen it. A sub-scope cannot add global
 search, add ancestor traversal, mount access, change principal identity, or move
 its root outside the parent scope's subtree.
 
+`memory.scope(root=...)` requires an explicit root. Unbounded delegated access is
+available through the more deliberate `memory.unbounded_scope(...)` API for
+administrative, routing, migration, or other trusted workflows.
+
+Mount operations on a `MemoryScope` are available only when the scope is created
+with `allow_mounts=True`.
+
 ## Backends
 
 Users configure one top-level backend object:
@@ -171,7 +178,9 @@ while still allowing users to configure one top-level backend.
 For sharding, data residency, migrations, or customer-owned storage,
 `RoutedBackend` can coordinate multiple authoritative backend routes behind the
 same public `MemoryBackend` interface. Each block still has exactly one
-authoritative store route.
+authoritative store route. By default, children stay on the same route as their
+parent; cross-route references should be modeled with links or mounts rather
+than parent/child ownership.
 
 Routes can be added at runtime when an application discovers a mount or tenant
 descriptor for a backend that was not opened at startup:
@@ -181,12 +190,18 @@ backend.register_route("eu-prod", eu_backend)
 mounted_root = memory.resolve_mount(mount)
 ```
 
+The public `memory.add_mount()` call validates both endpoints. Pending mounts
+to a route that has not been opened yet are represented by adapter or import
+code in a shared `LinkStore`, then resolved after the route is registered.
+
 ## Operational Safety
 
 Genie is designed so the core abstractions fail closed where possible:
 
 - Scopes cannot widen delegated authority.
-- Non-rootless scopes require an existing root block.
+- Bounded scopes require an existing root block.
+- Unbounded scopes must be created explicitly and require an explicit root for
+  non-global search.
 - Returned JSON values and metadata are copied so callers cannot mutate stored state accidentally.
 - Recursive delete requires write access to every block in the deleted subtree.
 - Recursive delete does not follow symbolic mounts.

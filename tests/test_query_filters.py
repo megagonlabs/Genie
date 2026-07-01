@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 
 from genie import InMemoryBackend, Memory, MemoryQuery, Scope, SearchResult
+from genie.query.filters import normalize_filters
 
 
 def test_search_filters_types_scopes_and_limits() -> None:
@@ -82,6 +83,25 @@ def test_canonical_filter_operators_still_work() -> None:
     results = memory.search(filters={"metadata.priority": {"$gte": 2, "$lte": 2}})
 
     assert [result.block.id for result in results] == [block.id]
+
+
+def test_filter_aliases_match_block_fields_and_do_not_mutate_inputs() -> None:
+    """Filter aliases work for block fields while normalization copies inputs."""
+
+    memory = Memory()
+    wanted = memory.put(type="note", value="wanted", metadata={"priority": 2})
+    memory.put(type="task", value="task", metadata={"priority": 2})
+    filters = {
+        "type": {"=": "note"},
+        "metadata.priority": {"==": 2},
+    }
+
+    normalized = normalize_filters(filters)
+    results = memory.search(filters=filters)
+
+    assert normalized == {"type": {"$eq": "note"}, "metadata.priority": {"$eq": 2}}
+    assert filters == {"type": {"=": "note"}, "metadata.priority": {"==": 2}}
+    assert [result.block.id for result in results] == [wanted.id]
 
 
 def test_backends_receive_normalized_filter_operators() -> None:

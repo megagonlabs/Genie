@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from genie import (
@@ -198,10 +200,10 @@ def test_subscopes_cannot_change_principal_identity() -> None:
         scope.scope(principal="agent:admin")
 
 
-def test_rootless_scope_requires_explicit_roots_for_traversal() -> None:
-    """Rootless scopes require explicit roots for tree traversal."""
+def test_unbounded_scope_requires_explicit_roots_for_traversal() -> None:
+    """Unbounded scopes require explicit roots for tree traversal."""
 
-    scope = Memory().scope(root=None)
+    scope = Memory().unbounded_scope()
 
     with pytest.raises(AccessDenied):
         scope.children()
@@ -209,8 +211,49 @@ def test_rootless_scope_requires_explicit_roots_for_traversal() -> None:
         scope.ancestors()
 
 
+def test_unbounded_scope_requires_explicit_root_or_global_permission_for_search() -> None:
+    """Unbounded scopes cannot accidentally turn subtree search into global search."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    inside = memory.put(parent=root, type="note", value="needle inside")
+    outside = memory.put(type="note", value="needle outside")
+    scope = memory.unbounded_scope()
+
+    with pytest.raises(AccessDenied):
+        scope.search("needle")
+    with pytest.raises(AccessDenied):
+        scope.search(MemoryQuery(text="needle", scope=Scope.SELF))
+    with pytest.raises(AccessDenied):
+        scope.search(MemoryQuery(text="needle", scope=Scope.SUBTREE))
+
+    scoped_results = scope.search("needle", root=root)
+    global_scope = memory.unbounded_scope(allow_global=True)
+    global_results = global_scope.search("needle", scope="global")
+
+    assert [result.block.id for result in scoped_results] == [inside.id]
+    assert {result.block.id for result in global_results} == {inside.id, outside.id}
+
+
+def test_memory_scope_requires_root_and_unbounded_scope_is_explicit() -> None:
+    """Memory.scope is bounded-only; unbounded access uses unbounded_scope."""
+
+    memory = Memory()
+
+    with pytest.raises(TypeError):
+        getattr(memory, "scope")()
+    with pytest.raises(ValueError):
+        memory.scope(root=cast(Any, None))
+
+    scope = memory.unbounded_scope(principal="agent:admin", allow_global=True)
+
+    assert scope.root_id is None
+    assert scope.principal.id == "agent:admin"
+    assert scope.allow_global is True
+
+
 def test_scope_root_must_exist() -> None:
-    """Non-rootless scopes fail early when their root block is missing."""
+    """Bounded scopes fail early when their root block is missing."""
 
     memory = Memory()
 

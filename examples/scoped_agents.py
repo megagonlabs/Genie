@@ -1,5 +1,9 @@
 """Pass scoped memory handles to agents and sub-agents.
 
+Most agents should receive bounded scopes created with `memory.scope(root=...)`.
+The example also shows `memory.unbounded_scope(...)` for a trusted supervisor
+handle, where unbounded access is deliberate and visible at the call site.
+
 Run from the repository root:
 
     conda run -n "genie" python examples/scoped_agents.py
@@ -54,15 +58,28 @@ def main() -> None:
 
     planner = Agent("planner", memory.scope(root=project, principal="agent:planner"))
     writer = Agent("writer", planner.memory.scope(root=task))
+    supervisor_memory = memory.unbounded_scope(
+        principal="agent:supervisor",
+        allow_global=True,
+    )
     note = writer.remember("use concise bullets")
 
     assert writer.memory.get(note) is not None
     assert [result.block.id for result in writer.memory.search("concise")] == [note.id]
+    assert [result.block.id for result in supervisor_memory.search("concise", root=project)] == [
+        note.id
+    ]
+    global_matches = supervisor_memory.search("Unrelated", scope="global")
+    assert [result.block.id for result in global_matches] == [sibling.id]
 
     try:
         writer.memory.get(sibling)
     except AccessDenied as exc:
         print(f"scope blocked sibling read: {exc}")
+    try:
+        supervisor_memory.search("concise")
+    except AccessDenied as exc:
+        print(f"unbounded scope needs an explicit root for subtree search: {exc}")
 
     print(f"writer only sees task subtree rooted at {task.id}")
 
