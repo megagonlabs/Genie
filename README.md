@@ -173,6 +173,14 @@ For sharding, data residency, migrations, or customer-owned storage,
 same public `MemoryBackend` interface. Each block still has exactly one
 authoritative store route.
 
+Routes can be added at runtime when an application discovers a mount or tenant
+descriptor for a backend that was not opened at startup:
+
+```python
+backend.register_route("eu-prod", eu_backend)
+mounted_root = memory.resolve_mount(mount)
+```
+
 ## Operational Safety
 
 Genie is designed so the core abstractions fail closed where possible:

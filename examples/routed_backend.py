@@ -20,6 +20,7 @@ from genie import (
     LinkRelations,
     Memory,
     MemoryBlock,
+    MemoryLink,
     RoutedBackend,
 )
 
@@ -43,6 +44,7 @@ def main() -> None:
 
     us_store = InMemoryBackend()
     eu_store = InMemoryBackend()
+    link_store = InMemoryLinkStore()
     backend = RoutedBackend(
         {
             "us": us_store,
@@ -50,7 +52,7 @@ def main() -> None:
         },
         route_selector=route_by_region,
         default_route="us",
-        link_store=InMemoryLinkStore(),
+        link_store=link_store,
     )
     memory = Memory(backend=backend)
 
@@ -82,34 +84,62 @@ def main() -> None:
     discovered_mounts = memory.discover_mounts(us_project)
     mounted_root = memory.resolve_mount(eu_rollout_link)
 
+    apac_store = InMemoryBackend()
+    apac_memory = Memory(backend=apac_store)
+    apac_project = apac_memory.put(type="project", value="APAC rollout")
+    apac_note = apac_memory.put(parent=apac_project, type="note", value="APAC launch checklist")
+    pending_apac_mount = link_store.add_link(
+        MemoryLink(
+            source_id=us_note.id,
+            target_id=apac_project.id,
+            relation=LinkRelations.MOUNT,
+            metadata={"route": "apac", "backend": "in-memory"},
+        )
+    )
+    pending_mounts = memory.discover_mounts(us_project)
+    assert memory.resolve_mount(pending_apac_mount) is None
+
+    backend.register_route("apac", apac_store)
+    apac_mounted_root = memory.resolve_mount(pending_apac_mount)
+    apac_results = memory.search("checklist", root=apac_project, scope="subtree")
+
     print(f"US project route: {backend.route_for_block(us_project.id)}")
     print(f"EU project route: {backend.route_for_block(eu_project.id)}")
+    print(f"APAC project route: {backend.route_for_block(apac_project.id)}")
     print(f"US note inherited route: {backend.route_for_block(us_note.id)}")
     print(f"Mount link relation: {eu_rollout_link.relation}")
     print(f"Discovered mount count: {len(discovered_mounts)}")
+    print(f"Pending mount count before registration: {len(pending_mounts)}")
     print(f"EU subtree search: {eu_results[0].block.value}")
     print(f"Mounted route target: {mounted_root.value if mounted_root else None}")
+    print(f"Runtime mounted target: {apac_mounted_root.value if apac_mounted_root else None}")
 
     assert backend.route_for_block(us_project.id) == "us"
     assert backend.route_for_block(us_note.id) == "us"
     assert backend.route_for_block(eu_project.id) == "eu"
     assert backend.route_for_block(eu_note.id) == "eu"
+    assert backend.route_for_block(apac_project.id) == "apac"
     assert us_store.get_block(us_project.id) is not None
     assert us_store.get_block(eu_project.id) is None
     assert eu_store.get_block(eu_project.id) is not None
     assert eu_store.get_block(us_project.id) is None
+    assert apac_store.get_block(apac_project.id) is not None
     assert [block.id for block in memory.children(us_project)] == [us_note.id]
     assert {result.block.id for result in global_results} >= {us_project.id, eu_note.id}
     assert [result.block.id for result in eu_results] == [eu_note.id]
     assert us_results == []
     assert [result.block.id for result in linked_results] == [eu_project.id]
+    assert [result.block.id for result in apac_results] == [apac_note.id]
     assert eu_rollout_link.relation == LinkRelations.MOUNT
     assert eu_rollout_link.source_id == us_project.id
     assert eu_rollout_link.target_id == eu_project.id
     assert memory.list_mounts(us_project) == [eu_rollout_link]
     assert discovered_mounts == [eu_rollout_link]
+    assert pending_apac_mount in pending_mounts
     assert mounted_root is not None
     assert mounted_root.id == eu_project.id
+    assert apac_mounted_root is not None
+    assert apac_mounted_root.id == apac_project.id
 
     memory.delete(us_project)
 
@@ -117,6 +147,8 @@ def main() -> None:
     assert memory.get(us_note) is None
     assert memory.get(eu_project) is not None
     assert memory.get(eu_note) is not None
+    assert memory.get(apac_project) is not None
+    assert memory.get(apac_note) is not None
 
 
 if __name__ == "__main__":

@@ -561,6 +561,26 @@ one Memory -> one public backend contract
 `MemoryBlock`. Blocks remain portable data objects. Routing stays in the
 backend layer.
 
+Routes can also be registered after initialization:
+
+```python
+mounts = memory.discover_mounts(local_root)
+route = mounts[0].metadata["route"]
+
+if backend.route_for_block(mounts[0].target_id) is None:
+    remote_backend = open_backend_from_mount_metadata(mounts[0].metadata)
+    backend.register_route(route, remote_backend)
+
+remote_root = memory.resolve_mount(mounts[0])
+```
+
+Runtime route registration supports mount or tenant descriptors discovered
+during application execution. The mount stores route metadata, not a live
+database connection. Application code uses that metadata to construct a backend
+adapter and registers it with `register_route(route, backend)`. Existing
+`Memory` and `MemoryScope` handles that share the routed backend can use the
+new route immediately.
+
 By default, child blocks stay in the same route as their parent. This preserves
 subtree traversal, recursive delete, and scoped access semantics. Independent
 root blocks can route to different stores.
@@ -595,9 +615,18 @@ Cross-route mounts use the same shared link capability with the reserved
 into another routed tree without changing ownership. The default
 `RoutedBackend` behavior keeps parent/child ownership inside the parent route.
 `discover_mounts(root)` can find cross-route mount links whose source is inside
-the scanned tree when the routed backend has a shared link store. Following
-mounts during traversal/search and deleting mounted target trees are not
-implemented in the current library.
+the scanned tree when the routed backend has a shared link store. If a mount
+target route has not been registered yet, mount discovery can still return the
+pending mount link; `resolve_mount(mount)` returns `None` until application code
+registers the target route. If a target block is known but not readable,
+discovery hides that mount from the current principal. Following mounts during
+traversal/search and deleting mounted target trees are not implemented in the
+current library.
+
+`register_route()` updates the set of authoritative stores. It does not
+backfill external shared search or traversal indexes. Applications that provide
+shared indexes are responsible for indexing newly registered route contents
+according to their own operational model.
 
 ## InMemoryBackend
 

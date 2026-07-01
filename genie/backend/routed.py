@@ -166,6 +166,46 @@ class RoutedBackend:
         if self.default_route not in self.routes:
             raise ValueError(f"Default route {self.default_route!r} is not configured.")
 
+    def register_route(
+        self,
+        route: RouteKey,
+        backend: MemoryBackend,
+        *,
+        replace: bool = False,
+        make_default: bool = False,
+    ) -> None:
+        """Register an authoritative route after initialization.
+
+        Runtime route registration is intended for cases where application code
+        discovers a symbolic mount or tenant descriptor that requires opening a
+        backend adapter that was not known when the routed backend was created.
+        Existing `Memory` and `MemoryScope` handles that share this routed
+        backend can use the new route immediately.
+
+        Args:
+            route: Route key to register.
+            backend: Authoritative backend for the route.
+            replace: Whether an existing route with no cataloged blocks may be
+                replaced.
+            make_default: Whether future unselected root blocks should use this
+                route as the default.
+
+        Raises:
+            MemoryConflict: If the route already exists without `replace`, or
+                if replacing it would orphan cataloged blocks.
+        """
+
+        if route in self.routes:
+            if not replace:
+                raise MemoryConflict(f"Route {route!r} is already configured.")
+            if route in self._catalog.values():
+                raise MemoryConflict(
+                    f"Route {route!r} cannot be replaced because it owns cataloged blocks."
+                )
+        self.routes[route] = backend
+        if make_default:
+            self.default_route = route
+
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
         """Persist a new block to its authoritative route.
 

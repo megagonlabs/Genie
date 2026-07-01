@@ -15,6 +15,7 @@ from genie import (
     InMemoryBackend,
     InMemoryLinkStore,
     JsonCodec,
+    LinkRelations,
     Memory,
     MemoryCodec,
     MemoryHook,
@@ -261,6 +262,78 @@ def test_routed_backend_supports_cross_route_mounts_as_symbolic_links() -> None:
     assert memory.get(mount_source) is None
     assert memory.get(remote_root) is not None
     assert memory.get(remote_child) is not None
+
+
+def test_routed_backend_can_register_route_for_discovered_pending_mount() -> None:
+    """A newly registered route can resolve a previously pending mount target."""
+
+    link_store = InMemoryLinkStore()
+    backend = RoutedBackend(
+        {"us": InMemoryBackend()},
+        route_selector=route_by_metadata,
+        default_route="us",
+        link_store=link_store,
+    )
+    memory = Memory(backend=backend)
+    us_project = memory.put(type="project", value="US launch", metadata={"route": "us"})
+
+    eu_store = InMemoryBackend()
+    eu_memory = Memory(backend=eu_store)
+    eu_project = eu_memory.put(type="project", value="EU rollout")
+    eu_note = eu_memory.put(parent=eu_project, type="note", value="EU data residency")
+    pending_mount = link_store.add_link(
+        MemoryLink(
+            source_id=us_project.id,
+            target_id=eu_project.id,
+            relation=LinkRelations.MOUNT,
+            metadata={"route": "eu", "backend": "in-memory"},
+        )
+    )
+
+    assert memory.list_mounts(us_project) == [pending_mount]
+    assert memory.discover_mounts(us_project) == [pending_mount]
+    assert memory.resolve_mount(pending_mount) is None
+
+    backend.register_route("eu", eu_store)
+    resolved = memory.resolve_mount(pending_mount)
+    eu_results = memory.search("data residency", root=eu_project, scope="subtree")
+
+    assert resolved is not None
+    assert resolved.id == eu_project.id
+    assert backend.route_for_block(eu_project.id) == "eu"
+    assert [result.block.id for result in eu_results] == [eu_note.id]
+
+
+def test_routed_backend_register_route_controls_default_for_new_roots() -> None:
+    """A runtime route can become the default for future root blocks."""
+
+    backend = RoutedBackend({"us": InMemoryBackend()}, default_route="us")
+    memory = Memory(backend=backend)
+
+    backend.register_route("eu", InMemoryBackend(), make_default=True)
+    block = memory.put(type="note", value="uses new default")
+
+    assert backend.route_for_block(block.id) == "eu"
+
+
+def test_routed_backend_register_route_rejects_unsafe_replacement() -> None:
+    """Route registration rejects duplicates and cataloged-route replacement."""
+
+    backend = RoutedBackend({"us": InMemoryBackend()}, default_route="us")
+    memory = Memory(backend=backend)
+    memory.put(type="note", value="cataloged")
+
+    with pytest.raises(MemoryConflict):
+        backend.register_route("us", InMemoryBackend())
+    with pytest.raises(MemoryConflict):
+        backend.register_route("us", InMemoryBackend(), replace=True)
+
+    replaceable = RoutedBackend({"old": InMemoryBackend()}, default_route="old")
+    new_backend = InMemoryBackend()
+
+    replaceable.register_route("old", new_backend, replace=True)
+
+    assert replaceable.routes["old"] is new_backend
 
 
 def test_routed_backend_rejects_cross_route_links_without_shared_link_store() -> None:

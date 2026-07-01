@@ -393,10 +393,22 @@ class Memory:
             source: Source block or id where the mount link starts.
 
         Returns:
-            Readable outgoing mount links.
+            Readable outgoing mount links. Mounts whose target route has not
+            been registered yet are returned as pending symbolic references;
+            resolving them returns `None` until the target becomes available.
         """
 
-        return self.list_links(source, relation=LinkRelations.MOUNT, direction="out")
+        source_block = self._require_raw(_block_id(source))
+        self.policy_engine.require(Operation.READ, source_block, self.principal)
+        return [
+            link
+            for link in self.backend.list_links(
+                source_block.id,
+                relation=LinkRelations.MOUNT,
+                direction="out",
+            )
+            if self._can_read_mount(link)
+        ]
 
     def discover_mounts(
         self,
@@ -440,7 +452,7 @@ class Memory:
                     relation=LinkRelations.MOUNT,
                     direction="out",
                 )
-                if self._can_read_link_endpoints(link)
+                if self._can_read_mount(link)
             )
         return mounts
 
@@ -654,6 +666,24 @@ class Memory:
             if block is None or not self.policy_engine.allows(Operation.READ, block, self.principal):
                 return False
         return True
+
+    def _can_read_mount(self, link: MemoryLink) -> bool:
+        """Return whether a mount link is visible to the current principal.
+
+        Mounts may point at routes that are discovered and registered later. In
+        that pending state the source policy controls visibility. If the target
+        block is already known, its read policy must also allow access.
+        """
+
+        if link.relation != LinkRelations.MOUNT:
+            return False
+        source = self.backend.get_block(link.source_id)
+        if source is None or not self.policy_engine.allows(Operation.READ, source, self.principal):
+            return False
+        target = self.backend.get_block(link.target_id)
+        if target is None:
+            return True
+        return self.policy_engine.allows(Operation.READ, target, self.principal)
 
 
 @overload
