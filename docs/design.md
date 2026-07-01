@@ -1,11 +1,12 @@
 # Genie Design
 
-Genie is a utility library for developers building their own agent memory
-systems around memory blocks, parent/child containment, and scoped access. It
-is not intended to be a full agent framework, vector database, graph database,
-or opinionated long-term memory product. It defines a memory block model,
-containment semantics, scoped access semantics, and extension contracts that
-other systems can build on.
+Genie is a utility library for developers building their own memory systems.
+It provides memory blocks, parent/child containment, scoped access, and
+extension contracts without tying the application to one agent platform,
+database, or memory use case. It is not intended to be a full agent framework,
+vector database, graph database, or opinionated long-term memory product. It
+defines a memory block model, containment semantics, scoped access semantics,
+and extension contracts that other systems can build on.
 
 Genie keeps application behavior outside the core package. Product-specific
 business logic, memory taxonomies, agent workflows, retrieval strategies,
@@ -14,17 +15,29 @@ structural primitives and adapter boundaries those systems can compose.
 
 Design objectives:
 
+- Stay platform-agnostic so applications can use Genie from LangChain,
+  LlamaIndex, custom agent runtimes, services, scripts, or other orchestration
+  layers.
+- Stay storage/database-agnostic so adapters can target Redis, Postgres,
+  document stores, graph databases, vector databases, object stores, or hybrid
+  systems.
+- Stay use-case-agnostic so applications can model conversation memory, NL2SQL
+  memory, task/workflow memory, user preferences, domain knowledge, or other
+  application-specific memory.
 - Provide a small, stable memory model that can be persisted in many backends.
 - Treat parent/child containment as the default ownership structure for scoped
   access and recursive operations.
 - Keep business logic, memory taxonomy, and agent behavior application-owned.
 - Give agents scoped memory handles rather than unrestricted access to the full memory system.
 - Keep storage, traversal, search, policy, hooks, and value encoding separable.
+- Provide observability extension points so applications can audit or log memory
+  operations; public memory lifecycle events are exposed through hooks, while
+  database-native operation logs remain the responsibility of backend adapters.
 - Let adapter authors support SQL, document, graph, vector, or hybrid backends.
 - Fail closed for access control and operational safety.
 - Stay dependency-light in the core package.
 
-Non-goals:
+Out of scope:
 
 - Prescribe a single database.
 - Provide durable production storage in core.
@@ -741,7 +754,11 @@ That inheritance model can be added later as an explicit policy mode.
 ## Hooks
 
 Hooks let users customize behavior around operations without changing the core
-memory model.
+memory model. They are the primary extension point for application-level
+observability, such as audit logs, metrics, tracing events, and operation logs
+around memory creates, reads, deletes, and searches. Backend adapters can add
+database-native logging when an application needs every underlying Redis,
+Postgres, or graph database operation recorded.
 
 Available hook points:
 

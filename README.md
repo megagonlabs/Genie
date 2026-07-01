@@ -1,7 +1,19 @@
 # Genie
 
-Genie is a utility library for developers building their own agent memory
-systems around memory blocks, parent/child containment, and scoped access.
+Genie is a utility library for developers building their own memory systems.
+It provides memory blocks, parent/child containment, scoped access, and
+extension contracts without tying the application to one agent platform,
+database, or memory use case.
+
+Genie has three primary design objectives:
+
+- Platform-agnostic: usable from LangChain, LlamaIndex, custom agent runtimes,
+  services, scripts, or any other orchestration layer.
+- Storage/database-agnostic: adaptable to Redis, Postgres, document stores,
+  graph databases, vector databases, object stores, or hybrid systems.
+- Use-case-agnostic: suitable for conversation memory, NL2SQL memory,
+  task/workflow memory, user preferences, domain knowledge, or application
+  specific memory models.
 
 Its core responsibility is deliberately narrow: define memory blocks, enforce
 parent/child containment for ownership-style memory structure, and provide
@@ -22,9 +34,9 @@ The core package defines the memory structure and extension contracts:
 - `MemoryHook`: lifecycle extension points around writes, reads, deletes, and search.
 - `MemoryCodec`: value encoders/decoders for custom Python objects and storage-safe payloads.
 
-Genie intentionally does not provide a full agent framework, durable production
-storage in core, built-in embeddings, semantic search, planning, tool calling,
-application business logic, or a universal memory taxonomy.
+The following are out of scope for the core package: full agent frameworks,
+durable production storage, built-in embeddings, semantic search, planning,
+tool calling, application business logic, and a universal memory taxonomy.
 
 ## Quick Start
 

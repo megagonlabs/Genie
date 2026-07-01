@@ -13,10 +13,11 @@ conda run -n "genie" python -m compileall -q genie tests examples
 
 ## Library Purpose
 
-Genie is a utility library for developers building their own agent memory
-systems around memory blocks, parent/child containment, and scoped access. Its
-core responsibility is to enforce the block model and containment semantics
-while staying database-agnostic and content value-type agnostic.
+Genie is a utility library for developers building their own memory systems
+around memory blocks, parent/child containment, and scoped access. Its core
+responsibility is to enforce the block model and containment semantics while
+remaining platform-agnostic, storage/database-agnostic, use-case-agnostic, and
+content value-type agnostic.
 
 Keep application business logic, memory taxonomies, agent behavior, storage
 topology, retrieval strategy, and domain-specific value semantics outside the
@@ -33,9 +34,10 @@ for a developer-facing Python library. Apply these standards proportionally to
 the size, risk, and user-facing impact of the change:
 
 - Prefer focused, minimal changes that fit the existing architecture.
-- Preserve Genie's database-agnostic and content-agnostic design; avoid
-  coupling core APIs to one storage engine, data model, retrieval strategy, or
-  value type.
+- Preserve Genie's platform-agnostic, storage/database-agnostic,
+  use-case-agnostic, and content-agnostic design; avoid coupling core APIs to
+  one agent framework, storage engine, data model, retrieval strategy, memory
+  workflow, or value type.
 - Keep public APIs clear and typed, with Google-style docstrings and predictable
   exceptions where they affect users.
 - Prefer explicit, least-privilege behavior for scoped memory access and policy

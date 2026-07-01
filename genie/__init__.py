@@ -1,10 +1,10 @@
 """Genie public API.
 
-Genie provides database-agnostic primitives for developers building their own
-scoped, policy-aware agent memory systems. The core package defines memory
-blocks, parent/child containment, and extension contracts; applications provide
-their own business logic, memory taxonomy, storage adapters, retrieval
-strategy, and value types.
+Genie provides platform-agnostic, storage/database-agnostic, and
+use-case-agnostic primitives for developers building their own memory systems.
+The core package defines memory blocks, parent/child containment, scoped access,
+and extension contracts; applications provide their own business logic, memory
+taxonomy, storage adapters, retrieval strategy, and value types.
 
 Most applications start with `Memory` and pass bounded `MemoryScope` instances
 to agents.

@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "genie"
 version = "0.1.0"
-description = "Database-agnostic hierarchical memory primitives for agents."
+description = "Platform-, storage-, and use-case-agnostic primitives for building memory systems."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
   { name = "Megagon Labs" }
 ]
-keywords = ["agents", "memory", "hierarchical-memory", "ai"]
+keywords = ["agents", "memory", "scoped-memory", "ai"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
