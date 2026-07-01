@@ -7,11 +7,16 @@ name = "genie"
 version = "0.1.0"
 description = "Database-agnostic hierarchical memory primitives for agents."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
   { name = "Megagon Labs" }
 ]
 dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
 
 [tool.setuptools.packages.find]
 include = ["genie*"]

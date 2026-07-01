@@ -69,6 +69,7 @@ genie/
     capabilities.py # BlockStore, TraversalIndex, SearchIndex, LinkStore protocols
     base.py         # MemoryBackend protocol
     inmemory.py     # In-memory reference backend
+    routed.py       # routed multi-backend composition
 
   query/
     query.py        # MemoryQuery
@@ -168,6 +169,19 @@ memory.add_link(requirement, outline, "informs")
 
 Use links for relationships that do not imply ownership or subtree membership.
 
+Mounts are a reserved link pattern for symbolic cross-tree references:
+
+```python
+mount = memory.add_mount(local_mount_point, remote_root)
+remote_root = memory.resolve_mount(mount)
+```
+
+A mount points from a local block to another memory root. The target does not
+become a child of the source. Subtree traversal, subtree search, and recursive
+delete do not follow mounts by default. Deleting the local mount point deletes
+the mount link, not the mounted target tree. This matches filesystem symbolic
+link behavior and keeps ownership separate from reference.
+
 ## Public API
 
 ### Memory
@@ -189,6 +203,9 @@ It exposes:
 - `ancestors`
 - `add_link`
 - `list_links`
+- `add_mount`
+- `list_mounts`
+- `resolve_mount`
 - `search`
 - `scope`
 
@@ -220,6 +237,9 @@ It supports normal CRUD/search operations:
 - `ancestors`
 - `add_link`
 - `list_links`
+- `add_mount`
+- `list_mounts`
+- `resolve_mount`
 - `search`
 - `scope`
 
@@ -242,6 +262,7 @@ Specifically, a sub-scope cannot:
 - change principal identity
 - add ancestor traversal if the parent did not allow it
 - add global search if the parent did not allow it
+- add mount access if the parent did not allow it
 - move its root outside the parent scope's subtree
 
 This makes delegated memory access monotonic:
@@ -494,6 +515,76 @@ S3 + vector database backend
   blob/object storage plus retrieval index
 ```
 
+### Routed Backends
+
+`RoutedBackend` is the built-in composition helper for using multiple
+authoritative stores behind one public `MemoryBackend`.
+
+```python
+backend = RoutedBackend(
+    {
+        "us": USPostgresBackend(...),
+        "eu": EUPostgresBackend(...),
+    },
+    route_selector=lambda block: block.metadata.get("region"),
+    default_route="us",
+)
+
+memory = Memory(backend=backend)
+```
+
+The public API still sees one backend. Internally, each block has exactly one
+authoritative route. The route is tracked by the backend catalog and resolved
+from stable routing rules such as tenant, region, namespace, root subtree, block
+type, or migration phase.
+
+The source-of-truth rule remains:
+
+```text
+one block -> one authoritative store route
+one Memory -> one public backend contract
+```
+
+`RoutedBackend` does not put database connections or storage handles on
+`MemoryBlock`. Blocks remain portable data objects. Routing stays in the
+backend layer.
+
+By default, child blocks stay in the same route as their parent. This preserves
+subtree traversal, recursive delete, and scoped access semantics. Independent
+root blocks can route to different stores.
+
+Routed backends can use one or more indexes:
+
+```text
+Route-local indexes
+  each route owns its own search/traversal/link capabilities
+  global search fans out to routes and merges results
+
+Shared indexes
+  one search, traversal, or link index spans all routes
+  useful for global retrieval or cross-route links
+
+Hybrid indexes
+  some capabilities are route-local and others are shared
+  useful for tenant, region, or workload isolation
+```
+
+Multiple stores and multiple indexes are therefore a coherent design. Stores
+own authoritative block state; indexes remain derived retrieval or traversal
+structures. A routed backend may have several store authorities, but only one
+authority for any given block.
+
+Cross-route links require a shared `LinkStore`, such as `InMemoryLinkStore` for
+tests and prototypes. Without a shared link store, route-local link stores can
+only represent relationships whose endpoints live in the same route.
+
+Cross-route mounts use the same shared link capability with the reserved
+`LinkRelations.MOUNT` relation (`genie.mount`). They point from one routed tree
+into another routed tree without changing ownership. The default
+`RoutedBackend` behavior keeps parent/child ownership inside the parent route.
+Following mounts during traversal/search and deleting mounted target trees are
+not implemented in the current library.
+
 ## InMemoryBackend
 
 `InMemoryBackend` is the reference backend for tests and prototypes.
@@ -624,6 +715,7 @@ The current implementation favors conservative behavior:
 - scopes cannot widen authority
 - unknown memory blocks raise clear errors for write-like operations
 - recursive delete checks every affected block
+- recursive delete does not follow symbolic mounts
 - returned JSON values and metadata are copied
 - in-memory reparenting rejects cycles
 - link directions are validated
@@ -647,6 +739,7 @@ more advanced storage systems.
 - pagination/cursors
 - event stream or subscription hooks
 - optional vector-search integration
+- explicit follow-mount traversal/search modes
 - first-party SQLite/Postgres adapters
 
 These additions remain compatible with the current core abstractions without

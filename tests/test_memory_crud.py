@@ -88,6 +88,23 @@ def test_patch_requires_dict_values() -> None:
         memory.patch(block, value={"field": "value"})
 
 
+def test_metadata_only_patch_preserves_value_and_versions() -> None:
+    """Metadata-only patches leave values intact while versioning the block."""
+
+    memory = Memory()
+    block = memory.put(type="note", value=["keep"], metadata={"source": "initial"})
+
+    updated = memory.patch(block, metadata={"priority": 2})
+
+    assert updated.value == ["keep"]
+    assert updated.metadata == {"source": "initial", "priority": 2}
+    assert updated.version == 2
+    reread = memory.get(block)
+    assert reread is not None
+    assert reread.value == ["keep"]
+    assert reread.metadata == {"source": "initial", "priority": 2}
+
+
 def test_returned_blocks_do_not_mutate_stored_values_or_metadata() -> None:
     """Returned block values and metadata are defensive copies."""
 

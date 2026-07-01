@@ -12,7 +12,7 @@ from genie.codecs import CodecRegistry, EncodedValue, JsonCodec
 from genie.hooks import HookRegistry, MemoryHook
 from genie.memory.block import MemoryBlock, new_memory_id, utc_now
 from genie.memory.errors import MemoryNotFound
-from genie.memory.links import MemoryLink
+from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import Operation, PolicyEngine
 from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
@@ -354,6 +354,84 @@ class Memory:
             if self._can_read_link_endpoints(link)
         ]
 
+    def add_mount(
+        self,
+        source: str | MemoryBlock,
+        target: str | MemoryBlock,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryLink:
+        """Create a symbolic mount from one block to another block.
+
+        A mount is stored as a typed link with the reserved
+        `LinkRelations.MOUNT` relation. It does not make the target a child of
+        the source, does not affect subtree traversal, and is not followed by
+        recursive delete.
+
+        Args:
+            source: Local mount point block or id.
+            target: Mounted target root block or id.
+            metadata: Optional mount metadata.
+
+        Returns:
+            Stored mount link.
+
+        Raises:
+            AccessDenied: If the principal cannot write the source or read the
+                target.
+            MemoryNotFound: If either endpoint is missing.
+        """
+
+        return self.add_link(source, target, LinkRelations.MOUNT, metadata=metadata)
+
+    def list_mounts(self, source: str | MemoryBlock) -> list[MemoryLink]:
+        """List symbolic mounts that start from a block.
+
+        Args:
+            source: Local mount point block or id.
+
+        Returns:
+            Readable outgoing mount links.
+        """
+
+        return self.list_links(source, relation=LinkRelations.MOUNT, direction="out")
+
+    def resolve_mount(self, mount: MemoryLink) -> MemoryBlock | None:
+        """Resolve a mount link to its target block.
+
+        Args:
+            mount: Mount link returned by `add_mount` or `list_mounts`.
+
+        Returns:
+            Decoded target block, or `None` if the mount or target no longer
+            exists.
+
+        Raises:
+            ValueError: If `mount` is not a mount link.
+            AccessDenied: If the principal cannot read the source or target.
+            MemoryNotFound: If the source block no longer exists.
+        """
+
+        if mount.relation != LinkRelations.MOUNT:
+            raise ValueError(f"Expected mount relation {LinkRelations.MOUNT!r}.")
+        source = self._require_raw(mount.source_id)
+        self.policy_engine.require(Operation.READ, source, self.principal)
+        stored_mount = next(
+            (
+                candidate
+                for candidate in self.backend.list_links(
+                    source.id,
+                    relation=LinkRelations.MOUNT,
+                    direction="out",
+                )
+                if candidate.id == mount.id and candidate.target_id == mount.target_id
+            ),
+            None,
+        )
+        if stored_mount is None:
+            return None
+        return self.get(stored_mount.target_id)
+
     def search(
         self,
         query: MemoryQuery | str | None = None,
@@ -417,6 +495,7 @@ class Memory:
         default_scope: Scope | str = Scope.SUBTREE,
         allow_up: bool = False,
         allow_global: bool = False,
+        allow_mounts: bool = False,
     ) -> "MemoryScope":
         """Create a scoped memory handle for delegation.
 
@@ -427,6 +506,8 @@ class Memory:
             default_scope: Default search scope used by the returned scope.
             allow_up: Whether ancestor traversal/search is allowed.
             allow_global: Whether global search is allowed.
+            allow_mounts: Whether the scope can create, list, and resolve
+                symbolic mounts whose source is inside the scope.
 
         Returns:
             A `MemoryScope` backed by this memory system.
@@ -441,6 +522,7 @@ class Memory:
             default_scope=Scope(default_scope),
             allow_up=allow_up,
             allow_global=allow_global,
+            allow_mounts=allow_mounts,
         )
 
     def contains(self, root: str | MemoryBlock, block_id: str | MemoryBlock) -> bool:

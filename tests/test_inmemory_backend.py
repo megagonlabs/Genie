@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from genie import InMemoryBackend, Memory, MemoryQuery
+from genie import InMemoryBackend, Memory, MemoryLink, MemoryQuery
 from genie.memory.errors import MemoryConflict
 
 
@@ -56,6 +56,49 @@ def test_backend_rejects_reparenting_cycles() -> None:
         backend.update_block(raw_root.with_updates(parent_id=child.id))
     with pytest.raises(MemoryConflict):
         backend.update_block(raw_child.with_updates(parent_id=child.id))
+
+
+def test_backend_rejects_reparenting_to_missing_parent() -> None:
+    """Reparenting to a missing parent leaves the existing hierarchy unchanged."""
+
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend)
+    root = memory.put(type="root", value="root")
+    child = memory.put(parent=root, type="child", value="child")
+    raw_child = backend.get_block(child.id)
+    assert raw_child is not None
+
+    with pytest.raises(MemoryConflict):
+        backend.update_block(raw_child.with_updates(parent_id="missing"))
+
+    assert [block.id for block in backend.children(root.id)] == [child.id]
+    unchanged = backend.get_block(child.id)
+    assert unchanged is not None
+    assert unchanged.parent_id == root.id
+
+
+def test_backend_links_return_defensive_metadata_copies() -> None:
+    """Backend link reads cannot mutate stored link metadata."""
+
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend)
+    source = memory.put(type="source", value="source")
+    target = memory.put(type="target", value="target")
+    link = backend.add_link(
+        MemoryLink(
+            source_id=source.id,
+            target_id=target.id,
+            relation="references",
+            metadata={"tags": ["initial"]},
+        )
+    )
+
+    link.metadata["tags"].append("returned")
+    listed = backend.list_links(source.id)
+    listed[0].metadata["tags"].append("listed")
+
+    relisted = backend.list_links(source.id)
+    assert relisted[0].metadata == {"tags": ["initial"]}
 
 
 def test_inmemory_backend_read_paths_return_defensive_copies() -> None:

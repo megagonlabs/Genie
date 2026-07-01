@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import FrozenInstanceError
+from typing import Any, cast
 
 import pytest
 
@@ -116,6 +117,19 @@ def test_query_accepts_tuple_types_and_string_scope() -> None:
 
     assert query.scope == Scope.SUBTREE
     assert query.types == ("note",)
+
+
+def test_query_validation_and_immutability() -> None:
+    """MemoryQuery rejects invalid scopes and remains immutable after creation."""
+
+    query = MemoryQuery(scope="links", types=cast(Any, ["note", "task"]))
+
+    assert query.scope == Scope.LINKS
+    assert query.types == ("note", "task")
+    with pytest.raises(ValueError):
+        MemoryQuery(scope=cast(Any, "sideways"))
+    with pytest.raises(FrozenInstanceError):
+        query.limit = 5  # type: ignore[misc]
 
 
 def test_filter_incompatible_comparisons_fail_closed() -> None:

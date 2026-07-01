@@ -1,9 +1,26 @@
 """Core memory models and public memory handles."""
 
-from genie.memory.block import MemoryBlock
-from genie.memory.links import MemoryLink
+from typing import TYPE_CHECKING
 
-__all__ = ["Memory", "MemoryBlock", "MemoryLink", "MemoryScope"]
+from genie.memory.block import MemoryBlock
+from genie.memory.errors import GenieError, MemoryConflict, MemoryNotFound, UnsupportedOperation
+from genie.memory.links import LinkRelations, MemoryLink
+
+if TYPE_CHECKING:
+    from genie.memory.memory import Memory
+    from genie.memory.scope import MemoryScope
+
+__all__ = [
+    "GenieError",
+    "LinkRelations",
+    "Memory",
+    "MemoryBlock",
+    "MemoryConflict",
+    "MemoryLink",
+    "MemoryNotFound",
+    "MemoryScope",
+    "UnsupportedOperation",
+]
 
 
 def __getattr__(name: str):

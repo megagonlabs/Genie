@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from genie import AccessDenied, AccessRule, Memory, MemoryPolicy
+from genie import AccessDenied, AccessRule, LinkRelations, Memory, MemoryLink, MemoryPolicy
 
 
 def test_public_link_api_uses_explicit_operation_names() -> None:
@@ -17,8 +17,14 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
 
     assert callable(memory.add_link)
     assert callable(memory.list_links)
+    assert callable(memory.add_mount)
+    assert callable(memory.list_mounts)
+    assert callable(memory.resolve_mount)
     assert callable(scope.add_link)
     assert callable(scope.list_links)
+    assert callable(scope.add_mount)
+    assert callable(scope.list_mounts)
+    assert callable(scope.resolve_mount)
     assert not hasattr(memory, "link")
     assert not hasattr(memory, "links")
     assert not hasattr(scope, "link")
@@ -128,3 +134,108 @@ def test_scope_linking_cannot_cross_scope_boundaries() -> None:
 
     with pytest.raises(AccessDenied):
         scope.add_link(child, outside, "related")
+
+
+def test_mounts_are_symbolic_and_not_recursive_ownership() -> None:
+    """Mounts resolve explicitly without changing subtree ownership."""
+
+    memory = Memory()
+    local_root = memory.put(type="project", value="local")
+    mount_point = memory.put(parent=local_root, type="mount-point", value="remote docs")
+    remote_root = memory.put(type="project", value="remote")
+    remote_child = memory.put(parent=remote_root, type="note", value="remote needle")
+
+    mount = memory.add_mount(mount_point, remote_root, metadata={"label": "docs"})
+    subtree_results = memory.search("remote needle", root=local_root, scope="subtree")
+    link_results = memory.search("project", root=mount_point, scope="links")
+    resolved = memory.resolve_mount(mount)
+
+    assert mount.relation == LinkRelations.MOUNT
+    assert memory.list_mounts(mount_point) == [mount]
+    assert subtree_results == []
+    assert [result.block.id for result in link_results] == [remote_root.id]
+    assert resolved is not None
+    assert resolved.id == remote_root.id
+
+    memory.delete(local_root)
+
+    assert memory.get(mount_point) is None
+    assert memory.get(remote_root) is not None
+    assert memory.get(remote_child) is not None
+
+
+def test_scope_mounts_require_explicit_mount_access() -> None:
+    """Scopes need explicit mount access before creating or resolving mounts."""
+
+    memory = Memory()
+    local_root = memory.put(type="project", value="local")
+    mount_point = memory.put(parent=local_root, type="mount-point", value="remote docs")
+    remote_root = memory.put(type="project", value="remote")
+    plain_scope = memory.scope(root=local_root)
+    mount_scope = memory.scope(root=local_root, allow_mounts=True)
+
+    with pytest.raises(AccessDenied):
+        plain_scope.add_mount(mount_point, remote_root)
+    with pytest.raises(AccessDenied):
+        plain_scope.list_mounts(mount_point)
+
+    mount = mount_scope.add_mount(mount_point, remote_root)
+    resolved = mount_scope.resolve_mount(mount)
+
+    assert mount_scope.list_mounts(mount_point) == [mount]
+    assert resolved is not None
+    assert resolved.id == remote_root.id
+    with pytest.raises(AccessDenied):
+        plain_scope.resolve_mount(mount)
+
+
+def test_resolve_mount_requires_stored_mount_link() -> None:
+    """Mount resolution does not trust a forged in-memory link object."""
+
+    memory = Memory()
+    local_root = memory.put(type="project", value="local")
+    mount_point = memory.put(parent=local_root, type="mount-point", value="remote docs")
+    remote_root = memory.put(type="project", value="remote")
+    scope = memory.scope(root=local_root, allow_mounts=True)
+    forged = MemoryLink(
+        source_id=mount_point.id,
+        target_id=remote_root.id,
+        relation=LinkRelations.MOUNT,
+    )
+
+    assert memory.resolve_mount(forged) is None
+    assert scope.resolve_mount(forged) is None
+
+
+def test_scope_mount_resolution_requires_local_mount_source() -> None:
+    """A mount-enabled scope can resolve only mounts whose source is inside it."""
+
+    memory = Memory()
+    local_root = memory.put(type="project", value="local")
+    memory.put(parent=local_root, type="mount-point", value="inside")
+    outside_source = memory.put(type="mount-point", value="outside")
+    remote_root = memory.put(type="project", value="remote")
+    outside_mount = memory.add_mount(outside_source, remote_root)
+    scope = memory.scope(root=local_root, allow_mounts=True)
+
+    with pytest.raises(AccessDenied):
+        scope.resolve_mount(outside_mount)
+    with pytest.raises(AccessDenied):
+        scope.list_mounts(outside_source)
+
+
+def test_subscopes_cannot_add_mount_access() -> None:
+    """Mount access follows the same monotonic delegation rule as other scope flags."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    child = memory.put(parent=root, type="task", value="child")
+    parent_scope = memory.scope(root=root)
+    mount_parent_scope = memory.scope(root=root, allow_mounts=True)
+
+    with pytest.raises(AccessDenied):
+        parent_scope.scope(root=child, allow_mounts=True)
+
+    child_scope = mount_parent_scope.scope(root=child, allow_mounts=True)
+
+    assert child_scope.allow_mounts is True

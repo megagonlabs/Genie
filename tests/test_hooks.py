@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from genie import Memory, MemoryHook, MemoryQuery
+from genie import HookRegistry, Memory, MemoryHook, MemoryQuery
 
 
 def test_hooks_can_transform_and_observe_blocks() -> None:
@@ -103,3 +103,31 @@ def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
     assert hook.before_get_calls == ["missing"]
     assert hook.after_get_calls == [None]
     assert hook.deleted == [block.id]
+
+
+def test_hook_registry_runs_hooks_in_registration_order() -> None:
+    """HookRegistry applies transformations in deterministic order."""
+
+    class OrderedHook(MemoryHook):
+        """Hook that appends a marker to block metadata."""
+
+        def __init__(self, marker: str, calls: list[str]) -> None:
+            self.marker = marker
+            self.calls = calls
+
+        def before_put(self, block):
+            """Append the marker to the ordered metadata list."""
+
+            self.calls.append(self.marker)
+            markers = [*block.metadata.get("markers", ()), self.marker]
+            return block.with_updates(metadata={**block.metadata, "markers": markers})
+
+    calls: list[str] = []
+    registry = HookRegistry([OrderedHook("first", calls)])
+    registry.register(OrderedHook("second", calls))
+    memory = Memory(hooks=registry)
+
+    block = memory.put(type="note", value="ordered")
+
+    assert calls == ["first", "second"]
+    assert block.metadata["markers"] == ["first", "second"]

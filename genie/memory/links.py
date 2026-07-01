@@ -10,6 +10,19 @@ from uuid import uuid4
 from genie.memory.block import utc_now
 
 
+class LinkRelations:
+    """Reserved Genie link relation constants.
+
+    Attributes:
+        MOUNT: Symbolic mount relation. Mount links point from a local mount
+            point to another memory root. They do not imply parent ownership,
+            subtree membership, recursive delete ownership, or access
+            inheritance.
+    """
+
+    MOUNT = "genie.mount"
+
+
 def new_link_id() -> str:
     """Create a unique memory link id.
 

@@ -10,6 +10,7 @@ The core package defines the memory structure and extension contracts:
 - `Memory`: the public API for creating, reading, updating, linking, and searching blocks.
 - `MemoryScope`: a scoped CRUD/search handle intended to be passed into agents or sub-agents.
 - `MemoryBackend`: the adapter contract for SQL, document, graph, vector, or composite backends.
+- `RoutedBackend`: a composition backend for routing blocks across multiple stores.
 - `MemoryHook`: lifecycle extension points around writes, reads, deletes, and search.
 - `MemoryCodec`: value encoders/decoders for custom Python objects and storage-safe payloads.
 
@@ -49,7 +50,8 @@ Focused runnable examples live in [examples](examples):
 - `crud_blocks.py`: CRUD, patching, delete, and child traversal.
 - `scoped_agents.py`: top-level agents and sub-agents using `MemoryScope`.
 - `search_filters.py`: text search, types, scopes, and metadata filters.
-- `links.py`: typed links and linked-memory search.
+- `links.py`: typed links, symbolic mounts, and linked-memory search.
+- `routed_backend.py`: route blocks across multiple backend stores.
 - `policies.py`: principal and role based access control.
 - `hooks_codecs.py`: lifecycle hooks and custom value codecs.
 - `basic_usage.py`: integrated workflow that combines the main features.
@@ -74,6 +76,17 @@ block = memory.put(
 )
 
 updated = memory.patch(block, value={"tone": "warm"})
+```
+
+Mounts are symbolic links between memory trees. They point to another block
+without making that block an owned child, so subtree search and recursive delete
+do not follow them by default.
+
+```python
+local_mount_point = memory.put(type="mount_point", value="external docs")
+remote_root = memory.put(type="project", value="external project")
+mount = memory.add_mount(local_mount_point, remote_root)
+mounted_root = memory.resolve_mount(mount)
 ```
 
 ## Query Filters
@@ -125,8 +138,8 @@ context_memory.search("project", scope="ancestors")
 ```
 
 Sub-scopes can narrow access, but cannot widen it. A sub-scope cannot add global
-search, add ancestor traversal, change principal identity, or move its root
-outside the parent scope's subtree.
+search, add ancestor traversal, mount access, change principal identity, or move
+its root outside the parent scope's subtree.
 
 ## Backends
 
@@ -148,6 +161,11 @@ backend capabilities in `genie.backend`:
 That keeps stores, graph traversal, and search/indexing separable internally
 while still allowing users to configure one top-level backend.
 
+For sharding, data residency, migrations, or customer-owned storage,
+`RoutedBackend` can coordinate multiple authoritative backend routes behind the
+same public `MemoryBackend` interface. Each block still has exactly one
+authoritative store route.
+
 ## Operational Safety
 
 Genie is designed so the core abstractions fail closed where possible:
@@ -155,6 +173,7 @@ Genie is designed so the core abstractions fail closed where possible:
 - Scopes cannot widen delegated authority.
 - Returned JSON values and metadata are copied so callers cannot mutate stored state accidentally.
 - Recursive delete requires write access to every block in the deleted subtree.
+- Recursive delete does not follow symbolic mounts.
 - In-memory hierarchy updates reject parent cycles.
 - Link direction values are validated.
 - Link listing hides relationships whose endpoints are not readable by the principal.

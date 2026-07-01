@@ -31,6 +31,7 @@ class MemoryScope:
         default_scope: Scope = Scope.SUBTREE,
         allow_up: bool = False,
         allow_global: bool = False,
+        allow_mounts: bool = False,
     ) -> None:
         """Create a scoped memory handle.
 
@@ -41,6 +42,8 @@ class MemoryScope:
             default_scope: Search scope used when callers omit `scope`.
             allow_up: Whether ancestor traversal/search is allowed.
             allow_global: Whether global search is allowed.
+            allow_mounts: Whether this scope can create, list, and resolve
+                symbolic mounts from local mount points.
         """
 
         self._memory = memory
@@ -49,6 +52,7 @@ class MemoryScope:
         self.default_scope = default_scope
         self.allow_up = allow_up
         self.allow_global = allow_global
+        self.allow_mounts = allow_mounts
 
     def put(
         self,
@@ -256,6 +260,73 @@ class MemoryScope:
             and self._memory.contains(self.root_id, link.target_id)
         ]
 
+    def add_mount(
+        self,
+        source: str | MemoryBlock,
+        target: str | MemoryBlock,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryLink:
+        """Create a symbolic mount from a source inside this scope.
+
+        The mount target may live outside the scope. The target does not become
+        part of this scope's subtree; callers must explicitly resolve the mount.
+
+        Args:
+            source: Local mount point block or id inside the scope.
+            target: Mounted target block or id.
+            metadata: Optional mount metadata.
+
+        Returns:
+            Stored mount link.
+
+        Raises:
+            AccessDenied: If mount access is disabled, the source is outside
+                the scope, or policy denies the write/read operation.
+        """
+
+        self._require_mounts_allowed()
+        self._require_in_subtree(_block_id(source))
+        return self._as_principal().add_mount(source, target, metadata=metadata)
+
+    def list_mounts(self, source: str | MemoryBlock) -> list[MemoryLink]:
+        """List symbolic mounts whose source is inside this scope.
+
+        Args:
+            source: Local mount point block or id inside the scope.
+
+        Returns:
+            Readable outgoing mount links.
+        """
+
+        self._require_mounts_allowed()
+        actual_id = _block_id(source)
+        self._require_in_subtree(actual_id)
+        return self._as_principal().list_mounts(actual_id)
+
+    def resolve_mount(self, mount: MemoryLink) -> MemoryBlock | None:
+        """Resolve a symbolic mount whose source is inside this scope.
+
+        Resolving a mount is explicit and can return a target outside the
+        scope's subtree. It does not widen ordinary subtree search, traversal,
+        or delete behavior.
+
+        Args:
+            mount: Mount link returned by `add_mount` or `list_mounts`.
+
+        Returns:
+            Decoded target block, or `None` if the mount or target no longer
+            exists.
+
+        Raises:
+            AccessDenied: If mount access is disabled or the mount source is
+                outside the scope.
+        """
+
+        self._require_mounts_allowed()
+        self._require_in_subtree(mount.source_id)
+        return self._as_principal().resolve_mount(mount)
+
     def search(
         self,
         query: MemoryQuery | str | None = None,
@@ -331,6 +402,8 @@ class MemoryScope:
             raise AccessDenied("A sub-scope cannot add ancestor access.")
         if kwargs.get("allow_global") and not self.allow_global:
             raise AccessDenied("A sub-scope cannot add global access.")
+        if kwargs.get("allow_mounts") and not self.allow_mounts:
+            raise AccessDenied("A sub-scope cannot add mount access.")
         root_id = _block_id(root) if root is not None else self.root_id
         if root_id is not None:
             self._require_in_subtree(root_id)
@@ -346,6 +419,12 @@ class MemoryScope:
             hooks=self._memory.hooks,
             codecs=self._memory.codecs,
         )
+
+    def _require_mounts_allowed(self) -> None:
+        """Raise when symbolic mount operations are disabled for this scope."""
+
+        if not self.allow_mounts:
+            raise AccessDenied("This memory scope does not allow mount access.")
 
     def _require_in_subtree(self, block_id: str | None) -> None:
         """Raise when a block id is outside the scope root."""
