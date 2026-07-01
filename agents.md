@@ -23,7 +23,7 @@ Keep application business logic, memory taxonomies, agent behavior, storage
 topology, retrieval strategy, and domain-specific value semantics outside the
 core library. Parent/child relationships are for containment and scoped
 operations; links and mounts are for non-containment relationships. Changes
-should strengthen Genie's structural primitives, extension contracts, examples,
+should strengthen Genie's structural primitives, public interfaces, examples,
 and documentation without turning Genie into an opinionated agent framework or
 memory product.
 

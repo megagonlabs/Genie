@@ -2,8 +2,9 @@
 
 Genie is a utility library for developers building their own memory systems.
 It provides memory blocks, parent/child containment, scoped access, and
-extension contracts without tying the application to one agent platform,
-database, or memory use case.
+clear interfaces for storage, search, links, policies, hooks, and value
+encoding without tying the application to one agent platform, database, or
+memory use case.
 
 Genie has three primary design objectives:
 
@@ -17,14 +18,15 @@ Genie has three primary design objectives:
 
 Its core responsibility is deliberately narrow: define memory blocks, enforce
 parent/child containment for ownership-style memory structure, and provide
-extension contracts for scoped access, storage, search, links, hooks, policies,
+clear interfaces for scoped access, storage, search, links, hooks, policies,
 and value encoding. Applications keep ownership of their business logic, memory
 taxonomy, agent behavior, storage topology, retrieval strategy, and value
 types.
 
 For a deeper architecture overview, see [docs/design.md](docs/design.md).
 
-The core package defines the memory structure and extension contracts:
+The core package defines the memory structure and the interfaces developers can
+plug into:
 
 - `MemoryBlock`: the smallest independently addressable unit of memory.
 - `Memory`: the public API for creating, reading, updating, linking, and searching blocks.
