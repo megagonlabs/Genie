@@ -19,11 +19,13 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
     assert callable(memory.list_links)
     assert callable(memory.add_mount)
     assert callable(memory.list_mounts)
+    assert callable(memory.discover_mounts)
     assert callable(memory.resolve_mount)
     assert callable(scope.add_link)
     assert callable(scope.list_links)
     assert callable(scope.add_mount)
     assert callable(scope.list_mounts)
+    assert callable(scope.discover_mounts)
     assert callable(scope.resolve_mount)
     assert not hasattr(memory, "link")
     assert not hasattr(memory, "links")
@@ -164,6 +166,59 @@ def test_mounts_are_symbolic_and_not_recursive_ownership() -> None:
     assert memory.get(remote_child) is not None
 
 
+def test_discover_mounts_scans_subtree_without_following_targets() -> None:
+    """Mount discovery finds local mount sources without entering mounted trees."""
+
+    memory = Memory()
+    local_root = memory.put(type="project", value="local")
+    local_child = memory.put(parent=local_root, type="task", value="local task")
+    local_source = memory.put(parent=local_child, type="reference", value="remote docs")
+    remote_root = memory.put(type="project", value="remote")
+    remote_source = memory.put(parent=remote_root, type="reference", value="remote nested source")
+    other_remote = memory.put(type="project", value="other remote")
+
+    root_mount = memory.add_mount(local_root, remote_root, metadata={"label": "root mount"})
+    child_mount = memory.add_mount(local_source, other_remote, metadata={"label": "child mount"})
+    remote_mount = memory.add_mount(remote_source, other_remote)
+
+    assert memory.discover_mounts(local_root) == [root_mount, child_mount]
+    assert memory.discover_mounts(local_root, include_self=False) == [child_mount]
+    assert remote_mount not in memory.discover_mounts(local_root)
+
+
+def test_discover_mounts_hides_unreadable_sources_and_targets() -> None:
+    """Mount discovery returns only links whose source and target are readable."""
+
+    owner = Memory(principal="owner")
+    root = owner.put(type="project", value="local")
+    readable_source = owner.put(parent=root, type="reference", value="public source")
+    hidden_source = owner.put(
+        parent=root,
+        type="reference",
+        value="private source",
+        policy=MemoryPolicy(read=AccessRule.only(principals={"owner"})),
+    )
+    visible_target = owner.put(type="project", value="public target")
+    hidden_target = owner.put(
+        type="project",
+        value="private target",
+        policy=MemoryPolicy(read=AccessRule.only(principals={"owner"})),
+    )
+
+    visible_mount = owner.add_mount(readable_source, visible_target)
+    owner.add_mount(readable_source, hidden_target)
+    owner.add_mount(hidden_source, visible_target)
+    reader = Memory(
+        backend=owner.backend,
+        principal="reader",
+        policy_engine=owner.policy_engine,
+        hooks=owner.hooks,
+        codecs=owner.codecs,
+    )
+
+    assert reader.discover_mounts(root) == [visible_mount]
+
+
 def test_scope_mounts_require_explicit_mount_access() -> None:
     """Scopes need explicit mount access before creating or resolving mounts."""
 
@@ -187,6 +242,34 @@ def test_scope_mounts_require_explicit_mount_access() -> None:
     assert resolved.id == remote_root.id
     with pytest.raises(AccessDenied):
         plain_scope.resolve_mount(mount)
+
+
+def test_scope_discover_mounts_requires_mount_access_and_stays_in_scope() -> None:
+    """Scoped mount discovery is explicit and cannot scan outside its root."""
+
+    memory = Memory()
+    local_root = memory.put(type="project", value="local")
+    local_child = memory.put(parent=local_root, type="task", value="local task")
+    local_source = memory.put(parent=local_child, type="reference", value="remote docs")
+    outside_source = memory.put(type="reference", value="outside source")
+    remote_root = memory.put(type="project", value="remote")
+    local_mount = memory.add_mount(local_source, remote_root)
+    memory.add_mount(outside_source, remote_root)
+    plain_scope = memory.scope(root=local_root)
+    mount_scope = memory.scope(root=local_root, allow_mounts=True)
+    child_scope = mount_scope.scope(root=local_child, allow_mounts=True)
+    rootless_scope = memory.scope(allow_mounts=True)
+
+    with pytest.raises(AccessDenied):
+        plain_scope.discover_mounts()
+    with pytest.raises(AccessDenied):
+        mount_scope.discover_mounts(outside_source)
+    with pytest.raises(AccessDenied):
+        rootless_scope.discover_mounts()
+
+    assert mount_scope.discover_mounts() == [local_mount]
+    assert child_scope.discover_mounts() == [local_mount]
+    assert rootless_scope.discover_mounts(local_root) == [local_mount]
 
 
 def test_resolve_mount_requires_stored_mount_link() -> None:

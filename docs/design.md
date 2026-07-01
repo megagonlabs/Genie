@@ -176,6 +176,7 @@ special block `type` is required.
 
 ```python
 mount = memory.add_mount(local_block, remote_root)
+mounts = memory.discover_mounts(local_block)
 remote_root = memory.resolve_mount(mount)
 ```
 
@@ -184,6 +185,10 @@ not become a child of the source. Subtree traversal, subtree search, and
 recursive delete do not follow mounts by default. Deleting the source block
 deletes the mount link, not the mounted target tree. This matches filesystem
 symbolic link behavior and keeps ownership separate from reference.
+
+`discover_mounts(root)` scans a normal parent/child subtree and returns mount
+links whose source is inside that subtree. Discovery does not resolve mount
+targets and does not traverse into mounted target trees.
 
 ## Public API
 
@@ -208,6 +213,7 @@ It exposes:
 - `list_links`
 - `add_mount`
 - `list_mounts`
+- `discover_mounts`
 - `resolve_mount`
 - `search`
 - `scope`
@@ -242,6 +248,7 @@ It supports normal CRUD/search operations:
 - `list_links`
 - `add_mount`
 - `list_mounts`
+- `discover_mounts`
 - `resolve_mount`
 - `search`
 - `scope`
@@ -587,8 +594,10 @@ Cross-route mounts use the same shared link capability with the reserved
 `LinkRelations.MOUNT` relation (`genie.mount`). They point from one routed tree
 into another routed tree without changing ownership. The default
 `RoutedBackend` behavior keeps parent/child ownership inside the parent route.
-Following mounts during traversal/search and deleting mounted target trees are
-not implemented in the current library.
+`discover_mounts(root)` can find cross-route mount links whose source is inside
+the scanned tree when the routed backend has a shared link store. Following
+mounts during traversal/search and deleting mounted target trees are not
+implemented in the current library.
 
 ## InMemoryBackend
 
@@ -628,22 +637,39 @@ Principal(id="user:alice", roles=frozenset({"admin"}))
 - search
 - traverse up
 - traverse down
+- application-defined extension operations
 
 ```python
 MemoryPolicy(
     read=AccessRule.only(roles={"researcher"}),
     write=AccessRule.only(principals={"agent:planner"}),
+    operations={"export": AccessRule.only(roles={"compliance"})},
 )
 ```
 
 The `PolicyEngine` checks whether a principal can perform an operation on a
 block.
 
+Applications can register operation defaults on the engine:
+
+```python
+policy_engine = PolicyEngine(
+    operations={"export": AccessRule.only(roles={"compliance"})},
+)
+```
+
+Custom operations are evaluated explicitly by application code with
+`policy_engine.require("export", block, principal)` or
+`policy_engine.allows("export", block, principal)`. Built-in memory methods use
+the built-in operations directly. Custom operation names cannot override
+`read`, `write`, `search`, `traverse_up`, or `traverse_down`.
+
 Important defaults:
 
 - If no policy is attached to a block, the block is public.
 - Scope boundaries are enforced in addition to block policies.
 - Recursive delete requires write access to every block that would be deleted.
+- Unknown custom policy operations raise a configuration error.
 
 Root write access does not automatically imply write access to descendants.
 That inheritance model can be added later as an explicit policy mode.
@@ -743,6 +769,7 @@ The current implementation favors conservative behavior:
 - link directions are validated
 - backend link stores expose cleanup for links connected to deleted blocks
 - link listing hides relationships whose endpoints are not readable by the principal
+- mount discovery does not follow mounted target trees
 - scoped link listing and linked-memory search remain inside the scope root
 - JSON encoding rejects `NaN` and `Infinity`
 - incompatible filter comparisons produce no matches

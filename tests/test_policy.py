@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
-from genie import AccessDenied, AccessRule, Memory, MemoryPolicy, Principal
+from genie import AccessDenied, AccessRule, Memory, MemoryPolicy, Operation, PolicyEngine, Principal
+from genie.policy.policy import BUILTIN_OPERATION_NAMES
 
 
 def test_block_policy_denies_read_to_other_principal() -> None:
@@ -24,6 +27,12 @@ def test_block_policy_denies_read_to_other_principal() -> None:
 
     with pytest.raises(AccessDenied):
         other_memory.get(private.id)
+
+
+def test_builtin_operation_names_match_reserved_policy_names() -> None:
+    """The engine enum and policy reserved-name set stay in sync."""
+
+    assert {operation.value for operation in Operation} == BUILTIN_OPERATION_NAMES
 
 
 def test_write_policy_blocks_set_patch_and_delete() -> None:
@@ -128,3 +137,87 @@ def test_policy_can_deny_parent_writes_and_traversal() -> None:
         memory.put(parent=parent, type="child", value="blocked")
     with pytest.raises(AccessDenied):
         memory.children(parent)
+
+
+def test_builtin_operations_can_be_checked_by_enum_or_string() -> None:
+    """The policy engine accepts built-in operations as enums or strings."""
+
+    memory = Memory(principal="owner")
+    block = memory.put(
+        type="note",
+        value="private",
+        policy=MemoryPolicy(read=AccessRule.only(principals={"owner"})),
+    )
+
+    assert memory.policy_engine.allows(Operation.READ, block, memory.principal)
+    assert memory.policy_engine.allows("read", block, memory.principal)
+
+
+def test_policy_engine_supports_block_level_custom_operations() -> None:
+    """Application-defined operations can be attached directly to a block policy."""
+
+    owner = Memory(principal="agent:owner")
+    block = owner.put(
+        type="report",
+        value="draft",
+        policy=MemoryPolicy(
+            operations={"export": AccessRule.only(roles={"compliance"})},
+        ),
+    )
+    compliance = Principal(id="agent:compliance", roles=frozenset({"compliance"}))
+    writer = Principal(id="agent:writer", roles=frozenset({"writer"}))
+
+    assert owner.policy_engine.allows("export", block, compliance)
+    assert not owner.policy_engine.allows("export", block, writer)
+
+    with pytest.raises(AccessDenied):
+        owner.policy_engine.require("export", block, writer)
+
+
+def test_policy_engine_custom_operation_defaults_can_be_registered() -> None:
+    """Engine-level custom operation defaults apply when a block has no override."""
+
+    engine = PolicyEngine(operations={"export": AccessRule.only(roles={"auditor"})})
+    memory = Memory(policy_engine=engine)
+    default_block = memory.put(type="report", value="default policy")
+    override_block = memory.put(
+        type="report",
+        value="owner export only",
+        policy=MemoryPolicy(
+            operations={"export": AccessRule.only(principals={"agent:owner"})},
+        ),
+    )
+    auditor = Principal(id="agent:auditor", roles=frozenset({"auditor"}))
+    owner = Principal(id="agent:owner")
+
+    assert engine.allows("export", default_block, auditor)
+    assert not engine.allows("export", default_block, owner)
+    assert engine.allows("export", override_block, owner)
+    assert not engine.allows("export", override_block, auditor)
+
+
+def test_custom_operation_rules_are_deepcopy_friendly() -> None:
+    """Policy objects with custom operations can be copied by adapters."""
+
+    policy = MemoryPolicy(operations={"export": AccessRule.only(roles={"auditor"})})
+    engine = PolicyEngine(operations={"export": AccessRule.only(roles={"auditor"})})
+
+    copied_policy = deepcopy(policy)
+    copied_engine = deepcopy(engine)
+
+    assert copied_policy.operations["export"] == policy.operations["export"]
+    assert copied_engine.operations["export"] == engine.operations["export"]
+
+
+def test_policy_engine_rejects_unknown_and_reserved_custom_operations() -> None:
+    """Unknown custom operations fail closed with configuration errors."""
+
+    memory = Memory()
+    block = memory.put(type="note", value="hello")
+
+    with pytest.raises(ValueError, match="Unknown policy operation"):
+        memory.policy_engine.allows("export", block, memory.principal)
+    with pytest.raises(ValueError, match="cannot override built-ins"):
+        MemoryPolicy(operations={"read": AccessRule.deny()})
+    with pytest.raises(ValueError, match="cannot override built-ins"):
+        PolicyEngine(operations={"write": AccessRule.deny()})

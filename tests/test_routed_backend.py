@@ -251,6 +251,7 @@ def test_routed_backend_supports_cross_route_mounts_as_symbolic_links() -> None:
     mount = memory.add_mount(mount_source, remote_root)
 
     assert memory.list_mounts(mount_source) == [mount]
+    assert memory.discover_mounts(local_root) == [mount]
     assert [block.id for block in memory.children(local_root)] == [mount_source.id]
     assert remote_root.id not in {block.id for block in backend.descendants(local_root.id)}
 

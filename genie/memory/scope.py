@@ -304,6 +304,39 @@ class MemoryScope:
         self._require_in_subtree(actual_id)
         return self._as_principal().list_mounts(actual_id)
 
+    def discover_mounts(
+        self,
+        root: str | MemoryBlock | None = None,
+        *,
+        include_self: bool = True,
+    ) -> list[MemoryLink]:
+        """Discover symbolic mounts attached to blocks inside this scope.
+
+        Discovery scans only the regular parent/child subtree. It returns mount
+        links whose source is inside the selected subtree, but it does not
+        resolve those mounts or include mounted target trees in the scan.
+
+        Args:
+            root: Optional scan root inside this scope. Defaults to the scope
+                root.
+            include_self: Whether mounts on the selected root should be
+                included.
+
+        Returns:
+            Readable mount links discovered under the selected root.
+
+        Raises:
+            AccessDenied: If mount access is disabled, the scan root is outside
+                the scope, or a rootless scope cannot infer a default root.
+        """
+
+        self._require_mounts_allowed()
+        actual_id = _block_id(root) if root is not None else self.root_id
+        if actual_id is None:
+            raise AccessDenied("A rootless memory scope cannot infer which subtree to scan.")
+        self._require_in_subtree(actual_id)
+        return self._as_principal().discover_mounts(actual_id, include_self=include_self)
+
     def resolve_mount(self, mount: MemoryLink) -> MemoryBlock | None:
         """Resolve a symbolic mount whose source is inside this scope.
 

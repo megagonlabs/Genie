@@ -35,17 +35,20 @@ def main() -> None:
     incoming = memory.list_links(requirement, direction="in")
     related = memory.search("sections", root=requirement, scope="links")
     mounts = memory.list_mounts(requirement)
+    discovered_mounts = memory.discover_mounts(requirement)
     mounted_root = memory.resolve_mount(mount)
     subtree = memory.search("rollout", root=requirement, scope="subtree")
 
     print(f"outgoing relation: {outgoing[0].relation}")
     print(f"incoming relation: {incoming[0].relation}")
     print(f"linked search result: {related[0].block.value}")
+    print(f"discovered mount count: {len(discovered_mounts)}")
     print(f"mount target: {mounted_root.value if mounted_root else None}")
 
     assert informs in outgoing
     assert [result.block.id for result in related] == [outline.id]
     assert mounts == [mount]
+    assert discovered_mounts == [mount]
     assert mounted_root is not None
     assert mounted_root.id == remote_root.id
     assert subtree == []

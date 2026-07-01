@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from genie.policy.principal import Principal
+
+BUILTIN_OPERATION_NAMES = frozenset(
+    {
+        "read",
+        "write",
+        "search",
+        "traverse_up",
+        "traverse_down",
+    }
+)
+"""Operation names reserved by Genie's core memory API."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,12 +94,49 @@ class AccessRule:
         return bool(self.roles.intersection(principal.roles))
 
 
+class _FrozenOperationRules(Mapping[str, AccessRule]):
+    """Immutable, deepcopy-friendly mapping for extension operation rules."""
+
+    def __init__(self, rules: Mapping[str, AccessRule]) -> None:
+        """Create an immutable copy of operation rules."""
+
+        self._rules = dict(rules)
+
+    def __getitem__(self, key: str) -> AccessRule:
+        """Return the rule for an operation name."""
+
+        return self._rules[key]
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over operation names."""
+
+        return iter(self._rules)
+
+    def __len__(self) -> int:
+        """Return the number of operation rules."""
+
+        return len(self._rules)
+
+    def __deepcopy__(self, memo: dict[int, object]) -> "_FrozenOperationRules":
+        """Return a copied immutable mapping."""
+
+        copied = self.__class__(deepcopy(self._rules, memo))
+        memo[id(self)] = copied
+        return copied
+
+    def __repr__(self) -> str:
+        """Return a developer-friendly representation."""
+
+        return repr(self._rules)
+
+
 @dataclass(frozen=True, slots=True)
 class MemoryPolicy:
     """Access policy attached to a memory block.
 
     Each field controls one operation family. Scope boundaries are enforced
-    separately by `MemoryScope`.
+    separately by `MemoryScope`. Applications can attach named extension
+    operations through `operations` and evaluate them with `PolicyEngine`.
 
     Attributes:
         read: Permission to read the block value and metadata.
@@ -94,6 +144,9 @@ class MemoryPolicy:
         search: Permission for the block to appear in search results.
         traverse_up: Permission to traverse from this block to ancestors.
         traverse_down: Permission to traverse from this block to descendants.
+        operations: Optional application-defined operation rules, such as
+            `"export"` or `"approve"`. These names cannot override Genie's
+            built-in operation fields.
     """
 
     read: AccessRule = field(default_factory=AccessRule.allow)
@@ -101,6 +154,16 @@ class MemoryPolicy:
     search: AccessRule = field(default_factory=AccessRule.allow)
     traverse_up: AccessRule = field(default_factory=AccessRule.allow)
     traverse_down: AccessRule = field(default_factory=AccessRule.allow)
+    operations: Mapping[str, AccessRule] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Validate and freeze extension operation rules."""
+
+        reserved = BUILTIN_OPERATION_NAMES.intersection(self.operations)
+        if reserved:
+            names = ", ".join(sorted(reserved))
+            raise ValueError(f"Custom policy operations cannot override built-ins: {names}.")
+        object.__setattr__(self, "operations", _FrozenOperationRules(self.operations))
 
     @classmethod
     def public(cls) -> "MemoryPolicy":

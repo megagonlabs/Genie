@@ -398,6 +398,52 @@ class Memory:
 
         return self.list_links(source, relation=LinkRelations.MOUNT, direction="out")
 
+    def discover_mounts(
+        self,
+        root: str | MemoryBlock,
+        *,
+        include_self: bool = True,
+    ) -> list[MemoryLink]:
+        """Discover symbolic mounts attached to blocks in a regular subtree.
+
+        Discovery scans the normal parent/child subtree below `root` and
+        returns readable outgoing mount links found on those source blocks. It
+        does not resolve mount targets and does not traverse into mounted
+        target trees.
+
+        Args:
+            root: Subtree root block or id to scan.
+            include_self: Whether mounts on `root` itself should be included.
+
+        Returns:
+            Readable mount links whose source is inside the scanned subtree.
+
+        Raises:
+            AccessDenied: If the principal cannot search and traverse downward
+                from `root`.
+            MemoryNotFound: If `root` does not exist.
+        """
+
+        root_id = _block_id(root)
+        root_block = self._require_raw(root_id)
+        self.policy_engine.require(Operation.SEARCH, root_block, self.principal)
+        self.policy_engine.require(Operation.TRAVERSE_DOWN, root_block, self.principal)
+
+        mounts: list[MemoryLink] = []
+        for candidate in self.backend.descendants(root_id, include_self=include_self):
+            if not self.policy_engine.allows(Operation.READ, candidate, self.principal):
+                continue
+            mounts.extend(
+                link
+                for link in self.backend.list_links(
+                    candidate.id,
+                    relation=LinkRelations.MOUNT,
+                    direction="out",
+                )
+                if self._can_read_link_endpoints(link)
+            )
+        return mounts
+
     def resolve_mount(self, mount: MemoryLink) -> MemoryBlock | None:
         """Resolve a mount link to its target block.
 

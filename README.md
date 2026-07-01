@@ -88,8 +88,13 @@ so subtree search and recursive delete do not follow mounts by default.
 local_block = memory.put(type="project", value="local project")
 remote_root = memory.put(type="project", value="external project")
 mount = memory.add_mount(local_block, remote_root)
+mounts_under_local = memory.discover_mounts(local_block)
 mounted_root = memory.resolve_mount(mount)
 ```
+
+Use `discover_mounts(root)` when an agent needs to inspect the mount links
+available inside a subtree. Discovery returns mount links; resolving a selected
+mount is still explicit.
 
 ## Query Filters
 

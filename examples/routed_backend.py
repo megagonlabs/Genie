@@ -79,12 +79,14 @@ def main() -> None:
     eu_results = memory.search("data residency", root=eu_project, scope="subtree")
     us_results = memory.search("data residency", root=us_project, scope="subtree")
     linked_results = memory.search("rollout", root=us_project, scope="links")
+    discovered_mounts = memory.discover_mounts(us_project)
     mounted_root = memory.resolve_mount(eu_rollout_link)
 
     print(f"US project route: {backend.route_for_block(us_project.id)}")
     print(f"EU project route: {backend.route_for_block(eu_project.id)}")
     print(f"US note inherited route: {backend.route_for_block(us_note.id)}")
     print(f"Mount link relation: {eu_rollout_link.relation}")
+    print(f"Discovered mount count: {len(discovered_mounts)}")
     print(f"EU subtree search: {eu_results[0].block.value}")
     print(f"Mounted route target: {mounted_root.value if mounted_root else None}")
 
@@ -105,6 +107,7 @@ def main() -> None:
     assert eu_rollout_link.source_id == us_project.id
     assert eu_rollout_link.target_id == eu_project.id
     assert memory.list_mounts(us_project) == [eu_rollout_link]
+    assert discovered_mounts == [eu_rollout_link]
     assert mounted_root is not None
     assert mounted_root.id == eu_project.id
 
