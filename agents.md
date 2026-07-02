@@ -15,16 +15,16 @@ conda run -n "genie" python -m compileall -q genie tests examples
 
 Genie is a utility library for developers building their own memory systems
 around memory blocks, parent/child containment, and scoped access. Its core
-responsibility is to enforce the block model and containment semantics while
-remaining platform-agnostic, storage/database-agnostic, use-case-agnostic, and
-content value-type agnostic.
+responsibility is to define how memory blocks work, how parent/child ownership
+works, and how scoped access works. It should stay independent of agent
+frameworks, databases, memory use cases, and stored value types.
 
 Keep application business logic, memory taxonomies, agent behavior, storage
-topology, retrieval strategy, and domain-specific value semantics outside the
-core library. Parent/child relationships are for containment and scoped
-operations; links and mounts are for non-containment relationships. Changes
-should strengthen Genie's structural primitives, public interfaces, examples,
-and documentation without turning Genie into an opinionated agent framework or
+layout, retrieval strategy, and domain-specific value meaning outside the core
+library. Parent/child relationships are for ownership and scoped operations;
+links and mounts are for relationships that do not imply ownership. Changes
+should improve Genie's memory model, public interfaces, examples, and
+documentation without turning Genie into an opinionated agent framework or
 memory product.
 
 ## Engineering Standards
@@ -38,6 +38,7 @@ the size, risk, and user-facing impact of the change:
   use-case-agnostic, and content-agnostic design; avoid coupling core APIs to
   one agent framework, storage engine, data model, retrieval strategy, memory
   workflow, or value type.
+- Keep docs and comments plain. Avoid fancy phrases when a direct phrase works.
 - Keep public APIs clear and typed, with Google-style docstrings and predictable
   exceptions where they affect users.
 - Prefer explicit, least-privilege behavior for scoped memory access and policy
