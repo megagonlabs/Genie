@@ -210,7 +210,7 @@ def test_custom_operation_rules_are_deepcopy_friendly() -> None:
 
 
 def test_policy_engine_rejects_unknown_and_reserved_custom_operations() -> None:
-    """Unknown custom operations fail closed with configuration errors."""
+    """Unknown custom operations are denied with clear configuration errors."""
 
     memory = Memory()
     block = memory.put(type="note", value="hello")

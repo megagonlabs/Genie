@@ -8,7 +8,7 @@ from genie.query.result import SearchResult
 
 
 class MemoryHook:
-    """No-op hook base class for extending Genie behavior.
+    """No-op hook base class for customizing Genie behavior.
 
     Subclasses can override one or more methods. Hooks run inside the public
     `Memory` operation flow, so they should avoid long-running or unreliable
@@ -18,8 +18,8 @@ class MemoryHook:
     def before_put(self, block: MemoryBlock) -> MemoryBlock:
         """Run before a block is stored.
 
-        Hooks may annotate or rewrite non-structural fields, but they must not
-        change `parent_id`; parent placement is authorized before hooks run.
+        Hooks may annotate or rewrite fields, but they must not change
+        `parent_id`; parent placement is checked before hooks run.
 
         Args:
             block: Block about to be stored.

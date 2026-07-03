@@ -1,8 +1,8 @@
 """Routed backend composition helpers.
 
 `RoutedBackend` lets one public `MemoryBackend` coordinate multiple internal
-backends. Each memory block has exactly one authoritative route, while search,
-traversal, and link capabilities may be route-local or supplied as shared
+backends. Each memory block has exactly one owning route, while search,
+traversal, and link interfaces may be route-local or supplied as shared
 indexes/stores.
 """
 
@@ -28,11 +28,11 @@ RouteSelector = Callable[[MemoryBlock], RouteKey | None]
 
 @dataclass(frozen=True, slots=True)
 class RouteInfo:
-    """Catalog entry describing where a block is authoritative.
+    """Catalog entry describing which route owns a block.
 
     Attributes:
         block_id: Memory block id.
-        route: Route key for the authoritative backend.
+        route: Route key for the backend that owns the block.
     """
 
     block_id: str
@@ -114,9 +114,9 @@ class InMemoryLinkStore:
 
 
 class RoutedBackend:
-    """Route blocks across multiple authoritative backend adapters.
+    """Route blocks across multiple backend adapters.
 
-    A `RoutedBackend` still satisfies the single `MemoryBackend` contract. Route
+    A `RoutedBackend` still satisfies the single `MemoryBackend` interface. Route
     selection is an implementation detail hidden behind the public `Memory`
     object.
     """
@@ -135,14 +135,14 @@ class RoutedBackend:
         """Create a routed backend.
 
         Args:
-            routes: Mapping of route keys to authoritative backends.
+            routes: Mapping of route keys to backend adapters.
             route_selector: Optional selector used for new root blocks. It may
                 return `None` to use `default_route` or inherit the parent route.
             default_route: Route used when the selector returns `None`.
             traversal_index: Optional shared traversal index. If omitted,
-                traversal is delegated to the authoritative route.
+                traversal is handled by the route that owns the block.
             search_index: Optional shared search index. If omitted, searches are
-                delegated to route backends and merged when needed.
+                run against route backends and merged when needed.
             link_store: Optional shared link store. If omitted, links are stored
                 route-locally and cross-route links are rejected.
             enforce_tree_route: Whether children must stay in the same route as
@@ -174,7 +174,7 @@ class RoutedBackend:
         replace: bool = False,
         make_default: bool = False,
     ) -> None:
-        """Register an authoritative route after initialization.
+        """Register a backend route after initialization.
 
         Runtime route registration is intended for cases where application code
         discovers a symbolic mount or tenant descriptor that requires opening a
@@ -184,7 +184,7 @@ class RoutedBackend:
 
         Args:
             route: Route key to register.
-            backend: Authoritative backend for the route.
+            backend: Backend adapter for the route.
             replace: Whether an existing route with no cataloged blocks may be
                 replaced.
             make_default: Whether future unselected root blocks should use this
@@ -207,7 +207,7 @@ class RoutedBackend:
             self.default_route = route
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Persist a new block to its authoritative route.
+        """Persist a new block to its owning route.
 
         Args:
             block: Encoded block to store.
@@ -228,7 +228,7 @@ class RoutedBackend:
         return stored
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        """Fetch a block by id from its authoritative route.
+        """Fetch a block by id from its owning route.
 
         Args:
             block_id: Memory block id.
@@ -243,7 +243,7 @@ class RoutedBackend:
         return self.routes[route].get_block(block_id)
 
     def update_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Replace a block in its current authoritative route.
+        """Replace a block in its current owning route.
 
         Updates do not move a block to another route. If a block is reparented,
         the parent must be in the same route when tree-route enforcement is
@@ -260,7 +260,7 @@ class RoutedBackend:
         return stored
 
     def delete_block(self, block_id: str) -> None:
-        """Delete a block from its authoritative route and remove catalog state.
+        """Delete a block from its owning route and remove catalog state.
 
         Args:
             block_id: Memory block id. Missing ids are ignored.
@@ -376,7 +376,7 @@ class RoutedBackend:
         relation: str | None = None,
         direction: Literal["out", "in", "both"] = "out",
     ) -> list[MemoryLink]:
-        """List links from the shared link store or authoritative route.
+        """List links from the shared link store or owning route.
 
         Args:
             block_id: Block id to inspect.
@@ -435,7 +435,7 @@ class RoutedBackend:
         return results[: query.limit]
 
     def route_for_block(self, block_id: str) -> RouteKey | None:
-        """Return the authoritative route for a block id.
+        """Return the route that owns a block id.
 
         Args:
             block_id: Memory block id.
@@ -447,7 +447,7 @@ class RoutedBackend:
         return self._route_for_existing_block(block_id, missing_ok=True)
 
     def _route_for_new_block(self, block: MemoryBlock) -> RouteKey:
-        """Choose and validate the authoritative route for a new block."""
+        """Choose and validate the owning route for a new block."""
 
         selected = self.route_selector(block) if self.route_selector is not None else None
         if block.parent_id is not None and self.enforce_tree_route:
@@ -486,7 +486,7 @@ class RoutedBackend:
         *,
         missing_ok: bool = False,
     ) -> RouteKey | None:
-        """Find the authoritative route for an existing block."""
+        """Find the route that owns an existing block."""
 
         route = self._catalog.get(block_id)
         if route is not None:

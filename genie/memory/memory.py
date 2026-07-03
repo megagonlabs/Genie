@@ -1,4 +1,4 @@
-"""Public memory system API."""
+"""Main memory system interface."""
 
 from __future__ import annotations
 
@@ -24,14 +24,14 @@ if TYPE_CHECKING:
 
 
 class Memory:
-    """Full Genie memory system handle.
+    """Main interface for a Genie memory system.
 
-    `Memory` owns the backend, policy engine, hooks, and codecs. Applications
-    typically keep this object at trust boundaries and pass bounded
-    `MemoryScope` objects to agents. It coordinates parent/child containment,
-    scoped access, and extension points without owning application business
-    logic, memory taxonomy, storage topology, retrieval strategy, or value
-    semantics.
+    `Memory` configures the backend, codecs, hooks, policy engine, and default
+    principal. Trusted application code usually keeps this object and passes
+    bounded `MemoryScope` objects to agents. It coordinates parent/child
+    ownership, scoped access, links, mounts, search, hooks, and codecs without
+    owning application business logic, memory structure, storage layout,
+    retrieval strategy, or value meaning.
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class Memory:
         hooks: list[MemoryHook] | HookRegistry | None = None,
         codecs: CodecRegistry | None = None,
     ) -> None:
-        """Create a memory system.
+        """Create the main memory interface.
 
         Args:
             backend: Backend adapter. Defaults to `InMemoryBackend`.
@@ -541,8 +541,8 @@ class Memory:
         self._authorize_query(memory_query)
         memory_query = self.hooks.before_search(memory_query)
         # Hooks may return a freshly constructed query. Normalize once more so
-        # backends receive canonical filter operators, then authorize again so
-        # hooks cannot accidentally widen the query root or scope.
+        # backends receive canonical filter operators, then check access again
+        # so hooks cannot pass through a wider query root or scope.
         memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
         self._authorize_query(memory_query)
         raw_results = self.backend.search(memory_query)
@@ -564,7 +564,7 @@ class Memory:
         allow_global: bool = False,
         allow_mounts: bool = False,
     ) -> "MemoryScope":
-        """Create a bounded scoped memory handle for delegation.
+        """Create a bounded scoped memory handle to pass to agents.
 
         Args:
             root: Root block or id that bounds the scope.
@@ -612,7 +612,7 @@ class Memory:
         """Create an explicit unbounded scoped memory handle.
 
         An unbounded scope has no default subtree root. It can still be limited
-        by principal policies and by capability flags such as `allow_global`.
+        by principal policies and options such as `allow_global`.
         Non-global searches through an unbounded scope must provide an explicit
         root.
 
@@ -734,7 +734,11 @@ class Memory:
 
         for block_id in (link.source_id, link.target_id):
             block = self.backend.get_block(block_id)
-            if block is None or not self.policy_engine.allows(Operation.READ, block, self.principal):
+            if block is None or not self.policy_engine.allows(
+                Operation.READ,
+                block,
+                self.principal,
+            ):
                 return False
         return True
 

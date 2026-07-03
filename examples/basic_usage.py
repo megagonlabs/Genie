@@ -2,13 +2,13 @@
 
 This example combines the main concepts shown in the smaller examples:
 
-- a full `Memory` object kept at the application boundary
+- a full `Memory` object kept in trusted application code
 - scoped memory handles passed to agents
-- parent/child containment for project/task/note structure
+- parent/child ownership for project/task/note structure
 - text search, metadata filters, and linked-memory search
 - typed links between memory blocks
 - policies for principal-specific access control
-- hooks, dataclass codecs, and stdlib codecs as extension points
+- hooks, dataclass codecs, and stdlib codecs as ways to customize Genie
 
 Run from the repository root:
 
@@ -195,7 +195,7 @@ def main() -> None:
         source="draft",
     )
 
-    section("Search inside the scoped containment")
+    section("Search inside the scoped ownership tree")
     local_results = writer.recall("sections")
     assert [block.id for block in local_results] == [outline.id]
 
@@ -269,7 +269,7 @@ def main() -> None:
     assert any(event.startswith("created:task:") for event in audit.events)
 
     section("Done")
-    print("The full Memory object stayed at the boundary; agents only received scopes.")
+    print("The full Memory object stayed in trusted application code; agents only received scopes.")
 
 
 def section(title: str) -> None:

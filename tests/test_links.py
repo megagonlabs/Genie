@@ -308,7 +308,7 @@ def test_scope_mount_resolution_requires_local_mount_source() -> None:
 
 
 def test_subscopes_cannot_add_mount_access() -> None:
-    """Mount access follows the same monotonic delegation rule as other scope flags."""
+    """Sub-scopes cannot add mount access when the parent scope lacks it."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

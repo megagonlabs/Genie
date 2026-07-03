@@ -2,7 +2,7 @@
 
 The backend is intentionally small and dependency-free. It is useful for tests,
 examples, and local prototypes, and also acts as executable documentation for
-the backend capability contracts.
+the backend interfaces.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from genie.query.scope import Scope
 
 
 class InMemoryBackend:
-    """Single-process backend implementing all Genie backend capabilities."""
+    """Single-process backend implementing all Genie backend interfaces."""
 
     def __init__(self) -> None:
         """Create an empty in-memory backend."""
@@ -117,7 +117,10 @@ class InMemoryBackend:
             Defensive copies of direct child blocks.
         """
 
-        return [_copy_block(self._blocks[child_id]) for child_id in self._children.get(block_id, ())]
+        return [
+            _copy_block(self._blocks[child_id])
+            for child_id in self._children.get(block_id, ())
+        ]
 
     def ancestors(self, block_id: str) -> list[MemoryBlock]:
         """Return ancestors from nearest parent upward.
@@ -301,7 +304,10 @@ class InMemoryBackend:
             raise MemoryConflict("A memory block cannot be its own parent.")
         if updated.parent_id is not None and self.contains(updated.id, updated.parent_id):
             raise MemoryConflict("A memory block cannot be moved under one of its descendants.")
-        if previous.parent_id is not None and previous.id in self._children.get(previous.parent_id, []):
+        if (
+            previous.parent_id is not None
+            and previous.id in self._children.get(previous.parent_id, [])
+        ):
             self._children[previous.parent_id].remove(previous.id)
         if updated.parent_id is not None:
             self._children[updated.parent_id].append(updated.id)

@@ -1,4 +1,4 @@
-"""Top-level backend protocol."""
+"""Top-level backend interface."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from genie.backend.capabilities import BlockStore, LinkStore, SearchIndex, Trave
 
 @runtime_checkable
 class MemoryBackend(BlockStore, TraversalIndex, SearchIndex, LinkStore, Protocol):
-    """Backend contract for Genie adapters.
+    """Backend interface for Genie adapters.
 
     A concrete backend can be a single database adapter or a composition of
-    store/search/traversal implementations. The backend boundary keeps Genie
-    independent of any specific database, storage topology, or retrieval
+    store/search/traversal implementations. The backend layer keeps Genie
+    independent of any specific database, storage layout, or retrieval
     strategy.
     """

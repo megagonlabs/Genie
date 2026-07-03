@@ -1,4 +1,4 @@
-"""Access control policy primitives."""
+"""Access control policy helpers."""
 
 from typing import TYPE_CHECKING
 
@@ -19,13 +19,13 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Lazily import policy engine primitives to avoid import cycles.
+    """Import policy engine objects on first use to avoid import cycles.
 
     Args:
         name: Exported attribute name.
 
     Returns:
-        The requested policy engine primitive.
+        The requested policy engine object.
 
     Raises:
         AttributeError: If the name is not exported by this module.

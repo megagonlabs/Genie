@@ -194,10 +194,10 @@ def test_after_search_hook_results_are_rechecked_for_policy_and_scope() -> None:
 
 
 def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
-    """Lifecycle hooks observe missing gets and every deleted subtree block."""
+    """Hooks observe missing gets and every deleted subtree block."""
 
     class LifecycleHook(MemoryHook):
-        """Hook that records get and delete lifecycle events."""
+        """Hook that records get and delete events."""
 
         def __init__(self) -> None:
             self.before_get_calls: list[str] = []

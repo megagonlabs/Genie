@@ -67,8 +67,8 @@ class PolicyEngine:
 
         Raises:
             AccessDenied: If the policy does not allow the operation.
-            ValueError: If `operation` is neither built-in nor configured as an
-                extension operation.
+            ValueError: If `operation` is neither built-in nor configured as a
+                custom operation.
         """
 
         if not self.allows(operation, block, principal):
@@ -94,8 +94,8 @@ class PolicyEngine:
             `True` when the operation is allowed.
 
         Raises:
-            ValueError: If `operation` is neither built-in nor configured as an
-                extension operation.
+            ValueError: If `operation` is neither built-in nor configured as a
+                custom operation.
         """
 
         policy = block.policy or MemoryPolicy.public()

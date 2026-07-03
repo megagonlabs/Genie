@@ -1,7 +1,7 @@
-"""Backend capability protocols.
+"""Smaller backend interface protocols.
 
-The public `Memory` API accepts a single `MemoryBackend`, but the contract is
-split into capabilities so adapter authors can compose storage, traversal,
+The public `Memory` API accepts a single `MemoryBackend`, but the interface is
+split into smaller pieces so adapter authors can compose storage, traversal,
 search, and link implementations internally.
 """
 
@@ -17,7 +17,7 @@ from genie.query.result import SearchResult
 
 @runtime_checkable
 class BlockStore(Protocol):
-    """Persistence contract for memory blocks."""
+    """Persistence interface for memory blocks."""
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
         """Persist a new block.
@@ -74,7 +74,7 @@ class BlockStore(Protocol):
 
 @runtime_checkable
 class TraversalIndex(Protocol):
-    """Hierarchy traversal contract."""
+    """Parent/child traversal interface."""
 
     def children(self, block_id: str) -> list[MemoryBlock]:
         """Return direct children for a block id.
@@ -129,7 +129,7 @@ class TraversalIndex(Protocol):
 
 @runtime_checkable
 class SearchIndex(Protocol):
-    """Search contract for backend adapters."""
+    """Search interface for backend adapters."""
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
         """Search memory blocks.
@@ -147,7 +147,7 @@ class SearchIndex(Protocol):
 
 @runtime_checkable
 class LinkStore(Protocol):
-    """Persistence and lookup contract for typed memory links."""
+    """Persistence and lookup interface for typed memory links."""
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
         """Persist a new typed link.
@@ -188,7 +188,7 @@ class LinkStore(Protocol):
         """Delete links connected to a block.
 
         Backend adapters should remove both incoming and outgoing links for the
-        block. `Memory.delete` uses this capability to keep link indexes from
+        block. `Memory.delete` uses this interface to keep link indexes from
         retaining dangling relationships after recursive deletes.
 
         Args:

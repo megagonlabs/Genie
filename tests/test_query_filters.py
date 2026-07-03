@@ -115,7 +115,7 @@ def test_backends_receive_normalized_filter_operators() -> None:
             self.seen_filters: dict[str, Any] | None = None
 
         def search(self, query: MemoryQuery) -> list[SearchResult]:
-            """Record filters before delegating to the in-memory backend."""
+            """Record filters before calling the in-memory backend."""
 
             self.seen_filters = query.filters
             return super().search(query)

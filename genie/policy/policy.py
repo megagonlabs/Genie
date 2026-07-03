@@ -95,7 +95,7 @@ class AccessRule:
 
 
 class _FrozenOperationRules(Mapping[str, AccessRule]):
-    """Immutable, deepcopy-friendly mapping for extension operation rules."""
+    """Immutable, deepcopy-friendly mapping for custom operation rules."""
 
     def __init__(self, rules: Mapping[str, AccessRule]) -> None:
         """Create an immutable copy of operation rules."""
@@ -134,8 +134,8 @@ class _FrozenOperationRules(Mapping[str, AccessRule]):
 class MemoryPolicy:
     """Access policy attached to a memory block.
 
-    Each field controls one operation family. Scope boundaries are enforced
-    separately by `MemoryScope`. Applications can attach named extension
+    Each field controls one operation family. Scope limits are enforced
+    separately by `MemoryScope`. Applications can attach named custom
     operations through `operations` and evaluate them with `PolicyEngine`.
 
     Attributes:
@@ -157,7 +157,7 @@ class MemoryPolicy:
     operations: Mapping[str, AccessRule] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate and freeze extension operation rules."""
+        """Validate and freeze custom operation rules."""
 
         reserved = BUILTIN_OPERATION_NAMES.intersection(self.operations)
         if reserved:

@@ -1,4 +1,4 @@
-"""Tests for scoped memory handles and delegated authority."""
+"""Tests for scoped memory handles and restricted access."""
 
 from __future__ import annotations
 
@@ -166,7 +166,7 @@ def test_subscopes_cannot_widen_parent_global_or_ancestor_access() -> None:
 
 
 def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
-    """Prebuilt queries cannot smuggle wider roots through a scope."""
+    """Prebuilt queries cannot pass wider roots through a scope."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -190,7 +190,7 @@ def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
 
 
 def test_subscopes_cannot_change_principal_identity() -> None:
-    """Sub-scopes cannot replace the delegated principal."""
+    """Sub-scopes cannot replace the principal they were created with."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

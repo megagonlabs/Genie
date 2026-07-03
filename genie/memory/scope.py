@@ -1,4 +1,4 @@
-"""Scoped memory handle for delegated agent access."""
+"""Scoped memory handle for agent access."""
 
 from __future__ import annotations
 
@@ -17,10 +17,11 @@ if TYPE_CHECKING:
 
 
 class MemoryScope:
-    """Capability-bearing view of part of a memory system.
+    """Restricted handle to part of a `Memory` object.
 
-    A scope narrows a `Memory` instance by root, principal, and traversal
-    permissions. Sub-scopes may narrow authority further but cannot widen it.
+    A scope narrows memory access by root, principal, and allowed search or
+    traversal modes. It supports scoped CRUD, traversal, links, mounts, search,
+    and sub-scopes. Sub-scopes may reduce access further but cannot increase it.
     """
 
     def __init__(
@@ -37,8 +38,9 @@ class MemoryScope:
         """Create a scoped memory handle.
 
         Args:
-            memory: Underlying full memory system.
-            root_id: Optional root block id. `None` means unbounded.
+            memory: Underlying `Memory` object.
+            root_id: Optional scope root block id. `None` means an explicit
+                unbounded scope.
             principal: Principal for operations through this scope.
             default_scope: Search scope used when callers omit `scope`.
             allow_up: Whether ancestor traversal/search is allowed.
@@ -188,7 +190,7 @@ class MemoryScope:
     def delete(self, block_id: str | MemoryBlock) -> None:
         """Delete a block and its descendants inside this scope.
 
-        Recursive delete is delegated to the underlying `Memory` handle and
+        Recursive delete is handled by the underlying `Memory` instance and
         requires write access to every block that would be removed.
 
         Args:
@@ -262,7 +264,7 @@ class MemoryScope:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Create a typed non-hierarchical relationship inside this scope.
+        """Create a typed relationship inside this scope.
 
         Args:
             source: Source block or id inside the scope.
@@ -467,7 +469,7 @@ class MemoryScope:
 
         Raises:
             AccessDenied: If the requested root or search mode would escape the
-                scope's authority, or if an unbounded scope cannot infer a
+                scope's access, or if an unbounded scope cannot infer a
                 non-global search root.
             MemoryNotFound: If the query root does not exist.
             ValueError: If the scope is invalid or limit is negative.
@@ -489,7 +491,7 @@ class MemoryScope:
         if root_id is not None and selected_scope != Scope.GLOBAL:
             self._require_in_subtree(root_id)
         # Rebuild query objects with the selected scope/root so a caller cannot
-        # smuggle a wider root or global scope through a prebuilt MemoryQuery.
+        # pass a wider root or global scope through a prebuilt MemoryQuery.
         results = self._as_principal().search(
             query,
             text=text,
@@ -501,7 +503,11 @@ class MemoryScope:
         )
         if self.root_id is None or selected_scope in {Scope.GLOBAL, Scope.ANCESTORS}:
             return results
-        return [result for result in results if self._memory.contains(self.root_id, result.block.id)]
+        return [
+            result
+            for result in results
+            if self._memory.contains(self.root_id, result.block.id)
+        ]
 
     def scope(
         self,
@@ -529,10 +535,10 @@ class MemoryScope:
                 them.
 
         Returns:
-            A new `MemoryScope` with equal or smaller authority.
+            A new `MemoryScope` with the same or less access.
 
         Raises:
-            AccessDenied: If the requested sub-scope would widen authority.
+            AccessDenied: If the requested sub-scope would increase access.
         """
 
         if principal is not None and Principal.coerce(principal) != self.principal:
@@ -564,7 +570,7 @@ class MemoryScope:
         )
 
     def _as_principal(self) -> "Memory":
-        """Create a full memory handle that shares state but uses this principal."""
+        """Create a `Memory` handle that shares state but uses this principal."""
 
         return self._memory.__class__(
             backend=self._memory.backend,

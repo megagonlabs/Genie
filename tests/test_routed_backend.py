@@ -158,14 +158,14 @@ class RecordingTraversalIndex:
         return list(self.descendants_by_root.get((block_id, include_self), ()))
 
     def contains(self, root_id: str, block_id: str) -> bool:
-        """Return configured containment for a root/candidate pair."""
+        """Return configured ownership for a root/candidate pair."""
 
         self.calls.append(("contains", root_id))
         return root_id == block_id or (root_id, block_id) in self.contains_pairs
 
 
-def test_routed_backend_routes_root_blocks_to_authoritative_stores() -> None:
-    """Independent root blocks can live in different authoritative stores."""
+def test_routed_backend_routes_root_blocks_to_owning_stores() -> None:
+    """Independent root blocks can live in different backend stores."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -229,7 +229,7 @@ def test_routed_backend_merges_global_search_and_routes_scoped_search() -> None:
     assert [result.block.id for result in scoped_results] == [note_a.id]
 
 
-def test_routed_backend_delegates_to_shared_search_index() -> None:
+def test_routed_backend_uses_shared_search_index() -> None:
     """A configured shared search index owns routed search execution."""
 
     search_index = RecordingSearchIndex()
@@ -251,8 +251,8 @@ def test_routed_backend_delegates_to_shared_search_index() -> None:
     assert search_index.queries[0].text == "ignored"
 
 
-def test_routed_backend_delegates_to_shared_traversal_index() -> None:
-    """Shared traversal indexes can define containment across routes."""
+def test_routed_backend_uses_shared_traversal_index() -> None:
+    """Shared traversal indexes can define parent/child ownership across routes."""
 
     traversal_index = RecordingTraversalIndex()
     backend = RoutedBackend(
@@ -422,7 +422,7 @@ def test_routed_backend_rejects_cross_route_links_without_shared_link_store() ->
 
 
 def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
-    """Route validation protects the one-authority-per-block invariant."""
+    """Route validation keeps each block owned by one backend route."""
 
     with pytest.raises(ValueError):
         RoutedBackend({"a": InMemoryBackend()}, default_route="missing")

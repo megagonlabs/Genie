@@ -15,8 +15,9 @@ class LinkRelations:
 
     Attributes:
         MOUNT: Symbolic mount relation. Mount links point from a source block
-            to another memory root. They do not imply parent ownership, subtree
-            membership, recursive delete ownership, or access inheritance.
+            to another memory root. They do not imply parent/child ownership,
+            subtree membership, recursive delete ownership, or access
+            inheritance.
     """
 
     MOUNT = "genie.mount"
@@ -36,8 +37,8 @@ def new_link_id() -> str:
 class MemoryLink:
     """A typed edge between two memory blocks.
 
-    Links represent non-hierarchical relationships. They do not imply parent
-    ownership, subtree membership, or access inheritance.
+    Links represent relationships that are separate from parent/child
+    ownership. They do not imply subtree membership or access inheritance.
 
     Attributes:
         source_id: Id of the block the link starts from.

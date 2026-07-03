@@ -1,4 +1,4 @@
-"""Use hooks for lifecycle behavior and codecs for custom and stdlib values.
+"""Use hooks around memory operations and codecs for custom and stdlib values.
 
 Run from the repository root:
 

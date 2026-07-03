@@ -1,7 +1,7 @@
 # Genie
 
 Genie is a utility library for developers building their own memory systems.
-It provides memory blocks, parent/child containment, scoped access, and
+It provides memory blocks, parent/child ownership, scoped access, and
 clear interfaces for storage, search, links, policies, hooks, and value
 encoding without tying the application to one agent platform, database, or
 memory use case.
@@ -9,7 +9,7 @@ memory use case.
 Genie has three primary design objectives:
 
 - Platform-agnostic: usable from LangChain, LlamaIndex, custom agent runtimes,
-  services, scripts, or any other orchestration layer.
+  services, scripts, or other tools.
 - Storage/database-agnostic: adaptable to Redis, Postgres, document stores,
   graph databases, vector databases, object stores, or hybrid systems.
 - Use-case-agnostic: suitable for conversation memory, NL2SQL memory,
@@ -17,10 +17,10 @@ Genie has three primary design objectives:
   specific memory models.
 
 Its core responsibility is deliberately narrow: define memory blocks, enforce
-parent/child containment for ownership-style memory structure, and provide
+parent/child ownership for scoped operations, and provide
 clear interfaces for scoped access, storage, search, links, hooks, policies,
 and value encoding. Applications keep ownership of their business logic, memory
-taxonomy, agent behavior, storage topology, retrieval strategy, and value
+taxonomy, agent behavior, storage layout, retrieval strategy, and value
 types.
 
 For a deeper architecture overview, see [docs/design.md](docs/design.md).
@@ -31,9 +31,9 @@ plug into:
 - `MemoryBlock`: the smallest independently addressable unit of memory.
 - `Memory`: the public API for creating, reading, updating, linking, and searching blocks.
 - `MemoryScope`: a scoped CRUD/search handle intended to be passed into agents or sub-agents.
-- `MemoryBackend`: the adapter contract for SQL, document, graph, vector, or composite backends.
+- `MemoryBackend`: the adapter interface for SQL, document, graph, vector, or composite backends.
 - `RoutedBackend`: an optional composition backend for routing blocks across multiple stores.
-- `MemoryHook`: lifecycle extension points around creates, reads, deletes, and search.
+- `MemoryHook`: hooks around creates, reads, deletes, and search.
 - `MemoryCodec`: value encoders/decoders for custom Python objects and storage-safe payloads.
 
 The following are out of scope for the core package: full agent frameworks,
@@ -51,7 +51,7 @@ root = memory.put(type="task", value={"name": "write proposal"})
 note = memory.put(
     parent=root,
     type="note",
-    value="User prefers database-agnostic memory primitives.",
+    value="User prefers database-agnostic memory building blocks.",
 )
 
 worker_memory = memory.scope(root=root, principal="agent:worker")
@@ -75,7 +75,7 @@ Focused runnable examples live in [examples](examples):
 - `links.py`: typed links, symbolic mounts, and linked-memory search.
 - `routed_backend.py`: route blocks across multiple backend stores.
 - `policies.py`: principal and role based access control.
-- `hooks_codecs.py`: lifecycle hooks with custom and stdlib value codecs.
+- `hooks_codecs.py`: hooks around memory operations with custom and stdlib value codecs.
 - `stdlib_codecs.py`: opt-in stdlib codecs with decoded and raw payload examples.
 - `basic_usage.py`: integrated workflow that combines the main features.
 
@@ -88,10 +88,11 @@ conda run -n "genie" python examples/basic_usage.py
 ## Core Model
 
 Genie treats memory as a permissioned, typed graph of blocks. Parent/child
-relationships define containment for scoped access and recursive operations.
-Each block has identity, an application-defined `type`, content-agnostic
-`value`, metadata, optional policy, and optional parent placement. Blocks can
-also be connected with typed links for non-containment relationships.
+relationships define ownership for scoped access and recursive operations.
+Each block has identity, an application-defined `type`, a `value` whose meaning
+belongs to the application, metadata, optional policy, and optional parent
+placement. Codecs convert values to and from storage-safe data. Blocks can also
+be connected with typed links for relationships that do not imply ownership.
 
 ```python
 block = memory.put(
@@ -172,7 +173,7 @@ Sub-scopes can narrow access, but cannot widen it. A sub-scope cannot add global
 search, add ancestor traversal, mount access, change principal identity, or move
 its root outside the parent scope's subtree.
 
-`memory.scope(root=...)` requires an explicit root. Unbounded delegated access is
+`memory.scope(root=...)` requires an explicit root. Unrestricted scoped access is
 available through the more deliberate `memory.unbounded_scope(...)` API for
 administrative, routing, migration, or other trusted workflows.
 
@@ -200,9 +201,9 @@ That keeps stores, graph traversal, and search/indexing separable internally
 while still allowing users to configure one top-level backend.
 
 For sharding, data residency, migrations, or customer-owned storage,
-`RoutedBackend` can coordinate multiple authoritative backend routes behind the
-same public `MemoryBackend` interface. Each block still has exactly one
-authoritative store route. By default, children stay on the same route as their
+`RoutedBackend` can coordinate multiple backend routes behind the same public
+`MemoryBackend` interface. Each block still has exactly one route that owns it.
+By default, children stay on the same route as their
 parent; cross-route references should be modeled with links or mounts rather
 than parent/child ownership.
 
@@ -220,9 +221,9 @@ code in a shared `LinkStore`, then resolved after the route is registered.
 
 ## Operational Safety
 
-Genie is designed so the core abstractions fail closed where possible:
+Genie is designed to deny access when the safe answer is unclear:
 
-- Scopes cannot widen delegated authority.
+- Scopes cannot increase access.
 - Bounded scopes require an existing root block.
 - Unbounded scopes must be created explicitly and require an explicit root for
   non-global search.
@@ -245,9 +246,9 @@ examples, and local prototypes; production deployments should provide a backend
 adapter with the desired persistence, transactions, observability, and backup
 behavior.
 
-`principal` is the acting identity used by policies. Application code should
-create scopes for the appropriate principal at trust boundaries and pass scopes,
-not the unrestricted `Memory` object, into agents.
+`principal` is the acting identity used by policies. Trusted application code
+should create scopes for the appropriate principal and pass scopes, not the
+unrestricted `Memory` object, into agents.
 
 ## Hooks
 

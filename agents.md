@@ -14,7 +14,7 @@ conda run -n "genie" python -m compileall -q genie tests examples
 ## Library Purpose
 
 Genie is a utility library for developers building their own memory systems
-around memory blocks, parent/child containment, and scoped access. Its core
+around memory blocks, parent/child ownership, and scoped access. Its core
 responsibility is to define how memory blocks work, how parent/child ownership
 works, and how scoped access works. It should stay independent of agent
 frameworks, databases, memory use cases, and stored value types.
@@ -38,7 +38,7 @@ the size, risk, and user-facing impact of the change:
   use-case-agnostic, and content-agnostic design; avoid coupling core APIs to
   one agent framework, storage engine, data model, retrieval strategy, memory
   workflow, or value type.
-- Keep docs and comments plain. Avoid fancy phrases when a direct phrase works.
+- Keep docs and comments plain. Avoid fancy phrases when a direct and clearer wording/phrase works.
 - Keep public APIs clear and typed, with Google-style docstrings and predictable
   exceptions where they affect users.
 - Prefer explicit, least-privilege behavior for scoped memory access and policy

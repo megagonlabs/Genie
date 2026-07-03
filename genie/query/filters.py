@@ -79,7 +79,7 @@ def _read_filter_value(block: MemoryBlock, key: str) -> Any:
 def _matches_operator(actual: Any, operators: dict[str, Any]) -> bool:
     """Evaluate operator filters against one value.
 
-    Incompatible comparisons fail closed by returning `False`.
+    Incompatible comparisons return `False` instead of matching by mistake.
     """
 
     try:
