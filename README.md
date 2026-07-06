@@ -1,44 +1,32 @@
 # Genie
 
-Genie is a utility library for developers building their own memory systems.
-It provides memory blocks, parent/child ownership, scoped access, and
-clear interfaces for storage, search, links, policies, hooks, and value
-encoding without tying the application to one agent platform, database, or
-memory use case.
+Genie is a utility library for developers building their own memory systems. It provides memory blocks, parent/child ownership, and scoped access without tying the application to one agent
+platform, database, or memory use case.
 
-Genie has three primary design objectives:
+Genie is not intended to be a full agent framework or an opinionated long-term memory product. It defines memory blocks, parent/child ownership rules, scoped access rules, and interfaces
+developers can implement or plug into for storage, search, access control, observability, and value encoding.
 
-- Platform-agnostic: usable from LangChain, LlamaIndex, custom agent runtimes,
-  services, scripts, or other tools.
-- Storage/database-agnostic: adaptable to Redis, Postgres, document stores,
-  graph databases, vector databases, object stores, or hybrid systems.
-- Use-case-agnostic: suitable for conversation memory, NL2SQL memory,
-  task/workflow memory, user preferences, domain knowledge, or application
-  specific memory models.
+For the full design document, see [docs/design.md](docs/design.md).
 
-Its core responsibility is deliberately narrow: define memory blocks, enforce
-parent/child ownership for scoped operations, and provide
-clear interfaces for scoped access, storage, search, links, hooks, policies,
-and value encoding. Applications keep ownership of their business logic, memory
-taxonomy, agent behavior, storage layout, retrieval strategy, and value
-types.
+## Design Objectives
 
-For a deeper architecture overview, see [docs/design.md](docs/design.md).
+- Stay platform-agnostic so applications can use Genie from LangChain, LlamaIndex, custom agent runtimes, services, scripts, or other tools.
+- Stay storage/database-agnostic so adapters can target Redis, Postgres, document stores, graph databases, vector databases, object stores, or hybrid systems.
+- Stay use-case-agnostic so applications can model conversation memory, NL2SQL memory, task/workflow memory, user preferences, domain knowledge, or other application-specific memory.
+- Treat parent/child ownership as the default structure for scoped access and recursive operations.
+- Keep business logic and agent behavior application-owned.
+- Give agents scoped memory access rather than unrestricted access to the full memory system.
+- Keep storage, traversal, search, policy, hooks, and value encoding separable.
+- Keep the core package small and avoid unnecessary dependencies.
 
-The core package defines the memory structure and the interfaces developers can
-plug into:
+## Out of Scope
 
-- `MemoryBlock`: the smallest independently addressable unit of memory.
-- `Memory`: the public API for creating, reading, updating, linking, and searching blocks.
-- `MemoryScope`: a scoped CRUD/search handle intended to be passed into agents or sub-agents.
-- `MemoryBackend`: the adapter interface for SQL, document, graph, vector, or composite backends.
-- `RoutedBackend`: an optional composition backend for routing blocks across multiple stores.
-- `MemoryHook`: hooks around creates, reads, deletes, and search.
-- `MemoryCodec`: value encoders/decoders for custom Python objects and storage-safe payloads.
-
-The following are out of scope for the core package: full agent frameworks,
-durable production storage, built-in embeddings, semantic search, planning,
-tool calling, application business logic, and a universal memory taxonomy.
+- Require or favor one specific database.
+- Include a built-in production storage engine in the core package.
+- Implement embeddings or semantic search by default.
+- Manage agent execution, planning, or tool calling.
+- Own application business logic or system design.
+- Define one universal memory structure.
 
 ## Quick Start
 
@@ -61,9 +49,20 @@ results = worker_memory.search("database-agnostic")
 assert results[0].block.id == note.id
 ```
 
-`Memory()` defaults to `InMemoryBackend()` when no backend is provided. The
-examples pass `backend=InMemoryBackend()` explicitly so first-time readers can
-see where storage comes from.
+`Memory()` defaults to `InMemoryBackend()` when no backend is provided. Examples pass `backend=InMemoryBackend()` explicitly so first-time readers can see where storage comes from.
+
+## Core Concepts
+
+- `Memory`: The main interface for a Genie memory system. It configures the backend, codecs, hooks, policy engine, and default principal.
+- `MemoryScope`: A restricted handle to part of a `Memory` object. Agents and sub-agents should usually receive a scope instead of the full `Memory` object.
+- `MemoryBlock`: The smallest memory unit Genie stores and retrieves. A block has an id, `type`, `value`, metadata, optional policy, and optional parent.
+- `MemoryLink`: A typed relationship between two blocks that does not make one block own the other.
+- `MemoryBackend`: The adapter interface for persistence, traversal, links, and search.
+- `MemoryHook`: User-provided code that runs before or after memory operations.
+- `MemoryCodec`: A converter between application values and storage-safe data.
+
+Genie models memory as a typed graph of blocks. Parent/child relationships show ownership for scoped access. Links and mounts connect blocks without making one own the other. The `type` field
+and the meaning of `value` are application-defined. Codecs convert values between application objects and storage-safe data.
 
 ## Examples
 
@@ -85,49 +84,36 @@ Run one directly from the repository root:
 conda run -n "genie" python examples/basic_usage.py
 ```
 
-## Core Model
+## Scoped Access
 
-Genie treats memory as a permissioned, typed graph of blocks. Parent/child
-relationships define ownership for scoped access and recursive operations.
-Each block has identity, an application-defined `type`, a `value` whose meaning
-belongs to the application, metadata, optional policy, and optional parent
-placement. Codecs convert values to and from storage-safe data. Blocks can also
-be connected with typed links for relationships that do not imply ownership.
+Sub-agents should receive a `MemoryScope`, not the whole memory object. A scope supports normal CRUD, traversal, link, mount, search, and sub-scope operations while constraining access to the
+scope root unless explicitly configured otherwise.
 
 ```python
-block = memory.put(
-    type="preference",
-    value={"style": "concise"},
-    metadata={"source": "conversation"},
-)
+subtask_memory = memory.scope(root=root)
+subtask_memory.search("style")
 
-updated = memory.patch(block, value={"tone": "warm"})
+context_memory = memory.scope(root=root, allow_up=True)
+context_memory.search("project", scope="ancestors")
 ```
 
-Mounts are symbolic links between memory trees. The mount itself is a
-`MemoryLink`; its source can be any memory block, and no special block `type` is
-required. It points to another block without making that block an owned child,
-so subtree search and recursive delete do not follow mounts by default.
+A sub-scope can narrow access but cannot increase it. A sub-scope cannot change principal identity, add ancestor traversal, add global search, add mount access, or move its root outside the
+parent scope's subtree unless the parent scope already allows that access.
 
-```python
-local_block = memory.put(type="project", value="local project")
-remote_root = memory.put(type="project", value="external project")
-mount = memory.add_mount(local_block, remote_root)
-mounts_under_local = memory.discover_mounts(local_block)
-mounted_root = memory.resolve_mount(mount)
-```
+`Memory.scope(root=...)` requires a concrete root. Unrestricted scoped handles are created with `Memory.unbounded_scope(...)` so administrative, routing, migration, or other trusted workflows
+are explicit at the call site.
 
-Use `discover_mounts(root)` when an agent needs to inspect the mount links
-available inside a subtree. Discovery returns mount links; resolving a selected
-mount is still explicit.
+Mount operations on a `MemoryScope` are available only when the scope is created with `allow_mounts=True`.
 
-## Query Filters
+## Search and Filters
 
-Use exact values for simple equality and operator dictionaries for comparisons:
+Search accepts text, scope, block type filters, metadata filters, and result limits:
 
 ```python
 results = memory.search(
     "concise",
+    root=root,
+    scope="subtree",
     types=["requirement"],
     filters={
         "metadata.priority": {">=": 3},
@@ -136,49 +122,18 @@ results = memory.search(
 )
 ```
 
-Genie accepts human-friendly operators in application code:
+Application-facing filters can use human-friendly operators. Genie normalizes them before they reach backend adapters.
 
-- `==` or `=` for equality
-- `!=` for inequality
-- `>`, `>=`, `<`, `<=` for comparisons
-- `in` for membership
-
-Internally these are normalized to canonical adapter-facing operators:
-
-```python
-{
-    "metadata.priority": {"$gte": 3},
-    "owner": {"$in": ["team", "agent:planner"]},
-}
-```
-
-Adapters can rely on canonical names such as `$eq`, `$ne`, `$gt`, `$gte`,
-`$lt`, `$lte`, and `$in`.
-
-## Scoped Agent Memory
-
-Sub-agents should receive a `MemoryScope`, not the whole memory object. A scope
-supports normal CRUD/search operations while defaulting to subtree-only access,
-with optional ancestor or global search.
-
-```python
-subtask_memory = memory.scope(root=block)
-subtask_memory.search("style")          # subtree search
-
-context_memory = memory.scope(root=block, allow_up=True)
-context_memory.search("project", scope="ancestors")
-```
-
-Sub-scopes can narrow access, but cannot widen it. A sub-scope cannot add global
-search, add ancestor traversal, mount access, change principal identity, or move
-its root outside the parent scope's subtree.
-
-`memory.scope(root=...)` requires an explicit root. Unrestricted scoped access is
-available through the more deliberate `memory.unbounded_scope(...)` API for
-administrative, routing, migration, or other trusted workflows.
-
-Mount operations on a `MemoryScope` are available only when the scope is created
-with `allow_mounts=True`.
+| Friendly | Canonical |
+| :-- | :-- |
+| `==` | `$eq` |
+| `=` | `$eq` |
+| `!=` | `$ne` |
+| `>` | `$gt` |
+| `>=` | `$gte` |
+| `<` | `$lt` |
+| `<=` | `$lte` |
+| `in` | `$in` |
 
 ## Backends
 
@@ -188,71 +143,54 @@ Users configure one top-level backend object:
 memory = Memory(backend=InMemoryBackend())
 ```
 
-The included `InMemoryBackend` is useful for tests, examples, and local
-prototypes. It is not durable storage. Database adapters should implement the
-backend capabilities in `genie.backend`:
+The included `InMemoryBackend` is the reference backend for tests, examples, and local prototypes. Production deployments should provide a backend adapter with the desired persistence,
+transactions, observability, and backup behavior.
+
+Backend adapters implement the smaller interfaces in `genie.backend`:
 
 - `BlockStore`
 - `TraversalIndex`
 - `SearchIndex`
 - `LinkStore`
 
-That keeps stores, graph traversal, and search/indexing separable internally
-while still allowing users to configure one top-level backend.
+That keeps stores, traversal, search, and links separable internally while still allowing users to configure one top-level backend.
 
-For sharding, data residency, migrations, or customer-owned storage,
-`RoutedBackend` can coordinate multiple backend routes behind the same public
-`MemoryBackend` interface. Each block still has exactly one route that owns it.
-By default, children stay on the same route as their
-parent; cross-route references should be modeled with links or mounts rather
-than parent/child ownership.
+For sharding, data residency, migrations, or customer-owned storage, `RoutedBackend` can coordinate multiple backend routes behind the same public `MemoryBackend` interface. Each block still
+has exactly one route that owns it. By default, children stay on the same route as their parent; cross-route references should be modeled with links or mounts rather than parent/child
+ownership.
 
-Routes can be added at runtime when an application discovers a mount or tenant
-descriptor for a backend that was not opened at startup:
+Routes can be added at runtime when an application discovers a mount or tenant descriptor for a backend that was not opened at startup:
 
 ```python
 backend.register_route("eu-prod", eu_backend)
 mounted_root = memory.resolve_mount(mount)
 ```
 
-The public `memory.add_mount()` call validates both endpoints. Pending mounts
-to a route that has not been opened yet are represented by adapter or import
-code in a shared `LinkStore`, then resolved after the route is registered.
+The public `memory.add_mount()` call validates both endpoints. Pending mounts to a route that has not been opened yet are represented by adapter or import code in a shared `LinkStore`, then
+resolved after the route is registered.
 
-## Operational Safety
+## Policies
 
-Genie is designed to deny access when the safe answer is unclear:
+`Principal` is the acting identity for an operation. `MemoryPolicy` controls read, write, search, traversal, and application-defined custom operations.
 
-- Scopes cannot increase access.
-- Bounded scopes require an existing root block.
-- Unbounded scopes must be created explicitly and require an explicit root for
-  non-global search.
-- Returned JSON values and metadata are copied so callers cannot mutate stored state accidentally.
-- Recursive delete requires write access to every block in the deleted subtree.
-- Recursive delete does not follow symbolic mounts.
-- Recursive delete dispatches delete hooks for every removed block.
-- `before_put` hooks cannot change parent placement after authorization.
-- Search hooks are re-authorized and results are re-filtered by policy and scope.
-- In-memory parent updates reject cycles.
-- Link direction values are validated.
-- Backend link stores expose cleanup for links connected to deleted blocks.
-- Link listing hides relationships whose endpoints are not readable by the principal.
-- Scoped link listing and linked-memory search do not expose blocks outside the scope.
-- JSON encoding rejects non-finite floats such as `NaN` and `Infinity`.
-- Unknown codecs and incompatible query filters raise clear errors or produce no matches.
+```python
+from genie import AccessRule, Memory, MemoryPolicy
 
-The included `InMemoryBackend` is not durable storage. Use it for tests,
-examples, and local prototypes; production deployments should provide a backend
-adapter with the desired persistence, transactions, observability, and backup
-behavior.
+memory = Memory()
+root = memory.put(type="project", value="proposal")
+private_note = memory.put(
+    parent=root,
+    type="note",
+    value="compliance-only detail",
+    policy=MemoryPolicy(read=AccessRule.only(roles={"compliance"})),
+)
+```
 
-`principal` is the acting identity used by policies. Trusted application code
-should create scopes for the appropriate principal and pass scopes, not the
-unrestricted `Memory` object, into agents.
+If no policy is attached to a block, the block is public. Scope limits are enforced in addition to block policies.
 
 ## Hooks
 
-Hooks customize behavior around memory operations.
+Hooks customize behavior before and after memory operations. They are useful for audit logs, metrics, tracing, redaction, or external indexing.
 
 ```python
 from genie import InMemoryBackend, Memory, MemoryHook
@@ -266,11 +204,11 @@ class AuditHook(MemoryHook):
 memory = Memory(backend=InMemoryBackend(), hooks=[AuditHook()])
 ```
 
+Hooks run inside the public operation flow. Genie keeps structure and access checks around hook execution, so hooks cannot bypass scope or policy checks.
+
 ## Codecs
 
-Codecs translate user-level Python objects into storage-safe values and back.
-`Memory()` registers only `JsonCodec` by default. Additional standard-library
-codecs are opt-in:
+Codecs translate user-level Python objects into storage-safe values and back. `Memory()` registers only `JsonCodec` by default. Additional standard-library codecs are opt-in:
 
 ```python
 from decimal import Decimal
@@ -287,54 +225,32 @@ memory = Memory(
 memory.put(type="amount", value=Decimal("0.1000000000000000001"))
 ```
 
-The stdlib module includes `BytesCodec`, `DatetimeCodec`, `DecimalCodec`,
-`UUIDCodec`, `DataclassCodec`, and `EnumCodec`. Register dataclass and enum
-types explicitly so decoding only reconstructs trusted application types.
+The stdlib module includes `BytesCodec`, `DatetimeCodec`, `DecimalCodec`, `UUIDCodec`, `DataclassCodec`, and `EnumCodec`. Register dataclass and enum types explicitly so decoding only
+reconstructs trusted application types.
 
-```python
-from dataclasses import dataclass
-from typing import Any
+## Operational Safety
 
-from genie import (
-    CodecRegistry,
-    EncodedValue,
-    InMemoryBackend,
-    JsonCodec,
-    Memory,
-    MemoryCodec,
-)
+Genie uses cautious behavior:
 
-
-@dataclass(frozen=True)
-class Preference:
-    topic: str
-    value: str
-
-
-class PreferenceCodec(MemoryCodec):
-    content_type = "application/vnd.genie.preference+json"
-
-    def can_encode(self, value: Any) -> bool:
-        return isinstance(value, Preference)
-
-    def encode(self, value: Any) -> EncodedValue:
-        return EncodedValue(self.content_type, {"topic": value.topic, "value": value.value})
-
-    def decode(self, value: EncodedValue) -> Any:
-        return Preference(**value.data)
-
-
-memory = Memory(
-    backend=InMemoryBackend(),
-    codecs=CodecRegistry([JsonCodec(), PreferenceCodec()]),
-)
-memory.put(type="preference", value=Preference("style", "concise"))
-```
+- scopes cannot increase access
+- bounded scopes require an existing root block
+- unbounded scopes must be created explicitly and require an explicit root for non-global search
+- recursive delete requires write access to every affected block
+- recursive delete does not follow symbolic mounts
+- `before_put` hooks cannot change parent placement after authorization
+- search hooks are re-authorized and results are re-filtered by policy and scope
+- returned JSON values and metadata are copied
+- in-memory reparenting rejects cycles
+- link listing hides relationships whose endpoints are not readable by the principal
+- mount discovery does not follow mounted target trees
+- JSON encoding rejects `NaN` and `Infinity`
+- incompatible filter comparisons produce no matches
 
 ## Development
 
 Run Python through the project Conda environment:
 
 ```bash
+conda run -n "genie" python -m compileall -q genie tests examples
 conda run -n "genie" python -m pytest
 ```

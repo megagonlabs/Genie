@@ -1,39 +1,25 @@
 # Genie Design
 
-Genie is a utility library for developers building their own memory systems. It
-provides memory blocks, parent/child ownership, and scoped access without tying
-the application to one agent platform, database, or memory use case.
+Genie is a utility library for developers building their own memory systems. It provides memory blocks, parent/child ownership, and scoped access without tying the application to one agent
+platform, database, or memory use case.
 
-Genie is not intended to be a full agent framework or an opinionated long-term
-memory product. It defines memory blocks, parent/child ownership rules, scoped
-access rules, and interfaces developers can implement or plug into for storage,
-search, access control, observability, and value encoding.
+Genie is not intended to be a full agent framework or an opinionated long-term memory product. It defines memory blocks, parent/child ownership rules, scoped access rules, and interfaces
+developers can implement or plug into for storage, search, access control, observability, and value encoding.
 
-Genie keeps application behavior outside the core package. Product-specific
-business logic, memory structure, agent workflows, retrieval strategies,
-storage layout, and value types remain application-owned. Genie supplies memory
-building blocks and interfaces those systems can use.
+Genie keeps application behavior outside the core package. Product-specific business logic, memory structure, agent workflows, retrieval strategies, storage layout, and value types remain
+application-owned. Genie supplies memory building blocks and interfaces those systems can use.
 
 ## Design Objectives
 
-- Stay platform-agnostic so applications can use Genie from LangChain,
-  LlamaIndex, custom agent runtimes, services, scripts, or other tools.
-- Stay storage/database-agnostic so adapters can target Redis, Postgres,
-  document stores, graph databases, vector databases, object stores, or hybrid
-  systems.
-- Stay use-case-agnostic so applications can model conversation memory, NL2SQL
-  memory, task/workflow memory, user preferences, domain knowledge, or other
-  application-specific memory.
-- Treat parent/child ownership as the default structure for scoped access and
-  recursive operations.
+- Stay platform-agnostic so applications can use Genie from LangChain, LlamaIndex, custom agent runtimes, services, scripts, or other tools.
+- Stay storage/database-agnostic so adapters can target Redis, Postgres, document stores, graph databases, vector databases, object stores, or hybrid systems.
+- Stay use-case-agnostic so applications can model conversation memory, NL2SQL memory, task/workflow memory, user preferences, domain knowledge, or other application-specific memory.
+- Treat parent/child ownership as the default structure for scoped access and recursive operations.
 - Keep business logic and agent behavior application-owned.
-- Give agents scoped memory access rather than unrestricted access to the full
-  memory system.
+- Give agents scoped memory access rather than unrestricted access to the full memory system.
 - Keep storage, traversal, search, policy, hooks, and value encoding separable.
-- Provide hooks so applications can log, audit, measure, or customize memory
-  operations.
-- Allow developers to add adapters for SQL, document, graph, vector, or hybrid
-  storage systems.
+- Provide hooks so applications can log, audit, measure, or customize memory operations.
+- Allow developers to add adapters for SQL, document, graph, vector, or hybrid storage systems.
 - Deny operations when access cannot be clearly verified.
 - Keep the core package small and avoid unnecessary dependencies.
 
@@ -48,34 +34,21 @@ building blocks and interfaces those systems can use.
 
 ## Terminology
 
-- `Memory`: The main interface for a Genie memory system. It configures the
-  backend, codecs, hooks, policy engine, and default principal.
-- `MemoryScope`: A restricted handle to part of a `Memory` object. Agents and
-  sub-agents should usually receive a scope instead of the full `Memory`
-  object.
-- `Codec`: A converter between application values and storage-safe data. For
-  example, a codec can turn a dataclass into JSON-compatible data before
-  storage and rebuild the dataclass when reading.
-- `Principal`: The acting identity for an operation, such as an agent, user, or
-  service. Policies use principals to decide access.
-- `Policy`: Access rules attached to a block. Policies can control read, write,
-  search, traversal, and application-defined custom operations.
-- `Mount`: A symbolic link from one block to another memory tree. Mounts can
-  point across backend routes without making the target tree part of the source
-  subtree.
-- `Hook`: User-provided code that runs before or after memory operations, such
-  as create, read, search, or delete. Hooks are useful for audit logs, metrics,
-  tracing, redaction, or external indexing.
-- `RoutedBackend`: A backend that routes different blocks to different backend
-  adapters while still presenting one `MemoryBackend` to the public API.
+- `Memory`: The main interface for a Genie memory system. It configures the backend, codecs, hooks, policy engine, and default principal.
+- `MemoryScope`: A restricted handle to part of a `Memory` object. Agents and sub-agents should usually receive a scope instead of the full `Memory` object.
+- `Codec`: A converter between application values and storage-safe data. For example, a codec can turn a dataclass into JSON-compatible data before storage and rebuild the dataclass when
+  reading.
+- `Principal`: The acting identity for an operation, such as an agent, user, or service. Policies use principals to decide access.
+- `Policy`: Access rules attached to a block. Policies can control read, write, search, traversal, and application-defined custom operations.
+- `Mount`: A symbolic link from one block to another memory tree. Mounts can point across backend routes without making the target tree part of the source subtree.
+- `Hook`: User-provided code that runs before or after memory operations, such as create, read, search, or delete. Hooks are useful for audit logs, metrics, tracing, redaction, or external
+  indexing.
+- `RoutedBackend`: A backend that routes different blocks to different backend adapters while still presenting one `MemoryBackend` to the public API.
 
 ## Mental Model
 
-Genie models memory as a typed graph of blocks. Parent/child relationships show
-ownership for scoped access. Links and mounts connect blocks without making one
-own the other. The `type` field and the meaning of `value` are
-application-defined. Codecs convert values between application objects and
-storage-safe data.
+Genie models memory as a typed graph of blocks. Parent/child relationships show ownership for scoped access. Links and mounts connect blocks without making one own the other. The `type` field
+and the meaning of `value` are application-defined. Codecs convert values between application objects and storage-safe data.
 
 ```text
 Memory
@@ -95,8 +68,7 @@ MemoryBackend
   adapter interface for persistence, traversal, links, and search
 ```
 
-Recommended integration pattern: keep `Memory` in trusted application code and
-pass `MemoryScope` into agents or sub-agents.
+Recommended integration pattern: keep `Memory` in trusted application code and pass `MemoryScope` into agents or sub-agents.
 
 ## Package Layout
 
@@ -149,9 +121,7 @@ genie/
 
 ### MemoryBlock
 
-`MemoryBlock` is the smallest independently addressable unit of memory.
-Applications decide what each block means and how block types map to their own
-domain model.
+`MemoryBlock` is the smallest independently addressable unit of memory. Applications decide what each block means and how block types map to their own domain model.
 
 ```python
 MemoryBlock(
@@ -167,15 +137,12 @@ MemoryBlock(
 )
 ```
 
-Use a separate block when a piece of memory needs its own id, source
-information, access control, search behavior, version history, or
-relationships.
+Use a separate block when a piece of memory needs its own id, source information, access control, search behavior, version history, or relationships.
 
 ### Values
 
-The core library does not define what a block's `value` means. Applications
-choose the value shape, and codecs convert that value to and from storage-safe
-data. The default `JsonCodec` supports JSON-compatible values:
+The core library does not define what a block's `value` means. Applications choose the value shape, and codecs convert that value to and from storage-safe data. The default `JsonCodec` supports
+JSON-compatible values:
 
 - `None`
 - `str`
@@ -202,14 +169,11 @@ project
     note
 ```
 
-Parent/child ownership is used for scoped access, subtree search, ancestor
-traversal, and recursive operations. The in-memory backend rejects parent
-cycles.
+Parent/child ownership is used for scoped access, subtree search, ancestor traversal, and recursive operations. The in-memory backend rejects parent cycles.
 
 ### Links and Mounts
 
-`MemoryLink` represents typed relationships that are separate from
-parent/child ownership.
+`MemoryLink` represents typed relationships that are separate from parent/child ownership.
 
 ```python
 memory.add_link(requirement, outline, "informs")
@@ -217,9 +181,7 @@ memory.add_link(requirement, outline, "informs")
 
 Use links for relationships that do not imply ownership or subtree membership.
 
-Mounts are a reserved link pattern for symbolic cross-tree references. The
-mount itself is a `MemoryLink`; its source can be any memory block, and no
-special block `type` is required.
+Mounts are a reserved link pattern for symbolic cross-tree references. The mount itself is a `MemoryLink`; its source can be any memory block, and no special block `type` is required.
 
 ```python
 mount = memory.add_mount(local_block, remote_root)
@@ -227,14 +189,11 @@ mounts = memory.discover_mounts(local_block)
 remote_root = memory.resolve_mount(mount)
 ```
 
-A mount points from a local source block to another memory root. Subtree
-traversal, subtree search, and recursive delete do not follow mounts by
-default. This matches filesystem symbolic link behavior and keeps ownership
-separate from reference.
+A mount points from a local source block to another memory root. Subtree traversal, subtree search, and recursive delete do not follow mounts by default. This matches filesystem symbolic link
+behavior and keeps ownership separate from reference.
 
-`discover_mounts(root)` scans a normal parent/child subtree and returns mount
-links whose source is inside that subtree. Discovery does not resolve mount
-targets and does not traverse into mounted target trees.
+`discover_mounts(root)` scans a normal parent/child subtree and returns mount links whose source is inside that subtree. Discovery does not resolve mount targets and does not traverse into
+mounted target trees.
 
 ## Public API
 
@@ -277,20 +236,16 @@ project_scope = memory.scope(root=project, principal="agent:planner")
 task_scope = project_scope.scope(root=task)
 ```
 
-It supports normal CRUD, traversal, link, mount, search, and sub-scope
-operations. The difference is that every operation is constrained to the scope
-root unless explicitly configured otherwise.
+It supports normal CRUD, traversal, link, mount, search, and sub-scope operations. The difference is that every operation is constrained to the scope root unless explicitly configured
+otherwise.
 
-`MemoryScope` does not expose `unbounded_scope()` or the raw `contains()`
-helper. Scope membership is enforced internally by scoped operations.
+`MemoryScope` does not expose `unbounded_scope()` or the raw `contains()` helper. Scope membership is enforced internally by scoped operations.
 
-`Memory.scope(root=...)` requires a concrete root. Unrestricted scoped handles
-are created with `Memory.unbounded_scope(...)` so administrative, routing,
-migration, or other trusted workflows are explicit at the call site.
+`Memory.scope(root=...)` requires a concrete root. Unrestricted scoped handles are created with `Memory.unbounded_scope(...)` so administrative, routing, migration, or other trusted workflows
+are explicit at the call site.
 
-Mount operations on a `MemoryScope` are available only when the scope is created
-with `allow_mounts=True`. Resolving a mount remains explicit and does not widen
-ordinary subtree search, traversal, or delete behavior.
+Mount operations on a `MemoryScope` are available only when the scope is created with `allow_mounts=True`. Resolving a mount remains explicit and does not widen ordinary subtree search,
+traversal, or delete behavior.
 
 ## Scoped Access
 
@@ -382,8 +337,7 @@ Adapters receive canonical operator names.
 
 ## Backend Architecture
 
-`MemoryBackend` is the top-level adapter interface. Users configure one
-backend:
+`MemoryBackend` is the top-level adapter interface. Users configure one backend:
 
 ```python
 memory = Memory(backend=PostgresBackend(...))
@@ -413,17 +367,13 @@ LinkStore
   delete_links_for_block
 ```
 
-The backend model separates storage and indexing conceptually, even when one
-concrete backend implements both.
+The backend model separates storage and indexing conceptually, even when one concrete backend implements both.
 
 ### InMemoryBackend
 
-`InMemoryBackend` is the included reference backend for tests, examples, and
-local prototypes.
+`InMemoryBackend` is the included reference backend for tests, examples, and local prototypes.
 
-Production deployments should provide a backend
-adapter with the desired persistence, transactions, observability, and backup
-behavior.
+Production deployments should provide a backend adapter with the desired persistence, transactions, observability, and backup behavior.
 
 ### Store vs Index
 
@@ -450,8 +400,7 @@ Which linked blocks are returned?
 Which blocks match this metadata filter efficiently?
 ```
 
-These responsibilities have different correctness, rebuild, and availability
-requirements.
+These responsibilities have different correctness, rebuild, and availability requirements.
 
 For example:
 
@@ -483,13 +432,10 @@ The separation defines ownership and recovery behavior:
 - search failures do not necessarily imply data loss
 - adapter authors can use the appropriate database interface for each operation
 - single-database deployments can still implement every interface in one place
-- advanced deployments can compose multiple systems without changing the public
-  API
+- advanced deployments can compose multiple systems without changing the public API
 
-Operationally, this separates saved memory state from derived search or
-traversal structures. If an index is stale, corrupted, or temporarily
-unavailable, the system still has a separate source of truth for memory. The
-store owns correctness; indexes optimize lookup.
+Operationally, this separates saved memory state from derived search or traversal structures. If an index is stale, corrupted, or temporarily unavailable, the system still has a separate source
+of truth for memory. The store owns correctness; indexes optimize lookup.
 
 ### One Public Backend, Multiple Internal Interfaces
 
@@ -499,9 +445,7 @@ The core API does not require users to choose separate store/index objects:
 memory = Memory(backend=PostgresBackend(...))
 ```
 
-This keeps backend storage layout inside adapter configuration. A developer
-using Genie does not need to understand the internal storage layout just to pass
-memory into an agent.
+This keeps backend storage layout inside adapter configuration. A developer using Genie does not need to understand the internal storage layout just to pass memory into an agent.
 
 Inside the backend, the implementation can still be split:
 
@@ -539,13 +483,11 @@ Adapter implementation layer
   stack requires
 ```
 
-As a result, Genie remains database-agnostic while backend composition stays out
-of the public API.
+As a result, Genie remains database-agnostic while backend composition stays out of the public API.
 
 ### Routed Backends
 
-`RoutedBackend` is the built-in composition helper for using multiple stores
-behind one public `MemoryBackend`.
+`RoutedBackend` is the built-in composition helper for using multiple stores behind one public `MemoryBackend`.
 
 ```python
 backend = RoutedBackend(
@@ -560,18 +502,14 @@ backend = RoutedBackend(
 memory = Memory(backend=backend)
 ```
 
-The public API still sees one backend. Internally, each block has exactly one
-route that owns it. The route is tracked by the backend catalog and resolved
-from stable routing rules.
+The public API still sees one backend. Internally, each block has exactly one route that owns it. The route is tracked by the backend catalog and resolved from stable routing rules.
 
 ```text
 one block -> one owning store route
 one Memory -> one public backend interface
 ```
 
-`RoutedBackend` does not store database connections or storage handles on
-`MemoryBlock`. Blocks remain portable data objects. Routing stays in the
-backend layer.
+`RoutedBackend` does not store database connections or storage handles on `MemoryBlock`. Blocks remain portable data objects. Routing stays in the backend layer.
 
 Routes can also be registered after initialization:
 
@@ -586,18 +524,12 @@ if backend.route_for_block(mounts[0].target_id) is None:
 remote_root = memory.resolve_mount(mounts[0])
 ```
 
-Runtime route registration supports mounts discovered during application
-execution. The mount stores route metadata. Application code uses that metadata
-to construct a backend adapter and registers it with
-`register_route(route, backend)`. Existing `Memory` and `MemoryScope` handles
-that share the routed backend can use the new route immediately.
+Runtime route registration supports mounts discovered during application execution. The mount stores route metadata. Application code uses that metadata to construct a backend adapter and
+registers it with `register_route(route, backend)`. Existing `Memory` and `MemoryScope` handles that share the routed backend can use the new route immediately.
 
-By default, `RoutedBackend(enforce_tree_route=True)` keeps child blocks in the
-same route as their parent. This preserves subtree traversal, recursive delete,
-and scoped access behavior. Independent root blocks can route to different
-stores. Advanced adapters may disable this setting, but then traversal, scoped
-access, and delete behavior must be handled by shared indexes or equivalent
-backend logic.
+By default, `RoutedBackend(enforce_tree_route=True)` keeps child blocks in the same route as their parent. This preserves subtree traversal, recursive delete, and scoped access behavior.
+Independent root blocks can route to different stores. Advanced adapters may disable this setting, but then traversal, scoped access, and delete behavior must be handled by shared indexes or
+equivalent backend logic.
 
 Routed backends can use one or more indexes:
 
@@ -615,41 +547,27 @@ Hybrid indexes
   useful for tenant, region, or workload isolation
 ```
 
-The routed model can therefore use multiple stores and multiple indexes. Stores
-own the saved block state; indexes remain derived search or traversal
-structures. A routed backend may have several store routes, but each block has
-only one route that owns it.
+The routed model can therefore use multiple stores and multiple indexes. Stores own the saved block state; indexes remain derived search or traversal structures. A routed backend may have
+several store routes, but each block has only one route that owns it.
 
-Cross-route links require a shared `LinkStore`, such as `InMemoryLinkStore` for
-tests and prototypes. Without a shared link store, route-local link stores can
-only represent relationships whose endpoints live in the same route.
+Cross-route links require a shared `LinkStore`, such as `InMemoryLinkStore` for tests and prototypes. Without a shared link store, route-local link stores can only represent relationships whose
+endpoints live in the same route.
 
-Cross-route mounts use the same shared link interface with the reserved
-`LinkRelations.MOUNT` relation (`genie.mount`). They point from one routed tree
-into another routed tree without changing ownership. The default
-`RoutedBackend` behavior keeps parent/child ownership inside the parent route.
+Cross-route mounts use the same shared link interface with the reserved `LinkRelations.MOUNT` relation (`genie.mount`). They point from one routed tree into another routed tree without changing
+ownership. The default `RoutedBackend` behavior keeps parent/child ownership inside the parent route.
 
-`discover_mounts(root)` can find cross-route mount links whose source is inside
-the scanned tree when the routed backend has a shared link store. If a mount
-target route has not been registered yet, mount discovery can still return the
-pending mount link; `resolve_mount(mount)` returns `None` until application code
-registers the target route. If a target block is known but not readable,
-discovery hides that mount.
+`discover_mounts(root)` can find cross-route mount links whose source is inside the scanned tree when the routed backend has a shared link store. If a mount target route has not been registered
+yet, mount discovery can still return the pending mount link; `resolve_mount(mount)` returns `None` until application code registers the target route. If a target block is known but not
+readable, discovery hides that mount.
 
-Following mounts during traversal/search and deleting mounted target trees are
-not implemented in the current library.
+Following mounts during traversal/search and deleting mounted target trees are not implemented in the current library.
 
-The public `Memory.add_mount()` and `MemoryScope.add_mount()` methods validate
-both endpoints through the active backend. Pending mounts to not-yet-registered
-routes are therefore represented by adapter, migration, or import code that can
-write a symbolic `MemoryLink` to a shared `LinkStore` before the target route is
-opened. After `register_route()` adds the route, the same mount can resolve
-through the public memory API.
+The public `Memory.add_mount()` and `MemoryScope.add_mount()` methods validate both endpoints through the active backend. Pending mounts to not-yet-registered routes are therefore represented
+by adapter, migration, or import code that can write a symbolic `MemoryLink` to a shared `LinkStore` before the target route is opened. After `register_route()` adds the route, the same mount
+can resolve through the public memory API.
 
-`register_route()` updates the set of backend routes. It does not backfill
-external shared search or traversal indexes. Applications that provide shared
-indexes are responsible for indexing newly registered route contents according
-to their own operational model.
+`register_route()` updates the set of backend routes. It does not backfill external shared search or traversal indexes. Applications that provide shared indexes are responsible for indexing
+newly registered route contents according to their own operational model.
 
 ## Policy Model
 
@@ -677,8 +595,7 @@ MemoryPolicy(
 )
 ```
 
-The `PolicyEngine` checks whether a principal can perform an operation on a
-block.
+The `PolicyEngine` checks whether a principal can perform an operation on a block.
 
 Applications can register operation defaults on the engine:
 
@@ -688,9 +605,7 @@ policy_engine = PolicyEngine(
 )
 ```
 
-Custom operations are evaluated explicitly by application code with
-`policy_engine.require("export", block, principal)` or
-`policy_engine.allows("export", block, principal)`.
+Custom operations are evaluated explicitly by application code with `policy_engine.require("export", block, principal)` or `policy_engine.allows("export", block, principal)`.
 
 Important defaults:
 
@@ -699,25 +614,20 @@ Important defaults:
 - Recursive delete requires write access to every block that would be deleted.
 - Unknown custom policy operations raise a configuration error.
 
-Root write access does not automatically imply write access to descendants.
-Policy inheritance is not implemented in the current library.
+Root write access does not automatically imply write access to descendants. Policy inheritance is not implemented in the current library.
 
 ## Hooks
 
-Hooks let users customize behavior before and after operations without changing
-the core memory model. They are the main way to add application-level
-observability, such as audit logs, metrics, tracing events, and operation logs
-around memory creates, reads, deletes, and searches.
+Hooks let users customize behavior before and after operations without changing the core memory model. They are the main way to add application-level observability, such as audit logs, metrics,
+tracing events, and operation logs around memory creates, reads, deletes, and searches.
 
-Hooks run inside the public operation flow. Genie keeps structure and access
-checks around hook execution:
+Hooks run inside the public operation flow. Genie keeps structure and access checks around hook execution:
 
 - `before_put` hooks cannot change parent placement after it has been checked.
 - Search queries are checked again after `before_search` hooks run.
 - Search results are checked again after `after_search` hooks run.
 
-This lets hooks customize operations without letting them bypass scope or
-policy checks.
+This lets hooks customize operations without letting them bypass scope or policy checks.
 
 Available hook points:
 
@@ -762,14 +672,11 @@ class PreferenceCodec:
         return Preference(**value.data)
 ```
 
-`CodecRegistry` chooses a codec by explicit `content_type` or by asking each
-codec whether it can encode the value.
+`CodecRegistry` chooses a codec by explicit `content_type` or by asking each codec whether it can encode the value.
 
-The default `JsonCodec` copies encoded and decoded values so callers cannot
-mutate stored state through returned objects.
+The default `JsonCodec` copies encoded and decoded values so callers cannot mutate stored state through returned objects.
 
-`Memory()` registers only `JsonCodec` by default. Additional dependency-free
-codecs live in `genie.codecs.stdlib` and are opt-in:
+`Memory()` registers only `JsonCodec` by default. Additional dependency-free codecs live in `genie.codecs.stdlib` and are opt-in:
 
 - `BytesCodec`
 - `DatetimeCodec`
@@ -778,8 +685,7 @@ codecs live in `genie.codecs.stdlib` and are opt-in:
 - `DataclassCodec`
 - `EnumCodec`
 
-Stdlib codecs encode values into portable payload shapes, usually
-JSON-compatible data.
+Stdlib codecs encode values into portable payload shapes, usually JSON-compatible data.
 
 ## Operational Safety
 
@@ -787,29 +693,24 @@ The current implementation uses cautious behavior:
 
 - scopes cannot increase access
 - bounded scopes require an existing root block
-- unbounded scopes must be created explicitly and require an explicit root for
-  non-global search
-- full `Memory.get` returns `None` for missing blocks; rooted scopes treat
-  missing or out-of-scope ids as denied before fetching
+- unbounded scopes must be created explicitly and require an explicit root for non-global search
+- full `Memory.get` returns `None` for missing blocks; rooted scopes treat missing or out-of-scope ids as denied before fetching
 - recursive delete requires write access to every affected block
 - recursive delete does not follow symbolic mounts
 - recursive delete dispatches delete hooks for every removed block
 - `before_put` hooks cannot change parent placement after authorization
-- search hooks are re-authorized and results are re-filtered by policy and
-  scope
+- search hooks are re-authorized and results are re-filtered by policy and scope
 - returned JSON values and metadata are copied
 - in-memory reparenting rejects cycles
 - link directions are validated
 - backend link stores expose cleanup for links connected to deleted blocks
-- link listing hides relationships whose endpoints are not readable by the
-  principal
+- link listing hides relationships whose endpoints are not readable by the principal
 - mount discovery does not follow mounted target trees
 - scoped link listing and linked-memory search remain inside the scope root
 - JSON encoding rejects `NaN` and `Infinity`
 - incompatible filter comparisons produce no matches
 
-These rules define the basic safety behavior for developers building adapters
-for more complex storage systems.
+These rules define the basic safety behavior for developers building adapters for more complex storage systems.
 
 ## Future TODOs
 
@@ -830,23 +731,17 @@ for more complex storage systems.
 
 ### How does policy inheritance work?
 
-Root write access does not automatically grant write access to descendant
-blocks. Genie evaluates permissions per block, so access to a parent block does
-not imply access to its children.
+Root write access does not automatically grant write access to descendant blocks. Genie evaluates permissions per block, so access to a parent block does not imply access to its children.
 
 ### Where do I draw the line between Store and Index?
 
-A store is the source of truth. Writes and updates should target the store so
-stored memory stays consistent. An index is derived from stored memory and is
-optimized for retrieval or traversal. Adapter implementations should treat store
-methods as the source of truth and index methods as rebuildable from stored
-state.
+A store is the source of truth. Writes and updates should target the store so stored memory stays consistent. An index is derived from stored memory and is optimized for retrieval or traversal.
+Adapter implementations should treat store methods as the source of truth and index methods as rebuildable from stored state.
 
 ### What happens if I link to something I cannot read?
 
-`list_links` excludes relationships when the principal lacks read access to
-either endpoint. If linked search encounters an unreadable block, that block is
-omitted from the current principal's results.
+`list_links` excludes relationships when the principal lacks read access to either endpoint. If linked search encounters an unreadable block, that block is omitted from the current principal's
+results.
 
 ### How do I register a custom codec at runtime?
 

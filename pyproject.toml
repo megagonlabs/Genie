@@ -37,3 +37,13 @@ genie = ["py.typed"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.black]
+line-length = 193
+
+[tool.ruff]
+line-length = 193
+
+[tool.isort]
+profile = "black"
+line_length = 193
