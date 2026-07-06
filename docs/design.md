@@ -712,21 +712,6 @@ The current implementation uses cautious behavior:
 
 These rules define the basic safety behavior for developers building adapters for more complex storage systems.
 
-## Future TODOs
-
-- backend adapter test suite for adapter authors
-- transaction abstraction
-- batch operations
-- async API variants
-- policy inheritance modes
-- explicit cascade-delete policies
-- richer filter grammar
-- pagination/cursors
-- event stream or subscription hooks
-- optional vector-search integration
-- explicit follow-mount traversal/search modes
-- first-party SQLite/Postgres adapters
-
 ## FAQ / Common Implementation Questions
 
 ### How does policy inheritance work?
