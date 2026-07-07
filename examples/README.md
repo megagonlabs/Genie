@@ -20,9 +20,9 @@ conda run -n "genie" python examples/basic_usage.py
 
 Recommended reading order:
 
-1. `crud_blocks.py`: create, read, patch, set, delete, and child traversal.
+1. `crud_blocks.py`: create, read, update, set, delete, and child traversal.
 2. `search_filters.py`: search by text, type, subtree, and metadata filters.
-3. `scoped_agents.py`: pass bounded `MemoryScope` handles into agents and sub-agents.
+3. `scoped_agents.py`: pass bounded `MemoryHandle` instances into agents and sub-agents.
 4. `links.py`: create typed links, symbolic mounts, and linked-memory search.
 5. `policies.py`: enforce principal and role based access.
 6. `hooks_codecs.py`: add hooks around memory operations with custom and stdlib codecs.
@@ -31,14 +31,14 @@ Recommended reading order:
 
 Integrated example:
 
-- `basic_usage.py`: combines scopes, parent/child ownership, search, links,
+- `basic_usage.py`: combines memory handles, parent/child ownership, search, links,
   policies, hooks, dataclass codecs, and stdlib codecs in one agent workflow.
 
 Conventions used throughout:
 
 - Examples pass `backend=InMemoryBackend()` explicitly so storage is visible.
-- Agent examples use `memory.scope(root=...)` for least-privilege access.
-- `memory.unbounded_scope(...)` appears only where the example is showing a
+- Agent examples use `memory.get_handle(root=...)` for least-privilege access.
+- `memory.get_unbounded_handle(...)` appears only where the example is showing a
   trusted administrative or routing-style handle.
 - `InMemoryBackend` is for examples, tests, and prototypes. Production code
   should provide a backend adapter with the desired persistence behavior.

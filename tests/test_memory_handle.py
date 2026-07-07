@@ -1,4 +1,4 @@
-"""Tests for scoped memory handles and restricted access."""
+"""Tests for bounded memory handles and restricted access."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def test_subtree_scope_limits_search_scope() -> None:
     memory.put(parent=task, type="note", value="subtree only clue")
     memory.put(type="note", value="global only clue")
 
-    scope = memory.scope(root=task)
+    scope = memory.get_handle(root=task)
 
     assert [result.block.value for result in scope.search("clue")] == ["subtree only clue"]
     with pytest.raises(AccessDenied):
@@ -40,18 +40,18 @@ def test_scope_can_optionally_search_ancestors() -> None:
     root = memory.put(type="root", value="project launch context")
     task = memory.put(parent=root, type="task", value="implementation task")
 
-    restricted = memory.scope(root=task)
+    restricted = memory.get_handle(root=task)
     with pytest.raises(AccessDenied):
         restricted.search("project", scope="ancestors")
 
-    allowed = memory.scope(root=task, allow_up=True)
+    allowed = memory.get_handle(root=task, allow_up=True)
     results = allowed.search("project", scope="ancestors")
 
     assert [result.block.id for result in results] == [root.id]
 
 
-def test_subscopes_can_narrow_but_not_escape_parent_scope() -> None:
-    """Sub-scopes can narrow roots but cannot escape their parent scope."""
+def test_child_handles_can_narrow_but_not_escape_parent_handle() -> None:
+    """Child handles can narrow roots but cannot escape their parent handle."""
 
     memory = Memory()
     project = memory.put(type="project", value="project")
@@ -60,19 +60,19 @@ def test_subscopes_can_narrow_but_not_escape_parent_scope() -> None:
     sibling = memory.put(parent=project, type="task", value="sibling")
     outside = memory.put(type="project", value="outside")
 
-    project_scope = memory.scope(root=project)
-    task_scope = project_scope.scope(root=task)
-    child = task_scope.put(type="observation", value="scoped child")
+    project_handle = memory.get_handle(root=project)
+    task_handle = project_handle.get_handle(root=task)
+    child = task_handle.put(type="observation", value="scoped child")
 
     assert child.parent_id == task.id
-    retrieved = task_scope.get(step)
+    retrieved = task_handle.get(step)
     assert retrieved is not None
     assert retrieved.value == "step"
 
     with pytest.raises(AccessDenied):
-        task_scope.get(sibling)
+        task_handle.get(sibling)
     with pytest.raises(AccessDenied):
-        project_scope.scope(root=outside)
+        project_handle.get_handle(root=outside)
 
 
 def test_scope_put_and_set_forward_codec_options() -> None:
@@ -80,7 +80,7 @@ def test_scope_put_and_set_forward_codec_options() -> None:
 
     memory = Memory()
     root = memory.put(type="root", value="root")
-    scope = memory.scope(root=root)
+    scope = memory.get_handle(root=root)
 
     child = scope.put(
         type="note",
@@ -101,7 +101,7 @@ def test_scope_put_forwards_block_policy() -> None:
 
     memory = Memory()
     root = memory.put(type="root", value="root")
-    writer_scope = memory.scope(root=root, principal="agent:writer")
+    writer_scope = memory.get_handle(root=root, principal="agent:writer")
 
     private = writer_scope.put(
         type="note",
@@ -109,8 +109,8 @@ def test_scope_put_forwards_block_policy() -> None:
         policy=MemoryPolicy(read=AccessRule.only(principals={"agent:allowed"})),
     )
 
-    blocked_scope = memory.scope(root=root, principal="agent:blocked")
-    allowed_scope = memory.scope(root=root, principal="agent:allowed")
+    blocked_scope = memory.get_handle(root=root, principal="agent:blocked")
+    allowed_scope = memory.get_handle(root=root, principal="agent:allowed")
 
     with pytest.raises(AccessDenied):
         blocked_scope.get(private)
@@ -124,7 +124,7 @@ def test_scope_search_accepts_full_search_arguments() -> None:
 
     memory = Memory()
     root = memory.put(type="root", value="root")
-    scope = memory.scope(root=root)
+    scope = memory.get_handle(root=root)
     memory.put(parent=root, type="note", value="needle first", metadata={"priority": 1})
     memory.put(parent=root, type="note", value="needle second", metadata={"priority": 2})
     memory.put(parent=root, type="task", value="needle task", metadata={"priority": 3})
@@ -139,28 +139,28 @@ def test_scope_search_accepts_full_search_arguments() -> None:
     assert [result.block.value for result in results] == ["needle second"]
 
 
-def test_subscopes_cannot_widen_parent_global_or_ancestor_access() -> None:
-    """Sub-scopes cannot add global or ancestor permissions."""
+def test_child_handles_cannot_widen_parent_global_or_ancestor_access() -> None:
+    """Child handles cannot add global or ancestor permissions."""
 
     memory = Memory()
     root = memory.put(type="root", value="root context")
     task = memory.put(parent=root, type="task", value="task")
     memory.put(type="note", value="global clue")
 
-    restricted = memory.scope(root=task)
+    restricted = memory.get_handle(root=task)
 
     with pytest.raises(AccessDenied):
-        restricted.scope(allow_up=True)
+        restricted.get_handle(allow_up=True)
     with pytest.raises(AccessDenied):
-        restricted.scope(allow_global=True)
+        restricted.get_handle(allow_global=True)
 
-    privileged = memory.scope(root=task, allow_up=True, allow_global=True)
-    subscope = privileged.scope(allow_up=True, allow_global=True)
+    privileged = memory.get_handle(root=task, allow_up=True, allow_global=True)
+    child_handle = privileged.get_handle(allow_up=True, allow_global=True)
 
-    assert [result.block.value for result in subscope.search("root", scope="ancestors")] == [
+    assert [result.block.value for result in child_handle.search("root", scope="ancestors")] == [
         "root context"
     ]
-    assert [result.block.value for result in subscope.search("global", scope="global")] == [
+    assert [result.block.value for result in child_handle.search("global", scope="global")] == [
         "global clue"
     ]
 
@@ -172,38 +172,38 @@ def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
     root = memory.put(type="root", value="root")
     child = memory.put(parent=root, type="child", value="child")
     outside = memory.put(type="note", value="outside needle")
-    scope = memory.scope(root=root)
+    scope = memory.get_handle(root=root)
 
     with pytest.raises(AccessDenied):
         scope.search(MemoryQuery(text="outside", root_id=outside.id, scope=Scope.SELF))
     with pytest.raises(AccessDenied):
         scope.search(MemoryQuery(text="outside", scope=Scope.GLOBAL))
 
-    upward_scope = memory.scope(root=child, allow_up=True)
+    upward_scope = memory.get_handle(root=child, allow_up=True)
     with pytest.raises(AccessDenied):
         upward_scope.search(MemoryQuery(text="outside", root_id=outside.id, scope=Scope.ANCESTORS))
 
-    global_scope = memory.scope(root=root, allow_global=True)
+    global_scope = memory.get_handle(root=root, allow_global=True)
     results = global_scope.search(MemoryQuery(text="outside", scope=Scope.GLOBAL))
 
     assert [result.block.id for result in results] == [outside.id]
 
 
-def test_subscopes_cannot_change_principal_identity() -> None:
-    """Sub-scopes cannot replace the principal they were created with."""
+def test_child_handles_cannot_change_principal_identity() -> None:
+    """Child handles cannot replace the principal they were created with."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
-    scope = memory.scope(root=root, principal="agent:worker")
+    scope = memory.get_handle(root=root, principal="agent:worker")
 
     with pytest.raises(AccessDenied):
-        scope.scope(principal="agent:admin")
+        scope.get_handle(principal="agent:admin")
 
 
-def test_unbounded_scope_requires_explicit_roots_for_traversal() -> None:
-    """Unbounded scopes require explicit roots for tree traversal."""
+def test_get_unbounded_handle_requires_explicit_roots_for_traversal() -> None:
+    """Unbounded handles require explicit roots for tree traversal."""
 
-    scope = Memory().unbounded_scope()
+    scope = Memory().get_unbounded_handle()
 
     with pytest.raises(AccessDenied):
         scope.children()
@@ -211,14 +211,14 @@ def test_unbounded_scope_requires_explicit_roots_for_traversal() -> None:
         scope.ancestors()
 
 
-def test_unbounded_scope_requires_explicit_root_or_global_permission_for_search() -> None:
-    """Unbounded scopes cannot accidentally turn subtree search into global search."""
+def test_get_unbounded_handle_requires_explicit_root_or_global_permission_for_search() -> None:
+    """Unbounded handles cannot accidentally turn subtree search into global search."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
     inside = memory.put(parent=root, type="note", value="needle inside")
     outside = memory.put(type="note", value="needle outside")
-    scope = memory.unbounded_scope()
+    scope = memory.get_unbounded_handle()
 
     with pytest.raises(AccessDenied):
         scope.search("needle")
@@ -228,24 +228,26 @@ def test_unbounded_scope_requires_explicit_root_or_global_permission_for_search(
         scope.search(MemoryQuery(text="needle", scope=Scope.SUBTREE))
 
     scoped_results = scope.search("needle", root=root)
-    global_scope = memory.unbounded_scope(allow_global=True)
+    global_scope = memory.get_unbounded_handle(allow_global=True)
     global_results = global_scope.search("needle", scope="global")
 
     assert [result.block.id for result in scoped_results] == [inside.id]
     assert {result.block.id for result in global_results} == {inside.id, outside.id}
 
 
-def test_memory_scope_requires_root_and_unbounded_scope_is_explicit() -> None:
-    """Memory.scope is bounded-only; unbounded access uses unbounded_scope."""
+def test_get_handle_requires_root_and_get_unbounded_handle_is_explicit() -> None:
+    """Memory.get_handle creates bounded handles; unbounded access uses get_unbounded_handle."""
 
     memory = Memory()
 
+    with pytest.raises(AttributeError):
+        getattr(memory, "scope")
     with pytest.raises(TypeError):
-        getattr(memory, "scope")()
+        cast(Any, memory.get_handle)()
     with pytest.raises(ValueError):
-        memory.scope(root=cast(Any, None))
+        memory.get_handle(root=cast(Any, None))
 
-    scope = memory.unbounded_scope(principal="agent:admin", allow_global=True)
+    scope = memory.get_unbounded_handle(principal="agent:admin", allow_global=True)
 
     assert scope.root_id is None
     assert scope.principal.id == "agent:admin"
@@ -253,9 +255,9 @@ def test_memory_scope_requires_root_and_unbounded_scope_is_explicit() -> None:
 
 
 def test_scope_root_must_exist() -> None:
-    """Bounded scopes fail early when their root block is missing."""
+    """Bounded handles fail early when their root block is missing."""
 
     memory = Memory()
 
     with pytest.raises(MemoryNotFound):
-        memory.scope(root="missing")
+        memory.get_handle(root="missing")

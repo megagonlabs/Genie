@@ -13,7 +13,7 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
     """The public API exposes add/list link names without old aliases."""
 
     memory = Memory()
-    scope = memory.unbounded_scope()
+    scope = memory.get_unbounded_handle()
 
     assert callable(memory.add_link)
     assert callable(memory.list_links)
@@ -105,7 +105,7 @@ def test_scope_list_links_and_link_search_stay_inside_scope() -> None:
     child = memory.put(parent=root, type="note", value="inside")
     outside = memory.put(type="note", value="outside needle")
     link = memory.add_link(child, outside, "references")
-    scope = memory.scope(root=root)
+    scope = memory.get_handle(root=root)
 
     assert memory.list_links(child) == [link]
     assert scope.list_links(child) == []
@@ -132,7 +132,7 @@ def test_scope_linking_cannot_cross_scope_boundaries() -> None:
     root = memory.put(type="root", value="root")
     child = memory.put(parent=root, type="note", value="child")
     outside = memory.put(type="note", value="outside")
-    scope = memory.scope(root=root)
+    scope = memory.get_handle(root=root)
 
     with pytest.raises(AccessDenied):
         scope.add_link(child, outside, "related")
@@ -226,8 +226,8 @@ def test_scope_mounts_require_explicit_mount_access() -> None:
     local_root = memory.put(type="project", value="local")
     mount_source = memory.put(parent=local_root, type="reference", value="remote docs")
     remote_root = memory.put(type="project", value="remote")
-    plain_scope = memory.scope(root=local_root)
-    mount_scope = memory.scope(root=local_root, allow_mounts=True)
+    plain_scope = memory.get_handle(root=local_root)
+    mount_scope = memory.get_handle(root=local_root, allow_mounts=True)
 
     with pytest.raises(AccessDenied):
         plain_scope.add_mount(mount_source, remote_root)
@@ -255,21 +255,21 @@ def test_scope_discover_mounts_requires_mount_access_and_stays_in_scope() -> Non
     remote_root = memory.put(type="project", value="remote")
     local_mount = memory.add_mount(local_source, remote_root)
     memory.add_mount(outside_source, remote_root)
-    plain_scope = memory.scope(root=local_root)
-    mount_scope = memory.scope(root=local_root, allow_mounts=True)
-    child_scope = mount_scope.scope(root=local_child, allow_mounts=True)
-    unbounded_scope = memory.unbounded_scope(allow_mounts=True)
+    plain_scope = memory.get_handle(root=local_root)
+    mount_scope = memory.get_handle(root=local_root, allow_mounts=True)
+    child_scope = mount_scope.get_handle(root=local_child, allow_mounts=True)
+    unbounded_handle = memory.get_unbounded_handle(allow_mounts=True)
 
     with pytest.raises(AccessDenied):
         plain_scope.discover_mounts()
     with pytest.raises(AccessDenied):
         mount_scope.discover_mounts(outside_source)
     with pytest.raises(AccessDenied):
-        unbounded_scope.discover_mounts()
+        unbounded_handle.discover_mounts()
 
     assert mount_scope.discover_mounts() == [local_mount]
     assert child_scope.discover_mounts() == [local_mount]
-    assert unbounded_scope.discover_mounts(local_root) == [local_mount]
+    assert unbounded_handle.discover_mounts(local_root) == [local_mount]
 
 
 def test_resolve_mount_requires_stored_mount_link() -> None:
@@ -279,7 +279,7 @@ def test_resolve_mount_requires_stored_mount_link() -> None:
     local_root = memory.put(type="project", value="local")
     mount_source = memory.put(parent=local_root, type="reference", value="remote docs")
     remote_root = memory.put(type="project", value="remote")
-    scope = memory.scope(root=local_root, allow_mounts=True)
+    scope = memory.get_handle(root=local_root, allow_mounts=True)
     forged = MemoryLink(
         source_id=mount_source.id,
         target_id=remote_root.id,
@@ -299,7 +299,7 @@ def test_scope_mount_resolution_requires_local_mount_source() -> None:
     outside_source = memory.put(type="reference", value="outside")
     remote_root = memory.put(type="project", value="remote")
     outside_mount = memory.add_mount(outside_source, remote_root)
-    scope = memory.scope(root=local_root, allow_mounts=True)
+    scope = memory.get_handle(root=local_root, allow_mounts=True)
 
     with pytest.raises(AccessDenied):
         scope.resolve_mount(outside_mount)
@@ -307,18 +307,18 @@ def test_scope_mount_resolution_requires_local_mount_source() -> None:
         scope.list_mounts(outside_source)
 
 
-def test_subscopes_cannot_add_mount_access() -> None:
-    """Sub-scopes cannot add mount access when the parent scope lacks it."""
+def test_child_handles_cannot_add_mount_access() -> None:
+    """Child handles cannot add mount access when the parent handle lacks it."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
     child = memory.put(parent=root, type="task", value="child")
-    parent_scope = memory.scope(root=root)
-    mount_parent_scope = memory.scope(root=root, allow_mounts=True)
+    parent_scope = memory.get_handle(root=root)
+    mount_parent_scope = memory.get_handle(root=root, allow_mounts=True)
 
     with pytest.raises(AccessDenied):
-        parent_scope.scope(root=child, allow_mounts=True)
+        parent_scope.get_handle(root=child, allow_mounts=True)
 
-    child_scope = mount_parent_scope.scope(root=child, allow_mounts=True)
+    child_scope = mount_parent_scope.get_handle(root=child, allow_mounts=True)
 
     assert child_scope.allow_mounts is True

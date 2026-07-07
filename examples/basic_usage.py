@@ -3,7 +3,7 @@
 This example combines the main concepts shown in the smaller examples:
 
 - a full `Memory` object kept in trusted application code
-- scoped memory handles passed to agents
+- bounded memory handles passed to agents
 - parent/child ownership for project/task/note structure
 - text search, metadata filters, and linked-memory search
 - typed links between memory blocks
@@ -40,7 +40,7 @@ from genie import (
     MemoryBlock,
     MemoryHook,
     MemoryPolicy,
-    MemoryScope,
+    MemoryHandle,
     SearchResult,
 )
 from genie.codecs.stdlib import (
@@ -85,18 +85,18 @@ class AuditHook(MemoryHook):
 
 @dataclass
 class Agent:
-    """Small example agent that depends only on `MemoryScope`.
+    """Small example agent that depends only on `MemoryHandle`.
 
     Attributes:
         name: Agent name used in printed output.
-        memory: Scoped memory handle assigned by the application.
+        memory: Bounded memory handle assigned by the application.
     """
 
     name: str
-    memory: MemoryScope
+    memory: MemoryHandle
 
     def remember(self, type: str, value: object, **metadata: object) -> MemoryBlock:
-        """Write a block into this agent's scoped memory.
+        """Write a block through this agent's memory handle.
 
         Args:
             type: Block type.
@@ -112,11 +112,11 @@ class Agent:
         return block
 
     def recall(self, text: str, **search_options: Any) -> list[MemoryBlock]:
-        """Search this agent's scoped memory.
+        """Search through this agent's memory handle.
 
         Args:
             text: Text query.
-            **search_options: Additional options passed to `MemoryScope.search`.
+            **search_options: Additional options passed to `MemoryHandle.search`.
 
         Returns:
             Matching memory blocks.
@@ -173,10 +173,10 @@ def main() -> None:
         value=StylePreference(tone="warm", length="short"),
     )
 
-    section("Pass scopes to agents")
+    section("Pass handles to agents")
     planner = Agent(
         name="planner",
-        memory=memory.scope(root=project, principal="agent:planner", allow_up=True),
+        memory=memory.get_handle(root=project, principal="agent:planner", allow_up=True),
     )
     task = planner.remember(
         "task",
@@ -187,7 +187,7 @@ def main() -> None:
 
     writer = Agent(
         name="writer",
-        memory=memory.scope(root=task, principal="agent:writer", allow_up=True),
+        memory=memory.get_handle(root=task, principal="agent:writer", allow_up=True),
     )
     outline = writer.remember(
         "note",
@@ -195,7 +195,7 @@ def main() -> None:
         source="draft",
     )
 
-    section("Search inside the scoped ownership tree")
+    section("Search inside the bounded ownership tree")
     local_results = writer.recall("sections")
     assert [block.id for block in local_results] == [outline.id]
 
@@ -229,8 +229,8 @@ def main() -> None:
     except AccessDenied as exc:
         print(f"blocked private note read: {exc}")
 
-    section("Patch data and decode typed values")
-    updated_task = writer.memory.patch(task, value={"status": "in_progress"})
+    section("Update data and decode typed values")
+    updated_task = writer.memory.update(task, value={"status": "in_progress"})
     decoded_style = planner.memory.get(style)
     decoded_due_at = planner.memory.get(due_at)
     decoded_budget = planner.memory.get(budget)
@@ -260,16 +260,16 @@ def main() -> None:
     except AccessDenied as exc:
         print(f"blocked sibling read: {exc}")
     try:
-        planner.memory.scope(root=other_project)
+        planner.memory.get_handle(root=other_project)
     except AccessDenied as exc:
-        print(f"blocked out-of-scope subscope: {exc}")
+        print(f"blocked out-of-scope child handle: {exc}")
 
     section("Audit hook observed writes")
     print(f"audit events: {len(audit.events)}")
     assert any(event.startswith("created:task:") for event in audit.events)
 
     section("Done")
-    print("The full Memory object stayed in trusted application code; agents only received scopes.")
+    print("The full Memory object stayed in trusted application code; agents only received handles.")
 
 
 def section(title: str) -> None:

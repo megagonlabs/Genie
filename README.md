@@ -42,7 +42,7 @@ note = memory.put(
     value="User prefers database-agnostic memory building blocks.",
 )
 
-worker_memory = memory.scope(root=root, principal="agent:worker")
+worker_memory = memory.get_handle(root=root, principal="agent:worker")
 worker_memory.put(type="observation", value="The task has one design note.")
 
 results = worker_memory.search("database-agnostic")
@@ -54,7 +54,7 @@ assert results[0].block.id == note.id
 ## Core Concepts
 
 - `Memory`: The main interface for a Genie memory system. It configures the backend, codecs, hooks, policy engine, and default principal.
-- `MemoryScope`: A restricted handle to part of a `Memory` object. Agents and sub-agents should usually receive a scope instead of the full `Memory` object.
+- `MemoryHandle`: A restricted handle to part of a `Memory` object. Agents and sub-agents should usually receive a handle instead of the full `Memory` object.
 - `MemoryBlock`: The smallest memory unit Genie stores and retrieves. A block has an id, `type`, `value`, metadata, optional policy, and optional parent.
 - `MemoryLink`: A typed relationship between two blocks that does not make one block own the other.
 - `MemoryBackend`: The adapter interface for persistence, traversal, links, and search.
@@ -68,8 +68,8 @@ and the meaning of `value` are application-defined. Codecs convert values betwee
 
 Focused runnable examples live in [examples](examples):
 
-- `crud_blocks.py`: CRUD, patching, delete, and child traversal.
-- `scoped_agents.py`: top-level agents and sub-agents using `MemoryScope`.
+- `crud_blocks.py`: CRUD, updating, delete, and child traversal.
+- `scoped_agents.py`: top-level agents and sub-agents using `MemoryHandle`.
 - `search_filters.py`: text search, types, scopes, and metadata filters.
 - `links.py`: typed links, symbolic mounts, and linked-memory search.
 - `routed_backend.py`: route blocks across multiple backend stores.
@@ -86,24 +86,24 @@ conda run -n "genie" python examples/basic_usage.py
 
 ## Scoped Access
 
-Sub-agents should receive a `MemoryScope`, not the whole memory object. A scope supports normal CRUD, traversal, link, mount, search, and sub-scope operations while constraining access to the
-scope root unless explicitly configured otherwise.
+Sub-agents should receive a `MemoryHandle`, not the whole memory object. A handle supports normal CRUD, traversal, link, mount, search, and child handle operations while constraining access to
+the handle root unless explicitly configured otherwise.
 
 ```python
-subtask_memory = memory.scope(root=root)
+subtask_memory = memory.get_handle(root=root)
 subtask_memory.search("style")
 
-context_memory = memory.scope(root=root, allow_up=True)
+context_memory = memory.get_handle(root=root, allow_up=True)
 context_memory.search("project", scope="ancestors")
 ```
 
-A sub-scope can narrow access but cannot increase it. A sub-scope cannot change principal identity, add ancestor traversal, add global search, add mount access, or move its root outside the
-parent scope's subtree unless the parent scope already allows that access.
+A child handle can narrow access but cannot increase it. A child handle cannot change principal identity, add ancestor traversal, add global search, add mount access, or move its root outside
+the parent handle's subtree unless the parent handle already allows that access.
 
-`Memory.scope(root=...)` requires a concrete root. Unrestricted scoped handles are created with `Memory.unbounded_scope(...)` so administrative, routing, migration, or other trusted workflows
+`Memory.get_handle(root=...)` requires a concrete root. Unbounded handles are created with `Memory.get_unbounded_handle(...)` so administrative, routing, migration, or other trusted workflows
 are explicit at the call site.
 
-Mount operations on a `MemoryScope` are available only when the scope is created with `allow_mounts=True`.
+Mount operations on a `MemoryHandle` are available only when the handle is created with `allow_mounts=True`.
 
 ## Search and Filters
 
@@ -232,9 +232,9 @@ reconstructs trusted application types.
 
 Genie uses cautious behavior:
 
-- scopes cannot increase access
-- bounded scopes require an existing root block
-- unbounded scopes must be created explicitly and require an explicit root for non-global search
+- child handles cannot increase access
+- bounded handles require an existing root block
+- unbounded handles must be created explicitly and require an explicit root for non-global search
 - recursive delete requires write access to every affected block
 - recursive delete does not follow symbolic mounts
 - `before_put` hooks cannot change parent placement after authorization

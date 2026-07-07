@@ -35,8 +35,8 @@ def test_builtin_operation_names_match_reserved_policy_names() -> None:
     assert {operation.value for operation in Operation} == BUILTIN_OPERATION_NAMES
 
 
-def test_write_policy_blocks_set_patch_and_delete() -> None:
-    """Write policies protect set, patch, and delete operations."""
+def test_write_policy_blocks_set_update_and_delete() -> None:
+    """Write policies protect set, update, and delete operations."""
 
     owner = Memory(principal="owner")
     block = owner.put(
@@ -55,7 +55,7 @@ def test_write_policy_blocks_set_patch_and_delete() -> None:
     with pytest.raises(AccessDenied):
         writer.set(block, {"body": "set"})
     with pytest.raises(AccessDenied):
-        writer.patch(block, value={"body": "patched"})
+        writer.update(block, value={"body": "updated"})
     with pytest.raises(AccessDenied):
         writer.delete(block)
 

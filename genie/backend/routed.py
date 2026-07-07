@@ -179,8 +179,8 @@ class RoutedBackend:
         Runtime route registration is intended for cases where application code
         discovers a symbolic mount or tenant descriptor that requires opening a
         backend adapter that was not known when the routed backend was created.
-        Existing `Memory` and `MemoryScope` handles that share this routed
-        backend can use the new route immediately.
+        Existing `Memory` objects and `MemoryHandle` instances that share this
+        routed backend can use the new route immediately.
 
         Args:
             route: Route key to register.

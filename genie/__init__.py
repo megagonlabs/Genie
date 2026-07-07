@@ -7,7 +7,7 @@ access, and interfaces for storage, search, links, policies, hooks, and value
 encoding. Applications provide their own business logic, memory structure,
 storage adapters, retrieval strategy, and value types.
 
-Most applications start with `Memory` and pass bounded `MemoryScope` instances
+Most applications start with `Memory` and pass bounded `MemoryHandle` instances
 to agents.
 """
 
@@ -26,7 +26,7 @@ from genie.memory.block import MemoryBlock
 from genie.memory.errors import GenieError, MemoryConflict, MemoryNotFound, UnsupportedOperation
 from genie.memory.links import LinkRelations, MemoryLink
 from genie.memory.memory import Memory
-from genie.memory.scope import MemoryScope
+from genie.memory.handle import MemoryHandle
 from genie.policy.engine import AccessDenied, Operation, PolicyEngine
 from genie.policy.policy import AccessRule, MemoryPolicy
 from genie.policy.principal import Principal
@@ -53,7 +53,7 @@ __all__ = [
     "MemoryNotFound",
     "MemoryPolicy",
     "MemoryQuery",
-    "MemoryScope",
+    "MemoryHandle",
     "Operation",
     "Principal",
     "PolicyEngine",

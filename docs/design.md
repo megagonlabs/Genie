@@ -35,7 +35,7 @@ application-owned. Genie supplies memory building blocks and interfaces those sy
 ## Terminology
 
 - `Memory`: The main interface for a Genie memory system. It configures the backend, codecs, hooks, policy engine, and default principal.
-- `MemoryScope`: A restricted handle to part of a `Memory` object. Agents and sub-agents should usually receive a scope instead of the full `Memory` object.
+- `MemoryHandle`: A restricted handle to part of a `Memory` object. Agents and sub-agents should usually receive a handle instead of the full `Memory` object.
 - `Codec`: A converter between application values and storage-safe data. For example, a codec can turn a dataclass into JSON-compatible data before storage and rebuild the dataclass when
   reading.
 - `Principal`: The acting identity for an operation, such as an agent, user, or service. Policies use principals to decide access.
@@ -55,8 +55,8 @@ Memory
   main interface for a memory system; configures backend, codecs, hooks,
   policy engine, and default principal
 
-MemoryScope
-  scoped interface for CRUD, traversal, links, mounts, and search
+MemoryHandle
+  restricted interface for CRUD, traversal, links, mounts, and search
 
 MemoryBlock
   smallest independently addressable memory unit
@@ -68,7 +68,7 @@ MemoryBackend
   adapter interface for persistence, traversal, links, and search
 ```
 
-Recommended integration pattern: keep `Memory` in trusted application code and pass `MemoryScope` into agents or sub-agents.
+Recommended integration pattern: keep `Memory` in trusted application code and pass `MemoryHandle` into agents or sub-agents.
 
 ## Package Layout
 
@@ -82,7 +82,7 @@ genie/
     block.py        # MemoryBlock identity, parent placement, metadata, policy
     links.py        # MemoryLink relation model
     memory.py       # Memory public API
-    scope.py        # MemoryScope scoped API
+    handle.py       # MemoryHandle restricted API
     errors.py       # Memory errors
 
   backend/
@@ -204,7 +204,7 @@ mounted target trees.
 - `put`
 - `get`
 - `set`
-- `patch`
+- `update`
 - `delete`
 - `children`
 - `ancestors`
@@ -215,8 +215,8 @@ mounted target trees.
 - `discover_mounts`
 - `resolve_mount`
 - `search`
-- `scope`
-- `unbounded_scope`
+- `get_handle`
+- `get_unbounded_handle`
 - `contains`
 
 `Memory` owns shared configuration:
@@ -227,51 +227,51 @@ mounted target trees.
 - hook registry
 - codec registry
 
-### MemoryScope
+### MemoryHandle
 
-`MemoryScope` is the agent-facing scoped interface.
+`MemoryHandle` is the agent-facing restricted interface.
 
 ```python
-project_scope = memory.scope(root=project, principal="agent:planner")
-task_scope = project_scope.scope(root=task)
+project_handle = memory.get_handle(root=project, principal="agent:planner")
+task_handle = project_handle.get_handle(root=task)
 ```
 
-It supports normal CRUD, traversal, link, mount, search, and sub-scope operations. The difference is that every operation is constrained to the scope root unless explicitly configured
+It supports normal CRUD, traversal, link, mount, search, and child handle operations. The difference is that every operation is constrained to the handle root unless explicitly configured
 otherwise.
 
-`MemoryScope` does not expose `unbounded_scope()` or the raw `contains()` helper. Scope membership is enforced internally by scoped operations.
+`MemoryHandle` does not expose `get_unbounded_handle()` or the raw `contains()` helper. Handle boundaries are enforced internally by scoped operations.
 
-`Memory.scope(root=...)` requires a concrete root. Unrestricted scoped handles are created with `Memory.unbounded_scope(...)` so administrative, routing, migration, or other trusted workflows
+`Memory.get_handle(root=...)` requires a concrete root. Unbounded handles are created with `Memory.get_unbounded_handle(...)` so administrative, routing, migration, or other trusted workflows
 are explicit at the call site.
 
-Mount operations on a `MemoryScope` are available only when the scope is created with `allow_mounts=True`. Resolving a mount remains explicit and does not widen ordinary subtree search,
+Mount operations on a `MemoryHandle` are available only when the handle is created with `allow_mounts=True`. Resolving a mount remains explicit and does not widen ordinary subtree search,
 traversal, or delete behavior.
 
 ## Scoped Access
 
-Scopes are the main way Genie limits what an agent or service can access.
+`MemoryHandle` is the main way Genie limits what an agent or service can access.
 
 ```python
-project_scope = memory.scope(root=project)
-task_scope = project_scope.scope(root=task)
+project_handle = memory.get_handle(root=project)
+task_handle = project_handle.get_handle(root=task)
 ```
 
-A sub-scope can narrow access but cannot increase it.
+A child handle can narrow access but cannot increase it.
 
-Specifically, a sub-scope cannot:
+Specifically, a child handle cannot:
 
 - change principal identity
 - add ancestor traversal if the parent did not allow it
 - add global search if the parent did not allow it
 - add mount access if the parent did not allow it
-- move its root outside the parent scope's subtree
+- move its root outside the parent handle's subtree
 
 This supports a common agent pattern:
 
 ```text
-top-level agent gets project scope
-sub-agent gets task scope
-sub-sub-agent gets step scope
+top-level agent gets project handle
+sub-agent gets task handle
+sub-sub-agent gets step handle
 ```
 
 Each layer can pass down the same or less access.
@@ -525,7 +525,7 @@ remote_root = memory.resolve_mount(mounts[0])
 ```
 
 Runtime route registration supports mounts discovered during application execution. The mount stores route metadata. Application code uses that metadata to construct a backend adapter and
-registers it with `register_route(route, backend)`. Existing `Memory` and `MemoryScope` handles that share the routed backend can use the new route immediately.
+registers it with `register_route(route, backend)`. Existing `Memory` objects and `MemoryHandle` instances that share the routed backend can use the new route immediately.
 
 By default, `RoutedBackend(enforce_tree_route=True)` keeps child blocks in the same route as their parent. This preserves subtree traversal, recursive delete, and scoped access behavior.
 Independent root blocks can route to different stores. Advanced adapters may disable this setting, but then traversal, scoped access, and delete behavior must be handled by shared indexes or
@@ -562,7 +562,7 @@ readable, discovery hides that mount.
 
 Following mounts during traversal/search and deleting mounted target trees are not implemented in the current library.
 
-The public `Memory.add_mount()` and `MemoryScope.add_mount()` methods validate both endpoints through the active backend. Pending mounts to not-yet-registered routes are therefore represented
+The public `Memory.add_mount()` and `MemoryHandle.add_mount()` methods validate both endpoints through the active backend. Pending mounts to not-yet-registered routes are therefore represented
 by adapter, migration, or import code that can write a symbolic `MemoryLink` to a shared `LinkStore` before the target route is opened. After `register_route()` adds the route, the same mount
 can resolve through the public memory API.
 
@@ -691,10 +691,10 @@ Stdlib codecs encode values into portable payload shapes, usually JSON-compatibl
 
 The current implementation uses cautious behavior:
 
-- scopes cannot increase access
-- bounded scopes require an existing root block
-- unbounded scopes must be created explicitly and require an explicit root for non-global search
-- full `Memory.get` returns `None` for missing blocks; rooted scopes treat missing or out-of-scope ids as denied before fetching
+- child handles cannot increase access
+- bounded handles require an existing root block
+- unbounded handles must be created explicitly and require an explicit root for non-global search
+- full `Memory.get` returns `None` for missing blocks; rooted handles treat missing or out-of-bounds ids as denied before fetching
 - recursive delete requires write access to every affected block
 - recursive delete does not follow symbolic mounts
 - recursive delete dispatches delete hooks for every removed block
@@ -706,7 +706,7 @@ The current implementation uses cautious behavior:
 - backend link stores expose cleanup for links connected to deleted blocks
 - link listing hides relationships whose endpoints are not readable by the principal
 - mount discovery does not follow mounted target trees
-- scoped link listing and linked-memory search remain inside the scope root
+- scoped link listing and linked-memory search remain inside the handle root
 - JSON encoding rejects `NaN` and `Infinity`
 - incompatible filter comparisons produce no matches
 
@@ -736,4 +736,4 @@ Custom codecs can be registered on the codec registry used by a `Memory` handle:
 memory.codecs.register(PreferenceCodec())
 ```
 
-Existing scopes created from that `Memory` share the same codec registry.
+Existing handles created from that `Memory` share the same codec registry.

@@ -20,7 +20,7 @@ from genie.query import MemoryQuery, Scope, SearchResult
 from genie.query.filters import normalize_filters
 
 if TYPE_CHECKING:
-    from genie.memory.scope import MemoryScope
+    from genie.memory.handle import MemoryHandle
 
 
 class Memory:
@@ -28,7 +28,7 @@ class Memory:
 
     `Memory` configures the backend, codecs, hooks, policy engine, and default
     principal. Trusted application code usually keeps this object and passes
-    bounded `MemoryScope` objects to agents. It coordinates parent/child
+    bounded `MemoryHandle` objects to agents. It coordinates parent/child
     ownership, scoped access, links, mounts, search, hooks, and codecs without
     owning application business logic, memory structure, storage layout,
     retrieval strategy, or value meaning.
@@ -177,7 +177,7 @@ class Memory:
         stored = self.backend.update_block(updated)
         return self._decode_block(stored)
 
-    def patch(
+    def update(
         self,
         block_id: str | MemoryBlock,
         *,
@@ -187,7 +187,7 @@ class Memory:
         """Merge updates into a dictionary value or metadata.
 
         Args:
-            block_id: Block or block id to patch.
+            block_id: Block or block id to update.
             value: Dict fields to merge into the existing decoded value.
             metadata: Metadata fields to merge.
 
@@ -206,7 +206,7 @@ class Memory:
         decoded_value = self.codecs.decode(EncodedValue(block.content_type, block.value))
         if value is not None:
             if not isinstance(decoded_value, dict):
-                raise TypeError("Value patches require the existing memory value to be a dict.")
+                raise TypeError("Value updates require the existing memory value to be a dict.")
             decoded_value = {**decoded_value, **value}
         encoded = self.codecs.encode(decoded_value, block.content_type)
         updated_metadata = deepcopy({**block.metadata, **(metadata or {})})
@@ -554,7 +554,7 @@ class Memory:
         hooked_results = self.hooks.after_search(memory_query, visible_results)
         return self._filter_visible_results(memory_query, hooked_results)
 
-    def scope(
+    def get_handle(
         self,
         *,
         root: str | MemoryBlock,
@@ -563,21 +563,21 @@ class Memory:
         allow_up: bool = False,
         allow_global: bool = False,
         allow_mounts: bool = False,
-    ) -> "MemoryScope":
-        """Create a bounded scoped memory handle to pass to agents.
+    ) -> "MemoryHandle":
+        """Create a bounded memory handle to pass to agents.
 
         Args:
-            root: Root block or id that bounds the scope.
-            principal: Principal for operations through the scope. Defaults to
+            root: Root block or id that bounds the handle.
+            principal: Principal for operations through the handle. Defaults to
                 this `Memory` handle's principal.
-            default_scope: Default search scope used by the returned scope.
+            default_scope: Default search scope used by the returned handle.
             allow_up: Whether ancestor traversal/search is allowed.
             allow_global: Whether global search is allowed.
-            allow_mounts: Whether the scope can create, list, and resolve
-                symbolic mounts whose source is inside the scope.
+            allow_mounts: Whether the handle can create, list, and resolve
+                symbolic mounts whose source is inside the handle.
 
         Returns:
-            A `MemoryScope` backed by this memory system.
+            A `MemoryHandle` backed by this memory system.
 
         Raises:
             ValueError: If `root` is `None`.
@@ -587,11 +587,11 @@ class Memory:
         root_id = _block_id(root)
         if root_id is None:
             raise ValueError(
-                "Memory.scope() requires a root. Use Memory.unbounded_scope() "
+                "Memory.get_handle() requires a root. Use Memory.get_unbounded_handle() "
                 "for explicit unbounded access."
             )
         self._require_raw(root_id)
-        return self._new_scope(
+        return self._new_handle(
             root_id=root_id,
             principal=principal,
             default_scope=default_scope,
@@ -600,7 +600,7 @@ class Memory:
             allow_mounts=allow_mounts,
         )
 
-    def unbounded_scope(
+    def get_unbounded_handle(
         self,
         *,
         principal: Principal | str | None = None,
@@ -608,28 +608,28 @@ class Memory:
         allow_up: bool = False,
         allow_global: bool = False,
         allow_mounts: bool = False,
-    ) -> "MemoryScope":
-        """Create an explicit unbounded scoped memory handle.
+    ) -> "MemoryHandle":
+        """Create an explicit unbounded memory handle.
 
-        An unbounded scope has no default subtree root. It can still be limited
+        An unbounded handle has no default subtree root. It can still be limited
         by principal policies and options such as `allow_global`.
-        Non-global searches through an unbounded scope must provide an explicit
+        Non-global searches through an unbounded handle must provide an explicit
         root.
 
         Args:
-            principal: Principal for operations through the scope. Defaults to
+            principal: Principal for operations through the handle. Defaults to
                 this `Memory` handle's principal.
-            default_scope: Default search scope used by the returned scope.
+            default_scope: Default search scope used by the returned handle.
             allow_up: Whether ancestor traversal/search is allowed.
             allow_global: Whether global search is allowed.
-            allow_mounts: Whether the scope can create, list, and resolve
-                symbolic mounts whose source is visible through the scope.
+            allow_mounts: Whether the handle can create, list, and resolve
+                symbolic mounts whose source is visible through the handle.
 
         Returns:
-            An unbounded `MemoryScope` backed by this memory system.
+            An unbounded `MemoryHandle` backed by this memory system.
         """
 
-        return self._new_scope(
+        return self._new_handle(
             root_id=None,
             principal=principal,
             default_scope=default_scope,
@@ -651,7 +651,7 @@ class Memory:
 
         return self.backend.contains(_block_id(root), _block_id(block_id))
 
-    def _new_scope(
+    def _new_handle(
         self,
         *,
         root_id: str | None,
@@ -660,12 +660,12 @@ class Memory:
         allow_up: bool,
         allow_global: bool,
         allow_mounts: bool,
-    ) -> "MemoryScope":
-        """Construct a `MemoryScope` after root validation is complete."""
+    ) -> "MemoryHandle":
+        """Construct a `MemoryHandle` after root validation is complete."""
 
-        from genie.memory.scope import MemoryScope
+        from genie.memory.handle import MemoryHandle
 
-        return MemoryScope(
+        return MemoryHandle(
             memory=self,
             root_id=root_id,
             principal=Principal.coerce(principal) if principal is not None else self.principal,

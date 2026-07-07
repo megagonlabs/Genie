@@ -30,8 +30,8 @@ def main() -> None:
         metadata={"priority": 2},
     )
 
-    patched = memory.patch(note, value={"status": "review"}, metadata={"priority": 3})
-    replaced = memory.set(patched, {"body": "Outline reviewed", "status": "done"})
+    updated = memory.update(note, value={"status": "review"}, metadata={"priority": 3})
+    replaced = memory.set(updated, {"body": "Outline reviewed", "status": "done"})
 
     print(f"created project: {project.id}")
     print(f"updated note v{replaced.version}: {replaced.value}")

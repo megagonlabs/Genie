@@ -1,7 +1,7 @@
-"""Pass scoped memory handles to agents and sub-agents.
+"""Pass bounded memory handles to agents and sub-agents.
 
-Most agents should receive bounded scopes created with `memory.scope(root=...)`.
-The example also shows `memory.unbounded_scope(...)` for a trusted supervisor
+Most agents should receive bounded handles created with `memory.get_handle(root=...)`.
+The example also shows `memory.get_unbounded_handle(...)` for a trusted supervisor
 handle, where unbounded access is deliberate and visible at the call site.
 
 Run from the repository root:
@@ -20,23 +20,23 @@ else:
 
 ensure_repo_on_path()
 
-from genie import AccessDenied, InMemoryBackend, Memory, MemoryBlock, MemoryScope
+from genie import AccessDenied, InMemoryBackend, Memory, MemoryBlock, MemoryHandle
 
 
 @dataclass
 class Agent:
-    """Tiny example agent that receives only a scoped memory handle.
+    """Tiny example agent that receives only a bounded memory handle.
 
     Attributes:
         name: Human-readable agent name used in written notes.
-        memory: Scoped memory handle passed in by the application.
+        memory: Bounded memory handle passed in by the application.
     """
 
     name: str
-    memory: MemoryScope
+    memory: MemoryHandle
 
     def remember(self, text: str) -> MemoryBlock:
-        """Write a note into the agent's scoped memory.
+        """Write a note through the agent's memory handle.
 
         Args:
             text: Note text.
@@ -49,16 +49,16 @@ class Agent:
 
 
 def main() -> None:
-    """Run a focused scoped-agent walkthrough."""
+    """Run a focused memory-handle walkthrough."""
 
     memory = Memory(backend=InMemoryBackend(), principal="system")
     project = memory.put(type="project", value="Project workspace")
     task = memory.put(parent=project, type="task", value="Write summary")
     sibling = memory.put(parent=project, type="task", value="Unrelated task")
 
-    planner = Agent("planner", memory.scope(root=project, principal="agent:planner"))
-    writer = Agent("writer", planner.memory.scope(root=task))
-    supervisor_memory = memory.unbounded_scope(
+    planner = Agent("planner", memory.get_handle(root=project, principal="agent:planner"))
+    writer = Agent("writer", planner.memory.get_handle(root=task))
+    supervisor_memory = memory.get_unbounded_handle(
         principal="agent:supervisor",
         allow_global=True,
     )
@@ -75,11 +75,11 @@ def main() -> None:
     try:
         writer.memory.get(sibling)
     except AccessDenied as exc:
-        print(f"scope blocked sibling read: {exc}")
+        print(f"handle blocked sibling read: {exc}")
     try:
         supervisor_memory.search("concise")
     except AccessDenied as exc:
-        print(f"unbounded scope needs an explicit root for subtree search: {exc}")
+        print(f"unbounded handle needs an explicit root for subtree search: {exc}")
 
     print(f"writer only sees task subtree rooted at {task.id}")
 

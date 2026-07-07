@@ -27,16 +27,18 @@ def test_package_all_exports_are_importable() -> None:
 def test_layered_import_styles_work_for_common_types() -> None:
     """Users can import common types from either `genie` or focused packages."""
 
-    from genie import LinkRelations, Memory, MemoryBlock, PolicyEngine
+    from genie import LinkRelations, Memory, MemoryBlock, MemoryHandle, PolicyEngine
     from genie.codecs import BytesCodec
     from genie.codecs.stdlib import BytesCodec as StdlibBytesCodec
     from genie.memory import LinkRelations as MemoryLinkRelations
     from genie.memory import Memory as MemoryFromPackage
     from genie.memory import MemoryBlock as MemoryBlockFromPackage
+    from genie.memory import MemoryHandle as MemoryHandleFromPackage
     from genie.policy import PolicyEngine as PolicyEngineFromPackage
 
     assert MemoryFromPackage is Memory
     assert MemoryBlockFromPackage is MemoryBlock
+    assert MemoryHandleFromPackage is MemoryHandle
     assert PolicyEngineFromPackage is PolicyEngine
     assert MemoryLinkRelations.MOUNT == LinkRelations.MOUNT
     assert BytesCodec is StdlibBytesCodec

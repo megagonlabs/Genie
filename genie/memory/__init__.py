@@ -8,7 +8,7 @@ from genie.memory.links import LinkRelations, MemoryLink
 
 if TYPE_CHECKING:
     from genie.memory.memory import Memory
-    from genie.memory.scope import MemoryScope
+    from genie.memory.handle import MemoryHandle
 
 __all__ = [
     "GenieError",
@@ -18,7 +18,7 @@ __all__ = [
     "MemoryConflict",
     "MemoryLink",
     "MemoryNotFound",
-    "MemoryScope",
+    "MemoryHandle",
     "UnsupportedOperation",
 ]
 
@@ -40,8 +40,8 @@ def __getattr__(name: str):
         from genie.memory.memory import Memory
 
         return Memory
-    if name == "MemoryScope":
-        from genie.memory.scope import MemoryScope
+    if name == "MemoryHandle":
+        from genie.memory.handle import MemoryHandle
 
-        return MemoryScope
+        return MemoryHandle
     raise AttributeError(name)

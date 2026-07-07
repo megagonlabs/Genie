@@ -65,7 +65,7 @@ def test_before_put_hook_cannot_change_parent_after_authorization() -> None:
     root = memory.put(type="root", value="root")
     outside = memory.put(type="root", value="outside")
     memory.hooks.register(ReparentHook(outside.id))
-    scope = memory.scope(root=root)
+    scope = memory.get_handle(root=root)
 
     with pytest.raises(ValueError, match="parent_id"):
         scope.put(type="note", value="should not be stored")

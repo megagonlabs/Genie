@@ -135,7 +135,7 @@ class MemoryPolicy:
     """Access policy attached to a memory block.
 
     Each field controls one operation family. Scope limits are enforced
-    separately by `MemoryScope`. Applications can attach named custom
+    separately by `MemoryHandle`. Applications can attach named custom
     operations through `operations` and evaluate them with `PolicyEngine`.
 
     Attributes:

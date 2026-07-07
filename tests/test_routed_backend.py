@@ -269,7 +269,7 @@ def test_routed_backend_uses_shared_traversal_index() -> None:
     traversal_index.descendants_by_root[(root.id, True)] = [root, cross_route_child]
     traversal_index.contains_pairs.add((root.id, cross_route_child.id))
 
-    scope = memory.scope(root=root)
+    scope = memory.get_handle(root=root)
 
     assert [block.id for block in memory.children(root)] == [cross_route_child.id]
     assert [block.id for block in memory.ancestors(cross_route_child)] == [root.id]

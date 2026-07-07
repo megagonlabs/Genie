@@ -8,13 +8,13 @@ from genie import AccessDenied, AccessRule, Memory, MemoryPolicy
 from genie.memory.errors import MemoryConflict, MemoryNotFound
 
 
-def test_put_get_and_patch_memory_block() -> None:
-    """Memory blocks can be created, read, patched, and versioned."""
+def test_put_get_and_update_memory_block() -> None:
+    """Memory blocks can be created, read, updated, and versioned."""
 
     memory = Memory()
 
     block = memory.put(type="preference", value={"style": "concise"})
-    updated = memory.patch(block, value={"tone": "warm"}, metadata={"source": "test"})
+    updated = memory.update(block, value={"tone": "warm"}, metadata={"source": "test"})
 
     assert updated.value == {"style": "concise", "tone": "warm"}
     assert updated.metadata["source"] == "test"
@@ -74,7 +74,7 @@ def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
     with pytest.raises(MemoryNotFound):
         memory.set("missing", "value")
     with pytest.raises(MemoryNotFound):
-        memory.patch("missing", value={"field": "value"})
+        memory.update("missing", value={"field": "value"})
     with pytest.raises(MemoryNotFound):
         memory.children("missing")
     with pytest.raises(MemoryNotFound):
@@ -91,23 +91,23 @@ def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
         memory.put(type="note", value="orphan", parent="missing")
 
 
-def test_patch_requires_dict_values() -> None:
-    """Value patches are accepted only for dictionary values."""
+def test_update_requires_dict_values() -> None:
+    """Value updates are accepted only for dictionary values."""
 
     memory = Memory()
     block = memory.put(type="note", value="plain text")
 
     with pytest.raises(TypeError):
-        memory.patch(block, value={"field": "value"})
+        memory.update(block, value={"field": "value"})
 
 
-def test_metadata_only_patch_preserves_value_and_versions() -> None:
-    """Metadata-only patches leave values intact while versioning the block."""
+def test_metadata_only_update_preserves_value_and_versions() -> None:
+    """Metadata-only updates leave values intact while versioning the block."""
 
     memory = Memory()
     block = memory.put(type="note", value=["keep"], metadata={"source": "initial"})
 
-    updated = memory.patch(block, metadata={"priority": 2})
+    updated = memory.update(block, metadata={"priority": 2})
 
     assert updated.value == ["keep"]
     assert updated.metadata == {"source": "initial", "priority": 2}
