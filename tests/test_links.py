@@ -78,7 +78,7 @@ def test_list_links_hides_links_to_unreadable_endpoints() -> None:
     """Link listing hides links whose endpoints are unreadable."""
 
     owner = Memory(principal="owner")
-    source = owner.put(type="note", value="source")
+    source = owner.put(type="note", value="source", policy=MemoryPolicy.public())
     target = owner.put(
         type="secret",
         value="hidden",
@@ -190,15 +190,20 @@ def test_discover_mounts_hides_unreadable_sources_and_targets() -> None:
     """Mount discovery returns only links whose source and target are readable."""
 
     owner = Memory(principal="owner")
-    root = owner.put(type="project", value="local")
-    readable_source = owner.put(parent=root, type="reference", value="public source")
+    root = owner.put(type="project", value="local", policy=MemoryPolicy.public())
+    readable_source = owner.put(
+        parent=root,
+        type="reference",
+        value="public source",
+        policy=MemoryPolicy.public(),
+    )
     hidden_source = owner.put(
         parent=root,
         type="reference",
         value="private source",
         policy=MemoryPolicy(read=AccessRule.only(principals={"owner"})),
     )
-    visible_target = owner.put(type="project", value="public target")
+    visible_target = owner.put(type="project", value="public target", policy=MemoryPolicy.public())
     hidden_target = owner.put(
         type="project",
         value="private target",

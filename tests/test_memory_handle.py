@@ -100,7 +100,7 @@ def test_scope_put_forwards_block_policy() -> None:
     """Scoped block creation can attach the same policy object as `Memory.put`."""
 
     memory = Memory()
-    root = memory.put(type="root", value="root")
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
     writer_scope = memory.get_handle(root=root, principal="agent:writer")
 
     private = writer_scope.put(

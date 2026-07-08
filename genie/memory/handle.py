@@ -587,6 +587,7 @@ class MemoryHandle:
             policy_engine=self._memory.policy_engine,
             hooks=self._memory.hooks,
             codecs=self._memory.codecs,
+            default_policy=self._memory.default_policy,
         )
 
     def _require_mounts_allowed(self) -> None:

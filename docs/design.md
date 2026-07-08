@@ -34,7 +34,7 @@ application-owned. Genie supplies memory building blocks and interfaces those sy
 
 ## Terminology
 
-- `Memory`: The main interface for a Genie memory system. It configures the backend, codecs, hooks, policy engine, and default principal.
+- `Memory`: The main interface for a Genie memory system. It configures the backend, codecs, hooks, policy engine, default principal, and default policy.
 - `MemoryHandle`: A restricted handle to part of a `Memory` object. Agents and sub-agents should usually receive a handle instead of the full `Memory` object.
 - `Codec`: A converter between application values and storage-safe data. For example, a codec can turn a dataclass into JSON-compatible data before storage and rebuild the dataclass when
   reading.
@@ -53,7 +53,7 @@ and the meaning of `value` are application-defined. Codecs convert values betwee
 ```text
 Memory
   main interface for a memory system; configures backend, codecs, hooks,
-  policy engine, and default principal
+  policy engine, default principal, and default policy
 
 MemoryHandle
   restricted interface for CRUD, traversal, links, mounts, and search
@@ -131,7 +131,7 @@ MemoryBlock(
     parent_id="mem_parent",
     content_type="application/json",
     metadata={"source": "conversation"},
-    policy=None,
+    policy=MemoryPolicy.owner_private(),
     created_by="agent:planner",
     version=1,
 )
@@ -224,6 +224,7 @@ mounted target trees.
 - backend
 - principal
 - policy engine
+- default policy
 - hook registry
 - codec registry
 
@@ -589,11 +590,23 @@ Principal(id="user:alice", roles=frozenset({"admin"}))
 
 ```python
 MemoryPolicy(
-    read=AccessRule.only(roles={"researcher"}),
-    write=AccessRule.only(principals={"agent:planner"}),
+    read=AccessRule.only(roles={"researcher"}, owner=True),
+    write=AccessRule.owner(),
+    search=AccessRule.only(roles={"researcher"}, owner=True),
+    traverse_up=AccessRule.only(roles={"researcher"}, owner=True),
+    traverse_down=AccessRule.only(roles={"researcher"}, owner=True),
     operations={"export": AccessRule.only(roles={"compliance"})},
 )
 ```
+
+Applications can configure the default policy attached to new blocks:
+
+```python
+memory = Memory(default_policy=MemoryPolicy.owner_private())
+```
+
+`MemoryPolicy.owner_private()` is the default when `default_policy` is not provided. Applications can choose another default, such as `MemoryPolicy.public()`, when a system needs broader
+access.
 
 The `PolicyEngine` checks whether a principal can perform an operation on a block.
 
@@ -609,7 +622,8 @@ Custom operations are evaluated explicitly by application code with `policy_engi
 
 Important defaults:
 
-- If no policy is attached to a block, the block is public.
+- New blocks use `MemoryPolicy.owner_private()` unless `Memory(default_policy=...)` or `put(..., policy=...)` chooses another policy.
+- Stored blocks with no policy are treated as owner-private by using `MemoryBlock.created_by`.
 - Scope limits are enforced in addition to block policies.
 - Recursive delete requires write access to every block that would be deleted.
 - Unknown custom policy operations raise a configuration error.

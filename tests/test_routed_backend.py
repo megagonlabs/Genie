@@ -446,7 +446,9 @@ def test_routed_backend_discovers_preexisting_route_blocks() -> None:
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
-    existing = route_b.put_block(MemoryBlock(id="existing", type="note", value="stored"))
+    existing = route_b.put_block(
+        MemoryBlock(id="existing", type="note", value="stored", created_by="system")
+    )
     backend = RoutedBackend({"a": route_a, "b": route_b}, default_route="a")
     memory = Memory(backend=backend)
 

@@ -26,12 +26,12 @@ if TYPE_CHECKING:
 class Memory:
     """Main interface for a Genie memory system.
 
-    `Memory` configures the backend, codecs, hooks, policy engine, and default
-    principal. Trusted application code usually keeps this object and passes
-    bounded `MemoryHandle` objects to agents. It coordinates parent/child
-    ownership, scoped access, links, mounts, search, hooks, and codecs without
-    owning application business logic, memory structure, storage layout,
-    retrieval strategy, or value meaning.
+    `Memory` configures the backend, codecs, hooks, policy engine, default
+    principal, and default policy. Trusted application code usually keeps this
+    object and passes bounded `MemoryHandle` objects to agents. It coordinates
+    parent/child ownership, scoped access, links, mounts, search, hooks, and
+    codecs without owning application business logic, memory structure, storage
+    layout, retrieval strategy, or value meaning.
     """
 
     def __init__(
@@ -42,16 +42,20 @@ class Memory:
         policy_engine: PolicyEngine | None = None,
         hooks: list[MemoryHook] | HookRegistry | None = None,
         codecs: CodecRegistry | None = None,
+        default_policy: MemoryPolicy | None = None,
     ) -> None:
         """Create the main memory interface.
 
         Args:
             backend: Backend adapter. Defaults to `InMemoryBackend`.
-            principal: Acting principal for operations through this handle.
+            principal: Acting principal for operations through this memory.
             policy_engine: Policy evaluator. Defaults to `PolicyEngine`.
             hooks: Hook list or registry.
             codecs: Codec registry. Defaults to a registry containing
                 `JsonCodec`.
+            default_policy: Policy attached to new blocks when
+                `put(..., policy=None)`. Defaults to
+                `MemoryPolicy.owner_private()`.
         """
 
         self.backend: MemoryBackend = backend or InMemoryBackend()
@@ -62,6 +66,7 @@ class Memory:
         else:
             self.hooks = HookRegistry(hooks)
         self.codecs = codecs or CodecRegistry([JsonCodec()])
+        self.default_policy = default_policy or MemoryPolicy.owner_private()
 
     def put(
         self,
@@ -81,7 +86,8 @@ class Memory:
             value: User-level value to encode and store.
             parent: Optional parent block or id.
             metadata: Optional metadata used for filtering or indexing.
-            policy: Optional block-level access policy.
+            policy: Optional block-level access policy. When omitted, the
+                memory's `default_policy` is attached.
             content_type: Optional explicit codec content type.
             id: Optional caller-provided block id.
 
@@ -107,7 +113,7 @@ class Memory:
             parent_id=parent_id,
             content_type=encoded.content_type,
             metadata=deepcopy(metadata or {}),
-            policy=policy,
+            policy=policy if policy is not None else self.default_policy,
             created_by=self.principal.id,
         )
         block = self.hooks.before_put(block)

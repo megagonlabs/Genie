@@ -33,7 +33,7 @@ For the full design document, see [docs/design.md](docs/design.md).
 ```python
 from genie import InMemoryBackend, Memory
 
-memory = Memory(backend=InMemoryBackend())
+memory = Memory(backend=InMemoryBackend(), principal="agent:worker")
 
 root = memory.put(type="task", value={"name": "write proposal"})
 note = memory.put(
@@ -49,11 +49,12 @@ results = worker_memory.search("database-agnostic")
 assert results[0].block.id == note.id
 ```
 
-`Memory()` defaults to `InMemoryBackend()` when no backend is provided. Examples pass `backend=InMemoryBackend()` explicitly so first-time readers can see where storage comes from.
+`Memory()` defaults to `InMemoryBackend()` when no backend is provided. New blocks are owner-private by default, so the quick start uses the same principal for the full `Memory` object and the
+bounded handle. Examples pass `backend=InMemoryBackend()` explicitly so first-time readers can see where storage comes from.
 
 ## Core Concepts
 
-- `Memory`: The main interface for a Genie memory system. It configures the backend, codecs, hooks, policy engine, and default principal.
+- `Memory`: The main interface for a Genie memory system. It configures the backend, codecs, hooks, policy engine, default principal, and default policy.
 - `MemoryHandle`: A restricted handle to part of a `Memory` object. Agents and sub-agents should usually receive a handle instead of the full `Memory` object.
 - `MemoryBlock`: The smallest memory unit Genie stores and retrieves. A block has an id, `type`, `value`, metadata, optional policy, and optional parent.
 - `MemoryLink`: A typed relationship between two blocks that does not make one block own the other.
@@ -176,17 +177,30 @@ resolved after the route is registered.
 ```python
 from genie import AccessRule, Memory, MemoryPolicy
 
-memory = Memory()
+memory = Memory(default_policy=MemoryPolicy.owner_private())
 root = memory.put(type="project", value="proposal")
-private_note = memory.put(
+public_note = memory.put(
+    parent=root,
+    type="note",
+    value="Safe to share broadly",
+    policy=MemoryPolicy.public(),
+)
+compliance_note = memory.put(
     parent=root,
     type="note",
     value="compliance-only detail",
-    policy=MemoryPolicy(read=AccessRule.only(roles={"compliance"})),
+    policy=MemoryPolicy(
+        read=AccessRule.only(roles={"compliance"}, owner=True),
+        search=AccessRule.only(roles={"compliance"}, owner=True),
+        traverse_up=AccessRule.only(roles={"compliance"}, owner=True),
+        traverse_down=AccessRule.only(roles={"compliance"}, owner=True),
+        write=AccessRule.owner(),
+    ),
 )
 ```
 
-If no policy is attached to a block, the block is public. Scope limits are enforced in addition to block policies.
+`MemoryPolicy.owner_private()` is the default for new blocks when `default_policy` is not provided. Applications can choose another default, such as `MemoryPolicy.public()`, but production code
+should keep private defaults and attach public or shared policies only where broader access is intended. Scope limits are enforced in addition to block policies.
 
 ## Hooks
 

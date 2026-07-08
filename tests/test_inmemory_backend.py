@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from genie import InMemoryBackend, Memory, MemoryLink, MemoryQuery
+from genie import InMemoryBackend, Memory, MemoryLink, MemoryPolicy, MemoryQuery
 from genie.memory.errors import MemoryConflict
 
 
@@ -15,7 +15,7 @@ def test_backends_can_be_shared_between_memory_instances() -> None:
     writer = Memory(backend=backend, principal="writer")
     reader = Memory(backend=backend, principal="reader")
 
-    block = writer.put(type="note", value="shared backend")
+    block = writer.put(type="note", value="shared backend", policy=MemoryPolicy.public())
 
     retrieved = reader.get(block.id)
     assert retrieved is not None

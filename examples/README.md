@@ -24,7 +24,7 @@ Recommended reading order:
 2. `search_filters.py`: search by text, type, subtree, and metadata filters.
 3. `scoped_agents.py`: pass bounded `MemoryHandle` instances into agents and sub-agents.
 4. `links.py`: create typed links, symbolic mounts, and linked-memory search.
-5. `policies.py`: enforce principal and role based access.
+5. `policies.py`: configure owner-private defaults and explicit shared access.
 6. `hooks_codecs.py`: add hooks around memory operations with custom and stdlib codecs.
 7. `stdlib_codecs.py`: opt into stdlib codecs and inspect raw payloads.
 8. `routed_backend.py`: route blocks across multiple backend stores.

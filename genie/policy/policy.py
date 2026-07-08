@@ -28,11 +28,15 @@ class AccessRule:
         allow_all: Whether every principal is allowed.
         principals: Explicit principal ids allowed when `allow_all` is false.
         roles: Principal roles allowed when `allow_all` is false.
+        allow_owner: Whether the block creator is allowed when `allow_all` is
+            false. The owner is the principal id stored in
+            `MemoryBlock.created_by`.
     """
 
     allow_all: bool = True
     principals: frozenset[str] = field(default_factory=frozenset)
     roles: frozenset[str] = field(default_factory=frozenset)
+    allow_owner: bool = False
 
     @classmethod
     def allow(cls) -> "AccessRule":
@@ -60,12 +64,14 @@ class AccessRule:
         *,
         principals: set[str] | frozenset[str] | None = None,
         roles: set[str] | frozenset[str] | None = None,
+        owner: bool = False,
     ) -> "AccessRule":
         """Create a rule that allows only listed principals or roles.
 
         Args:
             principals: Principal ids to allow.
             roles: Role names to allow.
+            owner: Whether to allow the block creator.
 
         Returns:
             A selective access rule.
@@ -75,19 +81,33 @@ class AccessRule:
             allow_all=False,
             principals=frozenset(principals or ()),
             roles=frozenset(roles or ()),
+            allow_owner=owner,
         )
 
-    def allows(self, principal: Principal) -> bool:
+    @classmethod
+    def owner(cls) -> "AccessRule":
+        """Create a rule that allows only the block creator.
+
+        Returns:
+            An owner-only access rule.
+        """
+
+        return cls(allow_all=False, allow_owner=True)
+
+    def allows(self, principal: Principal, *, owner_id: str | None = None) -> bool:
         """Return whether the principal satisfies this rule.
 
         Args:
             principal: Principal attempting an operation.
+            owner_id: Optional creator principal id for owner-aware rules.
 
         Returns:
             `True` when the principal is allowed.
         """
 
         if self.allow_all:
+            return True
+        if self.allow_owner and owner_id is not None and principal.id == owner_id:
             return True
         if principal.id in self.principals:
             return True
@@ -167,10 +187,31 @@ class MemoryPolicy:
 
     @classmethod
     def public(cls) -> "MemoryPolicy":
-        """Create the default public policy.
+        """Create a public policy.
 
         Returns:
             A policy that allows every operation to every principal.
         """
 
         return cls()
+
+    @classmethod
+    def owner_private(cls) -> "MemoryPolicy":
+        """Create a policy that allows only the block creator.
+
+        The owner is resolved from `MemoryBlock.created_by` when a policy check
+        runs. This is the default policy for new `Memory` blocks.
+
+        Returns:
+            A policy that allows only the creator to read, write, search, and
+            traverse the block.
+        """
+
+        owner_rule = AccessRule.owner()
+        return cls(
+            read=owner_rule,
+            write=owner_rule,
+            search=owner_rule,
+            traverse_up=owner_rule,
+            traverse_down=owner_rule,
+        )

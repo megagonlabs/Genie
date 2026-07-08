@@ -1,4 +1,4 @@
-"""Attach policies to memory blocks and read them through different principals.
+"""Configure default-private memory and explicit shared block policies.
 
 Run from the repository root:
 
@@ -62,22 +62,42 @@ def main() -> None:
         principal="agent:owner",
         policy_engine=policy_engine,
     )
-    public = owner.put(type="note", value="Public context")
-    private = owner.put(
-        type="note",
-        value="Owner-only reasoning",
-        policy=MemoryPolicy(read=AccessRule.only(principals={"agent:owner"})),
-    )
+    owner_only = AccessRule.owner()
+    researcher_shared = AccessRule.only(roles={"researcher"}, owner=True)
+    compliance_shared = AccessRule.only(roles={"compliance"}, owner=True)
+    public = owner.put(type="note", value="Public context", policy=MemoryPolicy.public())
+    private = owner.put(type="note", value="Owner-only reasoning")
     role_gated = owner.put(
         type="note",
         value="Research team context",
-        policy=MemoryPolicy(read=AccessRule.only(roles={"researcher"})),
+        policy=MemoryPolicy(
+            read=researcher_shared,
+            write=owner_only,
+            search=researcher_shared,
+            traverse_up=researcher_shared,
+            traverse_down=researcher_shared,
+        ),
     )
-    compliance_export = owner.put(type="report", value="Compliance export package")
+    compliance_export = owner.put(
+        type="report",
+        value="Compliance export package",
+        policy=MemoryPolicy(
+            read=compliance_shared,
+            write=owner_only,
+            search=compliance_shared,
+            traverse_up=compliance_shared,
+            traverse_down=compliance_shared,
+        ),
+    )
     owner_export = owner.put(
         type="report",
         value="Owner-only export package",
         policy=MemoryPolicy(
+            read=owner_only,
+            write=owner_only,
+            search=owner_only,
+            traverse_up=owner_only,
+            traverse_down=owner_only,
             operations={"export": AccessRule.only(principals={"agent:owner"})},
         ),
     )
@@ -105,6 +125,7 @@ def main() -> None:
     )
 
     assert reader.get(public) is not None
+    assert owner.get(private) is not None
     assert researcher.get(role_gated) is not None
     assert export_value(compliance, compliance_export) == "Compliance export package"
     assert export_value(owner, owner_export) == "Owner-only export package"

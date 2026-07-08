@@ -167,15 +167,15 @@ def test_after_search_hook_results_are_rechecked_for_policy_and_scope() -> None:
             return [*results, *self.injected]
 
     owner = Memory(principal="owner")
-    root = owner.put(type="root", value="root")
-    inside = owner.put(parent=root, type="note", value="needle inside")
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    inside = owner.put(parent=root, type="note", value="needle inside", policy=MemoryPolicy.public())
     private_inside = owner.put(
         parent=root,
         type="note",
         value="needle private",
         policy=MemoryPolicy(read=AccessRule.only(principals={"owner"})),
     )
-    outside = owner.put(type="note", value="needle outside")
+    outside = owner.put(type="note", value="needle outside", policy=MemoryPolicy.public())
     injected = [
         SearchResult(block=private_inside, score=99, reason="injected private"),
         SearchResult(block=outside, score=98, reason="injected outside"),

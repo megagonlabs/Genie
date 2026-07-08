@@ -6,7 +6,16 @@ from copy import deepcopy
 
 import pytest
 
-from genie import AccessDenied, AccessRule, Memory, MemoryPolicy, Operation, PolicyEngine, Principal
+from genie import (
+    AccessDenied,
+    AccessRule,
+    Memory,
+    MemoryBlock,
+    MemoryPolicy,
+    Operation,
+    PolicyEngine,
+    Principal,
+)
 from genie.policy.policy import BUILTIN_OPERATION_NAMES
 
 
@@ -68,8 +77,13 @@ def test_children_ancestors_and_search_filter_inaccessible_blocks() -> None:
     """Traversal and search filter results by read and search policies."""
 
     owner = Memory(principal="owner")
-    root = owner.put(type="root", value="root")
-    public_child = owner.put(parent=root, type="note", value="needle public")
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    public_child = owner.put(
+        parent=root,
+        type="note",
+        value="needle public",
+        policy=MemoryPolicy.public(),
+    )
     owner.put(
         parent=root,
         type="note",
@@ -80,14 +94,19 @@ def test_children_ancestors_and_search_filter_inaccessible_blocks() -> None:
         parent=root,
         type="note",
         value="needle unsearchable",
-        policy=MemoryPolicy(search=AccessRule.only(principals={"owner"})),
+        policy=MemoryPolicy(read=AccessRule.allow(), search=AccessRule.only(principals={"owner"})),
     )
     private_parent = owner.put(
         type="root",
         value="private parent",
         policy=MemoryPolicy(read=AccessRule.only(principals={"owner"})),
     )
-    public_leaf = owner.put(parent=private_parent, type="note", value="public leaf")
+    public_leaf = owner.put(
+        parent=private_parent,
+        type="note",
+        value="public leaf",
+        policy=MemoryPolicy.public(),
+    )
     reader = Memory(
         backend=owner.backend,
         principal="reader",
@@ -121,6 +140,102 @@ def test_policy_roles_allow_access_without_principal_id_match() -> None:
 
     assert retrieved is not None
     assert retrieved.value == "role gated"
+
+
+def test_policy_rule_can_allow_roles_and_block_owner() -> None:
+    """A rule can allow both matching roles and the block creator."""
+
+    owner = Memory(principal="owner")
+    policy = MemoryPolicy(read=AccessRule.only(roles={"reader"}, owner=True))
+    block = owner.put(type="note", value="shared with owner", policy=policy)
+    reader = Memory(
+        backend=owner.backend,
+        principal=Principal(id="agent", roles=frozenset({"reader"})),
+        policy_engine=owner.policy_engine,
+        hooks=owner.hooks,
+        codecs=owner.codecs,
+    )
+    stranger = Memory(
+        backend=owner.backend,
+        principal="stranger",
+        policy_engine=owner.policy_engine,
+        hooks=owner.hooks,
+        codecs=owner.codecs,
+    )
+
+    assert owner.get(block) is not None
+    assert reader.get(block) is not None
+    with pytest.raises(AccessDenied):
+        stranger.get(block)
+
+
+def test_memory_defaults_new_blocks_to_owner_private_policy() -> None:
+    """Blocks are owner-private when no default policy is configured."""
+
+    owner = Memory(principal="agent:owner")
+    block = owner.put(type="note", value="owner default")
+    reader = Memory(
+        backend=owner.backend,
+        principal="agent:reader",
+        policy_engine=owner.policy_engine,
+        hooks=owner.hooks,
+        codecs=owner.codecs,
+    )
+
+    assert block.policy == MemoryPolicy.owner_private()
+    assert owner.get(block) is not None
+    with pytest.raises(AccessDenied):
+        reader.get(block)
+
+
+def test_memory_default_policy_can_be_configured_to_public() -> None:
+    """Applications can choose a different default policy for new blocks."""
+
+    writer = Memory(principal="agent:writer", default_policy=MemoryPolicy.public())
+    block = writer.put(type="note", value="shared by default")
+    reader = Memory(
+        backend=writer.backend,
+        principal="agent:reader",
+        policy_engine=writer.policy_engine,
+        hooks=writer.hooks,
+        codecs=writer.codecs,
+    )
+
+    assert block.policy == MemoryPolicy.public()
+    assert reader.get(block) is not None
+
+
+def test_handle_writes_preserve_configured_default_policy() -> None:
+    """MemoryHandle writes use the same default policy as their parent memory."""
+
+    memory = Memory(principal="agent:owner", default_policy=MemoryPolicy.public())
+    root = memory.put(type="root", value="shared root")
+    writer = memory.get_handle(root=root, principal="agent:writer")
+
+    child = writer.put(type="note", value="writer-owned")
+    reader = Memory(
+        backend=memory.backend,
+        principal="agent:reader",
+        policy_engine=memory.policy_engine,
+        hooks=memory.hooks,
+        codecs=memory.codecs,
+    )
+
+    assert child.created_by == "agent:writer"
+    assert child.policy == MemoryPolicy.public()
+    assert reader.get(child) is not None
+
+
+def test_owner_rules_use_block_created_by_for_missing_policy_fallback() -> None:
+    """No-policy blocks are still owner-private through the policy engine."""
+
+    engine = PolicyEngine()
+    block = MemoryBlock(id="imported", type="note", value="stored", created_by="agent:owner")
+    owner = Principal(id="agent:owner")
+    reader = Principal(id="agent:reader")
+
+    assert engine.allows(Operation.READ, block, owner)
+    assert not engine.allows(Operation.READ, block, reader)
 
 
 def test_policy_can_deny_parent_writes_and_traversal() -> None:

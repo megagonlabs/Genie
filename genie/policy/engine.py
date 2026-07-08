@@ -98,9 +98,9 @@ class PolicyEngine:
                 custom operation.
         """
 
-        policy = block.policy or MemoryPolicy.public()
+        policy = block.policy or MemoryPolicy.owner_private()
         rule = self._rule_for(policy, operation)
-        return rule.allows(principal)
+        return rule.allows(principal, owner_id=block.created_by)
 
     def _rule_for(self, policy: MemoryPolicy, operation: Operation | str) -> AccessRule:
         """Return the access rule that applies to an operation."""

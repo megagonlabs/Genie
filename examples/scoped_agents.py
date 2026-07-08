@@ -20,7 +20,7 @@ else:
 
 ensure_repo_on_path()
 
-from genie import AccessDenied, InMemoryBackend, Memory, MemoryBlock, MemoryHandle
+from genie import AccessDenied, InMemoryBackend, Memory, MemoryBlock, MemoryHandle, MemoryPolicy
 
 
 @dataclass
@@ -51,7 +51,13 @@ class Agent:
 def main() -> None:
     """Run a focused memory-handle walkthrough."""
 
-    memory = Memory(backend=InMemoryBackend(), principal="system")
+    # This example focuses on handle boundaries, so blocks are explicitly
+    # shared. Production apps should choose a policy that matches their users.
+    memory = Memory(
+        backend=InMemoryBackend(),
+        principal="system",
+        default_policy=MemoryPolicy.public(),
+    )
     project = memory.put(type="project", value="Project workspace")
     task = memory.put(parent=project, type="task", value="Write summary")
     sibling = memory.put(parent=project, type="task", value="Unrelated task")

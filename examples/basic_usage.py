@@ -95,19 +95,27 @@ class Agent:
     name: str
     memory: MemoryHandle
 
-    def remember(self, type: str, value: object, **metadata: object) -> MemoryBlock:
+    def remember(
+        self,
+        type: str,
+        value: object,
+        *,
+        policy: MemoryPolicy | None = None,
+        **metadata: object,
+    ) -> MemoryBlock:
         """Write a block through this agent's memory handle.
 
         Args:
             type: Block type.
             value: Block value.
+            policy: Optional access policy for the new block.
             **metadata: Metadata fields to attach.
 
         Returns:
             Created memory block.
         """
 
-        block = self.memory.put(type=type, value=value, metadata=metadata)
+        block = self.memory.put(type=type, value=value, metadata=metadata, policy=policy)
         print(f"{self.name} wrote {block.type}: {block.value}")
         return block
 
@@ -132,6 +140,8 @@ def main() -> None:
     """Run the integrated Genie walkthrough."""
 
     audit = AuditHook()
+    team_policy = principal_policy("agent:root", "agent:planner", "agent:writer")
+    planner_policy = principal_policy("agent:planner")
     memory = Memory(
         backend=InMemoryBackend(),
         principal="agent:root",
@@ -153,24 +163,28 @@ def main() -> None:
         type="project",
         value={"name": "Proposal draft", "deadline": "Friday"},
         metadata={"workspace": "demo", "request_id": str(request_id)},
+        policy=team_policy,
     )
-    memory.put(parent=project, type="request_id", value=request_id)
+    memory.put(parent=project, type="request_id", value=request_id, policy=team_policy)
     due_at = memory.put(
         parent=project,
         type="deadline",
         value=dt.datetime(2026, 7, 3, 17, 0, tzinfo=dt.timezone.utc),
+        policy=team_policy,
     )
-    budget = memory.put(parent=project, type="budget", value=Decimal("1250.75"))
+    budget = memory.put(parent=project, type="budget", value=Decimal("1250.75"), policy=team_policy)
     requirement = memory.put(
         parent=project,
         type="requirement",
         value="Keep the proposal concise and database-agnostic.",
         metadata={"priority": 3, "owner": "team"},
+        policy=team_policy,
     )
     style = memory.put(
         parent=project,
         type="preference",
         value=StylePreference(tone="warm", length="short"),
+        policy=team_policy,
     )
 
     section("Pass handles to agents")
@@ -181,6 +195,7 @@ def main() -> None:
     task = planner.remember(
         "task",
         {"title": "Draft outline", "status": "open"},
+        policy=team_policy,
         assignee="agent:writer",
         priority=2,
     )
@@ -192,6 +207,7 @@ def main() -> None:
     outline = writer.remember(
         "note",
         "Use three sections: problem, approach, next steps.",
+        policy=team_policy,
         source="draft",
     )
 
@@ -221,7 +237,7 @@ def main() -> None:
         parent=task,
         type="private_note",
         value="Planner-only concern: trim examples if the draft grows.",
-        policy=MemoryPolicy(read=AccessRule.only(principals={"agent:planner"})),
+        policy=planner_policy,
     )
     assert planner.memory.get(private_note) is not None
     try:
@@ -280,6 +296,26 @@ def section(title: str) -> None:
     """
 
     print(f"\n== {title} ==")
+
+
+def principal_policy(*principals: str) -> MemoryPolicy:
+    """Create a policy that allows the listed principals for core operations.
+
+    Args:
+        *principals: Principal ids to allow.
+
+    Returns:
+        A memory policy for shared example blocks.
+    """
+
+    rule = AccessRule.only(principals=set(principals))
+    return MemoryPolicy(
+        read=rule,
+        write=rule,
+        search=rule,
+        traverse_up=rule,
+        traverse_down=rule,
+    )
 
 
 def print_results(results: list[SearchResult]) -> None:
