@@ -96,12 +96,37 @@ def test_scope_put_and_set_forward_codec_options() -> None:
     assert updated.value == {"status": "done"}
 
 
-def test_scope_put_forwards_block_policy() -> None:
-    """Scoped block creation can attach the same policy object as `Memory.put`."""
+def test_handle_put_rejects_explicit_policy_by_default() -> None:
+    """Handles use the memory default policy unless policy override is enabled."""
 
     memory = Memory()
     root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
     writer_scope = memory.get_handle(root=root, principal="agent:writer")
+
+    with pytest.raises(AccessDenied):
+        writer_scope.put(
+            type="note",
+            value="private",
+            policy=MemoryPolicy(read=AccessRule.only(principals={"agent:allowed"})),
+        )
+
+    child = writer_scope.put(type="note", value="writer-owned")
+    allowed_scope = memory.get_handle(root=root, principal="agent:allowed")
+
+    with pytest.raises(AccessDenied):
+        allowed_scope.get(child)
+
+
+def test_handle_put_forwards_block_policy_when_override_is_allowed() -> None:
+    """Trusted handles can attach the same policy object as `Memory.put`."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    writer_scope = memory.get_handle(
+        root=root,
+        principal="agent:writer",
+        allow_policy_override=True,
+    )
 
     private = writer_scope.put(
         type="note",
@@ -117,6 +142,27 @@ def test_scope_put_forwards_block_policy() -> None:
     visible = allowed_scope.get(private)
     assert visible is not None
     assert visible.value == "private"
+
+
+def test_child_handles_cannot_add_policy_override_access() -> None:
+    """Child handles cannot gain explicit policy control unless the parent has it."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    child = memory.put(parent=root, type="task", value="task", policy=MemoryPolicy.public())
+    restricted = memory.get_handle(root=root, principal="agent:writer")
+
+    with pytest.raises(AccessDenied):
+        restricted.get_handle(root=child, allow_policy_override=True)
+
+    privileged = memory.get_handle(
+        root=root,
+        principal="agent:writer",
+        allow_policy_override=True,
+    )
+    narrowed = privileged.get_handle(root=child, allow_policy_override=True)
+
+    assert narrowed.allow_policy_override is True
 
 
 def test_scope_search_accepts_full_search_arguments() -> None:
@@ -193,7 +239,7 @@ def test_child_handles_cannot_change_principal_identity() -> None:
     """Child handles cannot replace the principal they were created with."""
 
     memory = Memory()
-    root = memory.put(type="root", value="root")
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
     scope = memory.get_handle(root=root, principal="agent:worker")
 
     with pytest.raises(AccessDenied):
@@ -261,3 +307,19 @@ def test_scope_root_must_exist() -> None:
 
     with pytest.raises(MemoryNotFound):
         memory.get_handle(root="missing")
+
+
+def test_get_handle_requires_root_read_access_for_requested_principal() -> None:
+    """A principal cannot receive a rooted handle for an unreadable root."""
+
+    memory = Memory(principal="owner")
+    private_root = memory.put(type="root", value="private")
+    shared_root = memory.put(type="root", value="shared", policy=MemoryPolicy.public())
+
+    with pytest.raises(AccessDenied):
+        memory.get_handle(root=private_root, principal="agent:blocked")
+
+    allowed = memory.get_handle(root=shared_root, principal="agent:allowed")
+
+    assert allowed.root_id == shared_root.id
+    assert allowed.principal.id == "agent:allowed"

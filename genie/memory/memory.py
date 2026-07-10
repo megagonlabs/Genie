@@ -569,6 +569,7 @@ class Memory:
         allow_up: bool = False,
         allow_global: bool = False,
         allow_mounts: bool = False,
+        allow_policy_override: bool = False,
     ) -> "MemoryHandle":
         """Create a bounded memory handle to pass to agents.
 
@@ -581,11 +582,14 @@ class Memory:
             allow_global: Whether global search is allowed.
             allow_mounts: Whether the handle can create, list, and resolve
                 symbolic mounts whose source is inside the handle.
+            allow_policy_override: Whether the handle can pass explicit block
+                policies to `put`. Leave false for untrusted agent code.
 
         Returns:
             A `MemoryHandle` backed by this memory system.
 
         Raises:
+            AccessDenied: If the handle principal cannot read `root`.
             ValueError: If `root` is `None`.
             MemoryNotFound: If `root` does not exist.
         """
@@ -596,14 +600,17 @@ class Memory:
                 "Memory.get_handle() requires a root. Use Memory.get_unbounded_handle() "
                 "for explicit unbounded access."
             )
-        self._require_raw(root_id)
+        root_block = self._require_raw(root_id)
+        handle_principal = Principal.coerce(principal) if principal is not None else self.principal
+        self.policy_engine.require(Operation.READ, root_block, handle_principal)
         return self._new_handle(
             root_id=root_id,
-            principal=principal,
+            principal=handle_principal,
             default_scope=default_scope,
             allow_up=allow_up,
             allow_global=allow_global,
             allow_mounts=allow_mounts,
+            allow_policy_override=allow_policy_override,
         )
 
     def get_unbounded_handle(
@@ -614,6 +621,7 @@ class Memory:
         allow_up: bool = False,
         allow_global: bool = False,
         allow_mounts: bool = False,
+        allow_policy_override: bool = False,
     ) -> "MemoryHandle":
         """Create an explicit unbounded memory handle.
 
@@ -630,6 +638,8 @@ class Memory:
             allow_global: Whether global search is allowed.
             allow_mounts: Whether the handle can create, list, and resolve
                 symbolic mounts whose source is visible through the handle.
+            allow_policy_override: Whether the handle can pass explicit block
+                policies to `put`. Leave false for untrusted agent code.
 
         Returns:
             An unbounded `MemoryHandle` backed by this memory system.
@@ -642,6 +652,7 @@ class Memory:
             allow_up=allow_up,
             allow_global=allow_global,
             allow_mounts=allow_mounts,
+            allow_policy_override=allow_policy_override,
         )
 
     def contains(self, root: str | MemoryBlock, block_id: str | MemoryBlock) -> bool:
@@ -666,6 +677,7 @@ class Memory:
         allow_up: bool,
         allow_global: bool,
         allow_mounts: bool,
+        allow_policy_override: bool,
     ) -> "MemoryHandle":
         """Construct a `MemoryHandle` after root validation is complete."""
 
@@ -679,6 +691,7 @@ class Memory:
             allow_up=allow_up,
             allow_global=allow_global,
             allow_mounts=allow_mounts,
+            allow_policy_override=allow_policy_override,
         )
 
     def _coerce_query(

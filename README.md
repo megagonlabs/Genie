@@ -98,13 +98,16 @@ context_memory = memory.get_handle(root=root, allow_up=True)
 context_memory.search("project", scope="ancestors")
 ```
 
-A child handle can narrow access but cannot increase it. A child handle cannot change principal identity, add ancestor traversal, add global search, add mount access, or move its root outside
-the parent handle's subtree unless the parent handle already allows that access.
+A child handle can narrow access but cannot increase it. A child handle cannot change principal identity, add ancestor traversal, add global search, add mount access,
+add policy override access, or move its root outside the parent handle's subtree unless the parent handle already allows that access.
 
-`Memory.get_handle(root=...)` requires a concrete root. Unbounded handles are created with `Memory.get_unbounded_handle(...)` so administrative, routing, migration, or other trusted workflows
-are explicit at the call site.
+`Memory.get_handle(root=...)` requires a concrete root, and the requested handle principal must be able to read that root. Unbounded handles are created with
+`Memory.get_unbounded_handle(...)` so administrative, routing, migration, or other trusted workflows are explicit at the call site.
 
 Mount operations on a `MemoryHandle` are available only when the handle is created with `allow_mounts=True`.
+
+Handles cannot pass explicit block policies to `put(...)` unless they are created with `allow_policy_override=True`. Without that option, blocks created through a handle use the memory's
+configured `default_policy`. This keeps untrusted agent code from making its own writes public or granting access to other principals.
 
 ## Search and Filters
 
@@ -211,6 +214,21 @@ memory = Memory(
 )
 ```
 
+## Security Model
+
+Genie provides access-control building blocks, not a Python sandbox. Keep the full `Memory` object, backend adapters, hooks, codecs, and raw indexes in trusted application code. Pass
+`MemoryHandle` objects to agents or sub-agents through application-controlled tool interfaces.
+
+Production systems should use explicit principals for users, agents, services, and supervisors. The default principal is useful for simple scripts, but shared systems should pass a concrete
+principal when creating `Memory` and when creating handles.
+
+By default, new blocks are owner-private and handle writes cannot override policies. Use `MemoryPolicy.owner_or(...)` when the creator and a supervisor principal or role both need access. Use
+`allow_policy_override=True` only for trusted handles that are allowed to choose block-level policies.
+
+Denied reads raise `AccessDenied` while missing blocks return `None` through the full `Memory` API. If an application must hide whether a block exists, wrap Genie operations at the
+application boundary and return a generic not-found response for both missing and denied reads. Applications should also avoid letting untrusted callers choose block ids because duplicate-id
+errors can reveal that an id already exists.
+
 ## Hooks
 
 Hooks customize behavior before and after memory operations. They are useful for audit logs, metrics, tracing, redaction, or external indexing.
@@ -258,6 +276,7 @@ Genie uses cautious behavior:
 - child handles cannot increase access
 - bounded handles require an existing root block
 - unbounded handles must be created explicitly and require an explicit root for non-global search
+- handles cannot set explicit block policies unless created with `allow_policy_override=True`
 - recursive delete requires write access to every affected block
 - recursive delete does not follow symbolic mounts
 - `before_put` hooks cannot change parent placement after authorization

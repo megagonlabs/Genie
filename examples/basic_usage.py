@@ -189,7 +189,12 @@ def main() -> None:
     section("Pass handles to agents")
     planner = Agent(
         name="planner",
-        memory=memory.get_handle(root=project, principal="agent:planner", allow_up=True),
+        memory=memory.get_handle(
+            root=project,
+            principal="agent:planner",
+            allow_up=True,
+            allow_policy_override=True,
+        ),
     )
     task = planner.remember(
         "task",
@@ -201,7 +206,12 @@ def main() -> None:
 
     writer = Agent(
         name="writer",
-        memory=memory.get_handle(root=task, principal="agent:writer", allow_up=True),
+        memory=memory.get_handle(
+            root=task,
+            principal="agent:writer",
+            allow_up=True,
+            allow_policy_override=True,
+        ),
     )
     outline = writer.remember(
         "note",

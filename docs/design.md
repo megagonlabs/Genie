@@ -66,6 +66,8 @@ MemoryLink
 
 MemoryBackend
   adapter interface for persistence, traversal, links, and search
+
+Policy
 ```
 
 Recommended integration pattern: keep `Memory` in trusted application code and pass `MemoryHandle` into agents or sub-agents.
@@ -242,11 +244,16 @@ otherwise.
 
 `MemoryHandle` does not expose `get_unbounded_handle()` or the raw `contains()` helper. Handle boundaries are enforced internally by scoped operations.
 
-`Memory.get_handle(root=...)` requires a concrete root. Unbounded handles are created with `Memory.get_unbounded_handle(...)` so administrative, routing, migration, or other trusted workflows
-are explicit at the call site.
+`Memory.get_handle(root=...)` requires a concrete root, and the requested
+handle principal must be able to read that root. Unbounded handles are created
+with `Memory.get_unbounded_handle(...)` so administrative, routing, migration,
+or other trusted workflows are explicit at the call site.
 
 Mount operations on a `MemoryHandle` are available only when the handle is created with `allow_mounts=True`. Resolving a mount remains explicit and does not widen ordinary subtree search,
 traversal, or delete behavior.
+
+Handles cannot pass explicit block policies to `put(...)` unless they are created with `allow_policy_override=True`. Without that option, blocks created through a handle use the memory's
+configured `default_policy`.
 
 ## Scoped Access
 
@@ -265,6 +272,7 @@ Specifically, a child handle cannot:
 - add ancestor traversal if the parent did not allow it
 - add global search if the parent did not allow it
 - add mount access if the parent did not allow it
+- add policy override access if the parent did not allow it
 - move its root outside the parent handle's subtree
 
 This supports a common agent pattern:
@@ -446,7 +454,7 @@ The core API does not require users to choose separate store/index objects:
 memory = Memory(backend=PostgresBackend(...))
 ```
 
-This keeps backend storage layout inside adapter configuration. A developer using Genie does not need to understand the internal storage layout just to pass memory into an agent.
+This keeps the backend storage layout inside adapter configuration. A developer using Genie does not need to understand the internal storage layout just to pass memory into an agent.
 
 Inside the backend, the implementation can still be split. `CompositeBackend`
 is not a required Genie class or a fixed constructor shape. It is a common
@@ -733,10 +741,37 @@ Important defaults:
 - New blocks use `MemoryPolicy.owner_private()` unless `Memory(default_policy=...)` or `put(..., policy=...)` chooses another policy.
 - Stored blocks with no policy are treated as owner-private by using `MemoryBlock.created_by`.
 - Scope limits are enforced in addition to block policies.
+- Handles cannot pass explicit policies to `put(...)` unless created with `allow_policy_override=True`.
 - Recursive delete requires write access to every block that would be deleted.
 - Unknown custom policy operations raise a configuration error.
 
 Root write access does not automatically imply write access to descendants. Policy inheritance is not implemented in the current library.
+
+## Security Model
+
+Genie provides access-control building blocks, not a Python sandbox. Trusted application code should keep the full `Memory` object, backend adapters, hooks, codecs, and raw indexes. Agents and
+sub-agents should usually receive `MemoryHandle` objects through application-controlled tool interfaces.
+
+Applications should use explicit principals for users, agents, services, and supervisors. The default principal is useful for simple scripts, but shared systems should pass a concrete principal
+when creating `Memory` and when creating handles.
+
+New blocks are owner-private by default. Handles also reject explicit block policies by default, so untrusted agent code cannot make its own writes public or grant access to other principals.
+Trusted code can create a handle with `allow_policy_override=True` when that handle is allowed to choose block-level policies.
+
+Managed systems often need creator access plus supervisor access. `MemoryPolicy.owner_or(...)` supports that pattern without making blocks public:
+
+```python
+memory = Memory(
+    principal="service:memory",
+    default_policy=MemoryPolicy.owner_or(roles={"memory_admin"}),
+)
+```
+
+Denied reads raise `AccessDenied`, while missing blocks return `None` through the full `Memory` API. That distinction helps developers find policy mistakes. If an application must hide whether
+a block exists, wrap Genie at the application boundary and return a generic not-found response for both missing and denied reads.
+
+Caller-provided block ids should be treated as trusted input. Duplicate-id errors can reveal that an id already exists. Applications that accept untrusted user input should prefer generated ids
+or map external ids to internal Genie ids.
 
 ## Hooks
 
@@ -817,6 +852,7 @@ The current implementation uses cautious behavior:
 - bounded handles require an existing root block
 - unbounded handles must be created explicitly and require an explicit root for non-global search
 - full `Memory.get` returns `None` for missing blocks; rooted handles treat missing or out-of-bounds ids as denied before fetching
+- handles cannot set explicit block policies unless created with `allow_policy_override=True`
 - recursive delete requires write access to every affected block
 - recursive delete does not follow symbolic mounts
 - recursive delete dispatches delete hooks for every removed block

@@ -35,6 +35,7 @@ class MemoryHandle:
         allow_up: bool = False,
         allow_global: bool = False,
         allow_mounts: bool = False,
+        allow_policy_override: bool = False,
     ) -> None:
         """Create a restricted memory handle.
 
@@ -49,6 +50,9 @@ class MemoryHandle:
             allow_global: Whether global search is allowed.
             allow_mounts: Whether this handle can create, list, and resolve
                 symbolic mounts from local source blocks.
+            allow_policy_override: Whether this handle can pass an explicit
+                block policy to `put`. When false, new blocks use the memory's
+                configured default policy.
         """
 
         self._memory = memory
@@ -58,6 +62,7 @@ class MemoryHandle:
         self.allow_up = allow_up
         self.allow_global = allow_global
         self.allow_mounts = allow_mounts
+        self.allow_policy_override = allow_policy_override
 
     def put(
         self,
@@ -79,7 +84,8 @@ class MemoryHandle:
             value: User-level value to encode and store.
             parent: Optional parent block or id inside the handle boundary.
             metadata: Optional metadata used for filtering or indexing.
-            policy: Optional block-level access policy.
+            policy: Optional block-level access policy. Handles reject explicit
+                policies unless created with `allow_policy_override=True`.
             content_type: Optional explicit codec content type.
             id: Optional caller-provided block id.
 
@@ -99,6 +105,8 @@ class MemoryHandle:
         parent_id = _block_id(parent) if parent is not None else self.root_id
         if parent_id is not None:
             self._require_in_subtree(parent_id)
+        if policy is not None and not self.allow_policy_override:
+            raise AccessDenied("This memory handle does not allow explicit block policies.")
         return self._as_principal().put(
             type=type,
             value=value,
@@ -526,6 +534,7 @@ class MemoryHandle:
         allow_up: bool = False,
         allow_global: bool = False,
         allow_mounts: bool = False,
+        allow_policy_override: bool = False,
     ) -> "MemoryHandle":
         """Create a narrower child handle.
 
@@ -542,6 +551,9 @@ class MemoryHandle:
             allow_mounts: Whether symbolic mount operations are allowed. A
                 child handle cannot enable them unless this handle already allows
                 them.
+            allow_policy_override: Whether the child handle can pass explicit
+                block policies to `put`. A child handle cannot enable it unless
+                this handle already allows it.
 
         Returns:
             A new `MemoryHandle` with the same or less access.
@@ -558,6 +570,8 @@ class MemoryHandle:
             raise AccessDenied("A child memory handle cannot add global access.")
         if allow_mounts and not self.allow_mounts:
             raise AccessDenied("A child memory handle cannot add mount access.")
+        if allow_policy_override and not self.allow_policy_override:
+            raise AccessDenied("A child memory handle cannot add policy override access.")
         root_id = _block_id(root) if root is not None else self.root_id
         if root_id is not None:
             self._require_in_subtree(root_id)
@@ -568,6 +582,7 @@ class MemoryHandle:
                 allow_up=allow_up,
                 allow_global=allow_global,
                 allow_mounts=allow_mounts,
+                allow_policy_override=allow_policy_override,
             )
         return self._as_principal().get_handle(
             root=root_id,
@@ -576,6 +591,7 @@ class MemoryHandle:
             allow_up=allow_up,
             allow_global=allow_global,
             allow_mounts=allow_mounts,
+            allow_policy_override=allow_policy_override,
         )
 
     def _as_principal(self) -> "Memory":
