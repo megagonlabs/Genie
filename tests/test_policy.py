@@ -205,6 +205,54 @@ def test_memory_default_policy_can_be_configured_to_public() -> None:
     assert reader.get(block) is not None
 
 
+def test_owner_or_policy_allows_creator_and_configured_principal() -> None:
+    """Managed defaults can allow both block creators and a supervisor."""
+
+    memory = Memory(
+        principal="service:memory",
+        default_policy=MemoryPolicy.owner_or(principals={"service:memory"}),
+    )
+    root = memory.put(
+        type="root",
+        value="shared workspace",
+        policy=MemoryPolicy.owner_or(principals={"service:memory", "agent:writer"}),
+    )
+    agent = memory.get_handle(root=root, principal="agent:writer")
+
+    agent_note = agent.put(type="note", value="agent-authored")
+    reader = Memory(
+        backend=memory.backend,
+        principal="agent:reader",
+        policy_engine=memory.policy_engine,
+        hooks=memory.hooks,
+        codecs=memory.codecs,
+        default_policy=memory.default_policy,
+    )
+
+    assert agent_note.created_by == "agent:writer"
+    assert agent.get(agent_note) is not None
+    assert memory.get(agent_note) is not None
+    with pytest.raises(AccessDenied):
+        reader.get(agent_note)
+
+
+def test_owner_or_policy_allows_configured_roles() -> None:
+    """Managed defaults can use roles instead of fixed principal ids."""
+
+    writer = Memory(principal="agent:writer", default_policy=MemoryPolicy.owner_or(roles={"memory_admin"}))
+    block = writer.put(type="note", value="role-admin visible")
+    admin = Memory(
+        backend=writer.backend,
+        principal=Principal(id="service:memory", roles=frozenset({"memory_admin"})),
+        policy_engine=writer.policy_engine,
+        hooks=writer.hooks,
+        codecs=writer.codecs,
+        default_policy=writer.default_policy,
+    )
+
+    assert admin.get(block) is not None
+
+
 def test_handle_writes_preserve_configured_default_policy() -> None:
     """MemoryHandle writes use the same default policy as their parent memory."""
 

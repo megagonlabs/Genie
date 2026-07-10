@@ -32,7 +32,6 @@ ensure_repo_on_path()
 
 from genie import (
     AccessDenied,
-    AccessRule,
     CodecRegistry,
     InMemoryBackend,
     JsonCodec,
@@ -140,8 +139,8 @@ def main() -> None:
     """Run the integrated Genie walkthrough."""
 
     audit = AuditHook()
-    team_policy = principal_policy("agent:root", "agent:planner", "agent:writer")
-    planner_policy = principal_policy("agent:planner")
+    team_policy = MemoryPolicy.owner_or(principals={"agent:root", "agent:planner", "agent:writer"})
+    planner_policy = MemoryPolicy.owner_or(principals={"agent:planner"})
     memory = Memory(
         backend=InMemoryBackend(),
         principal="agent:root",
@@ -296,26 +295,6 @@ def section(title: str) -> None:
     """
 
     print(f"\n== {title} ==")
-
-
-def principal_policy(*principals: str) -> MemoryPolicy:
-    """Create a policy that allows the listed principals for core operations.
-
-    Args:
-        *principals: Principal ids to allow.
-
-    Returns:
-        A memory policy for shared example blocks.
-    """
-
-    rule = AccessRule.only(principals=set(principals))
-    return MemoryPolicy(
-        read=rule,
-        write=rule,
-        search=rule,
-        traverse_up=rule,
-        traverse_down=rule,
-    )
 
 
 def print_results(results: list[SearchResult]) -> None:

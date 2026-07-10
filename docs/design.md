@@ -448,15 +448,26 @@ memory = Memory(backend=PostgresBackend(...))
 
 This keeps backend storage layout inside adapter configuration. A developer using Genie does not need to understand the internal storage layout just to pass memory into an agent.
 
-Inside the backend, the implementation can still be split:
+Inside the backend, the implementation can still be split. `CompositeBackend`
+is not a required Genie class or a fixed constructor shape. It is a common
+adapter pattern: one public backend object coordinates whatever stores and
+indexes the application needs.
 
 ```python
 class CompositeBackend:
-    store = SQLiteBlockStore(...)
+    blocks = PostgresBlockStore(...)
+    values = ObjectValueStore(...)
     traversal = SQLiteTraversalIndex(...)
-    search = ElasticsearchIndex(...)
-    link_store = SQLiteLinkStore(...)
+    links = SQLiteLinkStore(...)
+    text = ElasticsearchIndex(...)
+    vectors = VectorSearchIndex(...)
 ```
+
+The field names and number of components are application choices. The example
+names `traversal` and `links` explicitly because they map to separate backend
+capabilities. A specialized composite can still back both capabilities with one
+graph database, as shown below. The only requirement is that the outer object
+implements the `MemoryBackend` methods that Genie calls.
 
 or implemented as one class:
 
@@ -472,6 +483,89 @@ class PostgresBackend:
 ```
 
 Both shapes satisfy the same `MemoryBackend` interface.
+
+Traversal and links may use the same graph database internally, but Genie keeps
+them as separate capabilities:
+
+```text
+TraversalIndex
+  parent/child ownership
+  used by children, ancestors, descendants, contains, handles, and delete
+
+LinkStore
+  non-owning relationships
+  used by add_link, list_links, mounts, and linked-memory search
+```
+
+Normal subtree traversal does not follow links. This keeps scoped handles,
+recursive delete, and ownership checks predictable. A backend can still support
+link-aware retrieval through `MemoryQuery(scope=Scope.LINKS)` or its own search
+routing logic.
+
+For example, a graph and vector backend can keep the full block record in a
+canonical store while using graph and vector systems as derived indexes:
+
+```python
+class GraphVectorBackend:
+    block_store = PostgresBlockStore(...)
+    graph = Neo4jMemoryGraph(...)
+    vector = VectorSearchIndex(...)
+
+    def put_block(self, block):
+        stored = self.block_store.put_block(block)
+        self.graph.upsert_block(stored)
+        self.graph.set_parent(stored.id, stored.parent_id)
+        self.vector.upsert(stored)
+        return stored
+
+    def get_block(self, block_id):
+        return self.block_store.get_block(block_id)
+
+    def update_block(self, block):
+        stored = self.block_store.update_block(block)
+        self.graph.upsert_block(stored)
+        self.graph.set_parent(stored.id, stored.parent_id)
+        self.vector.upsert(stored)
+        return stored
+
+    def delete_block(self, block_id):
+        self.block_store.delete_block(block_id)
+        self.graph.delete_block(block_id)
+        self.vector.delete(block_id)
+
+    def children(self, block_id):
+        ids = self.graph.child_ids(block_id)
+        return self.block_store.get_blocks(ids)
+
+    def ancestors(self, block_id):
+        ids = self.graph.ancestor_ids(block_id)
+        return self.block_store.get_blocks(ids)
+
+    def descendants(self, block_id, *, include_self=False):
+        ids = self.graph.descendant_ids(block_id, include_self=include_self)
+        return self.block_store.get_blocks(ids)
+
+    def contains(self, root_id, block_id):
+        return self.graph.contains(root_id, block_id)
+
+    def add_link(self, link):
+        return self.graph.add_link(link)
+
+    def list_links(self, block_id, **options):
+        return self.graph.list_links(block_id, **options)
+
+    def delete_links_for_block(self, block_id):
+        self.graph.delete_links_for_block(block_id)
+
+    def search(self, query):
+        if query.scope == Scope.LINKS:
+            return self.graph.search_linked_blocks(query)
+        return self.vector.search(query)
+```
+
+In this shape, Postgres owns the saved `MemoryBlock` state. Neo4j owns
+traversal and links. The vector index owns semantic retrieval. The public
+`Memory` object still receives one backend object.
 
 The design therefore gives two layers:
 
@@ -607,6 +701,20 @@ memory = Memory(default_policy=MemoryPolicy.owner_private())
 
 `MemoryPolicy.owner_private()` is the default when `default_policy` is not provided. Applications can choose another default, such as `MemoryPolicy.public()`, when a system needs broader
 access.
+
+Managed memory systems often need both creator access and supervisor access.
+Use `owner_or(...)` for that pattern:
+
+```python
+memory = Memory(
+    principal="service:memory",
+    default_policy=MemoryPolicy.owner_or(roles={"memory_admin"}),
+)
+```
+
+With this policy, blocks created through agent handles keep the agent as
+`created_by`, while principals with the configured role or id can also access
+those blocks.
 
 The `PolicyEngine` checks whether a principal can perform an operation on a block.
 

@@ -202,6 +202,15 @@ compliance_note = memory.put(
 `MemoryPolicy.owner_private()` is the default for new blocks when `default_policy` is not provided. Applications can choose another default, such as `MemoryPolicy.public()`, but production code
 should keep private defaults and attach public or shared policies only where broader access is intended. Scope limits are enforced in addition to block policies.
 
+For managed memory systems, use `owner_or(...)` so the block creator keeps access while a supervisor principal or admin role can also access new blocks:
+
+```python
+memory = Memory(
+    principal="service:memory",
+    default_policy=MemoryPolicy.owner_or(roles={"memory_admin"}),
+)
+```
+
 ## Hooks
 
 Hooks customize behavior before and after memory operations. They are useful for audit logs, metrics, tracing, redaction, or external indexing.

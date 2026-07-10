@@ -215,3 +215,34 @@ class MemoryPolicy:
             traverse_up=owner_rule,
             traverse_down=owner_rule,
         )
+
+    @classmethod
+    def owner_or(
+        cls,
+        *,
+        principals: set[str] | frozenset[str] | None = None,
+        roles: set[str] | frozenset[str] | None = None,
+    ) -> "MemoryPolicy":
+        """Create a policy that allows the creator plus listed principals or roles.
+
+        This is useful for managed memory systems where the creator should keep
+        access, but a supervisor, service principal, or admin role also needs
+        read, write, search, and traversal access.
+
+        Args:
+            principals: Additional principal ids to allow.
+            roles: Additional role names to allow.
+
+        Returns:
+            A policy that allows the creator, listed principals, and listed
+            roles for core memory operations.
+        """
+
+        rule = AccessRule.only(principals=principals, roles=roles, owner=True)
+        return cls(
+            read=rule,
+            write=rule,
+            search=rule,
+            traverse_up=rule,
+            traverse_down=rule,
+        )
