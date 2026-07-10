@@ -55,6 +55,13 @@ class MemoryHandle:
                 configured default policy.
         """
 
+        default_scope = Scope(default_scope)
+        _validate_default_scope(
+            default_scope,
+            allow_up=allow_up,
+            allow_global=allow_global,
+        )
+
         self._memory = memory
         self.root_id = root_id
         self.principal = principal
@@ -637,3 +644,17 @@ def _block_id(block: str | MemoryBlock | None) -> str | None:
     if isinstance(block, MemoryBlock):
         return block.id
     return block
+
+
+def _validate_default_scope(
+    default_scope: Scope,
+    *,
+    allow_up: bool,
+    allow_global: bool,
+) -> None:
+    """Raise when a handle default scope requires a disabled capability."""
+
+    if default_scope == Scope.GLOBAL and not allow_global:
+        raise ValueError("default_scope='global' requires allow_global=True.")
+    if default_scope == Scope.ANCESTORS and not allow_up:
+        raise ValueError("default_scope='ancestors' requires allow_up=True.")

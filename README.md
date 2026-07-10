@@ -109,6 +109,8 @@ Mount operations on a `MemoryHandle` are available only when the handle is creat
 Handles cannot pass explicit block policies to `put(...)` unless they are created with `allow_policy_override=True`. Without that option, blocks created through a handle use the memory's
 configured `default_policy`. This keeps untrusted agent code from making its own writes public or granting access to other principals.
 
+Handle default scopes are checked when the handle is created. For example, `default_scope="global"` requires `allow_global=True`, and `default_scope="ancestors"` requires `allow_up=True`.
+
 ## Search and Filters
 
 Search accepts text, scope, block type filters, metadata filters, and result limits:
@@ -276,6 +278,7 @@ Genie uses cautious behavior:
 - child handles cannot increase access
 - bounded handles require an existing root block
 - unbounded handles must be created explicitly and require an explicit root for non-global search
+- handle default scopes cannot require disabled access
 - handles cannot set explicit block policies unless created with `allow_policy_override=True`
 - recursive delete requires write access to every affected block
 - recursive delete does not follow symbolic mounts

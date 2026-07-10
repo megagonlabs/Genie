@@ -211,6 +211,45 @@ def test_child_handles_cannot_widen_parent_global_or_ancestor_access() -> None:
     ]
 
 
+def test_handle_creation_rejects_default_scope_that_requires_disabled_access() -> None:
+    """Handles reject default scopes that would fail every default search."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root context")
+
+    with pytest.raises(ValueError, match="allow_global"):
+        memory.get_handle(root=root, default_scope="global")
+    with pytest.raises(ValueError, match="allow_up"):
+        memory.get_handle(root=root, default_scope=Scope.ANCESTORS)
+    with pytest.raises(ValueError, match="allow_global"):
+        memory.get_unbounded_handle(default_scope="global")
+
+    global_handle = memory.get_handle(root=root, default_scope="global", allow_global=True)
+    ancestor_handle = memory.get_handle(root=root, default_scope="ancestors", allow_up=True)
+
+    assert global_handle.default_scope == Scope.GLOBAL
+    assert ancestor_handle.default_scope == Scope.ANCESTORS
+
+
+def test_child_handle_creation_rejects_default_scope_without_matching_child_capability() -> None:
+    """Child handles must enable the capability required by their default scope."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root context")
+    parent = memory.get_handle(root=root, allow_up=True, allow_global=True)
+
+    with pytest.raises(ValueError, match="allow_global"):
+        parent.get_handle(default_scope="global")
+    with pytest.raises(ValueError, match="allow_up"):
+        parent.get_handle(default_scope="ancestors")
+
+    global_child = parent.get_handle(default_scope="global", allow_global=True)
+    ancestor_child = parent.get_handle(default_scope="ancestors", allow_up=True)
+
+    assert global_child.default_scope == Scope.GLOBAL
+    assert ancestor_child.default_scope == Scope.ANCESTORS
+
+
 def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
     """Prebuilt queries cannot pass wider roots through a scope."""
 

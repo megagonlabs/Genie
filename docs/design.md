@@ -67,7 +67,15 @@ MemoryLink
 MemoryBackend
   adapter interface for persistence, traversal, links, and search
 
-Policy
+Principal
+  acting identity used by policy checks
+
+MemoryPolicy
+  block-level access rules for read, write, search, traversal, and custom
+  operations
+
+PolicyEngine
+  evaluates whether a principal can perform an operation on a memory block
 ```
 
 Recommended integration pattern: keep `Memory` in trusted application code and pass `MemoryHandle` into agents or sub-agents.
@@ -254,6 +262,8 @@ traversal, or delete behavior.
 
 Handles cannot pass explicit block policies to `put(...)` unless they are created with `allow_policy_override=True`. Without that option, blocks created through a handle use the memory's
 configured `default_policy`.
+
+Handle default scopes are checked when the handle is created. For example, `default_scope="global"` requires `allow_global=True`, and `default_scope="ancestors"` requires `allow_up=True`.
 
 ## Scoped Access
 
@@ -852,6 +862,7 @@ The current implementation uses cautious behavior:
 - bounded handles require an existing root block
 - unbounded handles must be created explicitly and require an explicit root for non-global search
 - full `Memory.get` returns `None` for missing blocks; rooted handles treat missing or out-of-bounds ids as denied before fetching
+- handle default scopes cannot require disabled access
 - handles cannot set explicit block policies unless created with `allow_policy_override=True`
 - recursive delete requires write access to every affected block
 - recursive delete does not follow symbolic mounts
