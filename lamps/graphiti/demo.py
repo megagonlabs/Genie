@@ -1,4 +1,4 @@
-"""Run the Graphiti-inspired temporal knowledge graph demo.
+"""Run an agent with temporal knowledge graph tools.
 
 From the repository root:
 
@@ -7,20 +7,19 @@ From the repository root:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from genie import InMemoryBackend, Memory
-from lamps.graphiti import TemporalKnowledgeGraph
-
-
-def at(value: str) -> datetime:
-    """Parse a demo date at midnight UTC."""
-
-    return datetime.fromisoformat(value).replace(tzinfo=UTC)
+from lamps.demo_output import print_agent_demo
+from lamps.graphiti import (
+    FactCandidate,
+    Observation,
+    TemporalGraphAgent,
+    TemporalGraphTools,
+    TemporalKnowledgeGraph,
+)
 
 
 def main() -> None:
-    """Build a small graph and run temporal and neighborhood queries."""
+    """Let an agent learn source material and answer through graph tools."""
 
     memory = Memory(backend=InMemoryBackend(), principal="graphiti-demo")
     root = memory.put(
@@ -28,101 +27,96 @@ def main() -> None:
         value={"name": "Customer context"},
     )
     graph = TemporalKnowledgeGraph(memory.get_handle(root=root))
-
-    alice = graph.add_entity("Alice", entity_type="person")
-    bob = graph.add_entity("Bob", entity_type="person")
-    acme = graph.add_entity("Acme", entity_type="company")
-    san_francisco = graph.add_entity("San Francisco", entity_type="city")
-    seattle = graph.add_entity("Seattle", entity_type="city")
-
-    first_chat = graph.add_episode(
-        "Alice said she lives in San Francisco and works at Acme.",
-        source="chat/2024-01-10",
-        observed_at=at("2024-01-10"),
-    )
-    graph.assert_fact(
-        alice,
-        "lives_in",
-        san_francisco,
-        episode=first_chat,
-        valid_from=at("2024-01-10"),
-        exclusive=True,
-    )
-    alice_employment = graph.assert_fact(
-        alice,
-        "works_at",
-        acme,
-        episode=first_chat,
-        valid_from=at("2024-01-10"),
+    agent = TemporalGraphAgent(
+        name="context-agent",
+        tools=TemporalGraphTools(graph),
     )
 
-    directory = graph.add_episode(
-        "Acme is headquartered in San Francisco; Alice and Bob work there.",
-        source="directory/2024-02-01",
-        observed_at=at("2024-02-01"),
-    )
-    graph.assert_fact(
-        alice,
-        "works_at",
-        acme,
-        episode=directory,
-        valid_from=at("2024-02-01"),
-    )
-    graph.assert_fact(
-        bob,
-        "works_at",
-        acme,
-        episode=directory,
-        valid_from=at("2024-02-01"),
-    )
-    graph.assert_fact(
-        acme,
-        "headquartered_in",
-        san_francisco,
-        episode=directory,
-        valid_from=at("2024-02-01"),
-        exclusive=True,
-    )
-
-    moving_chat = graph.add_episode(
-        "Alice said she moved to Seattle on June 1.",
-        source="chat/2025-06-02",
-        observed_at=at("2025-06-02"),
-    )
-    graph.assert_fact(
-        alice,
-        "lives_in",
-        seattle,
-        episode=moving_chat,
-        valid_from=at("2025-06-01"),
-        exclusive=True,
-    )
-
-    for query_date in ("2024-12-01", "2025-07-01"):
-        print(f"Alice as of {query_date}:")
-        for fact in graph.facts_at(at(query_date), subject=alice):
-            print(f"- {fact.statement}")
-
-    print("Acme neighborhood as of 2025-07-01:")
-    for fact in graph.neighborhood_at(acme, at("2025-07-01")):
-        print(f"- {fact.statement}")
-
-    print("Alice location history:")
-    for fact in graph.history(alice, relation="lives_in"):
-        valid_to = fact.valid_to.date().isoformat() if fact.valid_to else "open"
-        sources = ", ".join(
-            episode.value["source"] for episode in graph.provenance(fact)
+    agent.learn(
+        (
+            Observation(
+                content="Alice said she lives in San Francisco and works at Acme.",
+                source="chat/2024-01-10",
+                observed_at="2024-01-10T00:00:00Z",
+                facts=(
+                    FactCandidate(
+                        subject="Alice",
+                        subject_type="person",
+                        relation="lives_in",
+                        object="San Francisco",
+                        object_type="city",
+                        valid_from="2024-01-10T00:00:00Z",
+                        exclusive=True,
+                    ),
+                    FactCandidate(
+                        subject="Alice",
+                        subject_type="person",
+                        relation="works_at",
+                        object="Acme",
+                        object_type="company",
+                        valid_from="2024-01-10T00:00:00Z",
+                    ),
+                ),
+            ),
+            Observation(
+                content="Acme is headquartered in San Francisco; Alice and Bob work there.",
+                source="directory/2024-02-01",
+                observed_at="2024-02-01T00:00:00Z",
+                facts=(
+                    FactCandidate(
+                        subject="Alice",
+                        subject_type="person",
+                        relation="works_at",
+                        object="Acme",
+                        object_type="company",
+                        valid_from="2024-02-01T00:00:00Z",
+                    ),
+                    FactCandidate(
+                        subject="Bob",
+                        subject_type="person",
+                        relation="works_at",
+                        object="Acme",
+                        object_type="company",
+                        valid_from="2024-02-01T00:00:00Z",
+                    ),
+                    FactCandidate(
+                        subject="Acme",
+                        subject_type="company",
+                        relation="headquartered_in",
+                        object="San Francisco",
+                        object_type="city",
+                        valid_from="2024-02-01T00:00:00Z",
+                        exclusive=True,
+                    ),
+                ),
+            ),
+            Observation(
+                content="Alice said she moved to Seattle on June 1.",
+                source="chat/2025-06-02",
+                observed_at="2025-06-02T00:00:00Z",
+                facts=(
+                    FactCandidate(
+                        subject="Alice",
+                        subject_type="person",
+                        relation="lives_in",
+                        object="Seattle",
+                        object_type="city",
+                        valid_from="2025-06-01T00:00:00Z",
+                        exclusive=True,
+                    ),
+                ),
+            ),
         )
-        print(
-            f"- {fact.statement}; "
-            f"valid [{fact.valid_from.date().isoformat()}, {valid_to}); "
-            f"provenance: {sources}"
-        )
-
-    employment_sources = ", ".join(
-        episode.value["source"] for episode in graph.provenance(alice_employment)
     )
-    print(f"Alice employment provenance: {employment_sources}")
+
+    answer = agent.answer(
+        "Where does Alice live now, where did she live before, and who works with her?",
+        subject="Alice",
+        context_entity="Acme",
+        as_of="2025-07-01T00:00:00Z",
+        history_relation="lives_in",
+    )
+    print_agent_demo(tools=agent.tools, answer=answer, calls=agent.call_log)
 
 
 if __name__ == "__main__":

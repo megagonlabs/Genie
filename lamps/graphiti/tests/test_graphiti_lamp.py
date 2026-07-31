@@ -10,7 +10,13 @@ import sys
 import pytest
 
 from genie import Memory
-from lamps.graphiti import TemporalKnowledgeGraph
+from lamps.graphiti import (
+    FactCandidate,
+    Observation,
+    TemporalGraphAgent,
+    TemporalGraphTools,
+    TemporalKnowledgeGraph,
+)
 from lamps.graphiti.temporal_graph import SUPERSEDED_BY_RELATION
 
 
@@ -29,6 +35,15 @@ def make_graph() -> TemporalKnowledgeGraph:
     memory = Memory(principal="test")
     root = memory.put(type="temporal_knowledge_graph", value={"name": "test"})
     return TemporalKnowledgeGraph(memory.get_handle(root=root))
+
+
+def make_agent() -> TemporalGraphAgent:
+    """Create an agent that receives only temporal graph tools."""
+
+    return TemporalGraphAgent(
+        name="test-agent",
+        tools=TemporalGraphTools(make_graph()),
+    )
 
 
 def test_exclusive_fact_preserves_history_and_provenance() -> None:
@@ -214,6 +229,88 @@ def test_temporal_validation_is_explicit() -> None:
         )
 
 
+def test_agent_learns_and_answers_only_through_tools() -> None:
+    """The example agent writes and queries the graph through named tools."""
+
+    agent = make_agent()
+    assert [tool.name for tool in agent.tools] == [
+        "add_episode",
+        "add_fact",
+        "query_entity",
+        "query_neighborhood",
+        "get_history",
+    ]
+
+    agent.learn(
+        (
+            Observation(
+                content="Alice lives in San Francisco and works at Acme.",
+                source="chat/1",
+                observed_at="2024-01-10T00:00:00Z",
+                facts=(
+                    FactCandidate(
+                        subject="Alice",
+                        subject_type="person",
+                        relation="lives_in",
+                        object="San Francisco",
+                        object_type="city",
+                        valid_from="2024-01-10T00:00:00Z",
+                        exclusive=True,
+                    ),
+                    FactCandidate(
+                        subject="Alice",
+                        subject_type="person",
+                        relation="works_at",
+                        object="Acme",
+                        object_type="company",
+                        valid_from="2024-01-10T00:00:00Z",
+                    ),
+                ),
+            ),
+            Observation(
+                content="Alice moved to Seattle.",
+                source="chat/2",
+                observed_at="2025-06-02T00:00:00Z",
+                facts=(
+                    FactCandidate(
+                        subject="Alice",
+                        subject_type="person",
+                        relation="lives_in",
+                        object="Seattle",
+                        object_type="city",
+                        valid_from="2025-06-01T00:00:00Z",
+                        exclusive=True,
+                    ),
+                ),
+            ),
+        )
+    )
+    answer = agent.answer(
+        "Where does Alice live now and where did she live before?",
+        subject="Alice",
+        context_entity="Acme",
+        as_of="2025-07-01T00:00:00Z",
+        history_relation="lives_in",
+    )
+
+    assert "Alice -[lives_in]-> Seattle" in answer
+    assert "Alice -[lives_in]-> San Francisco" in answer
+    assert [record.name for record in agent.call_log] == [
+        "add_episode",
+        "add_fact",
+        "add_fact",
+        "add_episode",
+        "add_fact",
+        "query_entity",
+        "query_neighborhood",
+        "get_history",
+    ]
+    assert agent.tool_usage() == (
+        "add_episode x2, add_fact x3, query_entity x1, "
+        "query_neighborhood x1, get_history x1"
+    )
+
+
 def test_demo_runs_as_a_module() -> None:
     """The lamp is runnable from the repository root."""
 
@@ -226,9 +323,11 @@ def test_demo_runs_as_a_module() -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Alice as of 2024-12-01:" in result.stdout
-    assert "Alice -[lives_in]-> San Francisco" in result.stdout
-    assert "Alice as of 2025-07-01:" in result.stdout
+    assert "Tools available to the agent:" in result.stdout
+    assert "- add_episode: Store raw source material for later provenance." in result.stdout
+    assert "Agent answer:" in result.stdout
     assert "Alice -[lives_in]-> Seattle" in result.stdout
-    assert "Acme neighborhood as of 2025-07-01:" in result.stdout
-    assert "Alice employment provenance: chat/2024-01-10, directory/2024-02-01" in result.stdout
+    assert "Alice -[lives_in]-> San Francisco" in result.stdout
+    assert "Related context around Acme:" in result.stdout
+    assert "Inspectable tool calls:\n01. add_episode\n02. add_fact" in result.stdout
+    assert "Tool usage:\n- add_episode x3\n- add_fact x6" in result.stdout
