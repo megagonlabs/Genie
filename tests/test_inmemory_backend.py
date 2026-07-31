@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from genie import InMemoryBackend, Memory, MemoryLink, MemoryPolicy, MemoryQuery
@@ -107,6 +109,34 @@ def test_backend_links_return_defensive_metadata_copies() -> None:
 
     relisted = backend.list_links(source.id)
     assert relisted[0].metadata == {"tags": ["initial"]}
+
+
+def test_backend_updates_only_existing_link_metadata() -> None:
+    """Backend link updates preserve identity and reject implicit overwrites."""
+
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend)
+    source = memory.put(type="source", value="source")
+    target = memory.put(type="target", value="target")
+    link = backend.add_link(
+        MemoryLink(
+            source_id=source.id,
+            target_id=target.id,
+            relation="references",
+            metadata={"status": "new"},
+        )
+    )
+
+    updated = backend.update_link(replace(link, metadata={"status": "reviewed"}))
+
+    assert updated.metadata == {"status": "reviewed"}
+    assert backend.list_links(source.id) == [updated]
+    with pytest.raises(MemoryConflict):
+        backend.update_link(replace(link, relation="replaced"))
+    with pytest.raises(MemoryConflict):
+        backend.update_link(MemoryLink(source_id=source.id, target_id=target.id, relation="missing"))
+    with pytest.raises(MemoryConflict):
+        backend.add_link(link)
 
 
 def test_backend_can_delete_links_for_a_block() -> None:

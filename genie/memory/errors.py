@@ -6,7 +6,7 @@ class GenieError(Exception):
 
 
 class MemoryNotFound(GenieError):
-    """Raised when a requested memory block does not exist."""
+    """Raised when a requested memory block or link does not exist."""
 
 
 class MemoryConflict(GenieError):

@@ -157,6 +157,28 @@ class LinkStore(Protocol):
 
         Returns:
             Stored link.
+
+        Raises:
+            MemoryConflict: If the link id already exists.
+        """
+
+        ...
+
+    def update_link(self, link: MemoryLink) -> MemoryLink:
+        """Replace the metadata of an existing typed link.
+
+        The replacement must preserve the link id, source, target, relation,
+        and creation timestamp.
+
+        Args:
+            link: Link containing the replacement metadata.
+
+        Returns:
+            Stored replacement link.
+
+        Raises:
+            MemoryConflict: If the link is missing or any field other than
+                metadata changed.
         """
 
         ...

@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from genie.memory.block import MemoryBlock
-from genie.memory.links import MemoryLink
+from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import AccessDenied
 from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
@@ -306,6 +306,38 @@ class MemoryHandle:
         self._require_in_subtree(_block_id(source))
         self._require_in_subtree(_block_id(target))
         return self._as_principal().add_link(source, target, relation, metadata=metadata)
+
+    def update_link(
+        self,
+        link: MemoryLink,
+        *,
+        metadata: dict[str, Any],
+    ) -> MemoryLink:
+        """Merge metadata into an existing link visible through this handle.
+
+        Normal links must keep both endpoints inside the handle boundary. A
+        mount may point outside the boundary only when mount access is enabled.
+
+        Args:
+            link: Existing link returned by `add_link` or `list_links`.
+            metadata: Metadata fields to merge into the stored link metadata.
+
+        Returns:
+            Stored replacement link.
+
+        Raises:
+            AccessDenied: If the link falls outside the handle boundary, mount
+                access is required, or policy denies the operation.
+            MemoryNotFound: If the link or a required endpoint is missing.
+        """
+
+        stored = self._memory._require_stored_link(link)
+        self._require_in_subtree(stored.source_id)
+        if stored.relation == LinkRelations.MOUNT:
+            self._require_mounts_allowed()
+        else:
+            self._require_in_subtree(stored.target_id)
+        return self._as_principal().update_link(stored, metadata=metadata)
 
     def list_links(
         self,

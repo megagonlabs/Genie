@@ -65,6 +65,9 @@ bounded handle. Examples pass `backend=InMemoryBackend()` explicitly so first-ti
 Genie models memory as a typed graph of blocks. Parent/child relationships show ownership for scoped access. Links and mounts connect blocks without making one own the other. The `type` field
 and the meaning of `value` are application-defined. Codecs convert values between application objects and storage-safe data.
 
+Link identity and topology remain stable after creation. Applications can merge new relationship properties with `memory.update_link(link, metadata={...})`; the method persists and returns a
+replacement `MemoryLink` with the same id, source, target, relation, and creation timestamp.
+
 ## Examples
 
 Focused runnable examples live in [examples](examples):

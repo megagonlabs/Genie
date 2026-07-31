@@ -60,8 +60,36 @@ class InMemoryLinkStore:
 
         Returns:
             Defensive copy of the stored link.
+
+        Raises:
+            MemoryConflict: If the link id already exists.
         """
 
+        if link.id in self._links:
+            raise MemoryConflict(f"Memory link {link.id!r} already exists.")
+        link = _copy_link(link)
+        self._links[link.id] = link
+        return _copy_link(link)
+
+    def update_link(self, link: MemoryLink) -> MemoryLink:
+        """Replace the metadata of an existing link.
+
+        Args:
+            link: Link containing the replacement metadata.
+
+        Returns:
+            Defensive copy of the stored replacement link.
+
+        Raises:
+            MemoryConflict: If the link is missing or any field other than
+                metadata changed.
+        """
+
+        previous = self._links.get(link.id)
+        if previous is None:
+            raise MemoryConflict(f"Memory link {link.id!r} does not exist.")
+        if not _same_link_identity(previous, link):
+            raise MemoryConflict("Link updates can change only metadata.")
         link = _copy_link(link)
         self._links[link.id] = link
         return _copy_link(link)
@@ -357,8 +385,9 @@ class RoutedBackend:
             Stored link.
 
         Raises:
-            MemoryConflict: If either endpoint is missing or a cross-route link
-                is attempted without a shared link store.
+            MemoryConflict: If the link id already exists, either endpoint is
+                missing, or a cross-route link is attempted without a shared
+                link store.
         """
 
         source_route = self._route_for_existing_block(link.source_id)
@@ -368,6 +397,25 @@ class RoutedBackend:
         if source_route != target_route:
             raise MemoryConflict("Cross-route links require a shared link_store.")
         return self.routes[source_route].add_link(link)
+
+    def update_link(self, link: MemoryLink) -> MemoryLink:
+        """Replace link metadata in the shared store or source route.
+
+        Args:
+            link: Existing link containing the replacement metadata.
+
+        Returns:
+            Stored replacement link.
+
+        Raises:
+            MemoryConflict: If the link is missing or any field other than
+                metadata changed.
+        """
+
+        if self.link_store is not None:
+            return self.link_store.update_link(link)
+        source_route = self._route_for_existing_block(link.source_id)
+        return self.routes[source_route].update_link(link)
 
     def list_links(
         self,
@@ -566,4 +614,16 @@ def _copy_link(link: MemoryLink) -> MemoryLink:
         relation=link.relation,
         metadata=deepcopy(link.metadata),
         created_at=link.created_at,
+    )
+
+
+def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
+    """Return whether two links identify the same relationship."""
+
+    return (
+        left.id == right.id
+        and left.source_id == right.source_id
+        and left.target_id == right.target_id
+        and left.relation == right.relation
+        and left.created_at == right.created_at
     )

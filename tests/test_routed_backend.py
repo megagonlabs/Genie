@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import pytest
@@ -109,6 +109,11 @@ class RecordingLinkStore:
 
         return self.inner.add_link(link)
 
+    def update_link(self, link: MemoryLink) -> MemoryLink:
+        """Update a link in the inner link store."""
+
+        return self.inner.update_link(link)
+
     def list_links(
         self,
         block_id: str,
@@ -162,6 +167,21 @@ class RecordingTraversalIndex:
 
         self.calls.append(("contains", root_id))
         return root_id == block_id or (root_id, block_id) in self.contains_pairs
+
+
+def test_standalone_link_store_updates_only_metadata() -> None:
+    """The shared reference link store preserves link identity on updates."""
+
+    store = InMemoryLinkStore()
+    link = store.add_link(MemoryLink(source_id="source", target_id="target", relation="related"))
+
+    updated = store.update_link(replace(link, metadata={"confidence": 0.8}))
+
+    assert store.list_links("source") == [updated]
+    with pytest.raises(MemoryConflict):
+        store.update_link(replace(link, target_id="other"))
+    with pytest.raises(MemoryConflict):
+        store.add_link(link)
 
 
 def test_routed_backend_routes_root_blocks_to_owning_stores() -> None:
@@ -297,10 +317,26 @@ def test_routed_backend_supports_cross_route_links_with_shared_link_store() -> N
     target = memory.put(type="note", value="target needle", metadata={"route": "b"})
 
     link = memory.add_link(source, target, "references")
+    updated = memory.update_link(link, metadata={"confidence": 0.8})
     linked_results = memory.search("needle", root=source, scope="links")
 
-    assert memory.list_links(source) == [link]
+    assert memory.list_links(source) == [updated]
     assert [result.block.id for result in linked_results] == [target.id]
+
+
+def test_routed_backend_updates_route_local_links() -> None:
+    """Route-local links delegate metadata updates to their owning backend."""
+
+    backend = RoutedBackend({"a": InMemoryBackend()}, default_route="a")
+    memory = Memory(backend=backend)
+    source = memory.put(type="requirement", value="source")
+    target = memory.put(type="note", value="target")
+    link = memory.add_link(source, target, "references", metadata={"status": "new"})
+
+    updated = memory.update_link(link, metadata={"status": "reviewed"})
+
+    assert memory.list_links(source) == [updated]
+    assert updated.metadata == {"status": "reviewed"}
 
 
 def test_routed_backend_supports_cross_route_mounts_as_symbolic_links() -> None:
@@ -358,9 +394,15 @@ def test_routed_backend_can_register_route_for_discovered_pending_mount() -> Non
             metadata={"route": "eu", "backend": "in-memory"},
         )
     )
+    updated_mount = memory.update_link(pending_mount, metadata={"status": "discovered"})
 
-    assert memory.list_mounts(us_project) == [pending_mount]
-    assert memory.discover_mounts(us_project) == [pending_mount]
+    assert updated_mount.metadata == {
+        "route": "eu",
+        "backend": "in-memory",
+        "status": "discovered",
+    }
+    assert memory.list_mounts(us_project) == [updated_mount]
+    assert memory.discover_mounts(us_project) == [updated_mount]
     assert memory.resolve_mount(pending_mount) is None
 
     backend.register_route("eu", eu_store)
