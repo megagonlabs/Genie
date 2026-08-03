@@ -186,10 +186,13 @@ Parent/child ownership is used for scoped access, subtree search, ancestor trave
 `MemoryLink` represents typed relationships that are separate from parent/child ownership.
 
 ```python
-memory.add_link(requirement, outline, "informs")
+link = memory.add_link(requirement, outline, "informs")
+link = memory.update_link(link, metadata={"confidence": 0.9})
 ```
 
 Use links for relationships that do not imply ownership or subtree membership.
+Link metadata can be merged after creation. The link id, source, target,
+relation, and creation timestamp remain unchanged.
 
 Mounts are a reserved link pattern for symbolic cross-tree references. The mount itself is a `MemoryLink`; its source can be any memory block, and no special block `type` is required.
 
@@ -219,6 +222,7 @@ mounted target trees.
 - `children`
 - `ancestors`
 - `add_link`
+- `update_link`
 - `list_links`
 - `add_mount`
 - `list_mounts`
@@ -382,6 +386,7 @@ SearchIndex
 
 LinkStore
   add_link
+  update_link
   list_links
   delete_links_for_block
 ```
@@ -496,6 +501,7 @@ class PostgresBackend:
     def children(...): ...
     def search(...): ...
     def add_link(...): ...
+    def update_link(...): ...
     def list_links(...): ...
     def delete_links_for_block(...): ...
 ```
@@ -512,7 +518,7 @@ TraversalIndex
 
 LinkStore
   non-owning relationships
-  used by add_link, list_links, mounts, and linked-memory search
+  used by add_link, update_link, list_links, mounts, and linked-memory search
 ```
 
 Normal subtree traversal does not follow links. This keeps scoped handles,
@@ -568,6 +574,9 @@ class GraphVectorBackend:
 
     def add_link(self, link):
         return self.graph.add_link(link)
+
+    def update_link(self, link):
+        return self.graph.update_link(link)
 
     def list_links(self, block_id, **options):
         return self.graph.list_links(block_id, **options)

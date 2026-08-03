@@ -6,7 +6,15 @@ from typing import Any, cast
 
 import pytest
 
-from genie import AccessDenied, AccessRule, LinkRelations, Memory, MemoryLink, MemoryPolicy
+from genie import (
+    AccessDenied,
+    AccessRule,
+    LinkRelations,
+    Memory,
+    MemoryLink,
+    MemoryNotFound,
+    MemoryPolicy,
+)
 
 
 def test_public_link_api_uses_explicit_operation_names() -> None:
@@ -16,12 +24,14 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
     scope = memory.get_unbounded_handle()
 
     assert callable(memory.add_link)
+    assert callable(memory.update_link)
     assert callable(memory.list_links)
     assert callable(memory.add_mount)
     assert callable(memory.list_mounts)
     assert callable(memory.discover_mounts)
     assert callable(memory.resolve_mount)
     assert callable(scope.add_link)
+    assert callable(scope.update_link)
     assert callable(scope.list_links)
     assert callable(scope.add_mount)
     assert callable(scope.list_mounts)
@@ -72,6 +82,113 @@ def test_link_metadata_is_defensively_copied() -> None:
     assert listed[0].metadata == {"tags": ["original"]}
     listed[0].metadata["tags"].append("listed-mutated")
     assert memory.list_links(source)[0].metadata == {"tags": ["original"]}
+
+
+def test_update_link_merges_canonical_metadata_and_preserves_identity() -> None:
+    """Link updates persist merged metadata without changing link identity."""
+
+    memory = Memory()
+    source = memory.put(type="note", value="source")
+    target = memory.put(type="note", value="target")
+    created = memory.add_link(
+        source,
+        target,
+        "related",
+        metadata={"valid_at": "2026-01-01", "evidence": {"episode": 1}},
+    )
+
+    updated = memory.update_link(created, metadata={"invalid_at": "2026-02-01"})
+    updated_again = memory.update_link(created, metadata={"confidence": 0.9})
+
+    assert updated is not created
+    assert (
+        updated.id,
+        updated.source_id,
+        updated.target_id,
+        updated.relation,
+        updated.created_at,
+    ) == (
+        created.id,
+        created.source_id,
+        created.target_id,
+        created.relation,
+        created.created_at,
+    )
+    assert created.metadata == {
+        "valid_at": "2026-01-01",
+        "evidence": {"episode": 1},
+    }
+    assert updated_again.metadata == {
+        "valid_at": "2026-01-01",
+        "invalid_at": "2026-02-01",
+        "confidence": 0.9,
+        "evidence": {"episode": 1},
+    }
+    updated_again.metadata["evidence"]["episode"] = 2
+    assert memory.list_links(source)[0].metadata["evidence"] == {"episode": 1}
+
+
+def test_update_link_rejects_missing_links() -> None:
+    """Link updates require a canonical stored link rather than trusting input."""
+
+    memory = Memory()
+    source = memory.put(type="note", value="source")
+    target = memory.put(type="note", value="target")
+    forged = MemoryLink(source_id=source.id, target_id=target.id, relation="related")
+
+    with pytest.raises(MemoryNotFound):
+        memory.update_link(forged, metadata={"confidence": 0.9})
+
+
+def test_update_link_requires_source_write_and_target_read_access() -> None:
+    """Link updates enforce the same endpoint permissions as link creation."""
+
+    owner = Memory(principal="owner")
+    locked_source = owner.put(
+        type="note",
+        value="source",
+        policy=MemoryPolicy(read=AccessRule.allow(), write=AccessRule.only(principals={"owner"})),
+    )
+    readable_target = owner.put(type="note", value="target", policy=MemoryPolicy.public())
+    source_link = owner.add_link(locked_source, readable_target, "related")
+    writable_source = owner.put(type="note", value="source", policy=MemoryPolicy.public())
+    hidden_target = owner.put(
+        type="note",
+        value="target",
+        policy=MemoryPolicy(read=AccessRule.only(principals={"owner"})),
+    )
+    target_link = owner.add_link(writable_source, hidden_target, "related")
+    reader = Memory(
+        backend=owner.backend,
+        principal="reader",
+        policy_engine=owner.policy_engine,
+        hooks=owner.hooks,
+        codecs=owner.codecs,
+    )
+
+    with pytest.raises(AccessDenied):
+        reader.update_link(source_link, metadata={"status": "updated"})
+    with pytest.raises(AccessDenied):
+        reader.update_link(target_link, metadata={"status": "updated"})
+
+
+def test_scope_update_link_stays_inside_scope() -> None:
+    """A scoped handle can update only regular links contained by its subtree."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    source = memory.put(parent=root, type="note", value="source")
+    target = memory.put(parent=root, type="note", value="target")
+    outside = memory.put(type="note", value="outside")
+    inside_link = memory.add_link(source, target, "related", metadata={"status": "new"})
+    outside_link = memory.add_link(source, outside, "related")
+    scope = memory.get_handle(root=root)
+
+    updated = scope.update_link(inside_link, metadata={"status": "reviewed"})
+
+    assert updated.metadata == {"status": "reviewed"}
+    with pytest.raises(AccessDenied):
+        scope.update_link(outside_link, metadata={"status": "reviewed"})
 
 
 def test_list_links_hides_links_to_unreadable_endpoints() -> None:
@@ -240,9 +357,12 @@ def test_scope_mounts_require_explicit_mount_access() -> None:
         plain_scope.list_mounts(mount_source)
 
     mount = mount_scope.add_mount(mount_source, remote_root)
+    with pytest.raises(AccessDenied):
+        plain_scope.update_link(mount, metadata={"label": "updated"})
+    updated_mount = mount_scope.update_link(mount, metadata={"label": "updated"})
     resolved = mount_scope.resolve_mount(mount)
 
-    assert mount_scope.list_mounts(mount_source) == [mount]
+    assert mount_scope.list_mounts(mount_source) == [updated_mount]
     assert resolved is not None
     assert resolved.id == remote_root.id
     with pytest.raises(AccessDenied):

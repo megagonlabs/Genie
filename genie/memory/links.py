@@ -45,7 +45,8 @@ class MemoryLink:
         target_id: Id of the block the link points to.
         relation: Application-defined relationship type.
         id: Stable link identifier.
-        metadata: Optional relationship metadata.
+        metadata: Optional relationship metadata. `Memory.update_link` merges
+            metadata while preserving the other link fields.
         created_at: UTC timestamp for link creation.
     """
 

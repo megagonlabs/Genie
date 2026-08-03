@@ -187,13 +187,39 @@ class InMemoryBackend:
             Defensive copy of the stored link.
 
         Raises:
-            MemoryConflict: If either endpoint does not exist.
+            MemoryConflict: If the link id already exists or either endpoint
+                does not exist.
         """
 
+        if link.id in self._links:
+            raise MemoryConflict(f"Memory link {link.id!r} already exists.")
         if link.source_id not in self._blocks:
             raise MemoryConflict(f"Source memory block {link.source_id!r} does not exist.")
         if link.target_id not in self._blocks:
             raise MemoryConflict(f"Target memory block {link.target_id!r} does not exist.")
+        link = _copy_link(link)
+        self._links[link.id] = link
+        return _copy_link(link)
+
+    def update_link(self, link: MemoryLink) -> MemoryLink:
+        """Replace the metadata of an existing typed link.
+
+        Args:
+            link: Link containing the replacement metadata.
+
+        Returns:
+            Defensive copy of the stored replacement link.
+
+        Raises:
+            MemoryConflict: If the link is missing or any field other than
+                metadata changed.
+        """
+
+        previous = self._links.get(link.id)
+        if previous is None:
+            raise MemoryConflict(f"Memory link {link.id!r} does not exist.")
+        if not _same_link_identity(previous, link):
+            raise MemoryConflict("Link updates can change only metadata.")
         link = _copy_link(link)
         self._links[link.id] = link
         return _copy_link(link)
@@ -332,4 +358,16 @@ def _copy_link(link: MemoryLink) -> MemoryLink:
         relation=link.relation,
         metadata=deepcopy(link.metadata),
         created_at=link.created_at,
+    )
+
+
+def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
+    """Return whether two links identify the same relationship."""
+
+    return (
+        left.id == right.id
+        and left.source_id == right.source_id
+        and left.target_id == right.target_id
+        and left.relation == right.relation
+        and left.created_at == right.created_at
     )

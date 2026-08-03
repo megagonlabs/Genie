@@ -334,6 +334,48 @@ class Memory:
             )
         )
 
+    def update_link(
+        self,
+        link: MemoryLink,
+        *,
+        metadata: dict[str, Any],
+    ) -> MemoryLink:
+        """Merge metadata into an existing typed link.
+
+        Link identity and topology remain unchanged. The returned object is a
+        replacement value representing the state persisted by the backend.
+
+        Args:
+            link: Existing link returned by `add_link` or `list_links`.
+            metadata: Metadata fields to merge into the stored link metadata.
+
+        Returns:
+            Stored replacement link.
+
+        Raises:
+            AccessDenied: If the principal cannot write the source or read the
+                target. A pending mount without a registered target is governed
+                by its source policy.
+            MemoryNotFound: If the link or a non-mount endpoint is missing.
+        """
+
+        stored = self._require_stored_link(link)
+        source = self._require_raw(stored.source_id)
+        self.policy_engine.require(Operation.WRITE, source, self.principal)
+        target = self.backend.get_block(stored.target_id)
+        if target is None:
+            if stored.relation != LinkRelations.MOUNT:
+                raise MemoryNotFound(
+                    f"Target memory block {stored.target_id!r} does not exist."
+                )
+        else:
+            self.policy_engine.require(Operation.READ, target, self.principal)
+        updated = replace(
+            stored,
+            metadata=deepcopy({**stored.metadata, **metadata}),
+        )
+        return self.backend.update_link(updated)
+
     def list_links(
         self,
         block_id: str | MemoryBlock,
@@ -741,6 +783,21 @@ class Memory:
         if block is None:
             raise MemoryNotFound(f"Memory block {block_id!r} does not exist.")
         return block
+
+    def _require_stored_link(self, link: MemoryLink) -> MemoryLink:
+        """Fetch a canonical link value or raise `MemoryNotFound`."""
+
+        stored = next(
+            (
+                candidate
+                for candidate in self.backend.list_links(link.source_id, direction="out")
+                if candidate.id == link.id
+            ),
+            None,
+        )
+        if stored is None:
+            raise MemoryNotFound(f"Memory link {link.id!r} does not exist.")
+        return stored
 
     def _decode_block(self, block: MemoryBlock) -> MemoryBlock:
         """Decode a stored block value and isolate metadata."""
