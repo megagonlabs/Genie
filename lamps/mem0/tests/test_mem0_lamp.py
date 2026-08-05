@@ -8,12 +8,14 @@ import hashlib
 import pytest
 
 from genie import InMemoryBackend, Memory
+from genie.structures import MemoryAddress
 from lamps.mem0.demo import answer_demo_question, build_demo_agent, main, teach_demo_agent
 from lamps.mem0.memory_store import (
     ENTITY_LINK_RELATION,
     FACT_RECORD_TYPE,
     MENTAL_MODEL_TYPE,
     Mem0Memory,
+    Mem0Structures,
     MemoryScope,
 )
 
@@ -29,7 +31,8 @@ class SequenceClock:
 
 
 def _store(*, clock=None):  # type: ignore[no-untyped-def]
-    memory = Memory(backend=InMemoryBackend(), principal="mem0-test")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="mem0-test")
     root = memory.put(type="mem0.collection", value={"name": "test"})
     handle = memory.get_handle(root=root)
     scope = MemoryScope(
@@ -38,7 +41,15 @@ def _store(*, clock=None):  # type: ignore[no-untyped-def]
         app_id="travel",
         run_id="run-1",
     )
-    return Mem0Memory(handle, clock=clock), handle, scope
+    return (
+        Mem0Memory(
+            handle,
+            structures=Mem0Structures.create(handle, backend),
+            clock=clock,
+        ),
+        handle,
+        scope,
+    )
 
 
 def test_fact_record_has_exact_canonical_shape_and_scoped_hash_deduplication() -> None:
@@ -81,6 +92,18 @@ def test_fact_record_has_exact_canonical_shape_and_scoped_hash_deduplication() -
     }
     assert value["created_at"] == value["updated_at"]
     assert duplicate.id == record.id
+    assert store.structures.records.get(
+        MemoryAddress(
+            (
+                "records",
+                "user=alice",
+                "agent=assistant",
+                "app=travel",
+                "run=run-1",
+            ),
+            record.id,
+        )
+    ) == record.block
     assert len(handle.search(types=[FACT_RECORD_TYPE], limit=20)) == 1
 
 
@@ -270,7 +293,11 @@ def test_demo_prints_the_shared_terminal_format(capsys) -> None:
     main()
 
     output = capsys.readouterr().out
-    assert output.startswith("Tools available to the agent:\n")
+    assert output.startswith("== Mem0-inspired scoped memory ==\n")
+    assert "Genie structures: keyed collection, temporal collection, property graph" in output
+    assert "\nTools available to the agent:\n" in output
     assert "\nAgent answer:\nQuestion:" in output
+    assert "Prior experience timeline:\n- " in output
+    assert "Shared-entity context:\n- " in output
     assert "Inspectable tool calls:\n01. add_memory\n02. add_memory" in output
     assert "Tool usage:\n- add_memory x4\n- update_memory x1" in output

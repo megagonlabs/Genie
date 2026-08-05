@@ -14,6 +14,7 @@ from lamps.graphiti import (
     Observation,
     TemporalGraphAgent,
     TemporalGraphTools,
+    GraphitiStructures,
     TemporalKnowledgeGraph,
 )
 
@@ -21,12 +22,17 @@ from lamps.graphiti import (
 def main() -> None:
     """Let an agent learn source material and answer through graph tools."""
 
-    memory = Memory(backend=InMemoryBackend(), principal="graphiti-demo")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="graphiti-demo")
     root = memory.put(
         type="temporal_knowledge_graph",
         value={"name": "Customer context"},
     )
-    graph = TemporalKnowledgeGraph(memory.get_handle(root=root))
+    handle = memory.get_handle(root=root)
+    graph = TemporalKnowledgeGraph(
+        handle,
+        structures=GraphitiStructures.create(handle, backend),
+    )
     agent = TemporalGraphAgent(
         name="context-agent",
         tools=TemporalGraphTools(graph),
@@ -116,7 +122,17 @@ def main() -> None:
         as_of="2025-07-01T00:00:00Z",
         history_relation="lives_in",
     )
-    print_agent_demo(tools=agent.tools, answer=answer, calls=agent.call_log)
+    print_agent_demo(
+        title="Graphiti-inspired temporal knowledge graph",
+        purpose=(
+            "An agent stores source episodes, temporal facts, provenance, and "
+            "relationship history."
+        ),
+        structures=("property graph", "temporal collection", "lineage DAG"),
+        tools=agent.tools,
+        answer=answer,
+        calls=agent.call_log,
+    )
 
 
 if __name__ == "__main__":

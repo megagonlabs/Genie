@@ -6,13 +6,23 @@ from collections import deque
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import re
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable, Literal, Protocol, cast
 from uuid import uuid4
 
 from genie import MemoryBlock, MemoryHandle, MemoryLink
+from genie.backend import AcyclicLinkStore, KeyedStore, SequenceStore, TemporalStore
+from genie.structures import (
+    EventLog,
+    KeyedCollection,
+    LineageDAG,
+    MemoryAddress,
+    OwnershipTree,
+    PropertyGraph,
+    TemporalCollection,
+)
 
 SHORT_TERM_TYPE = "memoryos.short_term_qa"
 MID_TERM_TYPE = "memoryos.mid_term_page"
@@ -29,6 +39,9 @@ GraphDirection = Literal["out", "in"]
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 _SEARCH_LIMIT = 1_000
+_STRUCTURE_TYPE = "memoryos.structure"
+_CONVERSATION_NAMESPACE = ("conversations",)
+_PROFILE_ADDRESS = MemoryAddress(("long_term",), "user_profile")
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +149,78 @@ class GraphResult:
     description: str
 
 
+class MemoryOSStructureStore(
+    AcyclicLinkStore,
+    KeyedStore,
+    SequenceStore,
+    TemporalStore,
+    Protocol,
+):
+    """Backend capabilities required by the MemoryOS structure bundle."""
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryOSStructures:
+    """Composable structural views for the three-tier memory system."""
+
+    tree: OwnershipTree
+    keys: KeyedCollection
+    short_term: EventLog
+    mid_term: EventLog
+    user_knowledge: EventLog
+    assistant_knowledge: EventLog
+    timeline: TemporalCollection
+    graph: PropertyGraph
+    page_lineage: LineageDAG
+
+    @classmethod
+    def create(
+        cls,
+        memory: MemoryHandle,
+        store: MemoryOSStructureStore,
+    ) -> MemoryOSStructures:
+        """Build or reopen all structural anchors below one bounded root."""
+
+        if memory.root_id is None:
+            raise ValueError("MemoryOSStructures requires a bounded MemoryHandle.")
+        tree = OwnershipTree(memory, root=memory.root_id)
+
+        def log_anchor(name: str) -> MemoryBlock:
+            existing = next(
+                (
+                    child
+                    for child in tree.children()
+                    if child.type == _STRUCTURE_TYPE
+                    and child.value == {"kind": name}
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing
+            anchor_id = f"{tree.root_id}:memoryos:{name}"
+            return tree.create_child(
+                id=anchor_id,
+                type=_STRUCTURE_TYPE,
+                value={"kind": name},
+            )
+
+        short_term = log_anchor("short_term")
+        mid_term = log_anchor("mid_term")
+        user_knowledge = log_anchor("user_knowledge")
+        assistant_knowledge = log_anchor("assistant_knowledge")
+        return cls(
+            tree=tree,
+            keys=KeyedCollection(memory, store, collection=tree.root),
+            short_term=EventLog(memory, store, log=short_term),
+            mid_term=EventLog(memory, store, log=mid_term),
+            user_knowledge=EventLog(memory, store, log=user_knowledge),
+            assistant_knowledge=EventLog(memory, store, log=assistant_knowledge),
+            timeline=TemporalCollection(memory, store, collection=tree.root),
+            graph=PropertyGraph(memory),
+            page_lineage=LineageDAG(memory, relation=NEXT_PAGE_RELATION),
+        )
+
+
 class MemoryOSMemory:
     """Compact MemoryOS-inspired hierarchy over a bounded Genie handle."""
 
@@ -143,6 +228,7 @@ class MemoryOSMemory:
         self,
         memory: MemoryHandle,
         *,
+        structures: MemoryOSStructures,
         short_term_capacity: int = 3,
         heat_threshold: float = 2.0,
         knowledge_capacity: int = 100,
@@ -152,6 +238,7 @@ class MemoryOSMemory:
 
         Args:
             memory: Bounded handle owning all memory tiers.
+            structures: Tree, keyed, log, temporal, and graph views.
             short_term_capacity: Maximum QA pairs retained before FIFO promotion.
             heat_threshold: Minimum page heat required for long-term consolidation.
             knowledge_capacity: Maximum entries retained per knowledge owner.
@@ -165,6 +252,7 @@ class MemoryOSMemory:
         if not isinstance(knowledge_capacity, int) or isinstance(knowledge_capacity, bool) or knowledge_capacity < 1:
             raise ValueError("knowledge_capacity must be an integer of at least 1.")
         self.memory = memory
+        self.structures = structures
         self.short_term_capacity = short_term_capacity
         self.heat_threshold = float(heat_threshold)
         self.knowledge_capacity = knowledge_capacity
@@ -183,31 +271,41 @@ class MemoryOSMemory:
         """Append a QA pair and promote oldest overflow into mid-term pages."""
 
         normalized_key = _required_text(key, field="key")
-        if normalized_key in self._known_source_keys():
+        address = MemoryAddress(_CONVERSATION_NAMESPACE, normalized_key)
+        if self.structures.keys.get(address) is not None:
             raise ValueError(f"Memory key {normalized_key!r} already exists.")
         normalized_user = _required_text(user_input, field="user_input")
         normalized_agent = _required_text(agent_response, field="agent_response")
         normalized_summary = _required_text(summary, field="summary")
         normalized_occurred_at = _normalize_timestamp(occurred_at, field="occurred_at")
         normalized_entities = _normalized_strings(entities, field="entities")
-        sequence = self._next_sequence()
         payload = {
             "key": normalized_key,
             "user_input": normalized_user,
             "agent_response": normalized_agent,
             "timestamp": _format_timestamp(normalized_occurred_at),
         }
-        block = self.memory.put(
+        block = self.structures.tree.create_child(
+            parent=self.structures.short_term.log,
             type=SHORT_TERM_TYPE,
             value=payload,
             metadata={
-                "sequence": sequence,
                 "summary": normalized_summary,
                 "entities": list(normalized_entities),
                 "occurred_at": _format_timestamp(normalized_occurred_at),
             },
         )
-        qa = _qa_from_block(block)
+        try:
+            logged = self.structures.short_term.append(block)
+            self.structures.keys.bind(address, block)
+            self.structures.timeline.add(
+                block,
+                occurred_at=normalized_occurred_at,
+            )
+        except Exception:
+            self.memory.delete(block)
+            raise
+        qa = _qa_from_block(block, sequence=logged.entry.sequence + 1)
         promoted: list[MidTermPage] = []
         while len(self.short_term()) > self.short_term_capacity:
             oldest = self.short_term()[0]
@@ -217,16 +315,18 @@ class MemoryOSMemory:
     def short_term(self) -> list[ShortTermQA]:
         """Return the FIFO queue from oldest to newest."""
 
-        items = [_qa_from_block(block) for block in self._blocks(SHORT_TERM_TYPE)]
-        items.sort(key=lambda item: item.sequence)
-        return items
+        return [
+            _qa_from_block(item.block, sequence=item.entry.sequence + 1)
+            for item in self.structures.short_term.read(limit=_SEARCH_LIMIT)
+        ]
 
     def mid_term(self) -> list[MidTermPage]:
         """Return summarized pages in dialogue order."""
 
-        pages = [_page_from_block(block) for block in self._blocks(MID_TERM_TYPE)]
-        pages.sort(key=lambda page: page.sequence)
-        return pages
+        return [
+            _page_from_block(item.block, sequence=item.entry.sequence + 1)
+            for item in self.structures.mid_term.read(limit=_SEARCH_LIMIT)
+        ]
 
     def retrieve_memory(self, query: str, *, limit: int = 5) -> RetrievalBundle:
         """Retrieve context from short, mid, profile, and both knowledge stores.
@@ -281,11 +381,16 @@ class MemoryOSMemory:
         profile_data = deepcopy(existing.data if existing is not None else {})
         profile_data.update(deepcopy(profile_updates))
         if existing is None:
-            profile_block = self.memory.put(
+            profile_block = self.structures.tree.create_child(
                 type=PROFILE_TYPE,
                 value=profile_data,
                 metadata={"kind": "user_profile"},
             )
+            try:
+                self.structures.keys.bind(_PROFILE_ADDRESS, profile_block)
+            except Exception:
+                self.memory.delete(profile_block)
+                raise
         else:
             profile_block = self.memory.update(existing.block, value=deepcopy(profile_updates))
         profile = _profile_from_block(profile_block)
@@ -306,22 +411,18 @@ class MemoryOSMemory:
     def get_user_profile(self) -> LongTermProfile | None:
         """Return the current long-term profile dictionary."""
 
-        blocks = self._blocks(PROFILE_TYPE)
-        if len(blocks) > 1:
-            raise ValueError("The memory contains more than one user profile.")
-        return _profile_from_block(blocks[0]) if blocks else None
+        block = self.structures.keys.get(_PROFILE_ADDRESS)
+        return _profile_from_block(block) if block is not None else None
 
     def knowledge(self, owner: KnowledgeOwner) -> list[KnowledgeEntry]:
         """Return one bounded long-term knowledge collection in insertion order."""
 
         normalized_owner = _validate_owner(owner)
-        entries = [
-            _knowledge_from_block(block)
-            for block in self._blocks(KNOWLEDGE_TYPE)
-            if block.metadata.get("owner") == normalized_owner
+        log = self._knowledge_log(normalized_owner)
+        return [
+            _knowledge_from_block(item.block, sequence=item.entry.sequence + 1)
+            for item in log.read(limit=_SEARCH_LIMIT)
         ]
-        entries.sort(key=lambda entry: entry.sequence)
-        return entries
 
     def retrieve_temporal(
         self,
@@ -337,36 +438,45 @@ class MemoryOSMemory:
         if normalized_start > normalized_end:
             raise ValueError("start must be earlier than or equal to end.")
         normalized_limit = _validate_limit(limit)
+        try:
+            exclusive_end = normalized_end + timedelta(microseconds=1)
+        except OverflowError:
+            exclusive_end = None
         results: list[TemporalResult] = []
-        for qa in self.short_term():
-            if normalized_start <= qa.occurred_at <= normalized_end:
+        for temporal in self.structures.timeline.events(
+            start=normalized_start,
+            stop=exclusive_end,
+            limit=_SEARCH_LIMIT,
+        ):
+            occurred_at = temporal.entry.occurred_at
+            if occurred_at is None or occurred_at > normalized_end:
+                continue
+            block = temporal.block
+            if block.type == SHORT_TERM_TYPE:
+                qa = _qa_from_block(block, sequence=0)
                 results.append(
                     TemporalResult(
                         "short_term",
-                        qa.block.id,
-                        qa.occurred_at,
+                        block.id,
+                        occurred_at,
                         f"User: {qa.user_input} Assistant: {qa.agent_response}",
                     )
                 )
-        for page in self.mid_term():
-            if normalized_start <= page.occurred_at <= normalized_end:
+            elif block.type == MID_TERM_TYPE:
+                page = _page_from_block(block, sequence=0)
                 results.append(
-                    TemporalResult("mid_term", page.id, page.occurred_at, page.summary)
+                    TemporalResult("mid_term", block.id, occurred_at, page.summary)
                 )
-        for owner, layer in (
-            ("user", "user_knowledge"),
-            ("assistant", "assistant_knowledge"),
-        ):
-            for entry in self.knowledge(cast(KnowledgeOwner, owner)):
-                if normalized_start <= entry.timestamp <= normalized_end:
-                    results.append(
-                        TemporalResult(
-                            cast(MemoryLayer, layer),
-                            entry.block.id,
-                            entry.timestamp,
-                            entry.knowledge,
-                        )
-                    )
+            elif block.type == KNOWLEDGE_TYPE:
+                entry = _knowledge_from_block(block, sequence=0)
+                layer: MemoryLayer = (
+                    "user_knowledge"
+                    if entry.owner == "user"
+                    else "assistant_knowledge"
+                )
+                results.append(
+                    TemporalResult(layer, block.id, occurred_at, entry.knowledge)
+                )
         results.sort(key=lambda result: (result.occurred_at, result.layer, result.item_id))
         return results[:normalized_limit]
 
@@ -393,21 +503,25 @@ class MemoryOSMemory:
             if depth >= max_depth:
                 continue
             connected: list[tuple[MemoryBlock, str, GraphDirection]] = []
-            for link in self.memory.list_links(current, direction="both"):
+            for neighbor_record in self.structures.graph.neighbors(
+                current,
+                direction="both",
+            ):
+                link = neighbor_record.link
                 if link.relation not in GRAPH_RELATIONS:
                     continue
-                if link.source_id == current.id:
-                    neighbor_id = link.target_id
-                    direction: GraphDirection = "out"
-                else:
-                    neighbor_id = link.source_id
-                    direction = "in"
+                neighbor_id = neighbor_record.block.id
+                direction: GraphDirection = neighbor_record.direction
                 if neighbor_id in visited:
                     continue
-                neighbor = self.memory.get(neighbor_id)
-                if neighbor is not None:
-                    connected.append((neighbor, link.relation, direction))
-            connected.sort(key=lambda value: (_block_sequence(value[0]), value[0].type, value[0].id))
+                connected.append((neighbor_record.block, link.relation, direction))
+            connected.sort(
+                key=lambda value: (
+                    self._structural_sequence(value[0]),
+                    value[0].type,
+                    value[0].id,
+                )
+            )
             for neighbor, relation, direction in connected:
                 if neighbor.id in visited:
                     continue
@@ -436,6 +550,7 @@ class MemoryOSMemory:
         return None
 
     def _promote_qa(self, qa: ShortTermQA) -> MidTermPage:
+        previous = self.mid_term()
         page_id = f"page_{uuid4().hex}"
         summary = cast(str, qa.block.metadata["summary"])
         payload = {
@@ -450,26 +565,35 @@ class MemoryOSMemory:
             "heat": 1.0,
             "visit_count": 0,
         }
-        block = self.memory.put(
+        block = self.structures.tree.create_child(
+            parent=self.structures.mid_term.log,
             id=page_id,
             type=MID_TERM_TYPE,
             value=payload,
             metadata={
-                "sequence": qa.sequence,
                 "heat": 1.0,
                 "occurred_at": _format_timestamp(qa.occurred_at),
                 "entities": list(qa.entities),
             },
         )
-        page = _page_from_block(block)
-        previous = [candidate for candidate in self.mid_term() if candidate.id != page.id]
-        if previous:
-            self._add_link_unique(
-                previous[-1].block,
+        try:
+            logged = self.structures.mid_term.append(block)
+            self.structures.timeline.add(block, occurred_at=qa.occurred_at)
+            page = _page_from_block(block, sequence=logged.entry.sequence + 1)
+            if previous:
+                self.structures.page_lineage.add(
+                    previous[-1].block,
+                    page.block,
+                    metadata={"sequence": "next"},
+                )
+            self.structures.keys.rebind(
+                MemoryAddress(_CONVERSATION_NAMESPACE, qa.key),
                 page.block,
-                NEXT_PAGE_RELATION,
-                metadata={"sequence": "next"},
+                expected=qa.block,
             )
+        except Exception:
+            self.memory.delete(block)
+            raise
         self.memory.delete(qa.block)
         return page
 
@@ -480,7 +604,7 @@ class MemoryOSMemory:
             value={"heat": updated_heat, "visit_count": page.visit_count + 1},
             metadata={"heat": updated_heat},
         )
-        return _page_from_block(block)
+        return _page_from_block(block, sequence=page.sequence)
 
     def _require_heated_pages(self, page_ids: Sequence[str]) -> tuple[MidTermPage, ...]:
         normalized_ids = _normalized_strings(page_ids, field="source_page_ids")
@@ -514,7 +638,6 @@ class MemoryOSMemory:
                         metadata={"target": f"{normalized_owner}_knowledge"},
                     )
                 return existing
-        sequence = max((entry.sequence for entry in self.knowledge(normalized_owner)), default=0) + 1
         timestamp = _normalize_timestamp(self._clock(), field="clock")
         payload = {
             "owner": normalized_owner,
@@ -522,17 +645,24 @@ class MemoryOSMemory:
             "timestamp": _format_timestamp(timestamp),
             "source_page_ids": [page.id for page in source_pages],
         }
-        block = self.memory.put(
+        log = self._knowledge_log(normalized_owner)
+        block = self.structures.tree.create_child(
+            parent=log.log,
             type=KNOWLEDGE_TYPE,
             value=payload,
             metadata={
                 "owner": normalized_owner,
-                "sequence": sequence,
                 "occurred_at": _format_timestamp(timestamp),
                 "entities": list(entities),
             },
         )
-        entry = _knowledge_from_block(block)
+        try:
+            logged = log.append(block)
+            self.structures.timeline.add(block, occurred_at=timestamp)
+        except Exception:
+            self.memory.delete(block)
+            raise
+        entry = _knowledge_from_block(block, sequence=logged.entry.sequence + 1)
         for page in source_pages:
             self._add_link_unique(
                 page.block,
@@ -552,28 +682,41 @@ class MemoryOSMemory:
         *,
         metadata: dict[str, Any],
     ) -> MemoryLink:
-        for link in self.memory.list_links(source, relation=relation, direction="out"):
+        for link in self.structures.graph.edges(source, relation=relation, direction="out"):
             if link.target_id == target.id and link.metadata == metadata:
                 return link
-        return self.memory.add_link(source, target, relation, metadata=metadata)
+        return self.structures.graph.add_edge(
+            source,
+            target,
+            relation,
+            metadata=metadata,
+        )
 
-    def _known_source_keys(self) -> set[str]:
-        return {qa.key for qa in self.short_term()} | {page.source_key for page in self.mid_term()}
+    def _knowledge_log(self, owner: KnowledgeOwner) -> EventLog:
+        """Return the ordered log for one long-term knowledge owner."""
 
-    def _next_sequence(self) -> int:
-        values = [qa.sequence for qa in self.short_term()] + [
-            page.sequence for page in self.mid_term()
-        ]
-        return max(values, default=0) + 1
+        return (
+            self.structures.user_knowledge
+            if owner == "user"
+            else self.structures.assistant_knowledge
+        )
 
-    def _blocks(self, block_type: str) -> list[MemoryBlock]:
-        return [
-            result.block
-            for result in self.memory.search(types=[block_type], limit=_SEARCH_LIMIT)
-        ]
+    def _structural_sequence(self, block: MemoryBlock) -> int:
+        """Return a log position for stable mixed graph-result ordering."""
+
+        logs = (
+            self.structures.mid_term,
+            self.structures.user_knowledge,
+            self.structures.assistant_knowledge,
+        )
+        for log in logs:
+            for item in log.read(limit=_SEARCH_LIMIT):
+                if item.block.id == block.id:
+                    return item.entry.sequence
+        return _SEARCH_LIMIT + 1
 
 
-def _qa_from_block(block: MemoryBlock) -> ShortTermQA:
+def _qa_from_block(block: MemoryBlock, *, sequence: int) -> ShortTermQA:
     if block.type != SHORT_TERM_TYPE or not isinstance(block.value, dict):
         raise TypeError(f"Block {block.id!r} is not a short-term QA pair.")
     value = cast(dict[str, Any], block.value)
@@ -585,12 +728,12 @@ def _qa_from_block(block: MemoryBlock) -> ShortTermQA:
         user_input=cast(str, value["user_input"]),
         agent_response=cast(str, value["agent_response"]),
         occurred_at=_parse_timestamp(cast(str, value["timestamp"]), field="timestamp"),
-        sequence=cast(int, block.metadata["sequence"]),
+        sequence=sequence,
         entities=tuple(cast(list[str], block.metadata.get("entities", []))),
     )
 
 
-def _page_from_block(block: MemoryBlock) -> MidTermPage:
+def _page_from_block(block: MemoryBlock, *, sequence: int) -> MidTermPage:
     if block.type != MID_TERM_TYPE or not isinstance(block.value, dict):
         raise TypeError(f"Block {block.id!r} is not a mid-term page.")
     value = cast(dict[str, Any], block.value)
@@ -602,7 +745,7 @@ def _page_from_block(block: MemoryBlock) -> MidTermPage:
         user_input=cast(str, dialogue["user_input"]),
         agent_response=cast(str, dialogue["agent_response"]),
         occurred_at=_parse_timestamp(cast(str, dialogue["timestamp"]), field="timestamp"),
-        sequence=cast(int, block.metadata["sequence"]),
+        sequence=sequence,
         heat=float(value["heat"]),
         visit_count=cast(int, value["visit_count"]),
         entities=tuple(cast(list[str], block.metadata.get("entities", []))),
@@ -615,7 +758,7 @@ def _profile_from_block(block: MemoryBlock) -> LongTermProfile:
     return LongTermProfile(block=block, data=deepcopy(cast(dict[str, Any], block.value)))
 
 
-def _knowledge_from_block(block: MemoryBlock) -> KnowledgeEntry:
+def _knowledge_from_block(block: MemoryBlock, *, sequence: int) -> KnowledgeEntry:
     if block.type != KNOWLEDGE_TYPE or not isinstance(block.value, dict):
         raise TypeError(f"Block {block.id!r} is not a long-term knowledge entry.")
     value = cast(dict[str, Any], block.value)
@@ -624,7 +767,7 @@ def _knowledge_from_block(block: MemoryBlock) -> KnowledgeEntry:
         owner=_validate_owner(value["owner"]),
         knowledge=cast(str, value["knowledge"]),
         timestamp=_parse_timestamp(cast(str, value["timestamp"]), field="timestamp"),
-        sequence=cast(int, block.metadata["sequence"]),
+        sequence=sequence,
         entities=tuple(cast(list[str], block.metadata.get("entities", []))),
         source_page_ids=tuple(cast(list[str], value["source_page_ids"])),
     )
@@ -632,23 +775,18 @@ def _knowledge_from_block(block: MemoryBlock) -> KnowledgeEntry:
 
 def _describe_block(block: MemoryBlock) -> str:
     if block.type == MID_TERM_TYPE:
-        page = _page_from_block(block)
+        page = _page_from_block(block, sequence=0)
         return f"Mid-term page: {page.summary}"
     if block.type == PROFILE_TYPE:
         return f"User profile: {json.dumps(block.value, sort_keys=True)}"
     if block.type == KNOWLEDGE_TYPE:
-        entry = _knowledge_from_block(block)
+        entry = _knowledge_from_block(block, sequence=0)
         return f"{entry.owner.title()} knowledge: {entry.knowledge}"
     return f"{block.type}: {block.id}"
 
 
 def _page_text(page: MidTermPage) -> str:
     return f"{page.summary} {page.user_input} {page.agent_response}"
-
-
-def _block_sequence(block: MemoryBlock) -> int:
-    value = block.metadata.get("sequence")
-    return value if isinstance(value, int) else _SEARCH_LIMIT + 1
 
 
 def _validate_owner(value: object) -> KnowledgeOwner:

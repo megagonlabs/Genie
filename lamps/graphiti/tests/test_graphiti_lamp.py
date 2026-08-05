@@ -9,9 +9,10 @@ import sys
 
 import pytest
 
-from genie import Memory
+from genie import InMemoryBackend, Memory
 from lamps.graphiti import (
     FactCandidate,
+    GraphitiStructures,
     Observation,
     TemporalGraphAgent,
     TemporalGraphTools,
@@ -32,9 +33,14 @@ def at(value: str) -> datetime:
 def make_graph() -> TemporalKnowledgeGraph:
     """Create an empty graph rooted in a bounded Genie handle."""
 
-    memory = Memory(principal="test")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="test")
     root = memory.put(type="temporal_knowledge_graph", value={"name": "test"})
-    return TemporalKnowledgeGraph(memory.get_handle(root=root))
+    handle = memory.get_handle(root=root)
+    return TemporalKnowledgeGraph(
+        handle,
+        structures=GraphitiStructures.create(handle, backend),
+    )
 
 
 def make_agent() -> TemporalGraphAgent:
@@ -89,6 +95,7 @@ def test_exclusive_fact_preserves_history_and_provenance() -> None:
     assert [fact.object.value["name"] for fact in after] == ["Seattle"]
     assert history[0].valid_to == at("2025-06-01")
     assert history[1].valid_to is None
+    assert graph.structures.timeline.get(history[0].block) is not None
     assert [episode.value["source"] for episode in graph.provenance(history[0])] == [
         "chat/1",
         "chat/2",
@@ -323,6 +330,8 @@ def test_demo_runs_as_a_module() -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.startswith("== Graphiti-inspired temporal knowledge graph ==\n")
+    assert "Genie structures: property graph, temporal collection, lineage DAG" in result.stdout
     assert "Tools available to the agent:" in result.stdout
     assert "- add_episode: Store raw source material for later provenance." in result.stdout
     assert "Agent answer:" in result.stdout

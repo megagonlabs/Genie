@@ -10,13 +10,15 @@ from __future__ import annotations
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 import re
-from typing import Any, Callable, Literal, Sequence, cast
+from typing import Any, Callable, Literal, Protocol, Sequence, cast
 from uuid import uuid4
 
 from genie import MemoryBlock, MemoryHandle
+from genie.backend import KeyedStore, TemporalStore
+from genie.structures import KeyedCollection, MemoryAddress, PropertyGraph, TemporalCollection
 
 FACT_RECORD_TYPE = "mem0.fact_record"
 MENTAL_MODEL_TYPE = "mem0.mental_model"
@@ -148,6 +150,35 @@ class GraphResult:
     distance: int
 
 
+class Mem0StructureStore(KeyedStore, TemporalStore, Protocol):
+    """Backend capabilities required by the Mem0 structure bundle."""
+
+
+@dataclass(frozen=True, slots=True)
+class Mem0Structures:
+    """Keyed, temporal, and graph views used by the Mem0 service."""
+
+    records: KeyedCollection
+    timeline: TemporalCollection
+    graph: PropertyGraph
+
+    @classmethod
+    def create(
+        cls,
+        memory: MemoryHandle,
+        store: Mem0StructureStore,
+    ) -> Mem0Structures:
+        """Build all Mem0 structural views around one bounded root."""
+
+        if memory.root_id is None:
+            raise ValueError("Mem0Structures requires a bounded MemoryHandle.")
+        return cls(
+            records=KeyedCollection(memory, store, collection=memory.root_id),
+            timeline=TemporalCollection(memory, store, collection=memory.root_id),
+            graph=PropertyGraph(memory),
+        )
+
+
 class Mem0Memory:
     """Small Mem0-inspired memory service over one bounded Genie handle."""
 
@@ -155,16 +186,19 @@ class Mem0Memory:
         self,
         memory: MemoryHandle,
         *,
+        structures: Mem0Structures,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         """Create the application service.
 
         Args:
             memory: Bounded handle owning all records and mental models.
+            structures: Keyed, temporal, and graph views over the same handle.
             clock: Optional UTC clock used to make tests deterministic.
         """
 
         self.memory = memory
+        self.structures = structures
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def add(
@@ -240,6 +274,16 @@ class Mem0Memory:
             value=payload,
             metadata=_record_index(payload),
         )
+        try:
+            self.structures.records.bind(_record_address(scope, record_id), block)
+            if normalized_occurred_at is not None:
+                self.structures.timeline.add(
+                    block,
+                    occurred_at=normalized_occurred_at,
+                )
+        except Exception:
+            self.memory.delete(block)
+            raise
         stored = _record_from_block(block)
         self._link_shared_entities(stored)
         return stored
@@ -312,17 +356,8 @@ class Mem0Memory:
     ) -> ExtractedFactRecord | None:
         """Get one fact record only when its exact scope matches."""
 
-        matches = self.memory.search(
-            types=[FACT_RECORD_TYPE],
-            filters={"id": memory_id},
-            limit=2,
-        )
-        if not matches:
-            return None
-        if len(matches) > 1:
-            raise ValueError(f"Memory id {memory_id!r} is ambiguous.")
-        record = _record_from_block(matches[0].block)
-        return record if record.scope == scope else None
+        block = self.structures.records.get(_record_address(scope, memory_id))
+        return _record_from_block(block) if block is not None else None
 
     def search(
         self,
@@ -378,13 +413,25 @@ class Mem0Memory:
             raise ValueError("start must be earlier than or equal to end.")
         allowed_kinds = _validated_kinds(kinds)
         normalized_limit = _validate_limit(limit)
-        matches = [
-            record
-            for record in self._records(scope)
-            if record.occurred_at is not None
-            and normalized_start <= record.occurred_at <= normalized_end
-            and (not allowed_kinds or record.kind in allowed_kinds)
-        ]
+        try:
+            exclusive_end = normalized_end + timedelta(microseconds=1)
+        except OverflowError:
+            exclusive_end = None
+        matches = []
+        for temporal in self.structures.timeline.events(
+            start=normalized_start,
+            stop=exclusive_end,
+            limit=_SEARCH_LIMIT,
+        ):
+            if temporal.block.type != FACT_RECORD_TYPE:
+                continue
+            record = _record_from_block(temporal.block)
+            occurred_at = temporal.entry.occurred_at
+            if record.scope != scope or occurred_at is None or occurred_at > normalized_end:
+                continue
+            if allowed_kinds and record.kind not in allowed_kinds:
+                continue
+            matches.append(record)
         matches.sort(key=lambda record: (record.occurred_at, record.text, record.id))
         return matches[:normalized_limit]
 
@@ -411,7 +458,7 @@ class Mem0Memory:
             current_id, depth = queue.popleft()
             if depth >= max_depth:
                 continue
-            links = self.memory.list_links(
+            neighbors = self.structures.graph.neighbors(
                 current_id,
                 relation=ENTITY_LINK_RELATION,
                 direction="both",
@@ -419,13 +466,10 @@ class Mem0Memory:
             connected: list[
                 tuple[ExtractedFactRecord, tuple[str, ...], GraphDirection]
             ] = []
-            for link in links:
-                if link.source_id == current_id:
-                    neighbor_id = link.target_id
-                    direction: GraphDirection = "out"
-                else:
-                    neighbor_id = link.source_id
-                    direction = "in"
+            for neighbor_record in neighbors:
+                link = neighbor_record.link
+                neighbor_id = neighbor_record.block.id
+                direction: GraphDirection = neighbor_record.direction
                 if neighbor_id in visited:
                     continue
                 neighbor = self.get(neighbor_id, scope=scope)
@@ -483,26 +527,36 @@ class Mem0Memory:
             value=payload,
             metadata={**scope.as_dict(), "name": normalized_name},
         )
+        try:
+            self.structures.records.bind(
+                _mental_model_address(scope, normalized_name),
+                block,
+            )
+        except Exception:
+            self.memory.delete(block)
+            raise
         return _mental_model_from_block(block)
 
     def get_mental_model(self, name: str, *, scope: MemoryScope) -> MentalModel | None:
         """Return one named mental model from the exact scope."""
 
         normalized_name = _required_text(name, field="name")
-        for result in self.memory.search(types=[MENTAL_MODEL_TYPE], limit=_SEARCH_LIMIT):
-            model = _mental_model_from_block(result.block)
-            if model.scope == scope and model.name == normalized_name:
-                return model
-        return None
+        block = self.structures.records.get(
+            _mental_model_address(scope, normalized_name)
+        )
+        return _mental_model_from_block(block) if block is not None else None
 
     def _records(self, scope: MemoryScope) -> list[ExtractedFactRecord]:
         """Return all canonical records from one exact application scope."""
 
         records = [
-            _record_from_block(result.block)
-            for result in self.memory.search(types=[FACT_RECORD_TYPE], limit=_SEARCH_LIMIT)
+            _record_from_block(item.block)
+            for item in self.structures.records.items(
+                namespace=_scope_namespace(scope),
+                limit=_SEARCH_LIMIT,
+            )
+            if item.block.type == FACT_RECORD_TYPE
         ]
-        records = [record for record in records if record.scope == scope]
         records.sort(key=lambda record: (record.created_at, record.text, record.id))
         return records
 
@@ -521,12 +575,36 @@ class Mem0Memory:
                 for key in sorted(record_entities.keys() & candidate_entities.keys())
             ]
             if shared:
-                self.memory.add_link(
+                self.structures.graph.add_edge(
                     candidate.block,
                     record.block,
                     ENTITY_LINK_RELATION,
                     metadata={"shared_entities": shared},
                 )
+
+
+def _scope_namespace(scope: MemoryScope) -> tuple[str, ...]:
+    """Return a stable keyed namespace for one exact Mem0 scope."""
+
+    return (
+        "records",
+        f"user={scope.user_id or '-'}",
+        f"agent={scope.agent_id or '-'}",
+        f"app={scope.app_id or '-'}",
+        f"run={scope.run_id or '-'}",
+    )
+
+
+def _record_address(scope: MemoryScope, memory_id: str) -> MemoryAddress:
+    """Return the exact keyed address for one canonical record id."""
+
+    return MemoryAddress(_scope_namespace(scope), memory_id)
+
+
+def _mental_model_address(scope: MemoryScope, name: str) -> MemoryAddress:
+    """Return the scoped keyed address for one mental-model name."""
+
+    return MemoryAddress((*_scope_namespace(scope), "mental_models"), name)
 
 
 def _record_index(payload: dict[str, Any]) -> dict[str, Any]:

@@ -11,12 +11,19 @@ from collections import deque
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import re
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from genie import MemoryBlock, MemoryHandle, MemoryLink
+from genie.backend import KeyedStore, TemporalStore
+from genie.structures import (
+    KeyedCollection,
+    MemoryAddress,
+    PropertyGraph,
+    TemporalCollection,
+)
 
 ITEM_TYPE = "langmem.item"
 ITEM_RELATION = "langmem.item_relation"
@@ -133,6 +140,35 @@ class GraphResult:
     distance: int
 
 
+class LangMemStructureStore(KeyedStore, TemporalStore, Protocol):
+    """Backend capabilities required by the LangMem structure bundle."""
+
+
+@dataclass(frozen=True, slots=True)
+class LangMemStructures:
+    """Composable structural views used by the LangMem application service."""
+
+    items: KeyedCollection
+    timeline: TemporalCollection
+    graph: PropertyGraph
+
+    @classmethod
+    def create(
+        cls,
+        memory: MemoryHandle,
+        store: LangMemStructureStore,
+    ) -> LangMemStructures:
+        """Build the facade bundle around one bounded store root."""
+
+        if memory.root_id is None:
+            raise ValueError("LangMemStructures requires a bounded MemoryHandle.")
+        return cls(
+            items=KeyedCollection(memory, store, collection=memory.root_id),
+            timeline=TemporalCollection(memory, store, collection=memory.root_id),
+            graph=PropertyGraph(memory),
+        )
+
+
 class LangMemStore:
     """Schema-flexible namespaced item store backed by a bounded Genie handle."""
 
@@ -140,16 +176,19 @@ class LangMemStore:
         self,
         memory: MemoryHandle,
         *,
+        structures: LangMemStructures,
         schemas: Mapping[Namespace, ValueSchema] | None = None,
     ) -> None:
         """Create a store with optional per-namespace value schemas.
 
         Args:
             memory: Bounded Genie handle owning all items.
+            structures: Keyed, temporal, and graph views over the same handle.
             schemas: Exact namespaces mapped to application-supplied schemas.
         """
 
         self.memory = memory
+        self.structures = structures
         self._schemas = {
             _normalize_namespace(namespace): schema
             for namespace, schema in (schemas or {}).items()
@@ -173,7 +212,8 @@ class LangMemStore:
 
         normalized_namespace = _normalize_namespace(namespace)
         normalized_key = _required_text(key, field="key")
-        if self.get(normalized_namespace, normalized_key) is not None:
+        address = MemoryAddress(normalized_namespace, normalized_key)
+        if self.structures.items.get(address) is not None:
             raise ValueError(
                 f"Item {normalized_key!r} already exists in namespace {normalized_namespace!r}."
             )
@@ -200,6 +240,13 @@ class LangMemStore:
                 entities=normalized_entities,
             ),
         )
+        try:
+            self.structures.items.bind(address, block)
+            if normalized_occurred_at is not None:
+                self.structures.timeline.add(block, occurred_at=normalized_occurred_at)
+        except Exception:
+            self.memory.delete(block)
+            raise
         return _item_from_block(block)
 
     def update(
@@ -245,6 +292,15 @@ class LangMemStore:
                 entities=normalized_entities,
             ),
         )
+        if occurred_at is not None:
+            temporal = self.structures.timeline.get(block)
+            if temporal is None:
+                self.structures.timeline.add(block, occurred_at=normalized_occurred_at)
+            else:
+                self.structures.timeline.replace(
+                    block,
+                    occurred_at=normalized_occurred_at,
+                )
         return _item_from_block(block)
 
     def get(self, namespace: Sequence[str], key: str) -> LangMemItem | None:
@@ -252,16 +308,10 @@ class LangMemStore:
 
         normalized_namespace = _normalize_namespace(namespace)
         normalized_key = _required_text(key, field="key")
-        matches = [
-            item
-            for item in self._all_items()
-            if item.namespace == normalized_namespace and item.key == normalized_key
-        ]
-        if len(matches) > 1:
-            raise ValueError(
-                f"Item {normalized_key!r} is ambiguous in namespace {normalized_namespace!r}."
-            )
-        return matches[0] if matches else None
+        block = self.structures.items.get(
+            MemoryAddress(normalized_namespace, normalized_key)
+        )
+        return _item_from_block(block) if block is not None else None
 
     def search(
         self,
@@ -325,13 +375,25 @@ class LangMemStore:
             _required_text(value, field="collection") for value in collections
         )
         normalized_limit = _validate_limit(limit)
-        items = [
-            item
-            for item in self._items_below(prefix)
-            if item.occurred_at is not None
-            and normalized_start <= item.occurred_at <= normalized_end
-            and (not normalized_collections or item.namespace[-1] in normalized_collections)
-        ]
+        try:
+            exclusive_end = normalized_end + timedelta(microseconds=1)
+        except OverflowError:
+            exclusive_end = None
+        items = []
+        for temporal in self.structures.timeline.events(
+            start=normalized_start,
+            stop=exclusive_end,
+            limit=_SEARCH_LIMIT,
+        ):
+            item = _item_from_block(temporal.block)
+            occurred_at = temporal.entry.occurred_at
+            if occurred_at is None or occurred_at > normalized_end:
+                continue
+            if not _is_below(item.namespace, prefix):
+                continue
+            if normalized_collections and item.namespace[-1] not in normalized_collections:
+                continue
+            items.append(item)
         items.sort(key=lambda item: (item.occurred_at, item.namespace, item.key))
         return items[:normalized_limit]
 
@@ -349,7 +411,7 @@ class LangMemStore:
         source = self._require_item(source_namespace, source_key)
         target = self._require_item(target_namespace, target_key)
         normalized_relation = _required_text(relation, field="relation")
-        for existing in self.memory.list_links(
+        for existing in self.structures.graph.edges(
             source.block,
             relation=ITEM_RELATION,
             direction="out",
@@ -359,7 +421,7 @@ class LangMemStore:
                 and existing.metadata.get("relation") == normalized_relation
             ):
                 return existing
-        return self.memory.add_link(
+        return self.structures.graph.add_edge(
             source.block,
             target.block,
             ITEM_RELATION,
@@ -392,17 +454,14 @@ class LangMemStore:
             if depth >= max_depth:
                 continue
             connected: list[tuple[LangMemItem, str, GraphDirection]] = []
-            for link in self.memory.list_links(
+            for neighbor_record in self.structures.graph.neighbors(
                 current.block,
                 relation=ITEM_RELATION,
                 direction="both",
             ):
-                if link.source_id == current.block.id:
-                    neighbor_id = link.target_id
-                    direction: GraphDirection = "out"
-                else:
-                    neighbor_id = link.source_id
-                    direction = "in"
+                link = neighbor_record.link
+                neighbor_id = neighbor_record.block.id
+                direction: GraphDirection = neighbor_record.direction
                 if neighbor_id in visited:
                     continue
                 neighbor = self._item_by_block_id(neighbor_id)
@@ -429,21 +488,29 @@ class LangMemStore:
         return schema.validate(value), schema.name
 
     def _all_items(self) -> list[LangMemItem]:
-        items = [
-            _item_from_block(result.block)
-            for result in self.memory.search(types=[ITEM_TYPE], limit=_SEARCH_LIMIT)
+        return [
+            _item_from_block(item.block)
+            for item in self.structures.items.items(
+                recursive=True,
+                limit=_SEARCH_LIMIT,
+            )
         ]
-        items.sort(key=lambda item: (item.namespace, item.key))
-        return items
 
     def _items_below(self, prefix: Namespace) -> list[LangMemItem]:
-        return [item for item in self._all_items() if _is_below(item.namespace, prefix)]
+        return [
+            _item_from_block(item.block)
+            for item in self.structures.items.items(
+                namespace=prefix,
+                recursive=True,
+                limit=_SEARCH_LIMIT,
+            )
+        ]
 
     def _item_by_block_id(self, block_id: str) -> LangMemItem | None:
-        for item in self._all_items():
-            if item.block.id == block_id:
-                return item
-        return None
+        block = self.memory.get(block_id)
+        if block is None or block.type != ITEM_TYPE:
+            return None
+        return _item_from_block(block)
 
     def _require_item(self, namespace: Sequence[str], key: str) -> LangMemItem:
         item = self.get(namespace, key)

@@ -2,17 +2,25 @@
 
 This module deliberately keeps Graphiti-specific semantics in the example
 layer. Genie supplies memory blocks, ownership, scoped access, search, and
-typed links; this module decides what an entity, episode, fact, provenance
-edge, and validity interval mean.
+optional structural facades; this module decides what an entity, episode,
+fact, provenance edge, and validity interval mean.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from genie import MemoryBlock, MemoryHandle
+from genie.backend import AcyclicLinkStore, TemporalStore
+from genie.structures import (
+    LineageDAG,
+    PropertyGraph,
+    TemporalCollection,
+    TemporalItem,
+    ValidityInterval,
+)
 
 ENTITY_TYPE = "graphiti.entity"
 EPISODE_TYPE = "graphiti.episode"
@@ -39,6 +47,7 @@ class TemporalFact:
     block: MemoryBlock
     subject: MemoryBlock
     object: MemoryBlock
+    temporal: TemporalItem
 
     @property
     def relation(self) -> str:
@@ -50,18 +59,19 @@ class TemporalFact:
     def valid_from(self) -> datetime:
         """Return the inclusive start of the fact's validity interval."""
 
-        return _parse_timestamp(_required_string(self.block.metadata, "valid_from"))
+        validity = self.temporal.entry.validity
+        if validity is None:
+            raise TypeError("Temporal fact is missing its validity interval.")
+        return validity.valid_at
 
     @property
     def valid_to(self) -> datetime | None:
         """Return the exclusive interval end, or ``None`` when still open."""
 
-        value = self.block.metadata.get("valid_to")
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise TypeError("Temporal fact metadata 'valid_to' must be a string or None.")
-        return _parse_timestamp(value)
+        validity = self.temporal.entry.validity
+        if validity is None:
+            raise TypeError("Temporal fact is missing its validity interval.")
+        return validity.invalid_at
 
     @property
     def statement(self) -> str:
@@ -85,20 +95,55 @@ class TemporalFact:
         return self.valid_from <= instant and (self.valid_to is None or instant < self.valid_to)
 
 
+class GraphitiStructureStore(AcyclicLinkStore, TemporalStore, Protocol):
+    """Backend capabilities required by the Graphiti structure bundle."""
+
+
+@dataclass(frozen=True, slots=True)
+class GraphitiStructures:
+    """Temporal, property-graph, and succession views for this lamp."""
+
+    graph: PropertyGraph
+    timeline: TemporalCollection
+    succession: LineageDAG
+
+    @classmethod
+    def create(
+        cls,
+        memory: MemoryHandle,
+        store: GraphitiStructureStore,
+    ) -> GraphitiStructures:
+        """Build all Graphiti structural views around one bounded root."""
+
+        if memory.root_id is None:
+            raise ValueError("GraphitiStructures requires a bounded MemoryHandle.")
+        return cls(
+            graph=PropertyGraph(memory),
+            timeline=TemporalCollection(memory, store, collection=memory.root_id),
+            succession=LineageDAG(memory, relation=SUPERSEDED_BY_RELATION),
+        )
+
+
 class TemporalKnowledgeGraph:
     """Graphiti-inspired application model backed by a scoped Genie handle.
 
     Entities, source episodes, and temporal facts are blocks owned by the
     handle root. Typed links connect facts to their subject, object, and source
-    episodes. A fact stores its effective-time interval in metadata so it can
-    be updated independently of the entities it relates.
+    episodes. `TemporalCollection` stores fact validity independently of the
+    entities and relationship payloads it indexes.
     """
 
-    def __init__(self, memory: MemoryHandle) -> None:
+    def __init__(
+        self,
+        memory: MemoryHandle,
+        *,
+        structures: GraphitiStructures,
+    ) -> None:
         """Create a graph within an existing bounded memory handle.
 
         Args:
             memory: Handle rooted at the block that owns the whole graph.
+            structures: Temporal and graph views over that same handle.
 
         Raises:
             ValueError: If the handle is unbounded.
@@ -107,6 +152,7 @@ class TemporalKnowledgeGraph:
         if memory.root_id is None:
             raise ValueError("TemporalKnowledgeGraph requires a bounded MemoryHandle.")
         self.memory = memory
+        self.structures = structures
 
     def add_entity(self, name: str, *, entity_type: str) -> MemoryBlock:
         """Add an entity node to the graph.
@@ -151,7 +197,7 @@ class TemporalKnowledgeGraph:
             raise ValueError("Episode content cannot be empty.")
         if not source:
             raise ValueError("Episode source cannot be empty.")
-        return self.memory.put(
+        block = self.memory.put(
             type=EPISODE_TYPE,
             value={"content": content, "source": source},
             metadata={
@@ -161,6 +207,15 @@ class TemporalKnowledgeGraph:
                 ),
             },
         )
+        try:
+            self.structures.timeline.add(
+                block,
+                occurred_at=_normalize_timestamp(observed_at, field="observed_at"),
+            )
+        except Exception:
+            self.memory.delete(block)
+            raise
+        return block
 
     def assert_fact(
         self,
@@ -228,12 +283,12 @@ class TemporalKnowledgeGraph:
         superseded: list[TemporalFact] = []
         if exclusive:
             for active in active_facts:
-                updated = self.memory.update(
+                self.structures.timeline.replace(
                     active.block,
-                    metadata={"valid_to": _format_timestamp(start)},
+                    validity=ValidityInterval(active.valid_from, start),
                 )
-                self._add_provenance(updated, episode_block)
-                superseded.append(self.resolve_fact(updated))
+                self._add_provenance(active.block, episode_block)
+                superseded.append(self.resolve_fact(active.block))
 
         fact_block = self.memory.put(
             type=FACT_TYPE,
@@ -246,15 +301,29 @@ class TemporalKnowledgeGraph:
                 "subject_id": subject_block.id,
                 "relation": relation,
                 "object_id": object_block.id,
-                "valid_from": _format_timestamp(start),
-                "valid_to": _format_timestamp(end) if end is not None else None,
             },
         )
-        self.memory.add_link(fact_block, subject_block, SUBJECT_RELATION)
-        self.memory.add_link(fact_block, object_block, OBJECT_RELATION)
-        self._add_provenance(fact_block, episode_block)
-        for previous in superseded:
-            self.memory.add_link(previous.block, fact_block, SUPERSEDED_BY_RELATION)
+        try:
+            self.structures.timeline.add(
+                fact_block,
+                validity=ValidityInterval(start, end),
+            )
+            self.structures.graph.add_edge(
+                fact_block,
+                subject_block,
+                SUBJECT_RELATION,
+            )
+            self.structures.graph.add_edge(
+                fact_block,
+                object_block,
+                OBJECT_RELATION,
+            )
+            self._add_provenance(fact_block, episode_block)
+            for previous in superseded:
+                self.structures.succession.add(previous.block, fact_block)
+        except Exception:
+            self.memory.delete(fact_block)
+            raise
         return self.resolve_fact(fact_block)
 
     def facts_at(
@@ -276,9 +345,22 @@ class TemporalKnowledgeGraph:
         """
 
         instant = _normalize_timestamp(when, field="when")
-        facts = self._search_facts(subject=subject, relation=relation)
+        subject_block = (
+            self._require_block_type(subject, ENTITY_TYPE, role="subject")
+            if subject is not None
+            else None
+        )
+        facts = []
+        for item in self.structures.timeline.valid_at(instant, limit=_SEARCH_LIMIT):
+            if item.block.type != FACT_TYPE:
+                continue
+            if subject_block is not None and item.block.metadata.get("subject_id") != subject_block.id:
+                continue
+            if relation is not None and item.block.metadata.get("relation") != relation:
+                continue
+            facts.append(self.resolve_fact(item.block))
         return sorted(
-            (fact for fact in facts if fact.is_valid_at(instant)),
+            facts,
             key=lambda fact: (fact.relation, fact.statement, fact.valid_from),
         )
 
@@ -344,10 +426,11 @@ class TemporalKnowledgeGraph:
         block = fact.block if isinstance(fact, TemporalFact) else fact
         self._require_block_type(block, FACT_TYPE, role="fact")
         episodes: list[MemoryBlock] = []
-        for link in self.memory.list_links(block, relation=PROVENANCE_RELATION):
-            episode = self.memory.get(link.target_id)
-            if episode is not None:
-                episodes.append(episode)
+        for neighbor in self.structures.graph.neighbors(
+            block,
+            relation=PROVENANCE_RELATION,
+        ):
+            episodes.append(neighbor.block)
         return episodes
 
     def resolve_fact(self, fact: str | MemoryBlock) -> TemporalFact:
@@ -363,7 +446,15 @@ class TemporalKnowledgeGraph:
         fact_block = self._require_block_type(fact, FACT_TYPE, role="fact")
         subject = self._single_linked_block(fact_block, SUBJECT_RELATION)
         object_block = self._single_linked_block(fact_block, OBJECT_RELATION)
-        return TemporalFact(block=fact_block, subject=subject, object=object_block)
+        temporal = self.structures.timeline.get(fact_block)
+        if temporal is None or temporal.entry.validity is None:
+            raise ValueError(f"Fact {fact_block.id!r} has no validity interval.")
+        return TemporalFact(
+            block=fact_block,
+            subject=subject,
+            object=object_block,
+            temporal=temporal,
+        )
 
     def _search_facts(
         self,
@@ -389,22 +480,19 @@ class TemporalKnowledgeGraph:
     def _add_provenance(self, fact: MemoryBlock, episode: MemoryBlock) -> None:
         """Link an episode once, avoiding duplicate provenance edges."""
 
-        links = self.memory.list_links(fact, relation=PROVENANCE_RELATION)
+        links = self.structures.graph.edges(fact, relation=PROVENANCE_RELATION)
         if not any(link.target_id == episode.id for link in links):
-            self.memory.add_link(fact, episode, PROVENANCE_RELATION)
+            self.structures.graph.add_edge(fact, episode, PROVENANCE_RELATION)
 
     def _single_linked_block(self, fact: MemoryBlock, relation: str) -> MemoryBlock:
         """Resolve exactly one outgoing link for a structural fact role."""
 
-        links = self.memory.list_links(fact, relation=relation)
-        if len(links) != 1:
+        neighbors = self.structures.graph.neighbors(fact, relation=relation)
+        if len(neighbors) != 1:
             raise ValueError(
                 f"Fact {fact.id!r} must have exactly one outgoing {relation!r} link."
             )
-        block = self.memory.get(links[0].target_id)
-        if block is None:
-            raise ValueError(f"Fact {fact.id!r} links to a missing block.")
-        return block
+        return neighbors[0].block
 
     def _require_block_type(
         self,
@@ -438,12 +526,6 @@ def _format_timestamp(value: datetime) -> str:
     """Format a UTC timestamp as a JSON-compatible ISO 8601 string."""
 
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str) -> datetime:
-    """Parse the ISO 8601 representation used in fact metadata."""
-
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
 def _required_string(mapping: Any, key: str) -> str:

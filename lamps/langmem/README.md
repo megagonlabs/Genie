@@ -59,13 +59,13 @@ This keeps the example episode value faithful to the four-field episodic shape.
 | --- | --- |
 | `(namespace, key, value)` item | One owned `langmem.item` block |
 | Supplied value schema | `ValueSchema` registered for an exact namespace |
-| Hierarchical namespace | Tuple stored in the item wrapper and searchable metadata |
-| Contextual key | Unique key within an exact namespace |
+| Hierarchical namespace | `MemoryAddress.namespace` plus the canonical wrapper field |
+| Contextual key | Atomic `KeyedCollection` binding within an exact namespace |
 | Create/update management | `LangMemStore.create` and `update`; update preserves block identity |
-| Direct retrieval | Exact namespace plus key lookup |
+| Direct retrieval | Exact `KeyedCollection` address lookup |
 | Semantic retrieval | Deterministic token overlap across schema-shaped values |
-| Episodic retrieval | Event-time filtering using optional block metadata |
-| Graph retrieval | `langmem.item_relation` Genie links with application relation labels |
+| Episodic retrieval | `TemporalCollection` event query, with time retained as an annotation |
+| Graph retrieval | `PropertyGraph` edges with application relation labels |
 | Mental model | A regular item using a separate synthesis schema and namespace |
 | Agent tools | Namespace-bound `manage_memory`, `get_memory`, and search/link tools |
 
@@ -97,7 +97,8 @@ From the repository root:
 conda run -n "genie" python -m lamps.langmem.demo
 ```
 
-The terminal output uses the shared lamp format: available tools, agent answer,
+The terminal output first names the lamp, its purpose, and the Genie structures
+it uses. It then shows the shared lamp sections: available tools, agent answer,
 ordered tool calls, and one-line-per-tool usage counts.
 
 Run its co-located tests with:

@@ -9,18 +9,28 @@ from __future__ import annotations
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import re
-from typing import Any, Literal, Sequence, cast
+from typing import Any, Literal, Protocol, Sequence, cast
 
 from genie import MemoryBlock, MemoryHandle, MemoryLink
+from genie.backend import KeyedStore, SequenceStore, TemporalStore
+from genie.structures import (
+    EventLog,
+    KeyedCollection,
+    MemoryAddress,
+    PropertyGraph,
+    TemporalCollection,
+)
 
 MEMORY_UNIT_TYPE = "hindsight.memory_unit"
 MENTAL_MODEL_TYPE = "hindsight.mental_model"
+OCCURRENCE_TYPE = "hindsight.occurrence"
 
 TEMPORAL_RELATION = "hindsight.temporal"
 SEMANTIC_RELATION = "hindsight.semantic"
 CAUSAL_RELATION = "hindsight.causal"
+OCCURRENCE_OF_RELATION = "hindsight.occurrence_of"
 GRAPH_RELATIONS = frozenset({TEMPORAL_RELATION, SEMANTIC_RELATION, CAUSAL_RELATION})
 
 FactType = Literal["world", "experience", "observation"]
@@ -91,6 +101,37 @@ class GraphRecallResult:
     distance: int
 
 
+class HindsightStructureStore(KeyedStore, SequenceStore, TemporalStore, Protocol):
+    """Backend capabilities required by the Hindsight structure bundle."""
+
+
+@dataclass(frozen=True, slots=True)
+class HindsightStructures:
+    """Ordered, keyed, temporal, and graph views used by the memory bank."""
+
+    units: EventLog
+    names: KeyedCollection
+    timeline: TemporalCollection
+    graph: PropertyGraph
+
+    @classmethod
+    def create(
+        cls,
+        memory: MemoryHandle,
+        store: HindsightStructureStore,
+    ) -> HindsightStructures:
+        """Build all Hindsight structural views around one bounded root."""
+
+        if memory.root_id is None:
+            raise ValueError("HindsightStructures requires a bounded MemoryHandle.")
+        return cls(
+            units=EventLog(memory, store, log=memory.root_id),
+            names=KeyedCollection(memory, store, collection=memory.root_id),
+            timeline=TemporalCollection(memory, store, collection=memory.root_id),
+            graph=PropertyGraph(memory),
+        )
+
+
 class HindsightMemoryBank:
     """Application-owned Hindsight-inspired memory bank.
 
@@ -99,14 +140,21 @@ class HindsightMemoryBank:
     retrieval strategies without adding those opinions to Genie core.
     """
 
-    def __init__(self, memory: MemoryHandle) -> None:
+    def __init__(
+        self,
+        memory: MemoryHandle,
+        *,
+        structures: HindsightStructures,
+    ) -> None:
         """Create a bank over one bounded Genie memory handle.
 
         Args:
             memory: Handle whose root owns all units and mental models.
+            structures: Ordered, keyed, temporal, and graph views.
         """
 
         self.memory = memory
+        self.structures = structures
 
     def retain(
         self,
@@ -172,6 +220,31 @@ class HindsightMemoryBank:
                 "tags": list(normalized_tags),
             },
         )
+        try:
+            self.structures.names.bind(
+                MemoryAddress(("units",), block.id),
+                block,
+            )
+            self.structures.units.append(block)
+            for ordinal, occurred_at in enumerate(normalized_dates):
+                occurrence = self.memory.put(
+                    parent=block,
+                    type=OCCURRENCE_TYPE,
+                    value={"memory_unit_id": block.id, "ordinal": ordinal},
+                    metadata={"occurred_at": _format_timestamp(occurred_at)},
+                )
+                self.structures.timeline.add(
+                    occurrence,
+                    occurred_at=occurred_at,
+                )
+                self.structures.graph.add_edge(
+                    occurrence,
+                    block,
+                    OCCURRENCE_OF_RELATION,
+                )
+        except Exception:
+            self.memory.delete(block)
+            raise
         return _memory_unit_from_block(block)
 
     def get_unit(self, unit: str | MemoryBlock | MemoryUnit) -> MemoryUnit | None:
@@ -187,16 +260,10 @@ class HindsightMemoryBank:
             TypeError: If the block is not an atomic memory unit.
         """
 
-        results = self.memory.search(
-            types=[MEMORY_UNIT_TYPE],
-            filters={"id": _unit_id(unit)},
-            limit=2,
+        block = self.structures.names.get(
+            MemoryAddress(("units",), _unit_id(unit))
         )
-        if not results:
-            return None
-        if len(results) > 1:
-            raise ValueError(f"Memory unit id {_unit_id(unit)!r} is ambiguous.")
-        return _memory_unit_from_block(results[0].block)
+        return _memory_unit_from_block(block) if block is not None else None
 
     def set_state(
         self,
@@ -249,7 +316,7 @@ class HindsightMemoryBank:
             raise ValueError(f"Unsupported Hindsight graph relation {relation!r}.")
         source_unit = self._require_unit(source)
         target_unit = self._require_unit(target)
-        return self.memory.add_link(
+        return self.structures.graph.add_edge(
             source_unit.block,
             target_unit.block,
             relation,
@@ -304,6 +371,14 @@ class HindsightMemoryBank:
             },
             metadata={"name": normalized_name, "tags": list(normalized_tags)},
         )
+        try:
+            self.structures.names.bind(
+                MemoryAddress(("mental_models",), normalized_name),
+                block,
+            )
+        except Exception:
+            self.memory.delete(block)
+            raise
         return _mental_model_from_block(block)
 
     def get_mental_model(self, name: str) -> MentalModel | None:
@@ -316,16 +391,10 @@ class HindsightMemoryBank:
             Mental model, or `None` when no model has that name.
         """
 
-        results = self.memory.search(
-            types=[MENTAL_MODEL_TYPE],
-            filters={"metadata.name": name},
-            limit=2,
+        block = self.structures.names.get(
+            MemoryAddress(("mental_models",), name)
         )
-        if not results:
-            return None
-        if len(results) > 1:
-            raise ValueError(f"Mental model name {name!r} is ambiguous.")
-        return _mental_model_from_block(results[0].block)
+        return _mental_model_from_block(block) if block is not None else None
 
     def recall(
         self,
@@ -424,8 +493,34 @@ class HindsightMemoryBank:
             raise ValueError("Temporal recall end must not be earlier than start.")
         selected_types = {_validate_fact_type(value) for value in fact_types}
         normalized_entity = entity.casefold() if entity is not None else None
-        selected: list[tuple[datetime, MemoryUnit]] = []
-        for unit in self._all_units():
+        try:
+            exclusive_end = normalized_end + timedelta(microseconds=1)
+        except OverflowError:
+            exclusive_end = None
+        selected_by_id: dict[str, tuple[datetime, MemoryUnit]] = {}
+        for temporal in self.structures.timeline.events(
+            start=normalized_start,
+            stop=exclusive_end,
+            limit=_SEARCH_LIMIT,
+        ):
+            if temporal.block.type != OCCURRENCE_TYPE:
+                continue
+            occurred_at = temporal.entry.occurred_at
+            if occurred_at is None or occurred_at > normalized_end:
+                continue
+            neighbors = self.structures.graph.neighbors(
+                temporal.block,
+                relation=OCCURRENCE_OF_RELATION,
+            )
+            if len(neighbors) != 1:
+                raise ValueError(
+                    f"Occurrence {temporal.block.id!r} must reference one memory unit."
+                )
+            unit = self.get_unit(neighbors[0].block)
+            if unit is None:
+                raise ValueError(
+                    f"Occurrence {temporal.block.id!r} references a missing memory unit."
+                )
             if unit.state != "valid":
                 continue
             if selected_types and unit.fact_type not in selected_types:
@@ -434,11 +529,10 @@ class HindsightMemoryBank:
                 value.casefold() for value in unit.entities
             }:
                 continue
-            matching_dates = [
-                value for value in unit.occurred_dates if normalized_start <= value <= normalized_end
-            ]
-            if matching_dates:
-                selected.append((min(matching_dates), unit))
+            previous = selected_by_id.get(unit.id)
+            if previous is None or occurred_at < previous[0]:
+                selected_by_id[unit.id] = (occurred_at, unit)
+        selected = list(selected_by_id.values())
         selected.sort(key=lambda item: (item[0], item[1].text.casefold()))
         return [unit for _, unit in selected]
 
@@ -478,19 +572,16 @@ class HindsightMemoryBank:
             current_id, distance = queue.popleft()
             if distance >= max_depth:
                 continue
-            links = sorted(
-                self.memory.list_links(current_id, direction="both"),
-                key=lambda link: (link.relation, link.id),
+            neighbors = sorted(
+                self.structures.graph.neighbors(current_id, direction="both"),
+                key=lambda neighbor: (neighbor.link.relation, neighbor.link.id),
             )
-            for link in links:
+            for neighbor_record in neighbors:
+                link = neighbor_record.link
                 if link.relation not in selected_relations:
                     continue
-                if link.source_id == current_id:
-                    neighbor_id = link.target_id
-                    direction: GraphDirection = "out"
-                else:
-                    neighbor_id = link.source_id
-                    direction = "in"
+                neighbor_id = neighbor_record.block.id
+                direction: GraphDirection = neighbor_record.direction
                 if neighbor_id in visited:
                     continue
                 visited.add(neighbor_id)
@@ -513,8 +604,8 @@ class HindsightMemoryBank:
         """Return every readable atomic unit in insertion order."""
 
         return [
-            _memory_unit_from_block(result.block)
-            for result in self.memory.search(types=[MEMORY_UNIT_TYPE], limit=_SEARCH_LIMIT)
+            _memory_unit_from_block(item.block)
+            for item in self.structures.units.read(limit=_SEARCH_LIMIT)
         ]
 
     def _require_unit(self, unit: str | MemoryBlock | MemoryUnit) -> MemoryUnit:

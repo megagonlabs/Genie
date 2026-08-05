@@ -12,8 +12,11 @@ from lamps.hindsight.agent import (
 from lamps.hindsight.memory_bank import (
     CAUSAL_RELATION,
     GRAPH_RELATIONS,
+    HindsightStructures,
     MEMORY_UNIT_TYPE,
     MENTAL_MODEL_TYPE,
+    OCCURRENCE_OF_RELATION,
+    OCCURRENCE_TYPE,
     SEMANTIC_RELATION,
     TEMPORAL_RELATION,
     GraphRecallResult,
@@ -29,9 +32,12 @@ __all__ = [
     "GraphRecallResult",
     "HindsightAgent",
     "HindsightMemoryBank",
+    "HindsightStructures",
     "HindsightTools",
     "MEMORY_UNIT_TYPE",
     "MENTAL_MODEL_TYPE",
+    "OCCURRENCE_OF_RELATION",
+    "OCCURRENCE_TYPE",
     "MemoryCandidate",
     "MemoryLinkCandidate",
     "MemoryUnit",
@@ -43,4 +49,3 @@ __all__ = [
     "ToolCallRecord",
     "ToolDefinition",
 ]
-

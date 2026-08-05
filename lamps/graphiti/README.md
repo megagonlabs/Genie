@@ -12,10 +12,11 @@ example, not a drop-in implementation of Graphiti.
 | Entity node | `graphiti.entity` memory block |
 | Source episode | `graphiti.episode` memory block |
 | Temporal fact | First-class `graphiti.temporal_fact` memory block |
-| Subject and object | Typed links from a fact to entity blocks |
-| Provenance | `graphiti.provenance` links from a fact to episodes |
-| Validity period | `valid_from` and `valid_to` fact metadata |
-| Supersession | Close the old interval and link it to the new fact |
+| Subject and object | `PropertyGraph` edges from a fact to entity blocks |
+| Provenance | `PropertyGraph` edges from a fact to episodes |
+| Episode time | Event membership in `TemporalCollection` |
+| Validity period | `ValidityInterval` membership in `TemporalCollection` |
+| Supersession | Close the old interval and add a cycle-protected `LineageDAG` edge |
 | Agent access | Named tools with JSON-compatible arguments and results |
 
 Validity intervals are half-open: `[valid_from, valid_to)`. An absent
@@ -54,6 +55,10 @@ agent answers with current context, related company context, location history,
 and provenance:
 
 ```text
+== Graphiti-inspired temporal knowledge graph ==
+An agent stores source episodes, temporal facts, provenance, and relationship history.
+Genie structures: property graph, temporal collection, lineage DAG
+
 Tools available to the agent:
 - add_episode: Store raw source material for later provenance.
 - add_fact: Store a temporal subject-relation-object fact and link it to its source episode. Entities are reused by name and type.
@@ -100,8 +105,8 @@ Tool usage:
 The example does not reproduce Graphiti's LLM extraction, entity resolution,
 ontology management, embeddings, hybrid ranking, or graph-database query
 engine. Those are application and backend concerns. The lamp focuses on the
-portable model Genie can provide: owned blocks, scoped access, typed
-relationships, provenance, and updateable temporal facts.
+portable model Genie can provide: owned blocks, scoped access, a property
+graph, provenance, temporal membership, and cycle-protected succession.
 
 The example agent receives structured fact candidates rather than extracting
 them from raw text. Its deterministic policy demonstrates tool access and an

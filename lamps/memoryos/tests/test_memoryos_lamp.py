@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from genie import InMemoryBackend, Memory
+from genie.structures import MemoryAddress
 from lamps.memoryos.demo import answer_demo_question, build_demo_agent, main, teach_demo_agent
 from lamps.memoryos.memory_system import (
     KNOWLEDGE_TYPE,
@@ -17,6 +18,7 @@ from lamps.memoryos.memory_system import (
     SHORT_TERM_TYPE,
     KnowledgeDraft,
     MemoryOSMemory,
+    MemoryOSStructures,
 )
 
 
@@ -27,11 +29,13 @@ def _memory(
     knowledge_capacity: int = 10,
     clock=None,  # type: ignore[no-untyped-def]
 ):  # type: ignore[no-untyped-def]
-    memory = Memory(backend=InMemoryBackend(), principal="memoryos-test")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="memoryos-test")
     root = memory.put(type="memoryos.root", value={"user": "alice"})
     handle = memory.get_handle(root=root)
     hierarchy = MemoryOSMemory(
         handle,
+        structures=MemoryOSStructures.create(handle, backend),
         short_term_capacity=short_capacity,
         heat_threshold=heat_threshold,
         knowledge_capacity=knowledge_capacity,
@@ -69,6 +73,13 @@ def test_short_term_is_fifo_and_overflow_becomes_a_mid_term_page() -> None:
     assert [qa.key for qa in short] == ["second", "third"]
     assert [page.source_key for page in pages] == ["first"]
     assert [page.source_key for page in result.promoted_pages] == ["first"]
+    assert [item.block for item in memory.structures.short_term.read()] == [
+        qa.block for qa in short
+    ]
+    assert memory.structures.timeline.get(pages[0].block) is not None
+    assert memory.structures.keys.get(
+        MemoryAddress(("conversations",), "first")
+    ) == pages[0].block
     assert set(short[0].block.value) == {"key", "user_input", "agent_response", "timestamp"}
     assert len(handle.search(types=[SHORT_TERM_TYPE], limit=20)) == 2
     assert len(handle.search(types=[MID_TERM_TYPE], limit=20)) == 1
@@ -95,6 +106,7 @@ def test_mid_term_pages_store_summary_dialogue_heat_and_chronology_links() -> No
         "visit_count",
     }
     assert len(links) == 1 and links[0].target_id == second.id
+    assert memory.structures.page_lineage.successors(first.block)[0].block == second.block
 
 
 def test_matching_retrieval_increments_page_heat_and_visit_count() -> None:
@@ -289,7 +301,10 @@ def test_demo_uses_the_shared_terminal_format(capsys) -> None:
     main()
 
     output = capsys.readouterr().out
-    assert output.startswith("Tools available to the agent:\n")
+    assert output.startswith("== MemoryOS-inspired tiered memory ==\n")
+    assert "Genie structures: ownership tree, keyed collection, event logs" in output
+    assert "\nTools available to the agent:\n" in output
     assert "\nAgent answer:\nQuestion:" in output
+    assert "Long-term user profile:" in output
     assert "Inspectable tool calls:\n01. add_memory\n02. add_memory" in output
     assert "Tool usage:\n- add_memory x5\n- retrieve_memory x2" in output

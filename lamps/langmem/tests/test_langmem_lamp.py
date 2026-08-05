@@ -7,11 +7,13 @@ from datetime import UTC, datetime
 import pytest
 
 from genie import InMemoryBackend, Memory
+from genie.structures import MemoryAddress
 from lamps.langmem.demo import answer_demo_question, build_demo_agent, main, teach_demo_agent
 from lamps.langmem.memory_store import (
     ITEM_RELATION,
     ITEM_TYPE,
     LangMemStore,
+    LangMemStructures,
     Namespace,
     ValueSchema,
 )
@@ -20,7 +22,8 @@ BASE: Namespace = ("assistant", "alice")
 
 
 def _store():  # type: ignore[no-untyped-def]
-    memory = Memory(backend=InMemoryBackend(), principal="langmem-test")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="langmem-test")
     root = memory.put(type="langmem.store", value={"name": "test"})
     handle = memory.get_handle(root=root)
     schemas = {
@@ -37,7 +40,14 @@ def _store():  # type: ignore[no-untyped-def]
             {"name": str, "summary": str, "principles": list, "source_keys": list},
         ),
     }
-    return LangMemStore(handle, schemas=schemas), handle
+    return (
+        LangMemStore(
+            handle,
+            structures=LangMemStructures.create(handle, backend),
+            schemas=schemas,
+        ),
+        handle,
+    )
 
 
 def _fact(subject: str, predicate: str, object_: str, context: str) -> dict[str, str]:
@@ -83,6 +93,7 @@ def test_items_preserve_exact_namespace_key_value_shape_across_schemas() -> None
     )
     assert fact.schema_name == "semantic_fact"
     assert episode.schema_name == "episode"
+    assert store.structures.items.get(MemoryAddress(fact.namespace, fact.key)) == fact.block
     assert len(handle.search(types=[ITEM_TYPE], limit=20)) == 2
 
 
@@ -307,7 +318,9 @@ def test_demo_uses_the_shared_terminal_format(capsys) -> None:
     main()
 
     output = capsys.readouterr().out
-    assert output.startswith("Tools available to the agent:\n")
+    assert output.startswith("== LangMem-inspired namespaced memory ==\n")
+    assert "Genie structures: keyed collection, temporal collection, property graph" in output
+    assert "\nTools available to the agent:\n" in output
     assert "\nAgent answer:\nQuestion:" in output
     assert "Inspectable tool calls:\n01. manage_memory\n02. manage_memory" in output
     assert "Tool usage:\n- manage_memory x5\n- link_memories x3" in output

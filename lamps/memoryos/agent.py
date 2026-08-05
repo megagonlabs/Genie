@@ -358,7 +358,7 @@ class MemoryOSAgent:
         ) or "- No graph context."
         return (
             f"Question: {question}\n"
-            f"Mental model (user profile): {profile_text}\n"
+            f"Long-term user profile: {profile_text}\n"
             f"Relevant long-term facts:\n{fact_lines}\n"
             f"Experience timeline:\n{timeline_lines}\n"
             f"Graph context:\n{graph_lines}"

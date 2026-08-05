@@ -64,7 +64,7 @@ class LangMemTools:
         self.definitions = (
             ToolDefinition(
                 name="manage_memory",
-                description="Create or update a schema-shaped value under a bound namespace.",
+                description="Create or update a structured value under a bound namespace.",
                 parameters={
                     "action": "create | update",
                     "collection": "string",
@@ -81,7 +81,7 @@ class LangMemTools:
             ),
             ToolDefinition(
                 name="search_memory",
-                description="Search schema-shaped values below the bound namespace.",
+                description="Search structured values below the bound namespace.",
                 parameters={
                     "query": "string",
                     "collections": "optional list[string]",

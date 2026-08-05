@@ -56,13 +56,13 @@ a claim that mental models are part of Mem0's canonical fact-record schema.
 | Mem0-inspired behavior | Implementation in this lamp |
 | --- | --- |
 | Extracted fact record | One `mem0.fact_record` block with the canonical value shape |
-| Entity scope | `MemoryScope`; every tool is permanently bound to one exact four-id tuple |
+| Entity scope and record id | `MemoryScope` mapped to an atomic `KeyedCollection` address |
 | Exact deduplication | MD5 of normalized text, compared only inside the bound scope |
 | Update | `MemoryHandle.update`; id and `created_at` remain stable while text, hash, metadata, and `updated_at` change |
-| Facts and experiences | `metadata.kind`, with optional `metadata.occurred_at` |
+| Facts and experiences | `metadata.kind`; event time is also indexed by `TemporalCollection` |
 | Semantic retrieval | Portable lexical scoring over text and entities |
-| Graph context | `mem0.entity_link` links between records sharing normalized entities |
-| Mental model | Separate synthesis block containing supporting fact-record ids |
+| Graph context | `PropertyGraph` edges between records sharing normalized entities |
+| Mental model | Separate synthesis block addressed by scoped name in `KeyedCollection` |
 | Agent access | `Mem0Tools` wraps a bounded `Mem0Memory`; the agent never receives `Memory` or `MemoryHandle` |
 
 Parent/child structure owns the lamp's records. Links express related content
@@ -85,7 +85,8 @@ The agent calls:
 - `search_memories`, `search_temporal`, `search_graph`, and
   `get_mental_model` once each.
 
-The demo uses the same four terminal sections as the other agent lamps: tools,
+The output first names the lamp, its purpose, and the Genie structures it uses.
+It then uses the same four terminal sections as the other agent lamps: tools,
 answer, ordered call trace, and one-line-per-tool usage counts. Each invocation
 is also directly inspectable in `agent.tool_calls`.
 

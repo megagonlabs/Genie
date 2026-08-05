@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 
-from genie import Memory
+from genie import InMemoryBackend, Memory
 from lamps.hindsight import (
     CAUSAL_RELATION,
     MEMORY_UNIT_TYPE,
@@ -18,6 +18,9 @@ from lamps.hindsight import (
     SEMANTIC_RELATION,
     TEMPORAL_RELATION,
     HindsightMemoryBank,
+    HindsightStructures,
+    OCCURRENCE_OF_RELATION,
+    OCCURRENCE_TYPE,
 )
 from lamps.hindsight.demo import (
     answer_demo_question,
@@ -37,9 +40,14 @@ def at(value: str) -> datetime:
 def make_bank() -> HindsightMemoryBank:
     """Create an empty bank rooted in a bounded Genie handle."""
 
-    memory = Memory(principal="test")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="test")
     root = memory.put(type="hindsight.memory_bank", value={"name": "test"})
-    return HindsightMemoryBank(memory.get_handle(root=root))
+    handle = memory.get_handle(root=root)
+    return HindsightMemoryBank(
+        handle,
+        structures=HindsightStructures.create(handle, backend),
+    )
 
 
 def test_atomic_memory_unit_preserves_canonical_fields_and_curation_state() -> None:
@@ -113,6 +121,40 @@ def test_temporal_recall_filters_occurred_dates_and_fact_types() -> None:
 
     assert [unit.id for unit in results] == [failure.id, recovery.id]
     assert before.id not in {unit.id for unit in results}
+
+
+def test_multiple_occurred_dates_use_child_occurrences_and_deduplicate_recall() -> None:
+    """Each date is indexed independently without changing the canonical unit."""
+
+    bank = make_bank()
+    unit = bank.retain(
+        "The migration ran on two days.",
+        fact_type="experience",
+        occurred_dates=(at("2025-03-15"), at("2025-03-16")),
+    )
+
+    occurrences = bank.memory.search(types=[OCCURRENCE_TYPE], limit=10)
+    recalled = bank.recall_temporal(
+        at("2025-03-15"),
+        at("2025-03-16"),
+        fact_types=("experience",),
+    )
+
+    assert len(occurrences) == 2
+    assert [result.block.parent_id for result in occurrences] == [unit.id, unit.id]
+    assert all(
+        bank.structures.timeline.get(result.block) is not None
+        for result in occurrences
+    )
+    assert all(
+        bank.structures.graph.edges(
+            result.block,
+            relation=OCCURRENCE_OF_RELATION,
+        )[0].target_id
+        == unit.id
+        for result in occurrences
+    )
+    assert recalled == [unit]
 
 
 def test_graph_recall_traverses_temporal_semantic_and_causal_links() -> None:
@@ -241,6 +283,8 @@ def test_demo_runs_as_a_module() -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.startswith("== Hindsight-inspired agent memory ==\n")
+    assert "Genie structures: event log, keyed collection, temporal collection" in result.stdout
     assert "Tools available to the agent:" in result.stdout
     assert "Agent answer:" in result.stdout
     assert "Mental model (atlas-deployment-playbook)" in result.stdout

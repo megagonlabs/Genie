@@ -16,15 +16,20 @@ from lamps.mem0.agent import (
     MemoryUpdateCandidate,
     MentalModelCandidate,
 )
-from lamps.mem0.memory_store import Mem0Memory, MemoryScope
+from lamps.mem0.memory_store import Mem0Memory, Mem0Structures, MemoryScope
 
 
 def build_demo_agent() -> Mem0Agent:
     """Create an agent that receives scope-bound tools, not raw memory."""
 
-    memory = Memory(backend=InMemoryBackend(), principal="mem0-demo")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="mem0-demo")
     root = memory.put(type="mem0.memory_collection", value={"name": "travel assistant"})
-    store = Mem0Memory(memory.get_handle(root=root))
+    handle = memory.get_handle(root=root)
+    store = Mem0Memory(
+        handle,
+        structures=Mem0Structures.create(handle, backend),
+    )
     scope = MemoryScope(
         user_id="alice",
         agent_id="travel-agent",
@@ -108,7 +113,17 @@ def main() -> None:
     agent = build_demo_agent()
     teach_demo_agent(agent)
     answer = answer_demo_question(agent)
-    print_agent_demo(tools=agent.tools, answer=answer, calls=agent.tool_calls)
+    print_agent_demo(
+        title="Mem0-inspired scoped memory",
+        purpose=(
+            "An agent stores scoped fact records, updates preferences, and "
+            "retrieves context by text, time, and graph relationships."
+        ),
+        structures=("keyed collection", "temporal collection", "property graph"),
+        tools=agent.tools,
+        answer=answer,
+        calls=agent.tool_calls,
+    )
 
 
 if __name__ == "__main__":

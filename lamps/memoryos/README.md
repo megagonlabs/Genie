@@ -77,17 +77,19 @@ contain `owner`, `knowledge`, `timestamp`, and `source_page_ids`.
 
 | MemoryOS-inspired concept | Implementation in this lamp |
 | --- | --- |
-| Short-term FIFO QA | Owned `memoryos.short_term_qa` blocks ordered by sequence metadata |
+| Memory tiers | Owned subtrees created through `OwnershipTree` |
+| Short-term FIFO QA | Owned `memoryos.short_term_qa` blocks appended to an `EventLog` |
 | FIFO overflow | Oldest QA becomes a page, then is deleted from short-term storage |
-| Mid-term pages/segments | `memoryos.mid_term_page` blocks with summaries, dialogue, heat, and visits |
-| Dialogue chain | `memoryos.next_page` Genie links |
+| Mid-term pages/segments | Blocks appended to a separate mid-term `EventLog` |
+| Dialogue chain | Cycle-protected `memoryos.next_page` `LineageDAG` edges |
 | Heat accumulation | Matching page retrieval increments explicit `heat` and `visit_count` fields |
-| User mental model | One updateable long-term profile dictionary |
-| User facts | Bounded long-term knowledge blocks with `owner="user"` |
-| Assistant facts | Bounded long-term knowledge blocks with `owner="assistant"` |
-| Mid-to-long update | Heated pages link to profile/knowledge through `memoryos.promoted_to` |
+| Stable conversation key | `KeyedCollection` binding transferred from QA to promoted page |
+| User mental model | One updateable profile addressed through `KeyedCollection` |
+| User facts | Bounded entries in the user-knowledge `EventLog` |
+| Assistant facts | Bounded entries in the assistant-knowledge `EventLog` |
+| Mid-to-long update | Heated pages connect through `PropertyGraph` promotion edges |
 | Multi-tier retrieval | One result combines current FIFO, matching pages, profile, and both knowledge stores |
-| Temporal retrieval | Event/timestamp filtering across QA, pages, and knowledge |
+| Temporal retrieval | One `TemporalCollection` across QA, pages, and knowledge |
 | Agent access | `MemoryOSTools` wraps a bounded hierarchy; the agent never receives a Genie handle |
 
 Parent/child structure owns the hierarchy. Links express chronological and
@@ -119,8 +121,9 @@ From the repository root:
 conda run -n "genie" python -m lamps.memoryos.demo
 ```
 
-The output uses the shared lamp format: tool definitions, agent answer,
-numbered calls, and per-tool usage counts.
+The output first names the lamp, its purpose, and the Genie structures it uses.
+It then shows the shared lamp sections: tool definitions, agent answer, numbered
+calls, and per-tool usage counts.
 
 Run its co-located tests with:
 

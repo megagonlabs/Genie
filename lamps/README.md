@@ -11,6 +11,7 @@ use a package with several modules. In either case, a lamp should:
 
 - Explain its purpose, concept mapping, and important limits.
 - Keep application-specific behavior outside the Genie core library.
+- Compose only the optional structure facades that fit the lamp's model.
 - Be runnable from the repository root.
 - Keep its tests under `lamps/<name>/tests` rather than the top-level `tests`
   directory.

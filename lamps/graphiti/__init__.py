@@ -8,10 +8,15 @@ from lamps.graphiti.agent import (
     ToolCallRecord,
     ToolDefinition,
 )
-from lamps.graphiti.temporal_graph import TemporalFact, TemporalKnowledgeGraph
+from lamps.graphiti.temporal_graph import (
+    GraphitiStructures,
+    TemporalFact,
+    TemporalKnowledgeGraph,
+)
 
 __all__ = [
     "FactCandidate",
+    "GraphitiStructures",
     "Observation",
     "TemporalFact",
     "TemporalGraphAgent",

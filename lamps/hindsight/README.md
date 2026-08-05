@@ -21,13 +21,15 @@ the official [Hindsight repository](https://github.com/vectorize-io/hindsight),
 | `text` | Memory-unit block value field |
 | `fact_type` | `world`, `experience`, or `observation` value and index metadata |
 | `state` | `valid` or `invalidated` value and index metadata |
-| Entities, occurred dates, tags | Atomic value fields plus portable index metadata |
+| Entities, occurred dates, tags | Canonical atomic value fields |
 | Unit metadata and provenance | Nested atomic value fields |
-| Temporal graph | `hindsight.temporal` typed links |
-| Semantic graph | `hindsight.semantic` typed links |
-| Causal graph | `hindsight.causal` typed links |
-| Mental model | Separate `hindsight.mental_model` synthesized-document block |
-| Recall | Deterministic text/entity matching, explicit time filtering, and link traversal |
+| Retention order | Atomic units appended to an `EventLog` |
+| Occurred-date index | One owned `hindsight.occurrence` child per date in `TemporalCollection` |
+| Temporal graph | `hindsight.temporal` `PropertyGraph` edges |
+| Semantic graph | `hindsight.semantic` `PropertyGraph` edges |
+| Causal graph | `hindsight.causal` `PropertyGraph` edges |
+| Mental model | Separate block addressed by name through `KeyedCollection` |
+| Recall | Deterministic text/entity matching plus temporal and graph facade queries |
 | Agent access | Named tools with JSON-compatible arguments and results |
 
 Each atomic block stores the complete application-owned structure:
@@ -48,6 +50,11 @@ MemoryUnit {
 Genie remains unaware of these field meanings. The lamp owns validation,
 curation state, graph-relation names, ranking, temporal matching, and mental
 model semantics.
+
+A unit can contain several `occurred_dates`, while one temporal collection
+membership has one event time. The lamp therefore creates one small occurrence
+child per date, indexes each child in `TemporalCollection`, and links it back
+to the canonical unit. Temporal recall resolves and deduplicates those units.
 
 ## Agent and tools
 
@@ -76,9 +83,16 @@ Run it from the repository root:
 conda run -n "genie" python -m lamps.hindsight
 ```
 
-The compact answer includes:
+The output begins by naming the lamp, its purpose, and the Genie structures it
+uses. The compact answer includes:
 
 ```text
+== Hindsight-inspired agent memory ==
+An agent combines atomic memories, dated experiences, graph relations, and a synthesized mental model.
+Genie structures: event log, keyed collection, temporal collection, property graph
+
+Agent answer:
+Question: How should I deploy Atlas, and what past evidence supports that plan?
 Mental model (atlas-deployment-playbook): Deploy Atlas on Friday, use small database-migration batches, and retry failed batches separately.
 Relevant atomic memories:
 - [experience] I retried Atlas 2.0 on March 16 using smaller migration batches; the deployment succeeded.

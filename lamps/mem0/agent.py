@@ -7,7 +7,7 @@ to the application adapter.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -103,7 +103,7 @@ class Mem0Tools:
             ),
             ToolDefinition(
                 name="search_memories",
-                description="Rank scoped facts and experiences with portable lexical retrieval.",
+                description="Rank scoped facts and experiences by text and entity matches.",
                 parameters={
                     "query": "string",
                     "kinds": "optional list[fact | experience]",
@@ -390,15 +390,21 @@ class Mem0Agent:
         model = self._call("get_mental_model", {"name": mental_model_name})["mental_model"]
 
         preference = semantic[0]["text"] if semantic else "No matching preference was found."
-        timeline = " -> ".join(memory["text"] for memory in temporal) or "No events found."
-        connected = "; ".join(memory["text"] for memory in graph) or "No related memories."
+        timeline = _format_bullets(
+            (memory["text"] for memory in temporal),
+            empty="No events found.",
+        )
+        connected = _format_bullets(
+            (memory["text"] for memory in graph),
+            empty="No related memories.",
+        )
         synthesis = model["content"] if model is not None else "No mental model is available."
         return (
             f"Question: {question}\n"
             f"Plan: {synthesis}\n"
             f"Best matching memory: {preference}\n"
-            f"Prior experience timeline: {timeline}\n"
-            f"Shared-entity context: {connected}"
+            f"Prior experience timeline:\n{timeline}\n"
+            f"Shared-entity context:\n{connected}"
         )
 
     def memory_id(self, key: str) -> str:
@@ -429,6 +435,13 @@ def _record_result(record: ExtractedFactRecord) -> dict[str, Any]:
     """Return the canonical JSON-compatible fact record."""
 
     return record.canonical_value()
+
+
+def _format_bullets(values: Iterable[str], *, empty: str) -> str:
+    """Format readable evidence lines for the agent answer."""
+
+    items = list(values)
+    return "\n".join(f"- {item}" for item in items) if items else f"- {empty}"
 
 
 def _mental_model_result(model: MentalModel) -> dict[str, Any]:

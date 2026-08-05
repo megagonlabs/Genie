@@ -15,7 +15,12 @@ from lamps.langmem.agent import (
     MemoryCandidate,
     MemoryLinkCandidate,
 )
-from lamps.langmem.memory_store import LangMemStore, Namespace, ValueSchema
+from lamps.langmem.memory_store import (
+    LangMemStore,
+    LangMemStructures,
+    Namespace,
+    ValueSchema,
+)
 
 BASE_NAMESPACE: Namespace = ("travel-assistant", "alice")
 
@@ -23,8 +28,10 @@ BASE_NAMESPACE: Namespace = ("travel-assistant", "alice")
 def build_demo_agent() -> LangMemAgent:
     """Create an agent with namespace-bound tools and three supplied schemas."""
 
-    memory = Memory(backend=InMemoryBackend(), principal="langmem-demo")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="langmem-demo")
     root = memory.put(type="langmem.store", value={"name": "Alice travel memory"})
+    handle = memory.get_handle(root=root)
     schemas = {
         (*BASE_NAMESPACE, "semantic"): ValueSchema(
             "semantic_fact",
@@ -39,7 +46,11 @@ def build_demo_agent() -> LangMemAgent:
             {"name": str, "summary": str, "principles": list, "source_keys": list},
         ),
     }
-    store = LangMemStore(memory.get_handle(root=root), schemas=schemas)
+    store = LangMemStore(
+        handle,
+        structures=LangMemStructures.create(handle, backend),
+        schemas=schemas,
+    )
     return LangMemAgent(
         name="travel-agent",
         tools=LangMemTools(store, base_namespace=BASE_NAMESPACE),
@@ -165,7 +176,17 @@ def main() -> None:
     agent = build_demo_agent()
     teach_demo_agent(agent)
     answer = answer_demo_question(agent)
-    print_agent_demo(tools=agent.tools, answer=answer, calls=agent.call_log)
+    print_agent_demo(
+        title="LangMem-inspired namespaced memory",
+        purpose=(
+            "An agent manages structured values by namespace and retrieves "
+            "direct, temporal, and graph context."
+        ),
+        structures=("keyed collection", "temporal collection", "property graph"),
+        tools=agent.tools,
+        answer=answer,
+        calls=agent.call_log,
+    )
 
 
 if __name__ == "__main__":

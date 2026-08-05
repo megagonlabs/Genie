@@ -35,17 +35,27 @@ class ToolCallView(Protocol):
 
 def print_agent_demo(
     *,
+    title: str,
+    purpose: str,
+    structures: Sequence[str],
     tools: Iterable[ToolView],
     answer: str,
     calls: Sequence[ToolCallView],
 ) -> None:
-    """Print a lamp agent using the common four-section terminal format.
+    """Print a lamp agent with a short introduction and common terminal format.
 
     Args:
+        title: Name of the example shown to the user.
+        purpose: One-sentence explanation of the agent workflow.
+        structures: Genie structure facades used by the example.
         tools: Tool definitions presented to the agent.
         answer: Final readable answer assembled by the agent.
         calls: Ordered, inspectable tool-call records.
     """
+
+    print(f"== {title} ==")
+    print(purpose)
+    print(f"Genie structures: {', '.join(structures)}\n")
 
     print("Tools available to the agent:")
     for tool in tools:

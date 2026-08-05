@@ -16,19 +16,22 @@ from lamps.memoryos.agent import (
     MemoryOSAgent,
     MemoryOSTools,
 )
-from lamps.memoryos.memory_system import MemoryOSMemory
+from lamps.memoryos.memory_system import MemoryOSMemory, MemoryOSStructures
 
 
 def build_demo_agent() -> MemoryOSAgent:
     """Create an agent over a small three-tier memory hierarchy."""
 
-    memory = Memory(backend=InMemoryBackend(), principal="memoryos-demo")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="memoryos-demo")
     root = memory.put(
         type="memoryos.user_memory",
         value={"user_id": "alice", "assistant_id": "travel-agent"},
     )
+    handle = memory.get_handle(root=root)
     hierarchy = MemoryOSMemory(
-        memory.get_handle(root=root),
+        handle,
+        structures=MemoryOSStructures.create(handle, backend),
         short_term_capacity=2,
         heat_threshold=2.0,
         knowledge_capacity=10,
@@ -131,7 +134,24 @@ def main() -> None:
     agent = build_demo_agent()
     teach_demo_agent(agent)
     answer = answer_demo_question(agent)
-    print_agent_demo(tools=agent.tools, answer=answer, calls=agent.call_log)
+    print_agent_demo(
+        title="MemoryOS-inspired tiered memory",
+        purpose=(
+            "An agent moves conversations through short-, mid-, and long-term "
+            "memory, then retrieves across all tiers."
+        ),
+        structures=(
+            "ownership tree",
+            "keyed collection",
+            "event logs",
+            "temporal collection",
+            "property graph",
+            "lineage DAG",
+        ),
+        tools=agent.tools,
+        answer=answer,
+        calls=agent.call_log,
+    )
 
 
 if __name__ == "__main__":

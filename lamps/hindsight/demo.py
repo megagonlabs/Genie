@@ -21,18 +21,24 @@ from lamps.hindsight.memory_bank import (
     SEMANTIC_RELATION,
     TEMPORAL_RELATION,
     HindsightMemoryBank,
+    HindsightStructures,
 )
 
 
 def build_demo_agent() -> HindsightAgent:
     """Create an agent that receives only bounded memory tools."""
 
-    memory = Memory(backend=InMemoryBackend(), principal="hindsight-demo")
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="hindsight-demo")
     root = memory.put(
         type="hindsight.memory_bank",
         value={"name": "Atlas operations"},
     )
-    bank = HindsightMemoryBank(memory.get_handle(root=root))
+    handle = memory.get_handle(root=root)
+    bank = HindsightMemoryBank(
+        handle,
+        structures=HindsightStructures.create(handle, backend),
+    )
     return HindsightAgent(name="operations-agent", tools=HindsightTools(bank))
 
 
@@ -154,7 +160,22 @@ def main() -> None:
     agent = build_demo_agent()
     teach_demo_agent(agent)
     answer = answer_demo_question(agent)
-    print_agent_demo(tools=agent.tools, answer=answer, calls=agent.call_log)
+    print_agent_demo(
+        title="Hindsight-inspired agent memory",
+        purpose=(
+            "An agent combines atomic memories, dated experiences, graph "
+            "relations, and a synthesized mental model."
+        ),
+        structures=(
+            "event log",
+            "keyed collection",
+            "temporal collection",
+            "property graph",
+        ),
+        tools=agent.tools,
+        answer=answer,
+        calls=agent.call_log,
+    )
 
 
 if __name__ == "__main__":
