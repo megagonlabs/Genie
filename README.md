@@ -6,7 +6,8 @@ platform, database, or memory use case.
 Genie is not intended to be a full agent framework or an opinionated long-term memory product. It defines memory blocks, parent/child ownership rules, scoped access rules, and interfaces
 developers can implement or plug into for storage, search, access control, observability, and value encoding.
 
-For the full design document, see [docs/design.md](docs/design.md).
+For the architecture overview and package-specific design guides, see
+[docs/design.md](docs/design.md).
 
 ## Design Objectives
 
