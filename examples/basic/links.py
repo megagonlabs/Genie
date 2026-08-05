@@ -2,12 +2,16 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/links.py
+    conda run -n "genie" python examples/basic/links.py
 """
 
 from __future__ import annotations
 
 if __package__ in {None, ""}:
+    from pathlib import Path
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
 else:
     from examples._bootstrap import ensure_repo_on_path
@@ -20,6 +24,7 @@ from genie import InMemoryBackend, Memory
 def main() -> None:
     """Run a focused link and symbolic mount walkthrough."""
 
+    print("== Links and mounts ==")
     memory = Memory(backend=InMemoryBackend())
     requirement = memory.put(type="requirement", value="Mention deployment tradeoffs.")
     outline = memory.put(type="outline", value="Sections: context, tradeoffs, next steps.")
@@ -39,11 +44,12 @@ def main() -> None:
     mounted_root = memory.resolve_mount(mount)
     subtree = memory.search("rollout", root=requirement, scope="subtree")
 
-    print(f"outgoing relation: {outgoing[0].relation}")
-    print(f"incoming relation: {incoming[0].relation}")
-    print(f"linked search result: {related[0].block.value}")
-    print(f"discovered mount count: {len(discovered_mounts)}")
+    print(f"outgoing relation from requirement: {outgoing[0].relation}")
+    print(f"incoming relation to requirement: {incoming[0].relation}")
+    print(f"link-scoped search result: {related[0].block.value}")
+    print(f"mounts discovered from requirement: {len(discovered_mounts)}")
     print(f"mount target: {mounted_root.value if mounted_root else None}")
+    print("local subtree search includes the mounted target: no")
 
     assert informs in outgoing
     assert [result.block.id for result in related] == [outline.id]
@@ -54,6 +60,7 @@ def main() -> None:
     assert subtree == []
     memory.delete(requirement)
     assert memory.get(remote_note) is not None
+    print("deleting the mount source deletes the mounted memory: no")
 
 
 if __name__ == "__main__":

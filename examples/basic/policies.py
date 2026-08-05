@@ -2,12 +2,16 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/policies.py
+    conda run -n "genie" python examples/basic/policies.py
 """
 
 from __future__ import annotations
 
 if __package__ in {None, ""}:
+    from pathlib import Path
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
 else:
     from examples._bootstrap import ensure_repo_on_path
@@ -50,6 +54,7 @@ def export_value(memory: Memory, block: MemoryBlock) -> str:
 def main() -> None:
     """Run a principal and role based policy walkthrough."""
 
+    print("== Access policies ==")
     policy_engine = PolicyEngine(
         operations={
             # Custom operations are opt-in. This default says that blocks
@@ -132,18 +137,24 @@ def main() -> None:
 
     try:
         reader.get(private)
-    except AccessDenied as exc:
-        print(f"blocked private read: {exc}")
+    except AccessDenied:
+        print("ordinary reader reading an owner-private note: blocked")
+    else:
+        raise AssertionError("An ordinary reader must not read an owner-private note.")
     try:
         reader.policy_engine.require("export", compliance_export, reader.principal)
-    except AccessDenied as exc:
-        print(f"blocked reader export: {exc}")
+    except AccessDenied:
+        print("ordinary reader exporting a compliance report: blocked")
+    else:
+        raise AssertionError("An ordinary reader must not export a compliance report.")
     try:
         export_value(compliance, owner_export)
-    except AccessDenied as exc:
-        print(f"blocked compliance export override: {exc}")
+    except AccessDenied:
+        print("compliance role exporting an owner-only report: blocked by block override")
+    else:
+        raise AssertionError("A block policy override must restrict the compliance role.")
 
-    print("public reads, role-gated reads, and custom export checks succeeded")
+    print("allowed checks: public read, researcher read, and compliance export")
 
 
 if __name__ == "__main__":

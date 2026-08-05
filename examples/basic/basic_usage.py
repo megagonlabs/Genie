@@ -12,7 +12,7 @@ This example combines the main concepts shown in the smaller examples:
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic_usage.py
+    conda run -n "genie" python examples/basic/basic_usage.py
 """
 
 from __future__ import annotations
@@ -24,6 +24,10 @@ from typing import Any
 import uuid
 
 if __package__ in {None, ""}:
+    from pathlib import Path
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
 else:
     from examples._bootstrap import ensure_repo_on_path
@@ -132,12 +136,15 @@ class Agent:
         results = self.memory.search(text, **search_options)
         blocks = [result.block for result in results]
         print(f"{self.name} recalled {len(blocks)} block(s) for {text!r}")
+        for block in blocks:
+            print(f"- {block.type}: {block.value}")
         return blocks
 
 
 def main() -> None:
     """Run the integrated Genie walkthrough."""
 
+    print("== Integrated agent memory walkthrough ==")
     audit = AuditHook()
     team_policy = MemoryPolicy.owner_or(principals={"agent:root", "agent:planner", "agent:writer"})
     planner_policy = MemoryPolicy.owner_or(principals={"agent:planner"})
@@ -232,12 +239,14 @@ def main() -> None:
         types=["requirement"],
         filters={"metadata.priority": {">=": 3}},
     )
+    print("planner's filtered search results:")
     print_results(filtered)
     assert [result.block.id for result in filtered] == [requirement.id]
 
     section("Add a typed link and search linked memory")
     memory.add_link(requirement, outline, "informs", metadata={"confidence": 0.9})
     linked = memory.search("sections", root=requirement, scope="links")
+    print("linked search results:")
     print_results(linked)
     assert [result.block.id for result in linked] == [outline.id]
 
@@ -251,8 +260,10 @@ def main() -> None:
     assert planner.memory.get(private_note) is not None
     try:
         writer.memory.get(private_note)
-    except AccessDenied as exc:
-        print(f"blocked private note read: {exc}")
+    except AccessDenied:
+        print("writer reading planner-private note: blocked as expected")
+    else:
+        raise AssertionError("The writer must not read the planner's private note.")
 
     section("Update data and decode typed values")
     updated_task = writer.memory.update(task, value={"status": "in_progress"})
@@ -282,12 +293,16 @@ def main() -> None:
     other_project = memory.put(type="project", value={"name": "Other project"})
     try:
         writer.memory.get(style)
-    except AccessDenied as exc:
-        print(f"blocked sibling read: {exc}")
+    except AccessDenied:
+        print("writer reading outside its task subtree: blocked as expected")
+    else:
+        raise AssertionError("The writer must not read outside its task subtree.")
     try:
         planner.memory.get_handle(root=other_project)
-    except AccessDenied as exc:
-        print(f"blocked out-of-scope child handle: {exc}")
+    except AccessDenied:
+        print("planner creating a handle outside its project: blocked as expected")
+    else:
+        raise AssertionError("The planner must not create an out-of-scope handle.")
 
     section("Audit hook observed writes")
     print(f"audit events: {len(audit.events)}")
@@ -316,7 +331,7 @@ def print_results(results: list[SearchResult]) -> None:
 
     for result in results:
         block = result.block
-        print(f"- {block.type} {block.id}: {block.value}")
+        print(f"- {block.type}: {block.value}")
 
 
 if __name__ == "__main__":

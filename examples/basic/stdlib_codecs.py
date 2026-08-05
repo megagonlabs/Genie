@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/stdlib_codecs.py
+    conda run -n "genie" python examples/basic/stdlib_codecs.py
 """
 
 from __future__ import annotations
@@ -14,6 +14,10 @@ import enum
 import uuid
 
 if __package__ in {None, ""}:
+    from pathlib import Path
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
 else:
     from examples._bootstrap import ensure_repo_on_path
@@ -50,6 +54,7 @@ class Priority(str, enum.Enum):
 def main() -> None:
     """Run a focused stdlib codec walkthrough."""
 
+    print("== Standard-library codecs ==")
     section("JsonCodec stays the default")
     default_memory = Memory(backend=InMemoryBackend())
     try:
@@ -72,6 +77,7 @@ def main() -> None:
         ]
     )
     memory = Memory(backend=InMemoryBackend(), codecs=codecs)
+    print("registered: bytes, datetime, decimal, UUID, dataclass, and enum codecs")
 
     section("Store common standard-library values")
     binary = memory.put(type="artifact", value=b"release-notes")
@@ -80,7 +86,10 @@ def main() -> None:
         value=dt.datetime(2026, 6, 30, 12, 15, tzinfo=dt.timezone.utc),
     )
     amount = memory.put(type="amount", value=Decimal("0.1000000000000000001"))
-    identifier = memory.put(type="identifier", value=uuid.uuid4())
+    identifier = memory.put(
+        type="identifier",
+        value=uuid.UUID("a23a8348-3b66-4ba1-bac7-d9dac418556c"),
+    )
     audit = memory.put(type="audit", value=AuditRecord("req-123", ["release", "docs"]))
     priority = memory.put(type="priority", value=Priority.HIGH)
 

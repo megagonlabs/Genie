@@ -1,4 +1,4 @@
-"""Shared path setup for runnable examples."""
+"""Shared path setup for examples run before Genie is installed."""
 
 from __future__ import annotations
 

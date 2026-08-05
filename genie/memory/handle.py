@@ -339,6 +339,42 @@ class MemoryHandle:
             self._require_in_subtree(stored.target_id)
         return self._as_principal().update_link(stored, metadata=metadata)
 
+    def add_acyclic_link(
+        self,
+        source: str | MemoryBlock,
+        target: str | MemoryBlock,
+        relation: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryLink:
+        """Atomically create an acyclic typed link inside this handle.
+
+        Args:
+            source: Source block or id inside the handle boundary.
+            target: Target block or id inside the handle boundary.
+            relation: Application-defined relation that identifies the DAG.
+            metadata: Optional relationship metadata.
+
+        Returns:
+            Stored memory link.
+
+        Raises:
+            AccessDenied: If either endpoint is outside the handle boundary or
+                policy denies the operation.
+            MemoryConflict: If the link would form a cycle.
+            MemoryNotFound: If either endpoint is missing.
+            UnsupportedOperation: If the backend lacks atomic DAG insertion.
+        """
+
+        self._require_in_subtree(_block_id(source))
+        self._require_in_subtree(_block_id(target))
+        return self._as_principal().add_acyclic_link(
+            source,
+            target,
+            relation,
+            metadata=metadata,
+        )
+
     def list_links(
         self,
         block_id: str | MemoryBlock,

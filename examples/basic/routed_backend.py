@@ -2,12 +2,16 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/routed_backend.py
+    conda run -n "genie" python examples/basic/routed_backend.py
 """
 
 from __future__ import annotations
 
 if __package__ in {None, ""}:
+    from pathlib import Path
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
 else:
     from examples._bootstrap import ensure_repo_on_path
@@ -42,6 +46,7 @@ def route_by_region(block: MemoryBlock) -> str | None:
 def main() -> None:
     """Run a focused routed backend walkthrough."""
 
+    print("== Routed storage and mounts ==")
     us_store = InMemoryBackend()
     eu_store = InMemoryBackend()
     link_store = InMemoryLinkStore()
@@ -110,14 +115,14 @@ def main() -> None:
 
     print(f"US project route: {backend.route_for_block(us_project.id)}")
     print(f"EU project route: {backend.route_for_block(eu_project.id)}")
-    print(f"APAC project route: {backend.route_for_block(apac_project.id)}")
     print(f"US note inherited route: {backend.route_for_block(us_note.id)}")
-    print(f"Mount link relation: {eu_rollout_link.relation}")
-    print(f"Discovered mount count: {len(discovered_mounts)}")
-    print(f"Pending mount count before registration: {len(pending_mounts)}")
-    print(f"EU subtree search: {eu_results[0].block.value}")
-    print(f"Mounted route target: {mounted_root.value if mounted_root else None}")
-    print(f"Runtime mounted target: {apac_mounted_root.value if apac_mounted_root else None}")
+    print(f"mount link relation: {eu_rollout_link.relation}")
+    print(f"mounts discovered before APAC registration: {len(pending_mounts)} (EU and APAC)")
+    print(f"APAC mount before route registration: unresolved")
+    print(f"EU subtree search result: {eu_results[0].block.value}")
+    print(f"EU mount target: {mounted_root.value if mounted_root else None}")
+    print(f"APAC project route after registration: {backend.route_for_block(apac_project.id)}")
+    print(f"APAC mount after route registration: {apac_mounted_root.value if apac_mounted_root else None}")
 
     assert backend.route_for_block(us_project.id) == "us"
     assert backend.route_for_block(us_note.id) == "us"

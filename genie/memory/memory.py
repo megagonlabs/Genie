@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 
 from genie.backend.base import MemoryBackend
 from genie.backend.inmemory import InMemoryBackend
+from genie.backend.structure_capabilities import AcyclicLinkStore
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec
 from genie.hooks import HookRegistry, MemoryHook
 from genie.memory.block import MemoryBlock, new_memory_id, utc_now
-from genie.memory.errors import MemoryNotFound
+from genie.memory.errors import MemoryNotFound, UnsupportedOperation
 from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import Operation, PolicyEngine
 from genie.policy.policy import MemoryPolicy
@@ -375,6 +376,56 @@ class Memory:
             metadata=deepcopy({**stored.metadata, **metadata}),
         )
         return self.backend.update_link(updated)
+
+    def add_acyclic_link(
+        self,
+        source: str | MemoryBlock,
+        target: str | MemoryBlock,
+        relation: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryLink:
+        """Atomically create a typed link unless it would form a cycle.
+
+        Cycle detection includes every stored link with the exact same
+        relation. The backend performs the reachability check and insertion as
+        one operation.
+
+        Args:
+            source: Source block or id.
+            target: Target block or id.
+            relation: Application-defined relation that identifies the DAG.
+            metadata: Optional relationship metadata.
+
+        Returns:
+            Stored memory link.
+
+        Raises:
+            AccessDenied: If the principal cannot write the source or read the
+                target.
+            MemoryConflict: If existing or proposed links would contain a cycle.
+            MemoryNotFound: If either endpoint is missing.
+            UnsupportedOperation: If the backend lacks atomic DAG insertion.
+        """
+
+        if relation == LinkRelations.MOUNT:
+            raise ValueError("The reserved mount relation cannot be acyclically inserted.")
+        source_block = self._require_raw(_block_id(source))
+        target_block = self._require_raw(_block_id(target))
+        self.policy_engine.require(Operation.WRITE, source_block, self.principal)
+        self.policy_engine.require(Operation.READ, target_block, self.principal)
+        if not isinstance(self.backend, AcyclicLinkStore):
+            raise UnsupportedOperation(
+                "The configured backend does not support atomic acyclic links."
+            )
+        return self.backend.add_acyclic_link(
+            MemoryLink(
+                source_id=source_block.id,
+                target_id=target_block.id,
+                relation=relation,
+                metadata=dict(metadata or {}),
+            )
+        )
 
     def list_links(
         self,

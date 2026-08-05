@@ -13,20 +13,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize(
-    "example",
+    ("example", "expected_heading"),
     [
-        "crud_blocks.py",
-        "scoped_agents.py",
-        "search_filters.py",
-        "links.py",
-        "routed_backend.py",
-        "policies.py",
-        "hooks_codecs.py",
-        "stdlib_codecs.py",
-        "basic_usage.py",
+        ("basic/crud_blocks.py", "CRUD and ownership"),
+        ("basic/scoped_agents.py", "Scoped agent handles"),
+        ("basic/search_filters.py", "Search and filters"),
+        ("basic/links.py", "Links and mounts"),
+        ("basic/routed_backend.py", "Routed storage and mounts"),
+        ("basic/policies.py", "Access policies"),
+        ("basic/hooks_codecs.py", "Hooks and codecs"),
+        ("basic/stdlib_codecs.py", "Standard-library codecs"),
+        ("basic/basic_usage.py", "Integrated agent memory walkthrough"),
+        ("advanced/temporal_collection.py", "Temporal collection"),
+        ("advanced/agent_memory.py", "Compound memory for an agent"),
+        ("advanced/experiment_memory.py", "Experiment memory using all seven structures"),
     ],
 )
-def test_example_runs_as_a_script(example: str) -> None:
+def test_example_runs_as_a_script(example: str, expected_heading: str) -> None:
     """Every example script runs successfully from the repository root."""
 
     result = subprocess.run(
@@ -38,3 +41,4 @@ def test_example_runs_as_a_script(example: str) -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.startswith(f"== {expected_heading} ==\n")

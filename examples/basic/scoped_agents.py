@@ -6,7 +6,7 @@ handle, where unbounded access is deliberate and visible at the call site.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/scoped_agents.py
+    conda run -n "genie" python examples/basic/scoped_agents.py
 """
 
 from __future__ import annotations
@@ -14,6 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 if __package__ in {None, ""}:
+    from pathlib import Path
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
 else:
     from examples._bootstrap import ensure_repo_on_path
@@ -51,6 +55,7 @@ class Agent:
 def main() -> None:
     """Run a focused memory-handle walkthrough."""
 
+    print("== Scoped agent handles ==")
     # This example focuses on handle boundaries, so blocks are explicitly
     # shared. Production apps should choose a policy that matches their users.
     memory = Memory(
@@ -77,17 +82,23 @@ def main() -> None:
     ]
     global_matches = supervisor_memory.search("Unrelated", scope="global")
     assert [result.block.id for result in global_matches] == [sibling.id]
+    print(f"writer remembered: {note.value}")
+    print(f"writer scope root: {task.value}")
 
     try:
         writer.memory.get(sibling)
-    except AccessDenied as exc:
-        print(f"handle blocked sibling read: {exc}")
+    except AccessDenied:
+        print("sibling task read: blocked as expected")
+    else:
+        raise AssertionError("A bounded writer handle must not read a sibling task.")
     try:
         supervisor_memory.search("concise")
-    except AccessDenied as exc:
-        print(f"unbounded handle needs an explicit root for subtree search: {exc}")
+    except AccessDenied:
+        print("unbounded subtree search without a root: blocked as expected")
+    else:
+        raise AssertionError("An unbounded subtree search must specify a root.")
 
-    print(f"writer only sees task subtree rooted at {task.id}")
+    print(f"supervisor global search: {global_matches[0].block.value}")
 
 
 if __name__ == "__main__":

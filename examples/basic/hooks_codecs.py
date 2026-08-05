@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/hooks_codecs.py
+    conda run -n "genie" python examples/basic/hooks_codecs.py
 """
 
 from __future__ import annotations
@@ -14,6 +14,10 @@ from typing import Any
 import uuid
 
 if __package__ in {None, ""}:
+    from pathlib import Path
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
 else:
     from examples._bootstrap import ensure_repo_on_path
@@ -112,6 +116,7 @@ class AuditHook(MemoryHook):
 def main() -> None:
     """Run a focused hooks and codecs walkthrough."""
 
+    print("== Hooks and codecs ==")
     audit = AuditHook()
     memory = Memory(
         backend=InMemoryBackend(),
@@ -148,12 +153,12 @@ def main() -> None:
     assert retrieved_budget is not None
     assert retrieved_correlation_id is not None
     assert raw_budget is not None
-    print(f"decoded preference: {retrieved.value}")
+    print(f"decoded custom preference: {retrieved.value}")
     print(f"decoded timestamp: {retrieved_created_at.value.isoformat()}")
     print(f"decoded amount: {retrieved_budget.value}")
     print(f"decoded uuid: {retrieved_correlation_id.value}")
-    print(f"stored amount payload: {raw_budget.value!r}")
-    print(f"audit events: {len(audit.created)}")
+    print(f"raw storage payload for amount: {raw_budget.value!r}")
+    print(f"blocks observed by the audit hook: {len(audit.created)}")
 
     assert retrieved.value == Preference("tone", "warm")
     assert retrieved_created_at.value == dt.datetime(

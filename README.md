@@ -65,27 +65,184 @@ bounded handle. Examples pass `backend=InMemoryBackend()` explicitly so first-ti
 Genie models memory as a typed graph of blocks. Parent/child relationships show ownership for scoped access. Links and mounts connect blocks without making one own the other. The `type` field
 and the meaning of `value` are application-defined. Codecs convert values between application objects and storage-safe data.
 
+## Structure Foundations
+
+The focused `genie.structures` package provides shared access protocols and immutable records for optional higher-level structures. `MemoryAccess` describes the common block, tree, link, and
+search surface implemented by both `Memory` and `MemoryHandle`. Narrower protocols let a structure depend only on the operations it uses.
+
+Structural records describe membership without adding optional fields to every `MemoryBlock`:
+
+- `MemoryAddress` and `KeyBinding` describe namespaced keys.
+- `LogEntry` describes a stable position in an ordered log.
+- `ValidityInterval`, `TemporalEntry`, and `TemporalItem` describe event time,
+  validity periods, and resolved temporal members.
+- `GraphNeighbor` and `GraphPath` describe graph traversal through memory links.
+- `RevisionEntry` and `RevisionItem` separate logical record revisions from a
+  block's update counter.
+
+These records validate structure data but do not persist or query it by themselves. Structure facades and optional backend capabilities build on them.
+
+`OwnershipTree` is the first facade. It provides a rooted view over Genie's existing parent/child behavior:
+
+```python
+from genie import Memory
+from genie.structures import OwnershipTree
+
+
+memory = Memory(principal="agent:planner")
+root = memory.put(type="project", value="proposal")
+tree = OwnershipTree(memory, root=root)
+
+task = tree.create_child(type="task", value="draft outline")
+note = tree.create_child(parent=task, type="note", value="Keep it short.")
+
+assert tree.children(task) == [note]
+assert tree.ancestors(note) == [task, root]
+```
+
+The facade never traverses above its configured root. When constructed with a `MemoryHandle`, it also keeps the handle's scope and policy restrictions.
+
+`PropertyGraph` treats blocks as nodes and existing typed links as directed edges:
+
+```python
+from genie.structures import PropertyGraph
+
+
+graph = PropertyGraph(memory)
+edge = graph.add_edge(task, note, "supported_by", metadata={"confidence": 0.9})
+
+neighbors = graph.neighbors(task, relation="supported_by")
+paths = graph.walk(task, max_depth=2, limit=20)
+```
+
+Property graphs may contain cycles and parallel edges. `walk` returns bounded simple paths in breadth-first order, so traversal terminates without changing the stored graph. Pass a scoped
+`MemoryHandle` instead of `Memory` when graph operations must remain inside an agent's memory boundary.
+
+`LineageDAG` uses the same links while protecting one relation from directed
+cycles:
+
+```python
+from genie.structures import LineageDAG
+
+
+lineage = LineageDAG(memory, relation="derived_into")
+lineage.add(source_note, summary, metadata={"method": "summarize"})
+lineage.add(summary, report)
+
+predecessors = lineage.predecessors(report)
+paths = lineage.walk_predecessors(report, max_depth=3)
+```
+
+Edges point from predecessor to successor. The backend checks reachability and
+inserts the edge atomically. The exact relation identifies one DAG; use
+different relation names for independent lineage graphs.
+
+`KeyedCollection` and `EventLog` attach existing blocks to atomic
+backend-managed structures:
+
+```python
+from genie import InMemoryBackend, Memory
+from genie.structures import EventLog, KeyedCollection, MemoryAddress
+
+
+backend = InMemoryBackend()
+memory = Memory(backend=backend, principal="agent:planner")
+preferences_root = memory.put(type="collection", value="preferences")
+events_root = memory.put(type="log", value="events")
+language = memory.put(type="preference", value="English")
+
+preferences = KeyedCollection(memory, backend, collection=preferences_root)
+preferences.bind(MemoryAddress(("users", "alice"), "language"), language)
+
+events = EventLog(memory, backend, log=events_root)
+entry = events.append(language)
+assert entry.entry.sequence == 0
+```
+
+Key binding is create-only. `rebind(..., expected=...)` and `unbind(..., expected=...)` use compare-and-swap checks so concurrent writers cannot silently overwrite each other. Event-log append
+atomically allocates one stable, increasing sequence number per log. The included `InMemoryBackend` implements both optional capabilities. Other backends implement only the structures they
+support.
+
+`TemporalCollection` attaches event times and validity periods without copying
+block values:
+
+```python
+from datetime import UTC, datetime
+
+from genie.structures import TemporalCollection, ValidityInterval
+
+
+timeline_root = memory.put(type="temporal_collection", value="facts")
+timeline = TemporalCollection(memory, backend, collection=timeline_root)
+timeline.add(
+    language,
+    occurred_at=datetime(2026, 1, 10, tzinfo=UTC),
+    validity=ValidityInterval(datetime(2026, 1, 1, tzinfo=UTC)),
+)
+
+current = timeline.valid_at(datetime(2026, 2, 1, tzinfo=UTC))
+```
+
+Temporal queries use half-open bounds. A backend needs only `TemporalStore`;
+the facade can scan it in bounded pages. Backends may additionally implement
+`TemporalIndex` to prefilter candidates. Both paths return the same stable,
+access-filtered results.
+
+`VersionedRecords` composes keyed identity with per-record revision ordering:
+
+```python
+from genie.structures import MemoryAddress, VersionedRecords
+
+
+versions_root = memory.put(type="versioned_collection", value="preferences")
+identity = memory.put(type="record_identity", value="favorite color")
+blue = memory.put(type="record_revision", value="blue")
+green = memory.put(type="record_revision", value="green")
+address = MemoryAddress(("users", "alice"), "favorite_color")
+
+versions = VersionedRecords(memory, backend, collection=versions_root)
+versions.register(address, identity)
+versions.append(address, blue)   # revision 1
+versions.append(address, green)  # revision 2
+
+current = versions.current(address)
+history = versions.history(address)
+```
+
+The key always points to the stable identity block; revision blocks remain
+separate. Revision numbering is atomic per identity and is independent from
+`MemoryBlock.version`.
+
 Link identity and topology remain stable after creation. Applications can merge new relationship properties with `memory.update_link(link, metadata={...})`; the method persists and returns a
 replacement `MemoryLink` with the same id, source, target, relation, and creation timestamp.
 
 ## Examples
 
-Focused runnable examples live in [examples](examples):
+Basic runnable examples live in [examples/basic](examples/basic):
 
-- `crud_blocks.py`: CRUD, updating, delete, and child traversal.
-- `scoped_agents.py`: top-level agents and sub-agents using `MemoryHandle`.
-- `search_filters.py`: text search, types, scopes, and metadata filters.
-- `links.py`: typed links, symbolic mounts, and linked-memory search.
-- `routed_backend.py`: route blocks across multiple backend stores.
-- `policies.py`: principal and role based access control.
-- `hooks_codecs.py`: hooks around memory operations with custom and stdlib value codecs.
-- `stdlib_codecs.py`: opt-in stdlib codecs with decoded and raw payload examples.
-- `basic_usage.py`: integrated workflow that combines the main features.
+- `basic/crud_blocks.py`: CRUD, updating, delete, and child traversal.
+- `basic/scoped_agents.py`: top-level agents and sub-agents using `MemoryHandle`.
+- `basic/search_filters.py`: text search, types, scopes, and metadata filters.
+- `basic/links.py`: typed links, symbolic mounts, and linked-memory search.
+- `basic/routed_backend.py`: route blocks across multiple backend stores.
+- `basic/policies.py`: principal and role based access control.
+- `basic/hooks_codecs.py`: hooks around memory operations with custom and stdlib value codecs.
+- `basic/stdlib_codecs.py`: opt-in stdlib codecs with decoded and raw payload examples.
+- `basic/basic_usage.py`: integrated workflow that combines the main features.
+
+Advanced composition examples live in [examples/advanced](examples/advanced):
+
+- `temporal_collection.py`: one temporal structure by itself.
+- `agent_memory.py`: an agent with keyed preconditions, experiment
+  history, and graph knowledge in one compound memory.
+- `experiment_memory.py`: all seven optional structures in one
+  experiment-memory workflow.
 
 Run one directly from the repository root:
 
 ```bash
-conda run -n "genie" python examples/basic_usage.py
+conda run -n "genie" python examples/basic/basic_usage.py
+conda run -n "genie" python examples/advanced/experiment_memory.py
 ```
 
 ## Scoped Access
@@ -161,6 +318,30 @@ Backend adapters implement the smaller interfaces in `genie.backend`:
 - `TraversalIndex`
 - `SearchIndex`
 - `LinkStore`
+
+Optional structure facades use separate backend capabilities:
+
+- `AcyclicLinkStore`: atomic cycle check and link insertion for lineage DAGs.
+- `KeyedStore`: atomic unique key binding and compare-and-swap replacement.
+- `SequenceStore`: atomic monotonic sequence allocation for append-only logs.
+- `TemporalStore`: temporal membership persistence and portable paging.
+- `TemporalIndex`: optional temporal query prefiltering.
+
+These optional protocols are not part of the required `MemoryBackend` interface.
+`VersionedStore` simply combines the existing `KeyedStore` and `SequenceStore`
+protocols; it adds no backend operation.
+
+The facades are composable views over the same blocks. A block can belong to an
+ownership tree, graph, keyed collection, event log, temporal collection,
+lineage DAG, and version history at the same time. `LineageDAG` stores ordinary
+property-graph links with atomic cycle protection. `VersionedRecords` uses the
+same key bindings and log entries that `KeyedCollection` and `EventLog` expose.
+
+When a facade receives a `MemoryHandle`, it resolves every referenced block
+through that handle, so scope and block policies still apply. Possession of a
+configured facade or tool grants access to its structural methods. Keep raw
+backend capabilities in trusted application code, and expose only the facade
+methods an agent needs.
 
 That keeps stores, traversal, search, and links separable internally while still allowing users to configure one top-level backend.
 

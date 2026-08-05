@@ -13,13 +13,18 @@ to agents.
 """
 
 from genie.backend import (
+    AcyclicLinkStore,
     InMemoryBackend,
     InMemoryLinkStore,
+    KeyedStore,
     MemoryBackend,
     RouteInfo,
     RouteKey,
     RouteSelector,
     RoutedBackend,
+    SequenceStore,
+    TemporalIndex,
+    TemporalStore,
 )
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec, MemoryCodec
 from genie.hooks import HookRegistry, MemoryHook
@@ -34,6 +39,7 @@ from genie.policy.principal import Principal
 from genie.query import MemoryQuery, Scope, SearchResult
 
 __all__ = [
+    "AcyclicLinkStore",
     "AccessDenied",
     "AccessRule",
     "CodecRegistry",
@@ -43,6 +49,7 @@ __all__ = [
     "InMemoryBackend",
     "InMemoryLinkStore",
     "JsonCodec",
+    "KeyedStore",
     "LinkRelations",
     "Memory",
     "MemoryBackend",
@@ -64,5 +71,8 @@ __all__ = [
     "RouteSelector",
     "Scope",
     "SearchResult",
+    "SequenceStore",
+    "TemporalIndex",
+    "TemporalStore",
     "UnsupportedOperation",
 ]

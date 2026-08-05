@@ -101,6 +101,7 @@ genie/
     base.py         # MemoryBackend interface
     inmemory.py     # in-memory reference backend
     routed.py       # routed multi-backend composition
+    structure_capabilities.py # optional DAG, keyed, sequence, and temporal protocols
 
   query/
     __init__.py     # query exports
@@ -125,6 +126,18 @@ genie/
     __init__.py     # hook exports
     base.py         # MemoryHook methods
     registry.py     # hook dispatch
+
+  structures/
+    __init__.py     # focused structure exports
+    access.py       # shared Memory and MemoryHandle access protocols
+    graph.py        # property-graph facade over typed links
+    keyed.py        # namespaced keyed-collection facade
+    lineage.py      # relation-scoped lineage DAG facade
+    log.py          # ordered event-log facade
+    records.py      # immutable structural membership records
+    temporal.py     # temporal collection with scan and index query paths
+    tree.py         # rooted ownership-tree facade
+    versioned.py    # keyed identities with ordered revision history
 ```
 
 ## Core Data Model
@@ -169,6 +182,38 @@ memory.put(type="preference", value={"style": "concise"})
 memory.put(type="note", value="Keep the proposal short.")
 ```
 
+### Structural Foundations
+
+Optional memory structures use the shared protocols and records in
+`genie.structures`. The protocols describe the common public operations of
+`Memory` and `MemoryHandle`, allowing future structure facades to preserve
+normal scope and policy checks. Facades should depend on the narrowest protocol
+that provides the operations they need.
+
+Structural records reference block ids rather than storing block values:
+
+```python
+from genie.structures import KeyBinding, MemoryAddress
+
+
+address = MemoryAddress(namespace=("users", "alice"), key="language")
+binding = KeyBinding(
+    collection_id="preferences",
+    address=address,
+    block_id="mem_language",
+)
+```
+
+This keeps application values in `MemoryBlock` and lets one block participate
+in several structures. `ValidityInterval` uses aware UTC timestamps and the
+half-open `[valid_at, invalid_at)` convention. `RevisionEntry.revision` is a
+logical history position and is separate from `MemoryBlock.version`, which is
+the update counter for one stored block.
+
+The records do not provide persistence or query behavior. Structure facades
+and optional backend capability protocols provide that behavior in separate
+layers.
+
 ### Parent/Child Ownership
 
 Blocks form parent/child ownership through `parent_id`.
@@ -181,6 +226,28 @@ project
 
 Parent/child ownership is used for scoped access, subtree search, ancestor traversal, and recursive operations. The in-memory backend rejects parent cycles.
 
+`OwnershipTree` provides an optional rooted facade over this existing behavior:
+
+```python
+from genie.structures import OwnershipTree
+
+
+tree = OwnershipTree(memory, root=project)
+task = tree.create_child(type="task", value="Draft outline")
+note = tree.create_child(parent=task, type="note", value="Keep it short.")
+
+tree.children(task)
+tree.ancestors(note)
+tree.descendants()
+```
+
+The facade adds no new storage model. It delegates block creation, traversal,
+policy checks, and recursive deletion to its `Memory` or `MemoryHandle` access
+object. Its configured root is an additional boundary: operations cannot use a
+parent or target outside that root, even when the facade receives an unbounded
+`Memory`. Ancestor results stop at the root, and descendant results use
+depth-first pre-order based on the child order returned by the access object.
+
 ### Links and Mounts
 
 `MemoryLink` represents typed relationships that are separate from parent/child ownership.
@@ -191,6 +258,272 @@ link = memory.update_link(link, metadata={"confidence": 0.9})
 ```
 
 Use links for relationships that do not imply ownership or subtree membership.
+
+### Property Graph Facade
+
+`PropertyGraph` uses `MemoryBlock` objects as nodes and existing `MemoryLink`
+objects as directed typed edges. It delegates edge persistence and visibility
+to `Memory` or `MemoryHandle` and adds access-aware neighbor and path traversal:
+
+```python
+from genie.structures import PropertyGraph
+
+
+graph = PropertyGraph(memory)
+edge = graph.add_edge(requirement, outline, "informs", metadata={"weight": 0.8})
+
+graph.edges(requirement, direction="out")
+graph.neighbors(requirement, relation="informs")
+graph.walk(requirement, max_depth=2, limit=50)
+graph.shortest_path(requirement, outline, max_depth=3)
+```
+
+The graph may contain cycles, self-links, and parallel edges. Neighbor results
+contain both the visible block and the edge used to reach it, so parallel edges
+do not lose their identity or metadata. `walk` returns simple paths in
+breadth-first order; a block is not repeated within one path. Both `walk` and
+`shortest_path` require a depth bound, and `walk` also has a result limit.
+
+The facade does not define a separate graph root. Applications pass a bounded
+`MemoryHandle` when graph reads and writes must remain inside a subtree. Normal
+link endpoint policies and handle scope checks continue to apply at every step.
+The facade does not add a graph database or a second link representation.
+
+### Lineage DAG
+
+`LineageDAG` is a relation-scoped acyclic view over the property graph. Its
+edges are normal `MemoryLink` values. The source is a predecessor and the
+target is a successor, so following outgoing edges walks toward derived
+blocks.
+
+```python
+from genie.structures import LineageDAG
+
+
+lineage = LineageDAG(memory, relation="derived_into")
+lineage.add(raw_note, extracted_fact, metadata={"method": "extract"})
+lineage.add(extracted_fact, summary)
+
+lineage.predecessors(summary)
+lineage.successors(raw_note)
+lineage.walk_predecessors(summary, max_depth=4, limit=100)
+```
+
+The exact relation identifies the protected DAG. Applications use different
+relation names when they need independent lineage graphs. The first protected
+write may adopt existing links with that relation if they are already
+acyclic. Once protected, ordinary link insertion for that relation must be
+rejected or use the same cycle check.
+
+A portable read-then-write check is not sufficient because two writers can
+both observe an acyclic graph and then jointly create a cycle. The optional
+`AcyclicLinkStore` therefore performs reachability checking and insertion as
+one atomic operation. The reference backend holds its structure lock across
+both steps. Production adapters should use a transaction, serializable graph
+operation, advisory lock, or another database-specific atomic mechanism.
+
+`Memory.add_acyclic_link` and `MemoryHandle.add_acyclic_link` perform normal
+source-write, target-read, and handle-scope checks before calling that backend
+operation. The facade reuses `PropertyGraph` for edge lookup, predecessor and
+successor lookup, metadata updates, bounded walks, and shortest paths.
+
+### Keyed Collection
+
+`KeyedCollection` maps a `MemoryAddress(namespace, key)` to an existing visible
+block. The binding is separate from ownership, so the addressed block may live
+anywhere allowed by the supplied `Memory` or `MemoryHandle` and may participate
+in other structures.
+
+```python
+from genie.structures import KeyedCollection, MemoryAddress
+
+
+preferences = KeyedCollection(memory, backend, collection=preferences_root)
+address = MemoryAddress(("users", "alice"), "language")
+preferences.bind(address, language)
+
+current = preferences.get(address)
+preferences.rebind(address, french, expected=language)
+preferences.unbind(address, expected=french)
+```
+
+`bind` is create-only. `rebind` and `unbind` include the expected block id and
+the backend applies that check atomically. This compare-and-swap rule prevents
+lost updates when concurrent writers use the same address. Namespace listing
+may be exact or recursive and returns visible items in stable address order.
+Exact lookup propagates access denial; listing omits inaccessible targets.
+
+### Ordered Event Log
+
+`EventLog` appends references to existing visible blocks. The backend allocates
+one unique, monotonically increasing sequence number per log, starting at zero
+in the reference backend.
+
+```python
+from genie.structures import EventLog
+
+
+events = EventLog(memory, backend, log=events_root)
+first = events.append(user_message)
+second = events.append(agent_message)
+
+events.read(start=first.entry.sequence, stop=second.entry.sequence + 1)
+events.tail(limit=20)
+```
+
+Reads use half-open sequence ranges. A block may be appended more than once and
+may appear in more than one log. Deleting a referenced block removes its log
+entries but does not reuse their sequence numbers. Deleting the log block
+removes the log entries and allocator state.
+
+### Temporal Collection
+
+`TemporalCollection` attaches a `TemporalEntry` to an existing visible block.
+The entry keeps event time and validity separate: `occurred_at` records when an
+event happened, while `ValidityInterval` records when information is valid.
+One block has at most one entry in a collection, but the same block may appear
+in several temporal collections.
+
+```python
+from datetime import UTC, datetime
+
+from genie.structures import TemporalCollection, ValidityInterval
+
+
+timeline = TemporalCollection(memory, backend, collection=timeline_root)
+timeline.add(
+    fact,
+    occurred_at=datetime(2026, 1, 10, tzinfo=UTC),
+    validity=ValidityInterval(
+        valid_at=datetime(2026, 1, 1, tzinfo=UTC),
+        invalid_at=datetime(2026, 2, 1, tzinfo=UTC),
+    ),
+)
+
+events = timeline.events(
+    start=datetime(2026, 1, 1, tzinfo=UTC),
+    stop=datetime(2026, 2, 1, tzinfo=UTC),
+)
+current = timeline.valid_at(datetime(2026, 1, 15, tzinfo=UTC))
+```
+
+Event ranges and validity intervals use half-open bounds. `scan` can combine
+event bounds, a valid-at instant, and an overlap interval. `replace` changes
+the complete temporal entry, and `remove` removes only temporal membership; it
+does not delete the referenced block.
+
+The required `TemporalStore` returns bounded pages in stable block-id order.
+When no `TemporalIndex` is available, the facade scans those pages and applies
+time filters portably. A temporal index may prefilter the same query, but the
+facade still checks the returned entries and resolves every block through the
+supplied `Memory` or `MemoryHandle`. Exact lookup propagates access denial,
+while scans omit inaccessible or missing targets.
+
+Temporal results use block-id order so portable and indexed adapters have one
+simple cursor contract. Use `EventLog` when insertion or chronological order is
+part of the application model.
+
+### Versioned Records
+
+`VersionedRecords` composes `KeyedCollection` and `EventLog` without defining a
+second persistence model. A `MemoryAddress` maps to one stable identity block.
+That identity block anchors a separate ordered log of revision blocks. Log
+sequence zero becomes logical revision one.
+
+```python
+from genie.structures import MemoryAddress, VersionedRecords
+
+
+records = VersionedRecords(memory, backend, collection=records_root)
+address = MemoryAddress(("users", "alice"), "favorite_color")
+
+records.register(address, identity)
+first = records.append(address, blue_revision)
+second = records.append(address, green_revision)
+
+records.current(address)
+records.revision(address, 1)
+records.history(address, start=1, stop=3)
+```
+
+`register` uses create-only key binding and the facade exposes no rebind
+operation. `append` uses the sequence store's atomic per-log allocation, so
+concurrent writers receive unique increasing revision numbers. Each identity
+has an independent sequence. `RevisionEntry.record_id` is the identity block
+id, and `RevisionEntry.revision` is the log sequence plus one.
+
+Registration and first revision append are deliberately separate operations.
+Combining them would imply a transaction across keyed and sequence storage
+that not every backend can provide. `VersionedStore` is only the composition
+of the existing `KeyedStore` and `SequenceStore` protocols; it adds no backend
+method.
+
+Applications should reserve registered identity blocks as revision-log anchors
+and avoid appending unrelated events through a separate `EventLog`. They
+should also treat revision blocks as immutable snapshots or deltas. Genie
+preserves references and ordering but does not prevent trusted code from
+updating a block through the normal memory API.
+
+Deleting a revision block removes that log position without reusing its
+revision number. Deleting an identity removes its key binding and complete log.
+Exact revision lookup propagates access denial, while history and `current`
+return the newest revisions visible through the supplied `Memory` or
+`MemoryHandle`.
+
+### Optional Structure Capabilities
+
+`AcyclicLinkStore`, `KeyedStore`, `SequenceStore`, `TemporalStore`, and
+`TemporalIndex` are optional protocols in
+`genie.backend.structure_capabilities`; they are intentionally not added to the
+required `MemoryBackend` interface. A backend implements only the structures it
+supports. Facade construction raises `UnsupportedOperation` when the supplied
+store lacks the required capability.
+
+The reference `InMemoryBackend` implements these protocols with a reentrant lock.
+The lock makes each key bind/rebind/unbind and each sequence allocation atomic
+inside one process. Production adapters should use their storage engine's
+unique constraints, compare-and-swap operation, transaction, or native sequence
+support to provide the same contracts.
+
+`TemporalIndex` is an optional query optimization, not a separate source of
+truth. The reference backend implements its query contract with in-memory
+filtering. Production adapters can use range or interval indexes. When a
+separate index object is supplied, the adapter or application is responsible
+for keeping it synchronized with the `TemporalStore`.
+
+The facades attach existing blocks rather than hiding block creation inside the
+structural write. This keeps payload creation, hooks, codecs, policies, and
+structural membership explicit and avoids claiming a cross-store transaction
+that a backend cannot provide.
+
+### Composition and Backend Contracts
+
+All seven facades can refer to the same `MemoryBlock` at once. Structural
+records store block ids, so composition does not copy the block value or create
+different identities for each view. Deleting a block asks the backend to clean
+dependent links, key bindings, log entries, and temporal entries.
+
+`LineageDAG` delegates graph reads, traversal, and metadata updates to
+`PropertyGraph`; only insertion adds atomic cycle protection. Likewise,
+`VersionedRecords` delegates stable identity lookup to `KeyedCollection` and
+revision ordering to `EventLog`. Data written through `VersionedRecords` is
+visible through those base facades, and compatible log entries written through
+`EventLog` are visible as revisions.
+
+Facades resolve their containers and referenced blocks through the supplied
+`Memory` or `MemoryHandle`. A handle therefore applies its subtree boundary and
+block policies across a compound memory view. Structural method availability
+is capability-based: code that receives a configured facade or agent tool can
+call the methods exposed by that object. Raw stores and backend capability
+objects belong in trusted application code.
+
+The reusable mixins in `tests/structures/test_backend_contracts.py` define the
+optional backend contracts independently of facade behavior. A new repository
+adapter can inherit the mixins for the capabilities it implements and provide
+a fresh backend from `make_backend()`. The contracts cover uniqueness,
+compare-and-swap behavior, stable paging, monotonic append, temporal filtering,
+deletion cleanup, cycle prevention, and concurrent atomicity.
+
 Link metadata can be merged after creation. The link id, source, target,
 relation, and creation timestamp remain unchanged.
 
@@ -222,6 +555,7 @@ mounted target trees.
 - `children`
 - `ancestors`
 - `add_link`
+- `add_acyclic_link`
 - `update_link`
 - `list_links`
 - `add_mount`

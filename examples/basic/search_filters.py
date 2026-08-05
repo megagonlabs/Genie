@@ -2,12 +2,16 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/search_filters.py
+    conda run -n "genie" python examples/basic/search_filters.py
 """
 
 from __future__ import annotations
 
 if __package__ in {None, ""}:
+    from pathlib import Path
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
 else:
     from examples._bootstrap import ensure_repo_on_path
@@ -20,6 +24,7 @@ from genie import InMemoryBackend, Memory
 def main() -> None:
     """Run a focused search and filter walkthrough."""
 
+    print("== Search and filters ==")
     memory = Memory(backend=InMemoryBackend())
     project = memory.put(type="project", value="Proposal workspace")
     selected = memory.put(
@@ -44,8 +49,10 @@ def main() -> None:
         filters={"metadata.priority": {">=": 2}, "owner": {"in": ["team"]}},
     )
 
+    print("query: 'proposal' in the project subtree, priority >= 2")
+    print(f"matches: {len(results)}")
     for result in results:
-        print(f"{result.score:.0f} {result.block.type}: {result.block.value}")
+        print(f"- {result.block.type}: {result.block.value}")
 
     assert [result.block.id for result in results] == [selected.id]
 
