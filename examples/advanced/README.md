@@ -17,8 +17,9 @@ conda run -n "genie" python examples/advanced/experiment_memory.py
 
 - `temporal_collection.py` uses one structure for event-time and validity
   queries.
-- `agent_memory.py` gives an agent one compound memory containing keyed
-  preconditions, an experiment log, and a property graph.
+- `agent_memory.py` shows an application-owned `TaskMemory` that hides facade
+  setup. Its three views only read and write values; the agent interprets those
+  values and chooses its next action.
 - `experiment_memory.py` uses ownership tree, property graph, keyed collection,
   event log, temporal collection, lineage DAG, and versioned records in one
   experiment-memory workflow.

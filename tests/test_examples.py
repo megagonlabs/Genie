@@ -8,8 +8,67 @@ import sys
 
 import pytest
 
+from examples.advanced.agent_memory import TaskAgent, TaskMemory
+from genie import InMemoryBackend, Memory
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_task_memory_exposes_values_while_hiding_facade_setup() -> None:
+    """Application code writes and reads values through the compound memory."""
+
+    memory = Memory(backend=InMemoryBackend())
+    workspace = memory.put(type="task", value="improve retrieval")
+    task_memory = TaskMemory.create(memory, workspace=workspace)
+
+    task_memory.preconditions.set("data_ready", satisfied=True)
+    task_memory.experiments.append("collect more samples")
+    task_memory.knowledge.connect(
+        "data_ready",
+        "enables",
+        "run the next experiment",
+    )
+
+    assert task_memory.preconditions.get("data_ready") == {
+        "name": "data ready",
+        "satisfied": True,
+    }
+    assert task_memory.preconditions.get("unknown") is None
+    assert task_memory.experiments.tail(limit=1) == ["collect more samples"]
+    assert task_memory.knowledge.neighbors("data_ready", relation="enables") == [
+        "run the next experiment"
+    ]
+
+    task_memory.preconditions.set("data_ready", satisfied=False)
+    assert task_memory.preconditions.get("data_ready") == {
+        "name": "data ready",
+        "satisfied": False,
+    }
+
+
+def test_task_agent_interprets_memory_and_selects_an_action() -> None:
+    """Task decisions remain on the agent side of the memory boundary."""
+
+    memory = Memory(backend=InMemoryBackend())
+    workspace = memory.put(type="task", value="improve retrieval")
+    task_memory = TaskMemory.create(memory, workspace=workspace)
+    agent = TaskAgent("retrieval-agent", task_memory)
+
+    assert agent.choose_next_action() == "wait for data"
+
+    task_memory.preconditions.set("data_ready", satisfied=True)
+    assert agent.choose_next_action() == "collect more context"
+
+    task_memory.experiments.append("collect more samples")
+    task_memory.knowledge.connect("data_ready", "enables", "try reranking")
+    task_memory.knowledge.connect("data_ready", "enables", "expand the query")
+
+    assert task_memory.knowledge.neighbors("data_ready", relation="enables") == [
+        "try reranking",
+        "expand the query",
+    ]
+    assert agent.choose_next_action() == "try reranking"
 
 
 @pytest.mark.parametrize(
