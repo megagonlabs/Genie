@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Callable, Literal, Mapping, overload
+from collections.abc import Mapping
+from typing import Callable, Literal, overload
 
 from genie.backend.base import MemoryBackend
 from genie.backend.capabilities import LinkStore, SearchIndex, TraversalIndex
@@ -270,7 +271,12 @@ class RoutedBackend:
             return None
         return self.routes[route].get_block(block_id)
 
-    def update_block(self, block: MemoryBlock) -> MemoryBlock:
+    def update_block(
+        self,
+        block: MemoryBlock,
+        *,
+        expected_version: int | None = None,
+    ) -> MemoryBlock:
         """Replace a block in its current owning route.
 
         Updates do not move a block to another route. If a block is reparented,
@@ -283,11 +289,19 @@ class RoutedBackend:
             parent_route = self._route_for_existing_block(block.parent_id)
             if parent_route != route:
                 raise MemoryConflict("A memory block cannot be reparented across routes.")
-        stored = self.routes[route].update_block(block)
+        stored = self.routes[route].update_block(
+            block,
+            expected_version=expected_version,
+        )
         self._catalog[stored.id] = route
         return stored
 
-    def delete_block(self, block_id: str) -> None:
+    def delete_block(
+        self,
+        block_id: str,
+        *,
+        expected_versions: Mapping[str, int] | None = None,
+    ) -> None:
         """Delete a block from its owning route and remove catalog state.
 
         Args:
@@ -298,7 +312,10 @@ class RoutedBackend:
         if route is None:
             return
         descendants = self.descendants(block_id, include_self=True)
-        self.routes[route].delete_block(block_id)
+        self.routes[route].delete_block(
+            block_id,
+            expected_versions=expected_versions,
+        )
         for block in descendants:
             self._catalog.pop(block.id, None)
             if self.link_store is not None:

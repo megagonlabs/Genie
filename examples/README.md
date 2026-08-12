@@ -1,56 +1,49 @@
-# Genie Examples
+# Examples
 
-These examples are meant to be read in order. Each script is runnable and uses
-plain assertions, so a successful exit means the demonstrated workflow behaved
-as expected.
-
-Run examples from the repository root with the project Conda environment:
+Examples are runnable from the repository root, contain plain assertions, and
+use the project Conda environment:
 
 ```bash
-conda run -n "genie" python examples/basic/crud_blocks.py
-conda run -n "genie" python examples/basic/scoped_agents.py
-conda run -n "genie" python examples/basic/search_filters.py
-conda run -n "genie" python examples/basic/links.py
-conda run -n "genie" python examples/basic/routed_backend.py
-conda run -n "genie" python examples/basic/policies.py
-conda run -n "genie" python examples/basic/hooks_codecs.py
-conda run -n "genie" python examples/basic/stdlib_codecs.py
-conda run -n "genie" python examples/basic/basic_usage.py
-conda run -n "genie" python examples/advanced/temporal_collection.py
-conda run -n "genie" python examples/advanced/agent_memory.py
-conda run -n "genie" python examples/advanced/experiment_memory.py
+conda run -n "genie" python examples/<path>.py
 ```
 
-Basic examples live in [`examples/basic`](basic). Recommended reading order:
+## Basic reading order
 
-1. `basic/crud_blocks.py`: create, read, update, set, delete, and child traversal.
-2. `basic/search_filters.py`: search by text, type, subtree, and metadata filters.
-3. `basic/scoped_agents.py`: pass bounded `MemoryHandle` instances into agents and sub-agents.
-4. `basic/links.py`: create typed links, symbolic mounts, and linked-memory search.
-5. `basic/policies.py`: configure owner-private defaults and explicit shared access.
-6. `basic/hooks_codecs.py`: add hooks around memory operations with custom and stdlib codecs.
-7. `basic/stdlib_codecs.py`: opt into stdlib codecs and inspect raw payloads.
-8. `basic/routed_backend.py`: route blocks across multiple backend stores.
+1. [`basic/crud_blocks.py`](basic/crud_blocks.py): block CRUD and children.
+2. [`basic/search_filters.py`](basic/search_filters.py): text, type, subtree,
+   and metadata filters.
+3. [`basic/scoped_agents.py`](basic/scoped_agents.py): bounded handles for
+   agents and sub-agents.
+4. [`basic/links.py`](basic/links.py): typed links, mounts, and linked search.
+5. [`basic/policies.py`](basic/policies.py): private defaults and shared access.
+6. [`basic/hooks_codecs.py`](basic/hooks_codecs.py): hooks and custom or stdlib
+   codecs.
+7. [`basic/stdlib_codecs.py`](basic/stdlib_codecs.py): opt-in stdlib codecs and
+   raw payloads.
+8. [`basic/routed_backend.py`](basic/routed_backend.py): route blocks across
+   stores.
 
-Integrated example:
+[`basic/basic_usage.py`](basic/basic_usage.py) combines handles, ownership,
+search, links, policies, hooks, dataclass codecs, and stdlib codecs in one agent
+workflow. See the [basic guide](basic/README.md).
 
-- `basic/basic_usage.py`: combines memory handles, parent/child ownership, search, links,
-  policies, hooks, dataclass codecs, and stdlib codecs in one agent workflow.
+## Advanced structures
 
-Advanced structure examples live in [`examples/advanced`](advanced):
+- [`advanced/temporal_collection.py`](advanced/temporal_collection.py): event
+  time and validity periods.
+- [`advanced/agent_memory.py`](advanced/agent_memory.py): an application-owned
+  task memory composed from keyed preconditions, an experiment log, and a
+  property graph.
+- [`advanced/experiment_memory.py`](advanced/experiment_memory.py): all seven
+  structures in one workflow.
 
-- `advanced/temporal_collection.py`: use event time and validity periods in
-  one temporal collection.
-- `advanced/agent_memory.py`: give an agent one compound memory made from
-  keyed preconditions, an experiment log, and a property graph.
-- `advanced/experiment_memory.py`: use all seven optional structures in one
-  experiment-memory workflow.
+See the [advanced guide](advanced/README.md).
 
-Conventions used throughout:
+## Conventions
 
-- Examples pass `backend=InMemoryBackend()` explicitly so storage is visible.
-- Agent examples use `memory.get_handle(root=...)` for least-privilege access.
-- `memory.get_unbounded_handle(...)` appears only where the example is showing a
-  trusted administrative or routing-style handle.
-- `InMemoryBackend` is for examples, tests, and prototypes. Production code
-  should provide a backend adapter with the desired persistence behavior.
+- `InMemoryBackend` makes local storage explicit and dependency-free.
+- Agent examples use rooted handles; unbounded handles appear only for trusted
+  administrative or routing behavior.
+- Application types and agent decisions stay in example code.
+- Production code can use `SQLiteBackend` for local persistence or another
+  adapter with suitable storage, search, and operational behavior.

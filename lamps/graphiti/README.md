@@ -1,114 +1,63 @@
-# Graphiti-inspired temporal knowledge graph
+# Graphiti-inspired temporal graph
 
-This lamp shows how Genie primitives can support a small temporal knowledge
-graph with provenance and effective-time validity. It is an architectural
-example, not a drop-in implementation of Graphiti.
+This lamp builds a small temporal knowledge graph with provenance and
+effective-time validity. It demonstrates an architectural subset of Graphiti,
+not a drop-in implementation.
 
-## Concept mapping
+## Mapping
 
 | Temporal graph concept | Genie representation |
 | --- | --- |
-| Graph boundary | One root block and a bounded `MemoryHandle` |
-| Entity node | `graphiti.entity` memory block |
-| Source episode | `graphiti.episode` memory block |
-| Temporal fact | First-class `graphiti.temporal_fact` memory block |
-| Subject and object | `PropertyGraph` edges from a fact to entity blocks |
-| Provenance | `PropertyGraph` edges from a fact to episodes |
-| Episode time | Event membership in `TemporalCollection` |
-| Validity period | `ValidityInterval` membership in `TemporalCollection` |
-| Supersession | Close the old interval and add a cycle-protected `LineageDAG` edge |
-| Agent access | Named tools with JSON-compatible arguments and results |
+| Graph boundary | Root block and bounded handle |
+| Entity | `graphiti.entity` block |
+| Source episode | `graphiti.episode` block |
+| Temporal fact | `graphiti.temporal_fact` block |
+| Subject and object | `PropertyGraph` edges from fact to entities |
+| Provenance | Graph edges from fact to episodes |
+| Episode time | `TemporalCollection` event membership |
+| Validity | `ValidityInterval` membership |
+| Supersession | Closed old interval plus `LineageDAG` edge |
+| Agent access | Named JSON-compatible tools |
 
-Validity intervals are half-open: `[valid_from, valid_to)`. An absent
-`valid_to` means that the fact remains valid. When an exclusive relationship
-such as `lives_in` changes, the example closes the previous fact at the new
-fact's `valid_from`. The update episode is also attached to the previous fact
-because it is the evidence for ending that validity period.
+Intervals are half-open: `[valid_from, valid_to)`, with no `valid_to` meaning
+still valid. When an exclusive relation such as `lives_in` changes, the new
+fact's `valid_from` closes the previous interval. The update episode supports
+both the new fact and the end of the old one.
 
-## Agent and tools
+## Tools and workflow
 
-The demo gives a small agent five tools instead of direct access to Genie or
-the temporal graph:
-
-| Tool | Agent capability |
+| Tool | Capability |
 | --- | --- |
-| `add_episode` | Store raw source material for provenance |
+| `add_episode` | Store source material for provenance |
 | `add_fact` | Store a dated relationship supported by an episode |
-| `query_entity` | Retrieve facts valid for an entity at one time |
-| `query_neighborhood` | Inspect incoming and outgoing valid relationships |
-| `get_history` | Retrieve validity periods and supporting sources |
+| `query_entity` | Find facts valid for an entity at one time |
+| `query_neighborhood` | Inspect incoming and outgoing valid facts |
+| `get_history` | Return relationship intervals and sources |
 
-The agent first learns from three observations through the write tools. It then
-answers a question about Alice by selecting the three query tools. The agent is
-deterministic so the lamp runs without an API key or agent-framework
-dependency. Its tool interface is intentionally similar to an LLM
-function-calling interface, so a model-backed agent could use the same adapter.
+The agent learns from three observations, then answers where Alice lives now
+and previously and who works with her. As of 2025-07-01, Alice lives in Seattle
+and works at Acme; Bob also works at Acme, whose headquarters are in San
+Francisco. Her `lives_in` history is:
 
-Run the demo from the repository root:
+- San Francisco, valid `[2024-01-10, 2025-06-01)`, supported by the January and
+  June chat episodes.
+- Seattle, valid `[2025-06-01, open)`, supported by the June episode.
 
-```bash
-conda run -n "genie" python -m lamps.graphiti
-```
+| Tool | Calls |
+| --- | ---: |
+| `add_episode` | 3 |
+| `add_fact` | 6 |
+| `query_entity` | 1 |
+| `query_neighborhood` | 1 |
+| `get_history` | 1 |
 
-The resulting graph connects Alice, Bob, Acme, San Francisco, and Seattle. The
-agent answers with current context, related company context, location history,
-and provenance:
+## Limits
 
-```text
-== Graphiti-inspired temporal knowledge graph ==
-An agent stores source episodes, temporal facts, provenance, and relationship history.
-Genie structures: property graph, temporal collection, lineage DAG
+The lamp omits Graphiti's LLM extraction, entity resolution, ontology
+management, embeddings, hybrid ranking, and graph-database engine. Structured
+fact candidates replace natural-language extraction. The focus is portable
+owned blocks, scoped access, graph relationships, provenance, temporal
+membership, and cycle-protected succession.
 
-Tools available to the agent:
-- add_episode: Store raw source material for later provenance.
-- add_fact: Store a temporal subject-relation-object fact and link it to its source episode. Entities are reused by name and type.
-- query_entity: Return facts about an entity that are valid at a given time.
-- query_neighborhood: Return incoming and outgoing facts around an entity at a given time.
-- get_history: Return validity periods and provenance for an entity relationship.
-
-Agent answer:
-Question: Where does Alice live now, where did she live before, and who works with her?
-Current facts for Alice as of 2025-07-01:
-- Alice -[lives_in]-> Seattle
-- Alice -[works_at]-> Acme
-Related context around Acme:
-- Acme -[headquartered_in]-> San Francisco
-- Bob -[works_at]-> Acme
-lives_in history for Alice:
-- Alice -[lives_in]-> San Francisco; valid [2024-01-10, 2025-06-01); provenance: chat/2024-01-10, chat/2025-06-02
-- Alice -[lives_in]-> Seattle; valid [2025-06-01, open); provenance: chat/2025-06-02
-
-Inspectable tool calls:
-01. add_episode
-02. add_fact
-03. add_fact
-04. add_episode
-05. add_fact
-06. add_fact
-07. add_fact
-08. add_episode
-09. add_fact
-10. query_entity
-11. query_neighborhood
-12. get_history
-
-Tool usage:
-- add_episode x3
-- add_fact x6
-- query_entity x1
-- query_neighborhood x1
-- get_history x1
-```
-
-## Deliberate limits
-
-The example does not reproduce Graphiti's LLM extraction, entity resolution,
-ontology management, embeddings, hybrid ranking, or graph-database query
-engine. Those are application and backend concerns. The lamp focuses on the
-portable model Genie can provide: owned blocks, scoped access, a property
-graph, provenance, temporal membership, and cycle-protected succession.
-
-The example agent receives structured fact candidates rather than extracting
-them from raw text. Its deterministic policy demonstrates tool access and an
-agent loop, not natural-language reasoning. A production agent would typically
-use a model to choose tool calls and extract or validate candidate facts.
+Run and test commands plus the shared agent format are in the [lamp
+guide](../README.md).

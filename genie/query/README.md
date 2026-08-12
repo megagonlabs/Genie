@@ -1,11 +1,9 @@
 # Queries
 
-The `genie.query` package defines portable search requests and results. It does
-not choose a ranking method or search engine.
+`genie.query` defines portable search requests and results without choosing a
+ranking method or search engine.
 
-## Memory queries
-
-`Memory.search(...)` accepts friendly arguments or a `MemoryQuery`:
+## Requests and scopes
 
 ```python
 results = memory.search(
@@ -18,69 +16,50 @@ results = memory.search(
 )
 ```
 
-Before reaching a backend, the request is normalized into:
-
-- optional text;
-- an optional root id;
-- one search scope;
-- optional block types;
-- canonical filters; and
-- a non-negative result limit.
-
-The backend decides how to retrieve and rank matches. It returns
-`SearchResult` values containing a block, score, and reason.
-
-## Scopes
+`Memory.search` normalizes friendly arguments into `MemoryQuery`: optional
+text and root id, one scope, optional block types and filters, and a
+non-negative limit. Backends return ranked `SearchResult` values containing a
+block, score, and reason.
 
 | Scope | Search area |
 | --- | --- |
-| `self` | The root block only |
-| `subtree` | The root and its descendants |
-| `ancestors` | The root and its ancestors |
-| `links` | Blocks connected to the root by links |
+| `self` | Root only |
+| `subtree` | Root and descendants |
+| `ancestors` | Root and ancestors |
+| `links` | Blocks linked to the root |
 | `global` | All backend-visible blocks |
 
-`MemoryHandle` limits these scopes further. A bounded handle cannot use search
-to escape its root, and disabled global or ancestor access remains disabled.
+A bounded handle cannot use search to escape its root or enable global or
+ancestor access that the handle disables.
 
 ## Filters
 
-Application-facing operators are converted to canonical backend operators:
+Filters address block fields or metadata such as `metadata.priority`.
+Operators normalize as follows:
 
 | Friendly | Canonical |
 | --- | --- |
 | `=`, `==` | `$eq` |
 | `!=` | `$ne` |
-| `>` | `$gt` |
-| `>=` | `$gte` |
-| `<` | `$lt` |
-| `<=` | `$lte` |
+| `>`, `>=` | `$gt`, `$gte` |
+| `<`, `<=` | `$lt`, `$lte` |
 | `in` | `$in` |
 
-Filters can reference block fields or metadata fields such as
-`metadata.priority`. Backend adapters receive the normalized form.
+`InMemoryBackend` and `SQLiteBackend` use the same portable matcher; SQLite
+scans candidates in the requested scope. Other adapters may use richer indexes
+while preserving public query meaning.
 
-`InMemoryBackend` provides a small portable matcher. Other adapters may use
-database indexes or richer retrieval internally, but they should preserve the
-public query meaning.
-
-## Authorization
-
-Search authorization is applied outside backend ranking:
+## Authorization flow
 
 1. Genie checks the requested root and scope.
-2. A `before_search` hook may modify the normalized query.
-3. Genie checks the modified query again.
-4. The backend executes the query.
-5. Genie decodes and policy-filters the results.
-6. An `after_search` hook may filter or reorder results.
-7. Genie applies scope and policy filtering again.
+2. `before_search` may modify the normalized query.
+3. Genie authorizes the modified query again.
+4. The backend searches.
+5. Genie decodes and policy-filters results.
+6. `after_search` may filter or reorder them.
+7. Genie reapplies scope and policy filtering.
 
-This keeps hooks and backend results from widening the caller's access.
+This prevents hooks or backend results from widening access.
 
-## Related guides
-
-- [Memory and handles](../memory/README.md)
-- [Backends](../backend/README.md)
-- [Policies](../policy/README.md)
-- [Hooks](../hooks/README.md)
+Related: [Memory](../memory/README.md), [Backends](../backend/README.md),
+[Policies](../policy/README.md), and [Hooks](../hooks/README.md).

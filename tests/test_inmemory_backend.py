@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from genie import InMemoryBackend, Memory, MemoryLink, MemoryPolicy, MemoryQuery
+from genie import InMemoryBackend, Memory, MemoryBlock, MemoryLink, MemoryPolicy, MemoryQuery
 from genie.memory.errors import MemoryConflict
 
 
@@ -77,6 +77,44 @@ def test_backend_rejects_reparenting_to_missing_parent() -> None:
     unchanged = backend.get_block(child.id)
     assert unchanged is not None
     assert unchanged.parent_id == root.id
+
+
+def test_backend_rejects_a_stale_conditional_update() -> None:
+    """In-memory replacement follows the shared compare-and-swap contract."""
+
+    backend = InMemoryBackend()
+    original = backend.put_block(MemoryBlock(id="note", type="note", value={}))
+    first = backend.get_block(original.id)
+    stale = backend.get_block(original.id)
+    assert first is not None
+    assert stale is not None
+
+    backend.update_block(
+        first.with_updates(value={"first": True}, version=2),
+        expected_version=1,
+    )
+    with pytest.raises(MemoryConflict, match="changed"):
+        backend.update_block(
+            stale.with_updates(value={"stale": True}, version=2),
+            expected_version=1,
+        )
+
+
+def test_backend_rejects_a_stale_conditional_subtree_delete() -> None:
+    """In-memory deletion requires the complete supplied subtree snapshot."""
+
+    backend = InMemoryBackend()
+    root = backend.put_block(MemoryBlock(id="root", type="root", value={}))
+    snapshot = {root.id: root.version}
+    child = backend.put_block(
+        MemoryBlock(id="child", parent_id=root.id, type="child", value={})
+    )
+
+    with pytest.raises(MemoryConflict, match="changed"):
+        backend.delete_block(root.id, expected_versions=snapshot)
+
+    assert backend.get_block(root.id) is not None
+    assert backend.get_block(child.id) is not None
 
 
 def test_backend_contains_requires_existing_root() -> None:

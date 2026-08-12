@@ -3,7 +3,18 @@
 from typing import TYPE_CHECKING
 
 from genie.memory.block import MemoryBlock
-from genie.memory.errors import GenieError, MemoryConflict, MemoryNotFound, UnsupportedOperation
+from genie.memory.errors import (
+    BackendBusy,
+    BackendCapacityExceeded,
+    BackendCorruption,
+    BackendError,
+    BackendReadOnly,
+    BackendUnavailable,
+    GenieError,
+    MemoryConflict,
+    MemoryNotFound,
+    UnsupportedOperation,
+)
 from genie.memory.links import LinkRelations, MemoryLink
 
 if TYPE_CHECKING:
@@ -11,6 +22,12 @@ if TYPE_CHECKING:
     from genie.memory.handle import MemoryHandle
 
 __all__ = [
+    "BackendBusy",
+    "BackendCapacityExceeded",
+    "BackendCorruption",
+    "BackendError",
+    "BackendReadOnly",
+    "BackendUnavailable",
     "GenieError",
     "LinkRelations",
     "Memory",

@@ -1,35 +1,20 @@
 # Codecs
 
-The `genie.codecs` package converts application values to storage-safe data
-and reconstructs them when blocks are read.
-
-Each encoded value contains:
-
-- a `content_type` that identifies the codec; and
-- the encoded data stored in `MemoryBlock.value`.
+`genie.codecs` converts application values to storage-safe data and restores
+them on read. Each encoded value contains a codec `content_type` and the data
+stored in `MemoryBlock.value`.
 
 ## Default JSON codec
 
-`Memory()` registers only `JsonCodec` by default. It supports:
+`Memory` registers only `JsonCodec` by default. It accepts `None`, strings,
+booleans, integers, finite floats, lists, and dictionaries with string keys.
+Encoding and decoding deep-copy values; `NaN` and infinity are rejected.
 
-- `None`, strings, booleans, and integers;
-- finite floats;
-- lists; and
-- dictionaries with string keys.
+## Selection
 
-The codec deep-copies values during encode and decode. A caller therefore
-cannot change stored state by mutating a returned list or dictionary. `NaN`
-and infinity are rejected because they are not strict JSON values.
-
-## Selecting a codec
-
-`CodecRegistry` selects a codec in one of two ways:
-
-1. `content_type=` requests an exact registered codec.
-2. Without a content type, the registry uses the first codec whose
-   `can_encode` method accepts the value.
-
-The stored content type is used again during decoding.
+`CodecRegistry` uses an explicitly requested `content_type`, or the first codec
+whose `can_encode` accepts the value. The stored content type selects the codec
+again during decoding.
 
 ```python
 memory.codecs.register(PreferenceCodec())
@@ -37,8 +22,6 @@ block = memory.put(type="preference", value=preference)
 ```
 
 ## Custom codecs
-
-A custom codec implements `content_type`, `can_encode`, `encode`, and `decode`:
 
 ```python
 class PreferenceCodec:
@@ -57,13 +40,10 @@ class PreferenceCodec:
         return Preference(**value.data)
 ```
 
-Choose stable content types and portable payloads. A backend stores the
-encoded representation; it should not need application-specific knowledge to
-interpret the original Python object.
+Choose stable content types and portable encoded data. Backends should not need
+application knowledge to interpret the original Python object.
 
-## Standard-library codecs
-
-Dependency-free codecs are available but opt-in:
+## Opt-in standard-library codecs
 
 - `BytesCodec`
 - `DatetimeCodec`
@@ -72,10 +52,7 @@ Dependency-free codecs are available but opt-in:
 - `DataclassCodec`
 - `EnumCodec`
 
-Register only the types an application needs. Keep application taxonomies and
-domain validation outside Genie codecs.
+Register only required types. Keep domain taxonomies and validation outside
+Genie codecs.
 
-## Related guides
-
-- [Memory blocks](../memory/README.md)
-- [Backends](../backend/README.md)
+Related: [Memory](../memory/README.md) and [Backends](../backend/README.md).

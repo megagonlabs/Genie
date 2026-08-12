@@ -23,13 +23,25 @@ from genie.backend import (
     RouteSelector,
     RoutedBackend,
     SequenceStore,
+    SQLiteBackend,
     TemporalIndex,
     TemporalStore,
 )
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec, MemoryCodec
 from genie.hooks import HookRegistry, MemoryHook
 from genie.memory.block import MemoryBlock
-from genie.memory.errors import GenieError, MemoryConflict, MemoryNotFound, UnsupportedOperation
+from genie.memory.errors import (
+    BackendBusy,
+    BackendCapacityExceeded,
+    BackendCorruption,
+    BackendError,
+    BackendReadOnly,
+    BackendUnavailable,
+    GenieError,
+    MemoryConflict,
+    MemoryNotFound,
+    UnsupportedOperation,
+)
 from genie.memory.links import LinkRelations, MemoryLink
 from genie.memory.memory import Memory
 from genie.memory.handle import MemoryHandle
@@ -42,6 +54,12 @@ __all__ = [
     "AcyclicLinkStore",
     "AccessDenied",
     "AccessRule",
+    "BackendBusy",
+    "BackendCapacityExceeded",
+    "BackendCorruption",
+    "BackendError",
+    "BackendReadOnly",
+    "BackendUnavailable",
     "CodecRegistry",
     "EncodedValue",
     "GenieError",
@@ -72,6 +90,7 @@ __all__ = [
     "Scope",
     "SearchResult",
     "SequenceStore",
+    "SQLiteBackend",
     "TemporalIndex",
     "TemporalStore",
     "UnsupportedOperation",

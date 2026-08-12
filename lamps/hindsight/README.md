@@ -1,44 +1,30 @@
 # Hindsight-inspired agent memory
 
-This lamp shows how Genie primitives can support a small Hindsight-inspired
-memory bank with atomic facts, agent experiences, derived observations, mental
-models, and temporal and graph retrieval. It is an architectural example, not
-a compatibility layer or a complete Hindsight implementation.
+This lamp combines atomic facts, experiences, derived observations, mental
+models, and temporal and graph retrieval. It demonstrates part of Hindsight's
+retain/recall/reflect model, not a compatibility layer.
 
-Hindsight describes retain, recall, and reflect operations over world facts,
-agent experiences, observations, and separately stored mental models. Its
-recall pipeline combines semantic, keyword, graph, and temporal strategies. See
-the official [Hindsight repository](https://github.com/vectorize-io/hindsight),
-[retain documentation](https://hindsight.vectorize.io/developer/retain), and
-[recall documentation](https://hindsight.vectorize.io/developer/retrieval).
+## Mapping
 
-## Concept mapping
-
-| Hindsight concept | Genie representation in this lamp |
+| Hindsight concept | Genie representation |
 | --- | --- |
-| Memory bank | One root block and bounded `MemoryHandle` |
-| Atomic memory unit | One `hindsight.memory_unit` block |
-| `text` | Memory-unit block value field |
-| `fact_type` | `world`, `experience`, or `observation` value and index metadata |
-| `state` | `valid` or `invalidated` value and index metadata |
-| Entities, occurred dates, tags | Canonical atomic value fields |
-| Unit metadata and provenance | Nested atomic value fields |
-| Retention order | Atomic units appended to an `EventLog` |
-| Occurred-date index | One owned `hindsight.occurrence` child per date in `TemporalCollection` |
-| Temporal graph | `hindsight.temporal` `PropertyGraph` edges |
-| Semantic graph | `hindsight.semantic` `PropertyGraph` edges |
-| Causal graph | `hindsight.causal` `PropertyGraph` edges |
-| Mental model | Separate block addressed by name through `KeyedCollection` |
-| Recall | Deterministic text/entity matching plus temporal and graph facade queries |
-| Agent access | Named tools with JSON-compatible arguments and results |
+| Memory bank | Root block and bounded handle |
+| Atomic unit | `hindsight.memory_unit` block |
+| `text`, type, state, entities, dates, metadata, tags, provenance | Complete application-owned block value |
+| Retention order | `EventLog` |
+| Each occurred date | Owned `hindsight.occurrence` child in `TemporalCollection` |
+| Temporal, semantic, causal graphs | Relation-specific `PropertyGraph` edges |
+| Mental model | Separate named block in `KeyedCollection` |
+| Recall | Text/entity matching plus temporal and graph queries |
+| Agent access | Named JSON-compatible tools |
 
-Each atomic block stores the complete application-owned structure:
+Each atomic value has this shape:
 
 ```text
 MemoryUnit {
   text,
-  fact_type,
-  state,
+  fact_type,        # world, experience, or observation
+  state,            # valid or invalidated
   entities,
   occurred_dates,
   metadata,
@@ -47,100 +33,52 @@ MemoryUnit {
 }
 ```
 
-Genie remains unaware of these field meanings. The lamp owns validation,
-curation state, graph-relation names, ranking, temporal matching, and mental
-model semantics.
+The lamp owns validation, state, relation names, ranking, and mental-model
+meaning; Genie treats them as application data. Because one unit may have
+several dates while one temporal membership has one event time, each date gets
+an occurrence child linked to the canonical unit. Recall resolves and
+deduplicates those units.
 
-A unit can contain several `occurred_dates`, while one temporal collection
-membership has one event time. The lamp therefore creates one small occurrence
-child per date, indexes each child in `TemporalCollection`, and links it back
-to the canonical unit. Temporal recall resolves and deduplicates those units.
+## Tools and workflow
 
-## Agent and tools
-
-The demo gives a deterministic operations agent seven memory tools instead of
-direct access to Genie or `HindsightMemoryBank`:
-
-| Tool | Agent capability |
+| Tool | Capability |
 | --- | --- |
-| `retain` | Store one complete atomic world fact, experience, or observation |
-| `link_memories` | Add a temporal, semantic, or causal relationship |
-| `create_mental_model` | Save a synthesized document with evidence references |
-| `recall` | Rank active atomic units by text, entity, type, and tags |
-| `recall_temporal` | Retrieve experiences within an occurred-date range |
-| `recall_graph` | Traverse typed relationships around one memory |
-| `get_mental_model` | Retrieve a named synthesized document |
+| `retain` | Store a world fact, experience, or observation |
+| `link_memories` | Add a temporal, semantic, or causal edge |
+| `create_mental_model` | Save a synthesis with evidence ids |
+| `recall` | Rank active units by text, entity, type, and tags |
+| `recall_temporal` | Query experiences by occurred date |
+| `recall_graph` | Traverse typed relations |
+| `get_mental_model` | Fetch a named synthesis |
 
-The agent remembers an Atlas deployment failure and successful retry, derives
-an observation about smaller migration batches, connects the memories through
-all three graph relation types, and stores an Atlas deployment playbook. It then
-answers a question by combining mental-model, general, temporal, and graph
-retrieval.
+The agent records an Atlas deployment timeout, a successful smaller-batch
+retry, and the derived observation that small migration batches are more
+reliable. It links five units with four edges and creates a deployment
+playbook. The answer recommends a Friday deployment with small batches and
+separate retries, supported by the March 15 failure, March 16 success, and
+temporal, semantic, and causal graph context.
 
-Run it from the repository root:
+| Tool | Calls |
+| --- | ---: |
+| `retain` | 5 |
+| `link_memories` | 4 |
+| `create_mental_model` | 1 |
+| `get_mental_model` | 1 |
+| `recall` | 1 |
+| `recall_temporal` | 1 |
+| `recall_graph` | 1 |
 
-```bash
-conda run -n "genie" python -m lamps.hindsight
-```
+## Limits
 
-The output begins by naming the lamp, its purpose, and the Genie structures it
-uses. The compact answer includes:
+The lamp omits Hindsight's LLM extraction, canonical entity resolution,
+embeddings, BM25, temporal-language parsing, rank fusion, reranking,
+asynchronous consolidation, causal inference, and automatic mental-model
+refresh. Transparent token overlap replaces semantic similarity; structured
+agent decisions supply observations and synthesized text.
 
-```text
-== Hindsight-inspired agent memory ==
-An agent combines atomic memories, dated experiences, graph relations, and a synthesized mental model.
-Genie structures: event log, keyed collection, temporal collection, property graph
+References: [repository](https://github.com/vectorize-io/hindsight), [retain
+documentation](https://hindsight.vectorize.io/developer/retain), and [recall
+documentation](https://hindsight.vectorize.io/developer/retrieval).
 
-Agent answer:
-Question: How should I deploy Atlas, and what past evidence supports that plan?
-Mental model (atlas-deployment-playbook): Deploy Atlas on Friday, use small database-migration batches, and retry failed batches separately.
-Relevant atomic memories:
-- [experience] I retried Atlas 2.0 on March 16 using smaller migration batches; the deployment succeeded.
-- [observation] Atlas database migrations are more reliable when run in small batches.
-Experience timeline for Atlas:
-- 2025-03-15: I deployed Atlas 2.0 on March 15; the database migration timed out.
-- 2025-03-16: I retried Atlas 2.0 on March 16 using smaller migration batches; the deployment succeeded.
-Graph context around timeout:
-- causal (in): Atlas 2.0 migrated all customer records in one large batch.
-- semantic (in): Atlas database migrations are more reliable when run in small batches.
-- temporal (out): I retried Atlas 2.0 on March 16 using smaller migration batches; the deployment succeeded.
-
-Inspectable tool calls:
-01. retain
-02. retain
-03. retain
-04. retain
-05. retain
-06. link_memories
-07. link_memories
-08. link_memories
-09. link_memories
-10. create_mental_model
-11. get_mental_model
-12. recall
-13. recall_temporal
-14. recall_graph
-
-Tool usage:
-- retain x5
-- link_memories x4
-- create_mental_model x1
-- get_mental_model x1
-- recall x1
-- recall_temporal x1
-- recall_graph x1
-```
-
-## Deliberate limits
-
-The lamp does not reproduce Hindsight's LLM extraction, canonical entity
-resolution, embeddings, BM25 index, temporal-language parser, reciprocal-rank
-fusion, cross-encoder reranking, asynchronous observation consolidation, causal
-inference, or automatic mental-model refresh.
-
-`recall` uses transparent token overlap rather than claiming true semantic
-similarity. Observations and mental-model text are supplied as structured agent
-decisions so the example remains deterministic and runs without an API key or
-agent-framework dependency. A model-backed agent could use the same tool
-adapter to extract units, select links, synthesize documents, and choose
-retrieval calls.
+Run and test commands plus the shared agent format are in the [lamp
+guide](../README.md).

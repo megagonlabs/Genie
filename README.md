@@ -1,37 +1,30 @@
 # Genie
 
-Genie provides small, typed building blocks for developers creating memory
-systems. It defines memory blocks, parent/child ownership, relationships, and
-scoped access without requiring a specific agent framework, database, memory
-schema, or retrieval strategy.
+Genie provides typed building blocks for developers creating memory systems:
+memory blocks, parent/child ownership, typed relationships, scoped access, and
+composable structural views. It stays independent of agent frameworks,
+databases, memory taxonomies, retrieval strategies, and stored value types.
 
-Use Genie to build your own memory system. Genie is not an agent framework or
-an opinionated long-term memory product.
+> Genie is alpha software. Public APIs may evolve.
 
-> Genie is currently alpha software. Public APIs may evolve.
+## What it provides
 
-## What Genie provides
-
-- `MemoryBlock`: an independently addressable unit with an application-defined
-  type and value.
-- Parent/child ownership for containment, subtree access, and recursive
-  operations.
-- `MemoryLink` for typed relationships that do not imply ownership.
-- `MemoryHandle` for giving agents and services least-privilege access.
-- Composable structure facades for graphs, keys, logs, time, lineage, and
+- `MemoryBlock` values with application-defined types, metadata, policies, and
   versions.
-- Backend protocols for application-selected storage and search systems.
-- Policies, hooks, and codecs that stay separate from application behavior.
+- Parent/child ownership for containment, subtree scope, and lifecycle.
+- `MemoryLink` relationships that do not imply ownership.
+- Least-privilege `MemoryHandle` objects for agents and services.
+- Structure facades for trees, graphs, keys, logs, time, lineage, and versions.
+- Storage protocols plus in-memory and SQLite implementations.
+- Separate policies, hooks, queries, and codecs.
 
-Genie deliberately does not provide agent execution, planning, embeddings, a
-production database, or one universal memory taxonomy.
+Genie does not provide agent execution, planning, embeddings, a managed
+database service, or a universal memory schema.
 
-## Requirements and installation
+## Install
 
 Genie requires Python 3.11 or newer and has no required runtime dependencies.
-
-From a cloned repository, install the package into the project Conda
-environment:
+From a cloned repository:
 
 ```bash
 conda run -n "genie" python -m pip install -e .
@@ -43,41 +36,48 @@ conda run -n "genie" python -m pip install -e .
 from genie import InMemoryBackend, Memory
 
 
-backend = InMemoryBackend()
-memory = Memory(backend=backend, principal="agent:planner")
-
-workspace = memory.put(
-    type="project",
-    value={"name": "Write proposal"},
+memory = Memory(
+    backend=InMemoryBackend(),
+    principal="agent:planner",
 )
+workspace = memory.put(type="project", value={"name": "Write proposal"})
 requirement = memory.put(
     parent=workspace,
     type="requirement",
     value="Keep the proposal concise.",
 )
 
-# Give the agent access only to this workspace.
-agent_memory = memory.get_handle(
-    root=workspace,
-    principal="agent:planner",
-)
-agent_memory.put(
-    type="observation",
-    value="The proposal should use short sections.",
-)
+agent_memory = memory.get_handle(root=workspace, principal="agent:planner")
+agent_memory.put(type="observation", value="Use short sections.")
 
 results = agent_memory.search("concise")
 assert results[0].block.id == requirement.id
 ```
 
-`InMemoryBackend` is a dependency-free reference backend for examples and
-tests. Production applications should supply an adapter with the persistence,
-transactions, search, observability, and backup behavior they need.
+New blocks are owner-private by default. Keep the full `Memory` and backend in
+trusted application code; give agents rooted handles or application-defined
+tools.
 
-New blocks are owner-private by default. The example uses the same principal
-for `Memory` and its restricted handle.
+## Storage
 
-## Core model
+`InMemoryBackend` is the dependency-free reference backend for tests, examples,
+and prototypes. `SQLiteBackend` adds local persistence and supports all seven
+structure facades through Python's built-in SQLite driver:
+
+```python
+from genie import Memory, SQLiteBackend
+
+
+with SQLiteBackend("memory.db") as backend:
+    memory = Memory(backend=backend, principal="agent:planner")
+    memory.put(type="note", value={"text": "Persist this"})
+```
+
+The command-line SQLite program is not required. See the [backend
+guide](genie/backend/README.md) for storage contracts, implementation details,
+and production considerations.
+
+## Model and structures
 
 ```text
 Memory
@@ -89,32 +89,23 @@ MemoryLink
   requirement --supports--> observation
 ```
 
-Parent/child relationships mean ownership. They define subtree scope and
-lifecycle. Links express relationships without changing ownership.
+Ownership defines scope and lifecycle. Links express non-owning relationships.
+Applications define the meaning of block types, values, metadata, and links.
 
-Applications own the meaning of block types and values. Keep domain-specific
-taxonomies, agent behavior, retrieval strategy, and business rules outside the
-core library.
-
-## Composable structures
-
-The optional `genie.structures` facades organize existing blocks:
-
-| Facade | Use it for |
+| Facade | Purpose |
 | --- | --- |
 | `OwnershipTree` | Rooted ownership hierarchies |
-| `PropertyGraph` | Typed graph relationships and traversal |
+| `PropertyGraph` | Typed relationships and traversal |
 | `KeyedCollection` | Namespaced key lookup |
 | `EventLog` | Stable append order |
 | `TemporalCollection` | Event time and validity periods |
 | `LineageDAG` | Cycle-protected derivation history |
 | `VersionedRecords` | Stable identities and ordered revisions |
 
-Use one facade, combine a subset, or use all seven. They reference the same
-blocks rather than copying application values. When a facade receives a
-`MemoryHandle`, normal scope and policy checks still apply.
+Facades reference the same blocks, can be combined freely, and preserve normal
+handle scope and policy checks.
 
-## Architecture at a glance
+## Architecture
 
 ```text
 Application or agent tools
@@ -128,44 +119,19 @@ Application or agent tools
 Application storage     SQL, document, graph, vector, or hybrid
 ```
 
-Keep the full `Memory` object and backend in trusted application code. Give
-agents rooted handles or application-defined tools exposing only the
-operations they need.
+## Learn more
 
-## Documentation
-
-- [Architecture overview](docs/design.md)
-- [Memory and scoped handles](genie/memory/README.md)
-- [Composable structures](genie/structures/README.md)
-- [Backend adapters](genie/backend/README.md)
-- [Queries and filters](genie/query/README.md)
-- [Policies and security](genie/policy/README.md)
+- [Architecture](docs/design.md)
+- [Memory and handles](genie/memory/README.md)
+- [Structures](genie/structures/README.md)
+- [Backends](genie/backend/README.md)
+- [Queries](genie/query/README.md)
+- [Policies](genie/policy/README.md)
 - [Hooks](genie/hooks/README.md)
 - [Codecs](genie/codecs/README.md)
+- [Examples](examples/README.md) and [lamps](lamps/README.md)
 
-## Examples
-
-Start with these runnable examples:
-
-- [Basic workflow](examples/basic/basic_usage.py)
-- [Scoped agents](examples/basic/scoped_agents.py)
-- [Compound agent memory](examples/advanced/agent_memory.py)
-- [All seven structures](examples/advanced/experiment_memory.py)
-
-The [examples guide](examples/README.md) lists all basic and advanced examples.
-The [lamps](lamps/README.md) are larger demonstrations inspired by existing
-memory libraries.
-
-Run an example from the repository root:
-
-```bash
-conda run -n "genie" python examples/basic/basic_usage.py
-conda run -n "genie" python examples/advanced/experiment_memory.py
-```
-
-## Development
-
-Run tests and compilation checks through the project Conda environment:
+## Develop
 
 ```bash
 conda run -n "genie" python -m pytest

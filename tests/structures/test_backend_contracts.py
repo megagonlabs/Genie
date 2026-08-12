@@ -18,6 +18,7 @@ from genie import (
     MemoryConflict,
     MemoryLink,
     SequenceStore,
+    SQLiteBackend,
     TemporalIndex,
     TemporalStore,
 )
@@ -48,6 +49,41 @@ class StructureBackendContract:
             backend.put_block(MemoryBlock(id=block_id, type="test", value=block_id))
             for block_id in block_ids
         ]
+
+
+class BlockStoreContract(StructureBackendContract):
+    """Contract tests for conditional core block mutations."""
+
+    def test_block_update_compare_and_swap_contract(self) -> None:
+        """A stale version cannot replace a block changed by another writer."""
+
+        backend = self.make_backend()
+        original = backend.put_block(MemoryBlock(id="mem_note", type="note", value={}))
+        stale = backend.get_block(original.id)
+        assert stale is not None
+
+        backend.update_block(
+            original.with_updates(value={"current": True}, version=2),
+            expected_version=1,
+        )
+        with pytest.raises(MemoryConflict):
+            backend.update_block(
+                stale.with_updates(value={"stale": True}, version=2),
+                expected_version=1,
+            )
+
+    def test_conditional_subtree_delete_contract(self) -> None:
+        """Deletion rejects an incomplete or stale subtree snapshot."""
+
+        backend = self.make_backend()
+        root, child = self.put_blocks(backend, "mem_root", "mem_child")
+        child = backend.update_block(child.with_updates(parent_id=root.id))
+
+        with pytest.raises(MemoryConflict):
+            backend.delete_block(root.id, expected_versions={root.id: root.version})
+
+        assert backend.get_block(root.id) is not None
+        assert backend.get_block(child.id) is not None
 
 
 class KeyedStoreContract(StructureBackendContract):
@@ -410,6 +446,7 @@ class AcyclicLinkStoreContract(StructureBackendContract):
 
 
 class TestInMemoryStructureBackendContracts(
+    BlockStoreContract,
     KeyedStoreContract,
     SequenceStoreContract,
     TemporalStoreContract,
@@ -422,3 +459,32 @@ class TestInMemoryStructureBackendContracts(
         """Return an isolated in-memory backend."""
 
         return InMemoryBackend()
+
+
+class TestSQLiteStructureBackendContracts(
+    BlockStoreContract,
+    KeyedStoreContract,
+    SequenceStoreContract,
+    TemporalStoreContract,
+    TemporalIndexContract,
+    AcyclicLinkStoreContract,
+):
+    """Run every optional structure contract against SQLite."""
+
+    def setup_method(self) -> None:
+        """Track in-memory SQLite connections created by one contract test."""
+
+        self.backends: list[SQLiteBackend] = []
+
+    def teardown_method(self) -> None:
+        """Close every SQLite connection created by one contract test."""
+
+        for backend in self.backends:
+            backend.close()
+
+    def make_backend(self) -> SQLiteBackend:
+        """Return an isolated SQLite backend."""
+
+        backend = SQLiteBackend()
+        self.backends.append(backend)
+        return backend

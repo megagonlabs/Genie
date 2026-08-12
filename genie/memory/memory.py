@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from genie.backend.base import MemoryBackend
-from genie.backend.inmemory import InMemoryBackend
+from genie.backend.in_memory import InMemoryBackend
 from genie.backend.structure_capabilities import AcyclicLinkStore
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec
 from genie.hooks import HookRegistry, MemoryHook
@@ -168,6 +168,7 @@ class Memory:
 
         Raises:
             AccessDenied: If the principal cannot write the block.
+            MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
             TypeError: If no codec can encode the value.
         """
@@ -181,7 +182,7 @@ class Memory:
             updated_at=utc_now(),
             version=block.version + 1,
         )
-        stored = self.backend.update_block(updated)
+        stored = self.backend.update_block(updated, expected_version=block.version)
         return self._decode_block(stored)
 
     def update(
@@ -203,6 +204,7 @@ class Memory:
 
         Raises:
             AccessDenied: If the principal cannot write the block.
+            MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
             TypeError: If `value` is provided and the existing decoded value is
                 not a dictionary.
@@ -223,7 +225,7 @@ class Memory:
             updated_at=utc_now(),
             version=block.version + 1,
         )
-        stored = self.backend.update_block(updated)
+        stored = self.backend.update_block(updated, expected_version=block.version)
         return self._decode_block(stored)
 
     def delete(self, block_id: str | MemoryBlock) -> None:
@@ -237,6 +239,7 @@ class Memory:
 
         Raises:
             AccessDenied: If any affected block denies write access.
+            MemoryConflict: If the checked subtree changes before commit.
             MemoryNotFound: If the block does not exist.
         """
 
@@ -247,7 +250,10 @@ class Memory:
         decoded_blocks = [self._decode_block(candidate) for candidate in blocks_to_delete]
         for decoded_block in decoded_blocks:
             self.hooks.before_delete(decoded_block)
-        self.backend.delete_block(block.id)
+        self.backend.delete_block(
+            block.id,
+            expected_versions={candidate.id: candidate.version for candidate in blocks_to_delete},
+        )
         for decoded_block in decoded_blocks:
             self.hooks.after_delete(decoded_block)
 

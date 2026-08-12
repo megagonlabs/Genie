@@ -2,20 +2,21 @@
 
 from genie.backend.base import MemoryBackend
 from genie.backend.capabilities import BlockStore, LinkStore, SearchIndex, TraversalIndex
-from genie.backend.inmemory import InMemoryBackend
+from genie.backend.composite import (
+    InMemoryLinkStore,
+    RouteInfo,
+    RouteKey,
+    RouteSelector,
+    RoutedBackend,
+)
+from genie.backend.in_memory import InMemoryBackend
+from genie.backend.relational import SQLiteBackend
 from genie.backend.structure_capabilities import (
     AcyclicLinkStore,
     KeyedStore,
     SequenceStore,
     TemporalIndex,
     TemporalStore,
-)
-from genie.backend.routed import (
-    InMemoryLinkStore,
-    RouteInfo,
-    RouteKey,
-    RouteSelector,
-    RoutedBackend,
 )
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "RouteSelector",
     "SearchIndex",
     "SequenceStore",
+    "SQLiteBackend",
     "TemporalIndex",
     "TemporalStore",
     "TraversalIndex",

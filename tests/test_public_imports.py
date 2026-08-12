@@ -11,6 +11,9 @@ def test_package_all_exports_are_importable() -> None:
     package_names = [
         "genie",
         "genie.backend",
+        "genie.backend.composite",
+        "genie.backend.in_memory",
+        "genie.backend.relational",
         "genie.codecs",
         "genie.hooks",
         "genie.memory",
@@ -37,10 +40,14 @@ def test_layered_import_styles_work_for_common_types() -> None:
         MemoryHandle,
         PolicyEngine,
         SequenceStore,
+        SQLiteBackend,
         TemporalIndex,
         TemporalStore,
     )
     from genie.codecs import BytesCodec
+    from genie.backend.composite import RoutedBackend as CompositeRoutedBackend
+    from genie.backend.in_memory import InMemoryBackend as GroupedInMemoryBackend
+    from genie.backend.relational import SQLiteBackend as RelationalSQLiteBackend
     from genie.codecs.stdlib import BytesCodec as StdlibBytesCodec
     from genie.memory import LinkRelations as MemoryLinkRelations
     from genie.memory import Memory as MemoryFromPackage
@@ -78,6 +85,10 @@ def test_layered_import_styles_work_for_common_types() -> None:
     assert PropertyGraph is not None
     assert KeyedStore is not None
     assert SequenceStore is not None
+    assert SQLiteBackend is not None
+    assert CompositeRoutedBackend is not None
+    assert GroupedInMemoryBackend is not None
+    assert RelationalSQLiteBackend is SQLiteBackend
     assert TemporalIndex is not None
     assert TemporalStore is not None
     assert TemporalCollection is not None

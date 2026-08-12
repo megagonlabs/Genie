@@ -1,135 +1,99 @@
 # Genie Design
 
-Genie is a small library for developers who build memory systems. It provides
-memory blocks, ownership, relationships, scoped access, and extension
-interfaces. Applications decide what memories mean, how agents use them, and
-which databases or retrieval methods to use.
-
-## Goals
-
-Genie is designed to be:
-
-- independent of agent frameworks;
-- independent of databases and search engines;
-- independent of memory taxonomies and stored value types;
-- safe to expose through restricted handles;
-- easy to extend with backends, policies, hooks, and codecs; and
-- small enough to use as a library rather than a memory product.
-
-Genie does not manage agents, planning, embeddings, application workflows, or
-one universal memory schema. Those choices remain in application code.
+Genie supplies storage-independent building blocks for application memory. It
+defines addressable values, ownership, relationships, scoped access, and
+composable structures. Applications define agents, schemas, memory meaning,
+retrieval strategy, storage layout, and operational infrastructure.
 
 ## Architecture
 
 ```text
 Application or agent tools
           |
-    MemoryHandle               restricted scope and principal
+    MemoryHandle        restricted root, principal, and capabilities
           |
-       Memory                  policy, hooks, codecs, operation flow
+       Memory           policy, hooks, codecs, operation flow
           |
-   MemoryBackend               blocks, traversal, links, search
+   MemoryBackend        blocks, ownership, links, and search
           |
-Database or composed storage   chosen by the backend implementation
+Database or stores      selected by the backend
 ```
 
-`Memory` is the trusted application interface. `MemoryHandle` gives a caller a
-smaller view of the same memory. Both use a backend for persistence and
-retrieval.
+Keep `Memory`, backends, policy engines, hooks, and codec registries in trusted
+code. Give agents rooted handles or smaller application-defined tools.
 
-Applications should keep `Memory`, backends, hooks, and codec registries in
-trusted code. Agents should usually receive a rooted handle or a smaller set of
-application-defined tools.
+## Model and safety
 
-## Core model
+`MemoryBlock` is the addressable unit. It has a stable id, application-defined
+type and value, optional parent, metadata, content type, policy, creator,
+timestamps, and an update version.
 
-`MemoryBlock` is the basic unit. It has a stable id, application-defined type
-and value, metadata, optional parent, policy, and lifecycle information.
-
-Two relationships organize blocks:
-
-- A parent/child relationship means ownership. It controls subtree scope,
+- Parent/child relationships mean ownership. They define subtree scope,
   traversal, and recursive deletion.
-- A `MemoryLink` connects blocks without ownership. Links represent references,
-  provenance, graph edges, and mounts.
+- `MemoryLink` values are directed, typed, and non-owning. Updating a link
+  merges metadata while preserving identity, topology, relation, and creation
+  time.
+- Mounts point to another root but are not followed by ordinary subtree search,
+  traversal, or deletion.
+- Codecs translate application values at the storage boundary.
 
-Codecs translate application values to storage-safe values. Policies control
-operations for a principal. Hooks observe or customize the public operation
-flow.
+Every public memory operation acts as a `Principal`. Access requires both an
+allowed handle scope and an allowed block policy. Child handles may narrow
+access but cannot change principal or restore disabled capabilities. New blocks
+are owner-private by default; policies do not inherit through ownership.
+
+Block updates use optimistic versions. Recursive deletion verifies the exact
+authorized subtree snapshot. Concurrent changes raise `MemoryConflict` rather
+than committing stale work.
+
+Hooks cover block creation, lookup, search, and deletion. Changed searches are
+authorized again and final results are filtered again. Hooks run synchronously,
+and their external side effects are not part of backend transactions.
 
 ## Optional structures
 
-Structure facades organize existing blocks without changing their values:
+Facades organize references to existing blocks without changing application
+values. Any subset can be used, and one block can participate in all seven.
 
-| Facade | Main abstraction |
+| Facade | Structure |
 | --- | --- |
-| `OwnershipTree` | Rooted hierarchy |
-| `PropertyGraph` | Typed graph |
+| `OwnershipTree` | Rooted ownership hierarchy |
+| `PropertyGraph` | Typed graph over links |
 | `KeyedCollection` | Namespaced key map |
-| `EventLog` | Ordered append-only references |
+| `EventLog` | Ordered append log |
 | `TemporalCollection` | Event time and validity periods |
-| `LineageDAG` | Cycle-protected derivation graph |
-| `VersionedRecords` | Stable identities and ordered revisions |
+| `LineageDAG` | Property graph with cycle prevention |
+| `VersionedRecords` | Keyed identity with ordered revisions |
 
-Facades are optional and composable. One block can belong to several
-structures. A compound memory can expose one facade, a subset, or all seven.
+Facades use `Memory` or `MemoryHandle`, preserving normal scope and policy
+checks. `LineageDAG` reuses `PropertyGraph`; `VersionedRecords` reuses keyed
+identity and an event log. Atomic keys, sequences, temporal membership, and
+cycle-protected insertion are optional backend capabilities. A lineage cycle
+check and edge insertion must be one atomic operation.
 
-## Backend boundary
+## Backends
 
-The public API receives one `MemoryBackend`. The adapter implements block
-storage, ownership traversal, links, and search. Internally, it may use one
-database or coordinate several systems.
+`MemoryBackend` structurally combines block storage, ownership traversal,
+links, and search. `Memory` receives one backend object, which may coordinate
+multiple databases or indexes.
 
-Optional structures request smaller capabilities for atomic keys, sequences,
-temporal membership, and acyclic graph insertion. A backend implements only
-the capabilities it supports.
+| Implementation | Role |
+| --- | --- |
+| `InMemoryBackend` | Process-local reference backend; all optional capabilities |
+| `SQLiteBackend` | Persistent local backend using built-in `sqlite3`; all optional capabilities |
+| `RoutedBackend` | Composite backend with application-defined storage routes |
 
-`InMemoryBackend` is the reference implementation for tests and examples.
-Production systems should provide an adapter with appropriate persistence,
-transactions, observability, and backup behavior.
+Backends must preserve ownership, clean dependent structural state, enforce
+conditional writes atomically, and map storage failures to Genie errors. Raw
+backend access bypasses handles and policies. Applications remain responsible
+for deployment, backup, monitoring, and performance requirements.
 
-## Access model
+## Detailed guides
 
-Every operation uses an acting `Principal`. A block policy decides whether the
-principal may read, write, search, or traverse that block.
-
-A handle adds a separate scope boundary. A request succeeds only when the
-target is inside the allowed scope and the policy permits the operation. Child
-handles may reduce access but cannot increase it.
-
-New blocks are owner-private by default. Policy inheritance from parents is not
-automatic.
-
-## Important invariants
-
-- Parent/child ownership has no cycles.
-- Recursive deletion follows ownership, not links or mounts.
-- Link metadata may change, but link identity and topology stay stable.
-- Bounded handles cannot read or write outside their root.
-- Search results are filtered by scope and policy.
-- Structure facades resolve blocks through normal memory access.
-- Atomic structure operations are the backend's responsibility.
-- Application values and business meaning stay outside the core library.
-
-## Package guides
-
-Detailed design notes live beside the code they describe:
-
-- [`genie.memory`](../genie/memory/README.md): blocks, ownership, links,
-  `Memory`, handles, mounts, and safety rules.
-- [`genie.structures`](../genie/structures/README.md): the seven facades,
-  structural records, composition, and capability requirements.
-- [`genie.backend`](../genie/backend/README.md): backend protocols, store and
-  index roles, routing, and adapter contracts.
-- [`genie.query`](../genie/query/README.md): search scopes, filters, and query
-  authorization flow.
-- [`genie.policy`](../genie/policy/README.md): principals, access rules, custom
-  operations, and security guidance.
-- [`genie.hooks`](../genie/hooks/README.md): hook points, ordering,
-  authorization boundaries, and failure behavior.
-- [`genie.codecs`](../genie/codecs/README.md): value encoding, registry
-  selection, and custom codecs.
-
-Runnable examples are organized under [`examples/`](../examples/README.md).
-The `lamps/` directory contains larger examples inspired by existing memory
-systems while keeping their business logic outside Genie core.
+[Memory](../genie/memory/README.md) covers blocks and handles;
+[structures](../genie/structures/README.md) covers composition; and
+[backends](../genie/backend/README.md) defines adapter contracts. See also
+[queries](../genie/query/README.md), [policies](../genie/policy/README.md),
+[hooks](../genie/hooks/README.md), and [codecs](../genie/codecs/README.md).
+Runnable patterns live in [examples](../examples/README.md) and
+[lamps](../lamps/README.md).

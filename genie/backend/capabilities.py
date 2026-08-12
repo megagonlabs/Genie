@@ -7,6 +7,7 @@ search, and link implementations internally.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal, Protocol, runtime_checkable
 
 from genie.memory.block import MemoryBlock
@@ -46,27 +47,47 @@ class BlockStore(Protocol):
 
         ...
 
-    def update_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Replace an existing block.
+    def update_block(
+        self,
+        block: MemoryBlock,
+        *,
+        expected_version: int | None = None,
+    ) -> MemoryBlock:
+        """Replace an existing block, optionally using compare-and-swap.
 
         Args:
             block: Encoded replacement block.
+            expected_version: Required current version. When supplied, the
+                replacement must have version ``expected_version + 1`` and the
+                write must fail if another writer changed the block first.
 
         Returns:
             Stored replacement block.
 
         Raises:
-            MemoryConflict: If the block is missing or structural constraints
-                would be violated.
+            MemoryConflict: If the block is missing, its version changed, or
+                structural constraints would be violated.
         """
 
         ...
 
-    def delete_block(self, block_id: str) -> None:
+    def delete_block(
+        self,
+        block_id: str,
+        *,
+        expected_versions: Mapping[str, int] | None = None,
+    ) -> None:
         """Delete a block and backend-owned dependent state.
 
         Args:
             block_id: Memory block id.
+            expected_versions: Exact id-to-version snapshot of the subtree to
+                delete. When supplied, deletion must be atomic and fail if the
+                subtree membership or any version changed.
+
+        Raises:
+            MemoryConflict: If ``expected_versions`` no longer describes the
+                complete subtree.
         """
 
         ...

@@ -8,6 +8,7 @@ the backend interfaces.
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import RLock
@@ -87,50 +88,82 @@ class InMemoryBackend:
         block = self._blocks.get(block_id)
         return _copy_block(block) if block is not None else None
 
-    def update_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Replace an existing encoded block.
+    def update_block(
+        self,
+        block: MemoryBlock,
+        *,
+        expected_version: int | None = None,
+    ) -> MemoryBlock:
+        """Replace an existing encoded block, optionally by version.
 
         Args:
             block: Replacement block.
+            expected_version: Required current version for compare-and-swap.
 
         Returns:
             Stored replacement block.
 
         Raises:
-            MemoryConflict: If the block is missing, the parent is missing, or
-                the change would create a parent cycle.
-        """
-
-        previous = self._blocks.get(block.id)
-        if previous is None:
-            raise MemoryConflict(f"Memory block {block.id!r} does not exist.")
-        if previous.parent_id != block.parent_id:
-            self._move_parent(previous, block)
-        block = _copy_block(block)
-        self._blocks[block.id] = block
-        return block
-
-    def delete_block(self, block_id: str) -> None:
-        """Delete a block, descendants, and connected links.
-
-        Args:
-            block_id: Block id to delete. Missing ids are ignored.
+            MemoryConflict: If the block is missing, its version changed, the
+                parent is missing, or the change would create a parent cycle.
         """
 
         with self._structure_lock:
-            block = self._blocks.get(block_id)
-            if block is None:
-                return
-            for child in list(self._children.get(block_id, ())):
-                self.delete_block(child)
-            if block.parent_id is not None and block_id in self._children.get(block.parent_id, []):
-                self._children[block.parent_id].remove(block_id)
-            self._children.pop(block_id, None)
-            self._blocks.pop(block_id, None)
-            self.delete_links_for_block(block_id)
-            self.delete_key_bindings_for_block(block_id)
-            self.delete_log_entries_for_block(block_id)
-            self.delete_temporal_entries_for_block(block_id)
+            previous = self._blocks.get(block.id)
+            if previous is None:
+                raise MemoryConflict(f"Memory block {block.id!r} does not exist.")
+            _validate_expected_version(previous, block, expected_version)
+            if previous.parent_id != block.parent_id:
+                self._move_parent(previous, block)
+            block = _copy_block(block)
+            self._blocks[block.id] = block
+            return _copy_block(block)
+
+    def delete_block(
+        self,
+        block_id: str,
+        *,
+        expected_versions: Mapping[str, int] | None = None,
+    ) -> None:
+        """Delete a block and descendants, optionally from an exact snapshot.
+
+        Args:
+            block_id: Block id to delete. Missing ids are ignored.
+            expected_versions: Exact subtree id-to-version snapshot required
+                for the deletion.
+
+        Raises:
+            MemoryConflict: If the supplied subtree snapshot is stale.
+        """
+
+        with self._structure_lock:
+            if expected_versions is not None:
+                current = {
+                    block.id: block.version
+                    for block in self.descendants(block_id, include_self=True)
+                }
+                if current != dict(expected_versions):
+                    raise MemoryConflict(
+                        f"Memory subtree {block_id!r} changed before it could be deleted."
+                    )
+            self._delete_block_unchecked(block_id)
+
+    def _delete_block_unchecked(self, block_id: str) -> None:
+        """Delete one subtree while the structure lock is held."""
+
+        block = self._blocks.get(block_id)
+        if block is None:
+            return
+        for child in list(self._children.get(block_id, ())):
+            self._delete_block_unchecked(child)
+        if block.parent_id is not None and block_id in self._children.get(block.parent_id, []):
+            self._children[block.parent_id].remove(block_id)
+        self._children.pop(block_id, None)
+        self._blocks.pop(block_id, None)
+        self.delete_links_for_block(block_id)
+        self.delete_key_bindings_for_block(block_id)
+        self.delete_log_entries_for_block(block_id)
+        self.delete_temporal_entries_for_block(block_id)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
         """Return direct child blocks for a parent id.
@@ -850,6 +883,26 @@ def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
         and left.relation == right.relation
         and left.created_at == right.created_at
     )
+
+
+def _validate_expected_version(
+    previous: MemoryBlock,
+    replacement: MemoryBlock,
+    expected_version: int | None,
+) -> None:
+    """Validate one optional compare-and-swap block replacement."""
+
+    if expected_version is None:
+        return
+    if previous.version != expected_version:
+        raise MemoryConflict(
+            f"Memory block {previous.id!r} changed from expected version "
+            f"{expected_version}."
+        )
+    if replacement.version != expected_version + 1:
+        raise MemoryConflict(
+            "A conditional block replacement must increment its version by one."
+        )
 
 
 def _key_slot(

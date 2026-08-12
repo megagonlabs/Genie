@@ -1,153 +1,90 @@
 # MemoryOS-inspired lamp
 
-This lamp shows how an application can build a compact MemoryOS-like hierarchy
-with Genie blocks, bounded access, metadata, and links. It is an explanatory
-example, not a MemoryOS compatibility layer.
+This lamp builds a compact MemoryOS-like hierarchy with Genie blocks, scoped
+access, metadata, and links. It is an explanatory example, not a compatibility
+layer.
 
-It demonstrates:
+## Memory shape
 
-- short-term FIFO storage of recent user/agent QA pairs;
-- automatic overflow into summarized mid-term dialogue pages;
-- page visits and transparent heat scores;
-- a long-term user-profile dictionary plus separate user and assistant
-  knowledge collections;
-- temporal retrieval across tiers and graph traversal across page chronology
-  and promotion links; and
-- an agent that adds, reflects on, consolidates, and queries memory through
-  named tools.
-
-## Stored memory structure
-
-### Short-term FIFO QA
-
-Each `memoryos.short_term_qa` block stores:
+Short-term memory is a FIFO of `memoryos.short_term_qa` values:
 
 ```python
 {
     "key": "seat-fix",
     "user_input": "The window-seat change worked well.",
-    "agent_response": "Great, I'll use that successful correction as guidance.",
+    "agent_response": "I'll use that correction as guidance.",
     "timestamp": "2025-04-11T10:30:00Z",
 }
 ```
 
-The demo capacity is two. Adding the third and subsequent pairs moves the
-oldest pair into a mid-term page before deleting it from the FIFO queue.
-
-### Mid-term dialogue page
-
-Each `memoryos.mid_term_page` block stores:
+Its demo capacity is two. Before deleting the oldest item, overflow turns it
+into a mid-term page:
 
 ```python
 {
     "page_id": "page_...",
     "source_qa_key": "aisle-problem",
     "summary": "A prior aisle-seat booking required a correction.",
-    "dialogue": {
-        "user_input": "...",
-        "agent_response": "...",
-        "timestamp": "2025-04-09T09:30:00Z",
-    },
+    "dialogue": {"user_input": "...", "agent_response": "...", "timestamp": "..."},
     "heat": 2.0,
     "visit_count": 1,
 }
 ```
 
-Pages are connected in dialogue order with `memoryos.next_page` links. Relevant
-retrieval adds one visit and one heat point. Once a page reaches the configured
-threshold, it can support a deterministic long-term update.
+`memoryos.next_page` links preserve page order. A relevant retrieval adds one
+visit and one heat point; a configured threshold allows a deterministic
+long-term update.
 
-### Long-term memory
+Long-term memory contains an updateable profile dictionary plus separate user
+and assistant knowledge collections. Knowledge entries store `owner`,
+`knowledge`, `timestamp`, and `source_page_ids`. The profile acts as this demo's
+mental model.
 
-The current `memoryos.long_term_profile` block value is a plain dictionary:
+## Genie mapping
 
-```python
-{
-    "seat_preference": "window",
-    "austin_hotel": "Riverside Inn",
-    "planning_strategy": "confirm current preferences before booking",
-}
-```
-
-This profile is the demo's synthesized mental model. User and assistant facts
-are separate bounded `memoryos.long_term_knowledge` collections whose entries
-contain `owner`, `knowledge`, `timestamp`, and `source_page_ids`.
-
-## Mapping to Genie
-
-| MemoryOS-inspired concept | Implementation in this lamp |
+| Behavior | Genie implementation |
 | --- | --- |
-| Memory tiers | Owned subtrees created through `OwnershipTree` |
-| Short-term FIFO QA | Owned `memoryos.short_term_qa` blocks appended to an `EventLog` |
-| FIFO overflow | Oldest QA becomes a page, then is deleted from short-term storage |
-| Mid-term pages/segments | Blocks appended to a separate mid-term `EventLog` |
-| Dialogue chain | Cycle-protected `memoryos.next_page` `LineageDAG` edges |
-| Heat accumulation | Matching page retrieval increments explicit `heat` and `visit_count` fields |
-| Stable conversation key | `KeyedCollection` binding transferred from QA to promoted page |
-| User mental model | One updateable profile addressed through `KeyedCollection` |
-| User facts | Bounded entries in the user-knowledge `EventLog` |
-| Assistant facts | Bounded entries in the assistant-knowledge `EventLog` |
-| Mid-to-long update | Heated pages connect through `PropertyGraph` promotion edges |
-| Multi-tier retrieval | One result combines current FIFO, matching pages, profile, and both knowledge stores |
-| Temporal retrieval | One `TemporalCollection` across QA, pages, and knowledge |
-| Agent access | `MemoryOSTools` wraps a bounded hierarchy; the agent never receives a Genie handle |
+| Memory tiers | Owned subtrees through `OwnershipTree` |
+| Short-term FIFO | QA blocks appended to an `EventLog` |
+| Overflow | Oldest QA becomes a page, then leaves short-term storage |
+| Mid-term pages | Separate `EventLog` |
+| Page order | Cycle-protected `LineageDAG` edges |
+| Heat | Explicit fields updated after matching retrieval |
+| Stable conversation key | `KeyedCollection` binding transferred to the page |
+| Profile | One updateable keyed record |
+| User and assistant facts | Separate bounded `EventLog` collections |
+| Mid-to-long promotion | `PropertyGraph` edges to derived knowledge |
+| Time retrieval | One `TemporalCollection` across tiers |
+| Agent access | `MemoryOSTools` wraps a bounded hierarchy |
 
-Parent/child structure owns the hierarchy. Links express chronological and
-derivation relationships without implying ownership. Capacity policies,
-summaries, heat, profile meaning, extraction decisions, ranking, and agent
-behavior remain outside Genie core.
+Ownership defines the tier hierarchy; links represent chronology and
+derivation. Capacity, summaries, heat, profile meaning, extraction, ranking,
+and agent behavior remain application code.
 
-## Agent workflow
+## Demo workflow
 
-The deterministic travel agent:
+The travel agent adds five QA pairs, leaving two in short-term memory and three
+as linked pages. It retrieves matching pages to raise their heat, updates the
+profile plus two user facts and one assistant fact, retrieves all tiers, then
+queries a five-day timeline and a two-hop chronology/promotion graph.
 
-1. calls `add_memory` five times, leaving two QA pairs in short-term memory and
-   promoting three into linked pages;
-2. calls `retrieve_memory` to reflect on the pages and raise their heat;
-3. calls `update_long_term` with one profile update, two user facts, and one
-   assistant fact;
-4. retrieves the profile and all relevant memory tiers; and
-5. queries a five-day timeline and a two-hop chronology/promotion graph.
+See [the lamp guide](../README.md) for run commands and the shared output
+format.
 
-The explicit summaries and long-term candidates stand in for MemoryOS's LLM
-summarization and analysis, keeping the example deterministic and dependency
-free.
+## Limits
 
-## Run it
-
-From the repository root:
-
-```bash
-conda run -n "genie" python -m lamps.memoryos.demo
-```
-
-The output first names the lamp, its purpose, and the Genie structures it uses.
-It then shows the shared lamp sections: tool definitions, agent answer, numbered
-calls, and per-tool usage counts.
-
-Run its co-located tests with:
-
-```bash
-conda run -n "genie" python -m pytest lamps/memoryos/tests -q
-```
-
-## Deliberate limits
-
-This lamp does not reproduce MemoryOS's LLM summarization, dialogue-continuity
+The lamp does not reproduce MemoryOS's LLM summarization, dialogue-continuity
 classification, embeddings, keyword extraction, similarity thresholds, heat
 formula, LFU mid-term eviction, persistence files, parallel retrieval, or
-response-generation pipeline. Lexical overlap replaces embedding search, and
-page heat uses an intentionally simple `+1` per matching retrieval.
+response pipeline. It uses lexical overlap and a simple `+1` heat rule.
 
-`retrieve_temporal` and `retrieve_graph` are explicit demo APIs. Page chronology
-is based on MemoryOS's `pre_page`/`next_page` structure, but this lamp exposes
-that structure as Genie link traversal. The profile is called a mental model to
-match this demo series; MemoryOS describes it as a long-term user profile.
+Temporal and graph retrieval are explicit demo APIs. Page links adapt
+MemoryOS's `pre_page`/`next_page` chronology to Genie traversal. MemoryOS calls
+the synthesized state a user profile; this demo calls it a mental model for
+consistency with the lamp series.
 
-References:
-
-- [MemoryOS documentation](https://bai-lab.github.io/MemoryOS/docs)
-- [MemoryOS repository](https://github.com/BAI-LAB/MemoryOS)
-- [Short-term implementation](https://github.com/BAI-LAB/MemoryOS/blob/main/memoryos-pypi/short_term.py)
-- [Mid-term implementation](https://github.com/BAI-LAB/MemoryOS/blob/main/memoryos-pypi/mid_term.py)
-- [Long-term implementation](https://github.com/BAI-LAB/MemoryOS/blob/main/memoryos-pypi/long_term.py)
+References: [documentation](https://bai-lab.github.io/MemoryOS/docs),
+[repository](https://github.com/BAI-LAB/MemoryOS),
+[short-term code](https://github.com/BAI-LAB/MemoryOS/blob/main/memoryos-pypi/short_term.py),
+[mid-term code](https://github.com/BAI-LAB/MemoryOS/blob/main/memoryos-pypi/mid_term.py),
+and [long-term code](https://github.com/BAI-LAB/MemoryOS/blob/main/memoryos-pypi/long_term.py).

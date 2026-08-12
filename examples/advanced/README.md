@@ -1,32 +1,13 @@
-# Advanced Structure Examples
+# Advanced structure examples
 
-These examples show how optional structures can be used alone or composed
-without changing the underlying `MemoryBlock` values.
+These scripts compose optional facades without changing stored block values:
 
-## Run
+| Example | Focus |
+| --- | --- |
+| `temporal_collection.py` | Event time and validity queries |
+| `agent_memory.py` | `TaskMemory` hides facade setup behind three value-oriented views; the agent interprets values and chooses actions |
+| `experiment_memory.py` | Ownership, graph, keys, logs, time, lineage, and versions in one workflow |
 
-Run each script from the repository root with the project Conda environment:
-
-```bash
-conda run -n "genie" python examples/advanced/temporal_collection.py
-conda run -n "genie" python examples/advanced/agent_memory.py
-conda run -n "genie" python examples/advanced/experiment_memory.py
-```
-
-## Included Examples
-
-- `temporal_collection.py` uses one structure for event-time and validity
-  queries.
-- `agent_memory.py` shows an application-owned `TaskMemory` that hides facade
-  setup. Its three views only read and write values; the agent interprets those
-  values and chooses its next action.
-- `experiment_memory.py` uses ownership tree, property graph, keyed collection,
-  event log, temporal collection, lineage DAG, and versioned records in one
-  experiment-memory workflow.
-
-## Conventions
-
-- Each script uses `InMemoryBackend` for a local, dependency-free demo.
-- Each script contains assertions; a successful exit confirms the expected
-  behavior.
-- Application-specific types and agent behavior stay in the example code.
+Every script uses `InMemoryBackend` and assertions. Application types and agent
+behavior remain outside Genie. Run commands and shared conventions are in the
+[examples guide](../README.md).

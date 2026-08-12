@@ -1,139 +1,112 @@
 # Backends
 
-The `genie.backend` package separates Genie's public memory API from storage
-and retrieval technology. A backend may use SQL, documents, graphs, vectors,
-object storage, or several systems together.
-
-Applications configure one top-level backend:
+`genie.backend` separates the public memory API from storage and retrieval.
+Applications give `Memory` one top-level backend, which may use one database or
+coordinate several stores and indexes.
 
 ```python
 memory = Memory(backend=MyBackend(...))
 ```
 
-## Required interfaces
+## Core contract
 
-`MemoryBackend` combines four small protocols:
+`MemoryBackend` combines four structurally typed protocols. An adapter does not
+need to inherit from a Genie base class; it must provide the required behavior.
 
 | Protocol | Responsibility |
 | --- | --- |
-| `BlockStore` | Create, read, update, and delete blocks |
+| `BlockStore` | Create, read, conditionally update, and delete blocks |
 | `TraversalIndex` | Parent/child traversal and containment |
-| `SearchIndex` | Execute normalized `MemoryQuery` objects |
+| `SearchIndex` | Execute normalized `MemoryQuery` values |
 | `LinkStore` | Persist and list typed links |
 
-The protocols use structural typing. An adapter does not need to inherit from a
-Genie base class; it must implement the required methods and behavior.
-
-One adapter class may implement every method. A more complex adapter may
-delegate internally:
-
-```python
-class ApplicationBackend:
-    blocks = PostgresBlockStore(...)
-    traversal = PostgresTraversalIndex(...)
-    links = Neo4jLinkStore(...)
-    search_index = VectorSearchIndex(...)
-```
-
-That internal layout is an adapter decision. `Memory` still receives one
+An adapter may implement every method itself or delegate internally to SQL,
+graph, vector, document, or other components. `Memory` still receives one
 backend object.
 
-## Store and index responsibilities
+### Conditional writes
 
-A store is the source of truth. It owns persisted blocks, links, and structural
-state. An index optimizes search or traversal and should be rebuildable from
-the source of truth.
+- `update_block(..., expected_version=...)` succeeds only when the stored
+  version matches and the replacement increments it by one.
+- `delete_block(..., expected_versions=...)` succeeds only when the mapping
+  exactly matches the current subtree.
 
-Keeping those roles clear helps with recovery:
+`Memory.set`, `Memory.update`, and `Memory.delete` supply these expectations
+after authorization. Backends must check and mutate atomically. `None` permits
+trusted backend-level administration to make an unconditional change.
 
-- writes commit to the source of truth;
-- derived indexes may be rebuilt;
-- index failure does not imply data loss; and
-- adapters can choose the best database for each operation.
+### Errors
 
-A single database may serve both roles. The distinction describes ownership,
-not a required deployment topology.
+Use `MemoryConflict` for expected identity, version, or structure conflicts.
+Map storage failures to `BackendError` subclasses and preserve the driver error
+as `__cause__`:
 
-## Reference backend
+| Error | Meaning |
+| --- | --- |
+| `BackendBusy` | Retryable contention or timeout |
+| `BackendUnavailable` | Retryable storage unavailability |
+| `BackendReadOnly` | Write attempted against read-only storage |
+| `BackendCapacityExceeded` | Storage or configured limit exhausted |
+| `BackendCorruption` | Corrupt or invalid storage |
 
-`InMemoryBackend` is the dependency-free reference implementation. It stores
-blocks, links, keys, logs, and temporal entries in Python dictionaries and uses
-a reentrant lock for structural atomicity.
+## Stores and indexes
 
-Use it for tests, examples, and local prototypes. It is not a persistent
-database. Production adapters should provide the required durability,
-transactions, observability, backup, and concurrency behavior.
+A store is the source of truth for blocks, links, and structural state. A
+search or traversal index is an optimization and should be rebuildable. A
+single database may serve both roles; the distinction describes ownership, not
+a required deployment topology.
+
+## Implementations
+
+```text
+genie/backend/
+  in_memory/reference.py
+  relational/sqlite.py
+  composite/routed.py
+  base.py
+  capabilities.py
+  structure_capabilities.py
+```
+
+| Group | Implementation | Guide |
+| --- | --- | --- |
+| In-memory | `InMemoryBackend` | [In-memory](in_memory/README.md) |
+| Relational | `SQLiteBackend` | [Relational](relational/README.md) |
+| Composite | `RoutedBackend` | [Composite](composite/README.md) |
+
+Shared protocols stay at the package root. Genie does not yet bundle document,
+key-value, columnar, graph, or time-series adapters. All bundled classes are
+available from `genie` and `genie.backend`.
 
 ## Optional structure capabilities
 
-Higher-level facades request only the extra storage they need:
-
-| Protocol | Required behavior |
+| Capability | Required behavior |
 | --- | --- |
-| `AcyclicLinkStore` | Atomically check for a cycle and insert an edge |
-| `KeyedStore` | Unique key binding and compare-and-swap updates |
-| `SequenceStore` | Atomic, monotonic sequence allocation |
+| `AcyclicLinkStore` | Atomic cycle check and edge insertion |
+| `KeyedStore` | Unique bindings and compare-and-swap updates |
+| `SequenceStore` | Atomic monotonic sequence allocation |
 | `TemporalStore` | Temporal membership and stable paging |
 | `TemporalIndex` | Optional temporal query prefiltering |
 
-These protocols are not part of `MemoryBackend`. A backend can support the
-core API without supporting every optional structure. `VersionedRecords`
-combines `KeyedStore` and `SequenceStore`; it adds no backend method.
+These are not part of `MemoryBackend`; adapters implement only what they
+support. `VersionedRecords` combines `KeyedStore` and `SequenceStore` without
+adding another backend method. A split internal implementation must coordinate
+cleanup and transactions so it cannot leave dangling structure records.
 
-For a SQLite adapter, for example, the adapter could use tables for blocks,
-links, key bindings, log entries, and temporal entries. Unique constraints and
-transactions would enforce the optional capability contracts. The facade code
-would not need to change.
+## Adapter checklist
 
-When optional storage is implemented by a separate internal component, the
-top-level backend must still coordinate deletion cleanup and any required
-transactions. Avoid splitting state in a way that leaves dangling structure
-entries.
+A production adapter should:
 
-## Routed backends
+- reject duplicate ids and invalid parent cycles;
+- preserve ownership integrity and clean dependent state on deletion;
+- return defensive values and stable paging order;
+- atomically enforce block versions, subtree snapshots, keyed updates,
+  sequences, and DAG insertion;
+- map operational failures to `BackendError`; and
+- return normalized `SearchResult` values.
 
-`RoutedBackend` presents several `MemoryBackend` instances as one backend:
+Reusable [backend contracts](../../tests/structures/test_backend_contracts.py)
+cover optional capability semantics and concurrent atomicity.
 
-```python
-backend = RoutedBackend(
-    {"us": us_backend, "eu": eu_backend},
-    default_route="us",
-)
-```
-
-Each block has one owning route. By default, children remain on their parent's
-route so subtree traversal and recursive deletion stay predictable.
-
-The routed backend may use shared traversal, search, or link components.
-Without a shared link store, cross-route links are rejected. Routes can be
-registered later for application-managed mounts or tenant discovery.
-
-`RoutedBackend` currently exposes the core `MemoryBackend` contract. Optional
-keyed, sequence, temporal, and acyclic capabilities require a suitable store or
-a capability-aware adapter around the routed deployment.
-
-Mounts do not change route ownership. Discovering or resolving a mount also
-does not automatically index or traverse the target route.
-
-## Adapter requirements
-
-A production adapter should preserve these behaviors:
-
-- reject duplicate block and link ids;
-- preserve parent/child integrity and prevent parent cycles;
-- clean links and optional structural records when blocks are deleted;
-- return stable ordering where a protocol requires paging;
-- return defensive values that callers cannot mutate in place;
-- keep compare-and-swap, sequence allocation, and DAG insertion atomic; and
-- return normalized `SearchResult` objects for `MemoryQuery` requests.
-
-Reusable mixins in
-[`tests/structures/test_backend_contracts.py`](../../tests/structures/test_backend_contracts.py)
-cover optional capability semantics and concurrent atomicity. Each new backend
-should run the contracts for every capability it claims to support.
-
-## Related guides
-
-- [Memory](../memory/README.md)
-- [Structures](../structures/README.md)
-- [Queries](../query/README.md)
+Related: [Memory](../memory/README.md), [Structures](../structures/README.md),
+and [Queries](../query/README.md).
