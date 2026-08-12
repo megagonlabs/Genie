@@ -189,6 +189,8 @@ def test_temporal_collection_filters_events_and_half_open_validity() -> None:
             valid_at=_time(15),
         )
     ) == ["current"]
+    assert collection.scan(limit=0) == []
+    assert collection.events(limit=0) == []
 
 
 def test_portable_scan_and_optional_index_return_the_same_results() -> None:
@@ -342,6 +344,8 @@ def test_temporal_collection_requires_store_and_valid_optional_index() -> None:
             collection=root,
             index=object(),  # type: ignore[arg-type]
         )
+    with pytest.raises(MemoryNotFound, match="Temporal collection block"):
+        TemporalCollection(memory, memory.backend, collection="missing")
 
 
 def test_memory_and_handle_implement_temporal_access() -> None:

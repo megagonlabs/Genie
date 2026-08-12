@@ -84,6 +84,8 @@ mount links without entering their targets. Handle mount operations require
 - Handles need policy override permission to choose a new block's policy.
 - Returned JSON values and metadata are defensive copies.
 - Hooks cannot widen an authorized parent or search scope.
+- Hook callbacks may perform nested memory operations; active callbacks are
+  skipped on reentry and nesting is bounded.
 
 Genie supplies access-control building blocks, not a Python sandbox. Give
 untrusted agents bounded tools or facades, never raw backends or registries.

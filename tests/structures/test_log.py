@@ -37,6 +37,8 @@ def test_event_log_appends_and_reads_stable_sequences() -> None:
     assert [item.block.value for item in log.tail(limit=2)] == [3, 4]
     assert log.get(2) == appended[2]
     assert log.get(9) is None
+    assert log.read(limit=0) == []
+    assert log.tail(limit=0) == []
 
 
 def test_event_log_can_append_the_same_block_more_than_once() -> None:
@@ -177,6 +179,9 @@ def test_event_log_requires_the_optional_backend_capability() -> None:
 
     with pytest.raises(UnsupportedOperation):
         EventLog(memory, object(), log=root)  # type: ignore[arg-type]
+
+    with pytest.raises(MemoryNotFound, match="Event log block"):
+        EventLog(memory, memory.backend, log="missing")
 
 
 def test_memory_and_handle_implement_sequence_access() -> None:

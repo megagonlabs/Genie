@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Protocol, runtime_checkable
 
 from genie.backend.structure_capabilities import KeyedStore
+from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryConflict, MemoryNotFound, UnsupportedOperation
 from genie.policy.engine import AccessDenied
+from genie.structures._hooks import after_change, before_change, hook_operation, principal_id, resolve_hooks
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.records import KeyBinding, KeyedItem, MemoryAddress
 
@@ -25,7 +28,7 @@ class KeyedCollection:
     compare-and-swap updates.
     """
 
-    __slots__ = ("_access", "_store", "collection_id")
+    __slots__ = ("_access", "_hooks", "_principal_id", "_store", "collection_id")
 
     def __init__(
         self,
@@ -33,6 +36,7 @@ class KeyedCollection:
         store: KeyedStore,
         *,
         collection: BlockRef,
+        hooks: HookRegistry | None = None,
     ) -> None:
         """Create a keyed view anchored by a visible collection block.
 
@@ -40,6 +44,8 @@ class KeyedCollection:
             access: Full or scoped memory access used to resolve blocks.
             store: Backend capability that stores key bindings atomically.
             collection: Block or id that identifies this collection's key space.
+            hooks: Optional registry. Defaults to the registry owned by a
+                ``Memory`` or ``MemoryHandle`` access object.
 
         Raises:
             MemoryNotFound: If the collection block is missing.
@@ -55,6 +61,8 @@ class KeyedCollection:
             )
         self._access = access
         self._store = store
+        self._hooks = resolve_hooks(access, hooks)
+        self._principal_id = principal_id(access)
         self.collection_id = stored_collection.id
 
     @property
@@ -78,17 +86,30 @@ class KeyedCollection:
             MemoryNotFound: If the collection or block is missing.
         """
 
-        _require_address(address)
-        self._require_collection()
-        stored_block = self._require_block(block)
-        binding = self._store.bind_key(
-            KeyBinding(
+        with hook_operation(
+            self._hooks,
+            HookOperation.KEY_BIND,
+            principal=self._principal_id,
+        ) as context:
+            _require_address(address)
+            self._require_collection()
+            stored_block = self._require_block(block)
+            proposed = KeyBinding(
                 collection_id=self.collection_id,
                 address=address,
                 block_id=stored_block.id,
             )
-        )
-        return KeyedItem(binding=binding, block=stored_block)
+            change = StructureChange(
+                kind=StructureKind.KEYED_COLLECTION,
+                action=StructureAction.BIND,
+                container_id=self.collection_id,
+                block_id=stored_block.id,
+                after=proposed,
+            )
+            before_change(self._hooks, context, change)
+            binding = self._store.bind_key(proposed)
+            after_change(self._hooks, context, replace(change, after=binding))
+            return KeyedItem(binding=binding, block=stored_block)
 
     def rebind(
         self,
@@ -111,25 +132,41 @@ class KeyedCollection:
             MemoryConflict: If the address is missing or changed.
         """
 
-        _require_address(address)
-        self._require_collection()
-        current = self.get_item(address)
-        expected_id = _block_id(expected)
-        if current is None or current.binding.block_id != expected_id:
-            raise MemoryConflict(
-                f"Key address {address!r} no longer points to expected block "
-                f"{expected_id!r}."
-            )
-        stored_block = self._require_block(block)
-        binding = self._store.rebind_key(
-            KeyBinding(
+        with hook_operation(
+            self._hooks,
+            HookOperation.KEY_REBIND,
+            principal=self._principal_id,
+        ) as context:
+            _require_address(address)
+            self._require_collection()
+            current = self.get_item(address)
+            expected_id = _block_id(expected)
+            if current is None or current.binding.block_id != expected_id:
+                raise MemoryConflict(
+                    f"Key address {address!r} no longer points to expected block "
+                    f"{expected_id!r}."
+                )
+            stored_block = self._require_block(block)
+            proposed = KeyBinding(
                 collection_id=self.collection_id,
                 address=address,
                 block_id=stored_block.id,
-            ),
-            expected_block_id=expected_id,
-        )
-        return KeyedItem(binding=binding, block=stored_block)
+            )
+            change = StructureChange(
+                kind=StructureKind.KEYED_COLLECTION,
+                action=StructureAction.REBIND,
+                container_id=self.collection_id,
+                block_id=stored_block.id,
+                before=current.binding,
+                after=proposed,
+            )
+            before_change(self._hooks, context, change)
+            binding = self._store.rebind_key(
+                proposed,
+                expected_block_id=expected_id,
+            )
+            after_change(self._hooks, context, replace(change, after=binding))
+            return KeyedItem(binding=binding, block=stored_block)
 
     def get(self, address: MemoryAddress) -> MemoryBlock | None:
         """Return the visible block at an exact address, if one is bound."""
@@ -221,20 +258,34 @@ class KeyedCollection:
             MemoryConflict: If the address is missing or changed.
         """
 
-        _require_address(address)
-        self._require_collection()
-        current = self.get_item(address)
-        expected_id = _block_id(expected)
-        if current is None or current.binding.block_id != expected_id:
-            raise MemoryConflict(
-                f"Key address {address!r} no longer points to expected block "
-                f"{expected_id!r}."
+        with hook_operation(
+            self._hooks,
+            HookOperation.KEY_UNBIND,
+            principal=self._principal_id,
+        ) as context:
+            _require_address(address)
+            self._require_collection()
+            current = self.get_item(address)
+            expected_id = _block_id(expected)
+            if current is None or current.binding.block_id != expected_id:
+                raise MemoryConflict(
+                    f"Key address {address!r} no longer points to expected block "
+                    f"{expected_id!r}."
+                )
+            change = StructureChange(
+                kind=StructureKind.KEYED_COLLECTION,
+                action=StructureAction.UNBIND,
+                container_id=self.collection_id,
+                block_id=current.binding.block_id,
+                before=current.binding,
             )
-        self._store.unbind_key(
-            self.collection_id,
-            address,
-            expected_block_id=expected_id,
-        )
+            before_change(self._hooks, context, change)
+            self._store.unbind_key(
+                self.collection_id,
+                address,
+                expected_block_id=expected_id,
+            )
+            after_change(self._hooks, context, change)
 
     def _require_collection(self) -> MemoryBlock:
         """Return the visible collection block or raise when it was deleted."""

@@ -46,9 +46,10 @@ Block updates use optimistic versions. Recursive deletion verifies the exact
 authorized subtree snapshot. Concurrent changes raise `MemoryConflict` rather
 than committing stale work.
 
-Hooks cover block creation, lookup, search, and deletion. Changed searches are
-authorized again and final results are filtered again. Hooks run synchronously,
-and their external side effects are not part of backend transactions.
+Hooks cover block lifecycle, search, link mutations, and explicit key, log, and
+temporal changes. Changed searches are authorized again and final results are
+filtered again. Reentrant callbacks are skipped with bounded causal context.
+Hooks run synchronously; external side effects are not backend transactions.
 
 ## Optional structures
 

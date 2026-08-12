@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+from genie.hooks.events import HookContext, StructureChange
 from genie.memory.block import MemoryBlock
+from genie.memory.links import MemoryLink
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
 
@@ -15,13 +19,14 @@ class MemoryHook:
     side effects unless the application is prepared for those failures.
     """
 
-    def before_put(self, block: MemoryBlock) -> MemoryBlock:
+    def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
         """Run before a block is stored.
 
         Hooks may annotate or rewrite fields, but they must not change
         `parent_id`; parent placement is checked before hooks run.
 
         Args:
+            context: Operation context shared with the matching after callback.
             block: Block about to be stored.
 
         Returns:
@@ -30,37 +35,81 @@ class MemoryHook:
 
         return block
 
-    def after_put(self, block: MemoryBlock) -> None:
+    def after_put(self, context: HookContext, block: MemoryBlock) -> None:
         """Run after a block is stored.
 
         Args:
+            context: Operation context shared with the matching before callback.
             block: Stored block.
         """
 
         return None
 
-    def before_get(self, block_id: str) -> None:
+    def before_update(
+        self,
+        context: HookContext,
+        current: MemoryBlock,
+        proposed: MemoryBlock,
+    ) -> MemoryBlock:
+        """Run before a block value or metadata update.
+
+        The hook context distinguishes ``set`` from ``update``.
+        Hooks may change the proposed value, metadata, or content type. Stable
+        identity, ownership, policy, creator, timestamps, and version fields
+        are checked by ``Memory`` after hooks run.
+
+        Args:
+            context: Operation context shared with the matching after callback.
+            current: Stored block before the update.
+            proposed: Proposed replacement block.
+
+        Returns:
+            Replacement block to pass to the backend.
+        """
+
+        return proposed
+
+    def after_update(
+        self,
+        context: HookContext,
+        previous: MemoryBlock,
+        stored: MemoryBlock,
+    ) -> None:
+        """Run after a block update commits.
+
+        Args:
+            context: Operation context shared with the matching before callback.
+            previous: Block state read before the update.
+            stored: Persisted replacement block.
+        """
+
+        return None
+
+    def before_get(self, context: HookContext, block_id: str) -> None:
         """Run before a block lookup.
 
         Args:
+            context: Operation context shared with the matching after callback.
             block_id: Id being fetched.
         """
 
         return None
 
-    def after_get(self, block: MemoryBlock | None) -> None:
+    def after_get(self, context: HookContext, block: MemoryBlock | None) -> None:
         """Run after a block lookup.
 
         Args:
+            context: Operation context shared with the matching before callback.
             block: Fetched block, or `None` when missing.
         """
 
         return None
 
-    def before_search(self, query: MemoryQuery) -> MemoryQuery:
+    def before_search(self, context: HookContext, query: MemoryQuery) -> MemoryQuery:
         """Run before search is sent to the backend.
 
         Args:
+            context: Operation context shared with the matching after callback.
             query: Normalized memory query.
 
         Returns:
@@ -71,12 +120,14 @@ class MemoryHook:
 
     def after_search(
         self,
+        context: HookContext,
         query: MemoryQuery,
         results: list[SearchResult],
     ) -> list[SearchResult]:
         """Run after search results are decoded and policy-filtered.
 
         Args:
+            context: Operation context shared with the matching before callback.
             query: Query that was executed.
             results: Search results.
 
@@ -86,19 +137,113 @@ class MemoryHook:
 
         return results
 
-    def before_delete(self, block: MemoryBlock) -> None:
+    def before_add_link(self, context: HookContext, link: MemoryLink) -> MemoryLink:
+        """Run before a regular, acyclic, or mount link is stored.
+
+        Hooks may change metadata. Link identity, endpoints, relation, and
+        creation time are checked by ``Memory`` after hooks run.
+
+        Args:
+            context: Operation context shared with the matching after callback.
+            link: Proposed link.
+
+        Returns:
+            Link to pass to the backend.
+        """
+
+        return link
+
+    def after_add_link(self, context: HookContext, link: MemoryLink) -> None:
+        """Run after a regular, acyclic, or mount link commits.
+
+        Args:
+            context: Operation context shared with the matching before callback.
+            link: Persisted link.
+        """
+
+        return None
+
+    def before_update_link(
+        self,
+        context: HookContext,
+        current: MemoryLink,
+        proposed: MemoryLink,
+    ) -> MemoryLink:
+        """Run before replacement link metadata is stored.
+
+        Args:
+            context: Operation context shared with the matching after callback.
+            current: Stored link before the update.
+            proposed: Proposed replacement link.
+
+        Returns:
+            Replacement link to pass to the backend.
+        """
+
+        return proposed
+
+    def after_update_link(
+        self,
+        context: HookContext,
+        previous: MemoryLink,
+        stored: MemoryLink,
+    ) -> None:
+        """Run after a link metadata update commits.
+
+        Args:
+            context: Operation context shared with the matching before callback.
+            previous: Stored link before the update.
+            stored: Persisted replacement link.
+        """
+
+        return None
+
+    def before_structure_change(
+        self,
+        context: HookContext,
+        change: StructureChange[Any],
+    ) -> None:
+        """Run before keyed, log, or temporal structural state changes.
+
+        Structural records are immutable and backend-owned, so this callback
+        observes rather than transforms the proposed change.
+
+        Args:
+            context: Operation context shared with the matching after callback.
+            change: Proposed structural change.
+        """
+
+        return None
+
+    def after_structure_change(
+        self,
+        context: HookContext,
+        change: StructureChange[Any],
+    ) -> None:
+        """Run after a structural state change commits.
+
+        Args:
+            context: Operation context shared with the matching before callback.
+            change: Persisted structural change.
+        """
+
+        return None
+
+    def before_delete(self, context: HookContext, block: MemoryBlock) -> None:
         """Run before a block is deleted.
 
         Args:
+            context: Operation context shared with the matching after callback.
             block: Block about to be deleted.
         """
 
         return None
 
-    def after_delete(self, block: MemoryBlock) -> None:
+    def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
         """Run after a block is deleted.
 
         Args:
+            context: Operation context shared with the matching before callback.
             block: Deleted block.
         """
 

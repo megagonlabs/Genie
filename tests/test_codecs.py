@@ -204,6 +204,44 @@ def test_stdlib_codecs_reject_malformed_encoded_payloads() -> None:
             codec.decode(encoded)
 
 
+@pytest.mark.parametrize(
+    ("codec", "value"),
+    [
+        (BytesCodec(), "not-bytes"),
+        (DatetimeCodec(), "not-temporal"),
+        (DecimalCodec(), 1.25),
+        (UUIDCodec(), "not-a-uuid-object"),
+    ],
+)
+def test_stdlib_codecs_reject_wrong_direct_encode_types(
+    codec: Any,
+    value: object,
+) -> None:
+    """Direct codec use enforces the same input types as registry selection."""
+
+    with pytest.raises(TypeError):
+        codec.encode(value)
+
+
+@pytest.mark.parametrize(
+    "codec",
+    [
+        BytesCodec(),
+        DatetimeCodec(),
+        DecimalCodec(),
+        UUIDCodec(),
+        DataclassCodec([DataclassPreference]),
+        EnumCodec([Priority]),
+        JsonCodec(),
+    ],
+)
+def test_codecs_reject_payloads_owned_by_another_content_type(codec: Any) -> None:
+    """A codec never decodes an encoded value assigned to another codec."""
+
+    with pytest.raises(TypeError):
+        codec.decode(EncodedValue("application/vnd.other", None))
+
+
 def test_datetime_codec_round_trips_datetime_date_and_time() -> None:
     """DatetimeCodec preserves concrete datetime/date/time value classes."""
 
@@ -283,6 +321,8 @@ def test_dataclass_codec_requires_registered_json_compatible_types() -> None:
         registered_codec.encode(UnsupportedDataclass({1, 2}))
     with pytest.raises(TypeError):
         unsupported_codec.encode(UnsupportedDataclass({1, 2}))
+    with pytest.raises(TypeError, match="requires a dataclass type"):
+        DataclassCodec([str])  # type: ignore[list-item]
 
 
 def test_enum_codec_round_trips_registered_enum_members() -> None:
@@ -311,3 +351,5 @@ def test_enum_codec_requires_registered_enum_types() -> None:
         EnumCodec().encode(Priority.LOW)
     with pytest.raises(TypeError):
         EnumCodec().decode(encoded)
+    with pytest.raises(TypeError, match="requires an enum type"):
+        EnumCodec([str])  # type: ignore[list-item]

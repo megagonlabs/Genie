@@ -37,6 +37,7 @@ ensure_repo_on_path()
 from genie import (
     AccessDenied,
     CodecRegistry,
+    HookContext,
     InMemoryBackend,
     JsonCodec,
     Memory,
@@ -75,12 +76,12 @@ class AuditHook(MemoryHook):
 
         self.events: list[str] = []
 
-    def after_put(self, block: MemoryBlock) -> None:
+    def after_put(self, context: HookContext, block: MemoryBlock) -> None:
         """Record a block creation event."""
 
         self.events.append(f"created:{block.type}:{block.id}")
 
-    def after_delete(self, block: MemoryBlock) -> None:
+    def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
         """Record a block deletion event."""
 
         self.events.append(f"deleted:{block.type}:{block.id}")

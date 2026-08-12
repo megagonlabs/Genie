@@ -17,7 +17,8 @@ may participate in several structures.
 | `VersionedRecords` | Stable identity and revisions | Keys and log entries |
 
 Facades receive `Memory` or `MemoryHandle`; a handle keeps its normal subtree
-and policy restrictions.
+and policy restrictions. Explicit key, log, and temporal mutations reuse the
+access object's hook registry when available.
 
 ## Shared records
 

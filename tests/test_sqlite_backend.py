@@ -28,7 +28,6 @@ from genie import (
     SQLiteBackend,
     UnsupportedOperation,
 )
-from genie.backend.relational.sqlite import _APPLICATION_ID, _translate_sqlite_error
 
 
 def test_sqlite_backend_implements_the_core_backend_protocol() -> None:
@@ -36,6 +35,27 @@ def test_sqlite_backend_implements_the_core_backend_protocol() -> None:
 
     with SQLiteBackend() as backend:
         assert isinstance(backend, MemoryBackend)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error", "message"),
+    [
+        ({"timeout": True}, TypeError, "timeout must be a number"),
+        ({"timeout": -1}, ValueError, "timeout must be a finite number"),
+        ({"timeout": float("inf")}, ValueError, "timeout must be a finite number"),
+        ({"durability": 1}, TypeError, "durability must be a string"),
+        ({"durability": "fast"}, ValueError, "durability must be either"),
+    ],
+)
+def test_sqlite_backend_rejects_invalid_configuration(
+    kwargs: dict[str, Any],
+    error: type[Exception],
+    message: str,
+) -> None:
+    """Connection and durability options fail before opening a database."""
+
+    with pytest.raises(error, match=message):
+        SQLiteBackend(**kwargs)
 
 
 def test_sqlite_backend_persists_core_memory_state(tmp_path: Path) -> None:
@@ -458,28 +478,45 @@ def test_sqlite_backend_adopts_a_valid_legacy_schema(tmp_path: Path) -> None:
         kept = backend.get_block("kept")
         assert kept is not None
         assert kept.value == {"kept": True}
-        assert backend._require_connection().execute("PRAGMA application_id").fetchone()[0] != 0
+
+    connection = sqlite3.connect(path)
+    assert connection.execute("PRAGMA application_id").fetchone()[0] != 0
+    connection.close()
 
 
 def test_sqlite_backend_runs_ordered_migrations_from_version_zero(tmp_path: Path) -> None:
     """A recognized empty database migrates atomically to the current schema."""
 
     path = tmp_path / "version-zero.db"
+    with SQLiteBackend(path):
+        pass
+
     connection = sqlite3.connect(path)
-    connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
+    application_id = connection.execute("PRAGMA application_id").fetchone()[0]
+    assert application_id != 0
+    tables = connection.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    for (table,) in tables:
+        connection.execute(f'DROP TABLE "{table}"')
+    connection.execute("PRAGMA user_version = 0")
     connection.close()
 
-    with SQLiteBackend(path) as backend:
-        connection = backend._require_connection()
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
-        tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
-        assert "blocks" in tables
-        assert "temporal_entries" in tables
+    with SQLiteBackend(path):
+        pass
+
+    connection = sqlite3.connect(path)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    migrated_tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert "blocks" in migrated_tables
+    assert "temporal_entries" in migrated_tables
+    connection.close()
 
 
 def test_sqlite_schema_migration_rolls_back_as_one_transaction(
@@ -548,18 +585,19 @@ def test_sqlite_backend_maps_lock_timeout_to_retryable_busy_error(tmp_path: Path
     """Lock timeouts expose a stable retryable Genie error with driver cause."""
 
     path = tmp_path / "busy.db"
-    first = SQLiteBackend(path)
+    with SQLiteBackend(path):
+        pass
+    first_connection = sqlite3.connect(path, isolation_level=None)
     second = SQLiteBackend(path, timeout=0.01)
     try:
-        first_connection = first._require_connection()
         first_connection.execute("BEGIN IMMEDIATE")
         with pytest.raises(BackendBusy) as captured:
             second.put_block(MemoryBlock(type="note", value={}))
         assert captured.value.retryable is True
         assert isinstance(captured.value.__cause__, sqlite3.Error)
     finally:
-        first._require_connection().rollback()
-        first.close()
+        first_connection.rollback()
+        first_connection.close()
         second.close()
 
 
@@ -578,19 +616,40 @@ def test_sqlite_backend_maps_full_database_to_capacity_error(tmp_path: Path) -> 
         assert isinstance(captured.value.__cause__, sqlite3.Error)
 
 
-@pytest.mark.parametrize(
-    ("message", "expected_type"),
-    [
-        ("attempt to write a readonly database", BackendReadOnly),
-        ("database or disk is full", BackendCapacityExceeded),
-        ("database disk image is malformed", BackendCorruption),
-        ("unable to open database file", BackendUnavailable),
-    ],
-)
-def test_sqlite_error_categories_have_stable_genie_types(
-    message: str,
-    expected_type: type[Exception],
+def test_sqlite_backend_maps_read_only_writes_to_public_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Common SQLite operational failures map to documented public errors."""
+    """A driver read-only failure is exposed through the public backend API."""
 
-    assert isinstance(_translate_sqlite_error(sqlite3.OperationalError(message)), expected_type)
+    class ReadOnlyConnection(sqlite3.Connection):
+        """Connection that can simulate storage becoming read-only."""
+
+        deny_writes = False
+
+        def execute(
+            self,
+            sql: str,
+            parameters: Any = (),
+        ) -> sqlite3.Cursor:
+            """Reject data writes after normal backend initialization."""
+
+            if self.deny_writes and sql.lstrip().upper().startswith(
+                ("INSERT", "UPDATE", "DELETE", "REPLACE")
+            ):
+                raise sqlite3.OperationalError("attempt to write a readonly database")
+            return super().execute(sql, parameters)
+
+    real_connect = sqlite3.connect
+
+    def connect_with_read_only_control(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        kwargs["factory"] = ReadOnlyConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect_with_read_only_control)
+    with SQLiteBackend(tmp_path / "readonly.db") as backend:
+        ReadOnlyConnection.deny_writes = True
+        with pytest.raises(BackendReadOnly) as captured:
+            backend.put_block(MemoryBlock(type="note", value={}))
+
+        assert isinstance(captured.value.__cause__, sqlite3.Error)

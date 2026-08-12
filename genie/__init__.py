@@ -28,7 +28,16 @@ from genie.backend import (
     TemporalStore,
 )
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec, MemoryCodec
-from genie.hooks import HookRegistry, MemoryHook
+from genie.hooks import (
+    HookContext,
+    HookOperation,
+    HookOrigin,
+    HookRegistry,
+    MemoryHook,
+    StructureAction,
+    StructureChange,
+    StructureKind,
+)
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import (
     BackendBusy,
@@ -38,6 +47,7 @@ from genie.memory.errors import (
     BackendReadOnly,
     BackendUnavailable,
     GenieError,
+    HookRecursionError,
     MemoryConflict,
     MemoryNotFound,
     UnsupportedOperation,
@@ -63,6 +73,10 @@ __all__ = [
     "CodecRegistry",
     "EncodedValue",
     "GenieError",
+    "HookContext",
+    "HookOperation",
+    "HookOrigin",
+    "HookRecursionError",
     "HookRegistry",
     "InMemoryBackend",
     "InMemoryLinkStore",
@@ -91,6 +105,9 @@ __all__ = [
     "SearchResult",
     "SequenceStore",
     "SQLiteBackend",
+    "StructureAction",
+    "StructureChange",
+    "StructureKind",
     "TemporalIndex",
     "TemporalStore",
     "UnsupportedOperation",

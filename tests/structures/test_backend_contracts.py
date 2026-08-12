@@ -72,6 +72,36 @@ class BlockStoreContract(StructureBackendContract):
                 expected_version=1,
             )
 
+        current = backend.get_block(original.id)
+        assert current is not None
+        with pytest.raises(MemoryConflict):
+            backend.update_block(
+                current.with_updates(version=current.version + 2),
+                expected_version=current.version,
+            )
+
+    def test_block_reference_integrity_contract(self) -> None:
+        """Core writes reject missing identities and parent references."""
+
+        backend = self.make_backend()
+
+        with pytest.raises(MemoryConflict):
+            backend.put_block(
+                MemoryBlock(
+                    id="mem_orphan",
+                    parent_id="mem_missing_parent",
+                    type="note",
+                    value={},
+                )
+            )
+        with pytest.raises(MemoryConflict):
+            backend.update_block(
+                MemoryBlock(id="mem_missing", type="note", value={}, version=2)
+            )
+
+        assert backend.get_block("mem_orphan") is None
+        assert backend.get_block("mem_missing") is None
+
     def test_conditional_subtree_delete_contract(self) -> None:
         """Deletion rejects an incomplete or stale subtree snapshot."""
 

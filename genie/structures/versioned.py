@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from genie.backend.structure_capabilities import KeyedStore, SequenceStore
+from genie.hooks import HookRegistry
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryNotFound, UnsupportedOperation
+from genie.structures._hooks import resolve_hooks
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.keyed import KeyedCollection
 from genie.structures.log import EventLog
@@ -38,7 +40,7 @@ class VersionedRecords:
     does not create, update, or delete payload blocks.
     """
 
-    __slots__ = ("_access", "_identities", "_store", "collection_id")
+    __slots__ = ("_access", "_hooks", "_identities", "_store", "collection_id")
 
     def __init__(
         self,
@@ -46,6 +48,7 @@ class VersionedRecords:
         store: VersionedStore,
         *,
         collection: BlockRef,
+        hooks: HookRegistry | None = None,
     ) -> None:
         """Create a versioned-record collection.
 
@@ -53,6 +56,8 @@ class VersionedRecords:
             access: Full or scoped memory access used to resolve every block.
             store: Backend implementing keyed and sequence capabilities.
             collection: Block or id that owns the record address space.
+            hooks: Optional registry forwarded to the reused keyed collection
+                and event logs. Defaults to the access object's registry.
 
         Raises:
             MemoryNotFound: If the collection block is missing.
@@ -65,10 +70,12 @@ class VersionedRecords:
             )
         self._access = access
         self._store = store
+        self._hooks = resolve_hooks(access, hooks)
         self._identities = KeyedCollection(
             access,
             store,
             collection=collection,
+            hooks=self._hooks,
         )
         self.collection_id = self._identities.collection_id
 
@@ -137,7 +144,12 @@ class VersionedRecords:
             raise MemoryNotFound(
                 f"Versioned record address {address!r} is not registered."
             )
-        item = EventLog(self._access, self._store, log=identity).append(block)
+        item = EventLog(
+            self._access,
+            self._store,
+            log=identity,
+            hooks=self._hooks,
+        ).append(block)
         return _revision_item(item)
 
     def current(self, address: MemoryAddress) -> RevisionItem | None:
@@ -210,7 +222,12 @@ class VersionedRecords:
         identity = self.identity(address)
         if identity is None:
             return None
-        return EventLog(self._access, self._store, log=identity)
+        return EventLog(
+            self._access,
+            self._store,
+            log=identity,
+            hooks=self._hooks,
+        )
 
 
 def _revision_item(item: LogItem) -> RevisionItem:

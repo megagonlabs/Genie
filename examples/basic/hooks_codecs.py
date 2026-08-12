@@ -27,6 +27,7 @@ ensure_repo_on_path()
 from genie import (
     CodecRegistry,
     EncodedValue,
+    HookContext,
     InMemoryBackend,
     JsonCodec,
     Memory,
@@ -102,12 +103,12 @@ class AuditHook(MemoryHook):
 
         self.created: list[str] = []
 
-    def before_put(self, block):
+    def before_put(self, context: HookContext, block):
         """Mark blocks before they are stored."""
 
         return block.with_updates(metadata={**block.metadata, "audited": True})
 
-    def after_put(self, block) -> None:
+    def after_put(self, context: HookContext, block) -> None:
         """Record stored block ids."""
 
         self.created.append(block.id)

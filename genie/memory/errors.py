@@ -17,6 +17,10 @@ class UnsupportedOperation(GenieError):
     """Raised when a backend does not support a requested capability."""
 
 
+class HookRecursionError(GenieError):
+    """Raised when nested hook operations exceed the configured depth."""
+
+
 class BackendError(GenieError):
     """Base class for backend failures that are not memory conflicts.
 

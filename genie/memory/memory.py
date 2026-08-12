@@ -10,7 +10,7 @@ from genie.backend.base import MemoryBackend
 from genie.backend.in_memory import InMemoryBackend
 from genie.backend.structure_capabilities import AcyclicLinkStore
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec
-from genie.hooks import HookRegistry, MemoryHook
+from genie.hooks import HookOperation, HookRegistry, MemoryHook
 from genie.memory.block import MemoryBlock, new_memory_id, utc_now
 from genie.memory.errors import MemoryNotFound, UnsupportedOperation
 from genie.memory.links import LinkRelations, MemoryLink
@@ -101,28 +101,32 @@ class Memory:
             TypeError: If no codec can encode the value.
         """
 
-        parent_id = _block_id(parent)
-        if parent_id is not None:
-            parent_block = self._require_raw(parent_id)
-            self.policy_engine.require(Operation.WRITE, parent_block, self.principal)
-            self.policy_engine.require(Operation.TRAVERSE_DOWN, parent_block, self.principal)
-        encoded = self.codecs.encode(value, content_type)
-        block = MemoryBlock(
-            id=id or new_memory_id(),
-            type=type,
-            value=encoded.data,
-            parent_id=parent_id,
-            content_type=encoded.content_type,
-            metadata=deepcopy(metadata or {}),
-            policy=policy if policy is not None else self.default_policy,
-            created_by=self.principal.id,
-        )
-        block = self.hooks.before_put(block)
-        if block.parent_id != parent_id:
-            raise ValueError("before_put hooks cannot change a block's parent_id.")
-        stored = self.backend.put_block(block)
-        self.hooks.after_put(stored)
-        return self._decode_block(stored)
+        with self.hooks.operation(
+            HookOperation.PUT,
+            principal_id=self.principal.id,
+        ) as context:
+            parent_id = _block_id(parent)
+            if parent_id is not None:
+                parent_block = self._require_raw(parent_id)
+                self.policy_engine.require(Operation.WRITE, parent_block, self.principal)
+                self.policy_engine.require(Operation.TRAVERSE_DOWN, parent_block, self.principal)
+            encoded = self.codecs.encode(value, content_type)
+            block = MemoryBlock(
+                id=id or new_memory_id(),
+                type=type,
+                value=encoded.data,
+                parent_id=parent_id,
+                content_type=encoded.content_type,
+                metadata=deepcopy(metadata or {}),
+                policy=policy if policy is not None else self.default_policy,
+                created_by=self.principal.id,
+            )
+            block = self.hooks.before_put(context, block)
+            if block.parent_id != parent_id:
+                raise ValueError("before_put hooks cannot change a block's parent_id.")
+            stored = self.backend.put_block(block)
+            self.hooks.after_put(context, stored)
+            return self._decode_block(stored)
 
     def get(self, block_id: str | MemoryBlock) -> MemoryBlock | None:
         """Fetch a memory block by id.
@@ -138,16 +142,20 @@ class Memory:
             TypeError: If no codec can decode the stored value.
         """
 
-        actual_id = _block_id(block_id)
-        self.hooks.before_get(actual_id)
-        block = self.backend.get_block(actual_id)
-        if block is None:
-            self.hooks.after_get(None)
-            return None
-        self.policy_engine.require(Operation.READ, block, self.principal)
-        decoded = self._decode_block(block)
-        self.hooks.after_get(decoded)
-        return decoded
+        with self.hooks.operation(
+            HookOperation.GET,
+            principal_id=self.principal.id,
+        ) as context:
+            actual_id = _block_id(block_id)
+            self.hooks.before_get(context, actual_id)
+            block = self.backend.get_block(actual_id)
+            if block is None:
+                self.hooks.after_get(context, None)
+                return None
+            self.policy_engine.require(Operation.READ, block, self.principal)
+            decoded = self._decode_block(block)
+            self.hooks.after_get(context, decoded)
+            return decoded
 
     def set(
         self,
@@ -173,17 +181,25 @@ class Memory:
             TypeError: If no codec can encode the value.
         """
 
-        block = self._require_raw(_block_id(block_id))
-        self.policy_engine.require(Operation.WRITE, block, self.principal)
-        encoded = self.codecs.encode(value, content_type)
-        updated = block.with_updates(
-            value=encoded.data,
-            content_type=encoded.content_type,
-            updated_at=utc_now(),
-            version=block.version + 1,
-        )
-        stored = self.backend.update_block(updated, expected_version=block.version)
-        return self._decode_block(stored)
+        with self.hooks.operation(
+            HookOperation.SET,
+            principal_id=self.principal.id,
+        ) as context:
+            block = self._require_raw(_block_id(block_id))
+            self.policy_engine.require(Operation.WRITE, block, self.principal)
+            encoded = self.codecs.encode(value, content_type)
+            proposed = block.with_updates(
+                value=encoded.data,
+                content_type=encoded.content_type,
+                metadata=deepcopy(block.metadata),
+                updated_at=utc_now(),
+                version=block.version + 1,
+            )
+            updated = self.hooks.before_update(context, block, proposed)
+            _require_update_hook_invariants(proposed, updated)
+            stored = self.backend.update_block(updated, expected_version=block.version)
+            self.hooks.after_update(context, block, stored)
+            return self._decode_block(stored)
 
     def update(
         self,
@@ -210,23 +226,30 @@ class Memory:
                 not a dictionary.
         """
 
-        block = self._require_raw(_block_id(block_id))
-        self.policy_engine.require(Operation.WRITE, block, self.principal)
-        decoded_value = self.codecs.decode(EncodedValue(block.content_type, block.value))
-        if value is not None:
-            if not isinstance(decoded_value, dict):
-                raise TypeError("Value updates require the existing memory value to be a dict.")
-            decoded_value = {**decoded_value, **value}
-        encoded = self.codecs.encode(decoded_value, block.content_type)
-        updated_metadata = deepcopy({**block.metadata, **(metadata or {})})
-        updated = block.with_updates(
-            value=encoded.data,
-            metadata=updated_metadata,
-            updated_at=utc_now(),
-            version=block.version + 1,
-        )
-        stored = self.backend.update_block(updated, expected_version=block.version)
-        return self._decode_block(stored)
+        with self.hooks.operation(
+            HookOperation.UPDATE,
+            principal_id=self.principal.id,
+        ) as context:
+            block = self._require_raw(_block_id(block_id))
+            self.policy_engine.require(Operation.WRITE, block, self.principal)
+            decoded_value = self.codecs.decode(EncodedValue(block.content_type, block.value))
+            if value is not None:
+                if not isinstance(decoded_value, dict):
+                    raise TypeError("Value updates require the existing memory value to be a dict.")
+                decoded_value = {**decoded_value, **value}
+            encoded = self.codecs.encode(decoded_value, block.content_type)
+            updated_metadata = deepcopy({**block.metadata, **(metadata or {})})
+            proposed = block.with_updates(
+                value=encoded.data,
+                metadata=updated_metadata,
+                updated_at=utc_now(),
+                version=block.version + 1,
+            )
+            updated = self.hooks.before_update(context, block, proposed)
+            _require_update_hook_invariants(proposed, updated)
+            stored = self.backend.update_block(updated, expected_version=block.version)
+            self.hooks.after_update(context, block, stored)
+            return self._decode_block(stored)
 
     def delete(self, block_id: str | MemoryBlock) -> None:
         """Delete a block and its descendants.
@@ -243,19 +266,23 @@ class Memory:
             MemoryNotFound: If the block does not exist.
         """
 
-        block = self._require_raw(_block_id(block_id))
-        blocks_to_delete = self.backend.descendants(block.id, include_self=True)
-        for candidate in blocks_to_delete:
-            self.policy_engine.require(Operation.WRITE, candidate, self.principal)
-        decoded_blocks = [self._decode_block(candidate) for candidate in blocks_to_delete]
-        for decoded_block in decoded_blocks:
-            self.hooks.before_delete(decoded_block)
-        self.backend.delete_block(
-            block.id,
-            expected_versions={candidate.id: candidate.version for candidate in blocks_to_delete},
-        )
-        for decoded_block in decoded_blocks:
-            self.hooks.after_delete(decoded_block)
+        with self.hooks.operation(
+            HookOperation.DELETE,
+            principal_id=self.principal.id,
+        ) as context:
+            block = self._require_raw(_block_id(block_id))
+            blocks_to_delete = self.backend.descendants(block.id, include_self=True)
+            for candidate in blocks_to_delete:
+                self.policy_engine.require(Operation.WRITE, candidate, self.principal)
+            decoded_blocks = [self._decode_block(candidate) for candidate in blocks_to_delete]
+            for decoded_block in decoded_blocks:
+                self.hooks.before_delete(context, decoded_block)
+            self.backend.delete_block(
+                block.id,
+                expected_versions={candidate.id: candidate.version for candidate in blocks_to_delete},
+            )
+            for decoded_block in decoded_blocks:
+                self.hooks.after_delete(context, decoded_block)
 
     def children(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
         """Return readable direct children for a block.
@@ -328,17 +355,13 @@ class Memory:
             MemoryNotFound: If either endpoint is missing.
         """
 
-        source_block = self._require_raw(_block_id(source))
-        target_block = self._require_raw(_block_id(target))
-        self.policy_engine.require(Operation.WRITE, source_block, self.principal)
-        self.policy_engine.require(Operation.READ, target_block, self.principal)
-        return self.backend.add_link(
-            MemoryLink(
-                source_id=source_block.id,
-                target_id=target_block.id,
-                relation=relation,
-                metadata=dict(metadata or {}),
-            )
+        return self._add_link(
+            source,
+            target,
+            relation,
+            metadata=metadata,
+            hook_operation=HookOperation.ADD_LINK,
+            acyclic=False,
         )
 
     def update_link(
@@ -366,22 +389,30 @@ class Memory:
             MemoryNotFound: If the link or a non-mount endpoint is missing.
         """
 
-        stored = self._require_stored_link(link)
-        source = self._require_raw(stored.source_id)
-        self.policy_engine.require(Operation.WRITE, source, self.principal)
-        target = self.backend.get_block(stored.target_id)
-        if target is None:
-            if stored.relation != LinkRelations.MOUNT:
-                raise MemoryNotFound(
-                    f"Target memory block {stored.target_id!r} does not exist."
-                )
-        else:
-            self.policy_engine.require(Operation.READ, target, self.principal)
-        updated = replace(
-            stored,
-            metadata=deepcopy({**stored.metadata, **metadata}),
-        )
-        return self.backend.update_link(updated)
+        with self.hooks.operation(
+            HookOperation.UPDATE_LINK,
+            principal_id=self.principal.id,
+        ) as context:
+            stored = self._require_stored_link(link)
+            source = self._require_raw(stored.source_id)
+            self.policy_engine.require(Operation.WRITE, source, self.principal)
+            target = self.backend.get_block(stored.target_id)
+            if target is None:
+                if stored.relation != LinkRelations.MOUNT:
+                    raise MemoryNotFound(
+                        f"Target memory block {stored.target_id!r} does not exist."
+                    )
+            else:
+                self.policy_engine.require(Operation.READ, target, self.principal)
+            updated = replace(
+                stored,
+                metadata=deepcopy({**stored.metadata, **metadata}),
+            )
+            updated = self.hooks.before_update_link(context, stored, updated)
+            _require_link_hook_invariants(stored, updated, callback="before_update_link")
+            persisted = self.backend.update_link(updated)
+            self.hooks.after_update_link(context, stored, persisted)
+            return persisted
 
     def add_acyclic_link(
         self,
@@ -416,22 +447,56 @@ class Memory:
 
         if relation == LinkRelations.MOUNT:
             raise ValueError("The reserved mount relation cannot be acyclically inserted.")
-        source_block = self._require_raw(_block_id(source))
-        target_block = self._require_raw(_block_id(target))
-        self.policy_engine.require(Operation.WRITE, source_block, self.principal)
-        self.policy_engine.require(Operation.READ, target_block, self.principal)
-        if not isinstance(self.backend, AcyclicLinkStore):
-            raise UnsupportedOperation(
-                "The configured backend does not support atomic acyclic links."
-            )
-        return self.backend.add_acyclic_link(
-            MemoryLink(
+        return self._add_link(
+            source,
+            target,
+            relation,
+            metadata=metadata,
+            hook_operation=HookOperation.ADD_ACYCLIC_LINK,
+            acyclic=True,
+        )
+
+    def _add_link(
+        self,
+        source: str | MemoryBlock,
+        target: str | MemoryBlock,
+        relation: str,
+        *,
+        metadata: dict[str, Any] | None,
+        hook_operation: HookOperation,
+        acyclic: bool,
+    ) -> MemoryLink:
+        """Authorize, hook, and persist one link mutation."""
+
+        with self.hooks.operation(
+            hook_operation,
+            principal_id=self.principal.id,
+        ) as context:
+            source_block = self._require_raw(_block_id(source))
+            target_block = self._require_raw(_block_id(target))
+            self.policy_engine.require(Operation.WRITE, source_block, self.principal)
+            self.policy_engine.require(Operation.READ, target_block, self.principal)
+            acyclic_backend: AcyclicLinkStore | None = None
+            if acyclic:
+                if not isinstance(self.backend, AcyclicLinkStore):
+                    raise UnsupportedOperation(
+                        "The configured backend does not support atomic acyclic links."
+                    )
+                acyclic_backend = self.backend
+            proposed = MemoryLink(
                 source_id=source_block.id,
                 target_id=target_block.id,
                 relation=relation,
-                metadata=dict(metadata or {}),
+                metadata=deepcopy(metadata or {}),
             )
-        )
+            hooked = self.hooks.before_add_link(context, proposed)
+            _require_link_hook_invariants(proposed, hooked, callback="before_add_link")
+            if acyclic_backend is not None:
+                stored = acyclic_backend.add_acyclic_link(hooked)
+            else:
+                stored = self.backend.add_link(hooked)
+            self.hooks.after_add_link(context, stored)
+            return stored
 
     def list_links(
         self,
@@ -494,7 +559,14 @@ class Memory:
             MemoryNotFound: If either endpoint is missing.
         """
 
-        return self.add_link(source, target, LinkRelations.MOUNT, metadata=metadata)
+        return self._add_link(
+            source,
+            target,
+            LinkRelations.MOUNT,
+            metadata=metadata,
+            hook_operation=HookOperation.ADD_MOUNT,
+            acyclic=False,
+        )
 
     def list_mounts(self, source: str | MemoryBlock) -> list[MemoryLink]:
         """List symbolic mounts that start from a block.
@@ -634,30 +706,38 @@ class Memory:
             ValueError: If the scope is invalid or limit is negative.
         """
 
-        memory_query = self._coerce_query(
-            query,
-            text=text,
-            root=root,
-            scope=scope,
-            types=types,
-            filters=filters,
-            limit=limit,
-        )
-        self._authorize_query(memory_query)
-        memory_query = self.hooks.before_search(memory_query)
-        # Hooks may return a freshly constructed query. Normalize once more so
-        # backends receive canonical filter operators, then check access again
-        # so hooks cannot pass through a wider query root or scope.
-        memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
-        self._authorize_query(memory_query)
-        raw_results = self.backend.search(memory_query)
-        decoded_results = [
-            replace(result, block=self._decode_block(result.block))
-            for result in raw_results
-        ]
-        visible_results = self._filter_visible_results(memory_query, decoded_results)
-        hooked_results = self.hooks.after_search(memory_query, visible_results)
-        return self._filter_visible_results(memory_query, hooked_results)
+        with self.hooks.operation(
+            HookOperation.SEARCH,
+            principal_id=self.principal.id,
+        ) as context:
+            memory_query = self._coerce_query(
+                query,
+                text=text,
+                root=root,
+                scope=scope,
+                types=types,
+                filters=filters,
+                limit=limit,
+            )
+            self._authorize_query(memory_query)
+            memory_query = self.hooks.before_search(context, memory_query)
+            # Hooks may return a freshly constructed query. Normalize once more so
+            # backends receive canonical filter operators, then check access again
+            # so hooks cannot pass through a wider query root or scope.
+            memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
+            self._authorize_query(memory_query)
+            raw_results = self.backend.search(memory_query)
+            decoded_results = [
+                replace(result, block=self._decode_block(result.block))
+                for result in raw_results
+            ]
+            visible_results = self._filter_visible_results(memory_query, decoded_results)
+            hooked_results = self.hooks.after_search(
+                context,
+                memory_query,
+                visible_results,
+            )
+            return self._filter_visible_results(memory_query, hooked_results)
 
     def get_handle(
         self,
@@ -933,6 +1013,57 @@ class Memory:
                 for link in self.backend.list_links(query.root_id, direction="both")
             )
         return False
+
+
+def _require_update_hook_invariants(
+    proposed: MemoryBlock,
+    hooked: MemoryBlock,
+) -> None:
+    """Require block-update hooks to preserve non-payload fields."""
+
+    stable_fields = (
+        "id",
+        "type",
+        "parent_id",
+        "policy",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "version",
+    )
+    changed = [
+        field
+        for field in stable_fields
+        if getattr(hooked, field) != getattr(proposed, field)
+    ]
+    if changed:
+        names = ", ".join(changed)
+        raise ValueError(
+            "before_update hooks may change only value, metadata, and "
+            f"content_type; changed protected fields: {names}."
+        )
+
+
+def _require_link_hook_invariants(
+    proposed: MemoryLink,
+    hooked: MemoryLink,
+    *,
+    callback: str,
+) -> None:
+    """Require link hooks to preserve identity and topology."""
+
+    stable_fields = ("id", "source_id", "target_id", "relation", "created_at")
+    changed = [
+        field
+        for field in stable_fields
+        if getattr(hooked, field) != getattr(proposed, field)
+    ]
+    if changed:
+        names = ", ".join(changed)
+        raise ValueError(
+            f"{callback} hooks may change only metadata; changed protected "
+            f"fields: {names}."
+        )
 
 
 @overload

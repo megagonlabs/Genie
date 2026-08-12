@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 
 from genie.backend.structure_capabilities import TemporalIndex, TemporalStore
+from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryNotFound, UnsupportedOperation
 from genie.policy.engine import AccessDenied
+from genie.structures._hooks import after_change, before_change, hook_operation, principal_id, resolve_hooks
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.records import TemporalEntry, TemporalItem, ValidityInterval
 
@@ -28,7 +31,14 @@ class TemporalCollection:
     and block policies remain in effect.
     """
 
-    __slots__ = ("_access", "_index", "_store", "collection_id")
+    __slots__ = (
+        "_access",
+        "_hooks",
+        "_index",
+        "_principal_id",
+        "_store",
+        "collection_id",
+    )
 
     def __init__(
         self,
@@ -37,6 +47,7 @@ class TemporalCollection:
         *,
         collection: BlockRef,
         index: TemporalIndex | None = None,
+        hooks: HookRegistry | None = None,
     ) -> None:
         """Create a temporal view anchored by a visible collection block.
 
@@ -47,6 +58,8 @@ class TemporalCollection:
             index: Optional efficient temporal query index. When omitted, the
                 store is used as the index if it implements ``TemporalIndex``;
                 otherwise queries use a portable paged scan.
+            hooks: Optional registry. Defaults to the registry owned by a
+                ``Memory`` or ``MemoryHandle`` access object.
 
         Raises:
             MemoryNotFound: If the collection block is missing.
@@ -68,6 +81,8 @@ class TemporalCollection:
             )
         self._access = access
         self._store = store
+        self._hooks = resolve_hooks(access, hooks)
+        self._principal_id = principal_id(access)
         if index is not None:
             self._index = index
         elif isinstance(store, TemporalIndex):
@@ -103,17 +118,30 @@ class TemporalCollection:
             MemoryConflict: If the block is already in this collection.
         """
 
-        self._require_collection()
-        stored_block = self._require_block(block)
-        entry = self._store.add_temporal_entry(
-            TemporalEntry(
+        with hook_operation(
+            self._hooks,
+            HookOperation.TEMPORAL_ADD,
+            principal=self._principal_id,
+        ) as context:
+            self._require_collection()
+            stored_block = self._require_block(block)
+            proposed = TemporalEntry(
                 collection_id=self.collection_id,
                 block_id=stored_block.id,
                 occurred_at=occurred_at,
                 validity=validity,
             )
-        )
-        return TemporalItem(entry=entry, block=stored_block)
+            change = StructureChange(
+                kind=StructureKind.TEMPORAL_COLLECTION,
+                action=StructureAction.ADD,
+                container_id=self.collection_id,
+                block_id=stored_block.id,
+                after=proposed,
+            )
+            before_change(self._hooks, context, change)
+            entry = self._store.add_temporal_entry(proposed)
+            after_change(self._hooks, context, replace(change, after=entry))
+            return TemporalItem(entry=entry, block=stored_block)
 
     def replace(
         self,
@@ -136,17 +164,35 @@ class TemporalCollection:
             MemoryConflict: If the block is not in this collection.
         """
 
-        self._require_collection()
-        stored_block = self._require_block(block)
-        entry = self._store.replace_temporal_entry(
-            TemporalEntry(
+        with hook_operation(
+            self._hooks,
+            HookOperation.TEMPORAL_REPLACE,
+            principal=self._principal_id,
+        ) as context:
+            self._require_collection()
+            stored_block = self._require_block(block)
+            current = self._store.get_temporal_entry(
+                self.collection_id,
+                stored_block.id,
+            )
+            proposed = TemporalEntry(
                 collection_id=self.collection_id,
                 block_id=stored_block.id,
                 occurred_at=occurred_at,
                 validity=validity,
             )
-        )
-        return TemporalItem(entry=entry, block=stored_block)
+            change = StructureChange(
+                kind=StructureKind.TEMPORAL_COLLECTION,
+                action=StructureAction.REPLACE,
+                container_id=self.collection_id,
+                block_id=stored_block.id,
+                before=current,
+                after=proposed,
+            )
+            before_change(self._hooks, context, change)
+            entry = self._store.replace_temporal_entry(proposed)
+            after_change(self._hooks, context, replace(change, after=entry))
+            return TemporalItem(entry=entry, block=stored_block)
 
     def get(self, block: BlockRef) -> TemporalItem | None:
         """Return one exact visible temporal member, if present."""
@@ -167,9 +213,27 @@ class TemporalCollection:
             MemoryConflict: If the block is not in this collection.
         """
 
-        self._require_collection()
-        stored_block = self._require_block(block)
-        self._store.remove_temporal_entry(self.collection_id, stored_block.id)
+        with hook_operation(
+            self._hooks,
+            HookOperation.TEMPORAL_REMOVE,
+            principal=self._principal_id,
+        ) as context:
+            self._require_collection()
+            stored_block = self._require_block(block)
+            current = self._store.get_temporal_entry(
+                self.collection_id,
+                stored_block.id,
+            )
+            change = StructureChange(
+                kind=StructureKind.TEMPORAL_COLLECTION,
+                action=StructureAction.REMOVE,
+                container_id=self.collection_id,
+                block_id=stored_block.id,
+                before=current,
+            )
+            before_change(self._hooks, context, change)
+            self._store.remove_temporal_entry(self.collection_id, stored_block.id)
+            after_change(self._hooks, context, change)
 
     def scan(
         self,

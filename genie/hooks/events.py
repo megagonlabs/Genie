@@ -1,0 +1,102 @@
+"""Typed context and events shared by Genie hooks."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Generic, Literal, TypeVar
+
+
+class HookOperation(StrEnum):
+    """Logical operations that can dispatch hooks."""
+
+    PUT = "put"
+    GET = "get"
+    SET = "set"
+    UPDATE = "update"
+    DELETE = "delete"
+    SEARCH = "search"
+    ADD_LINK = "link.add"
+    ADD_ACYCLIC_LINK = "link.add_acyclic"
+    ADD_MOUNT = "mount.add"
+    UPDATE_LINK = "link.update"
+    KEY_BIND = "key.bind"
+    KEY_REBIND = "key.rebind"
+    KEY_UNBIND = "key.unbind"
+    LOG_APPEND = "log.append"
+    TEMPORAL_ADD = "temporal.add"
+    TEMPORAL_REPLACE = "temporal.replace"
+    TEMPORAL_REMOVE = "temporal.remove"
+
+
+HookOrigin = Literal["caller", "hook"]
+
+
+@dataclass(frozen=True, slots=True)
+class HookContext:
+    """Causal context for one logical operation.
+
+    Attributes:
+        operation_id: Unique id shared by the operation's before and after
+            callbacks.
+        parent_operation_id: Id of the operation active when this one began.
+        operation: Logical operation being performed.
+        origin: Whether the operation began in caller code or inside a hook.
+        depth: Zero-based nesting depth.
+        principal_id: Acting principal when one is available.
+    """
+
+    operation_id: str
+    parent_operation_id: str | None
+    operation: HookOperation
+    origin: HookOrigin
+    depth: int
+    principal_id: str | None = None
+
+
+class StructureKind(StrEnum):
+    """Structural state families exposed to hooks."""
+
+    KEYED_COLLECTION = "keyed_collection"
+    EVENT_LOG = "event_log"
+    TEMPORAL_COLLECTION = "temporal_collection"
+
+
+class StructureAction(StrEnum):
+    """Mutations supported by structural hook events."""
+
+    BIND = "bind"
+    REBIND = "rebind"
+    UNBIND = "unbind"
+    APPEND = "append"
+    ADD = "add"
+    REPLACE = "replace"
+    REMOVE = "remove"
+
+
+RecordT = TypeVar("RecordT")
+
+
+@dataclass(frozen=True, slots=True)
+class StructureChange(Generic[RecordT]):
+    """One logical change to structure membership.
+
+    ``before`` and ``after`` contain the facade's immutable structural record,
+    such as a key binding, log entry, or temporal entry. A before callback may
+    see ``after=None`` when the backend must allocate the final record.
+
+    Attributes:
+        kind: Structural state family.
+        action: Mutation within that family.
+        container_id: Collection or log block id.
+        block_id: Referenced memory block id.
+        before: Existing structural record, when applicable.
+        after: Proposed or persisted structural record, when available.
+    """
+
+    kind: StructureKind
+    action: StructureAction
+    container_id: str
+    block_id: str
+    before: RecordT | None = None
+    after: RecordT | None = None

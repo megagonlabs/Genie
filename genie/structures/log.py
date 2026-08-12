@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from genie.backend.structure_capabilities import SequenceStore
+from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryNotFound, UnsupportedOperation
 from genie.policy.engine import AccessDenied
+from genie.structures._hooks import after_change, before_change, hook_operation, principal_id, resolve_hooks
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.records import LogEntry, LogItem
 
@@ -25,7 +27,7 @@ class EventLog:
     log or structure.
     """
 
-    __slots__ = ("_access", "_store", "log_id")
+    __slots__ = ("_access", "_hooks", "_principal_id", "_store", "log_id")
 
     def __init__(
         self,
@@ -33,6 +35,7 @@ class EventLog:
         store: SequenceStore,
         *,
         log: BlockRef,
+        hooks: HookRegistry | None = None,
     ) -> None:
         """Create an event-log view anchored by a visible log block.
 
@@ -40,6 +43,8 @@ class EventLog:
             access: Full or scoped memory access used to resolve blocks.
             store: Backend capability that appends entries atomically.
             log: Block or id that identifies this ordered log.
+            hooks: Optional registry. Defaults to the registry owned by a
+                ``Memory`` or ``MemoryHandle`` access object.
 
         Raises:
             MemoryNotFound: If the log block is missing.
@@ -53,6 +58,8 @@ class EventLog:
             raise MemoryNotFound(f"Event log block {_block_id(log)!r} does not exist.")
         self._access = access
         self._store = store
+        self._hooks = resolve_hooks(access, hooks)
+        self._principal_id = principal_id(access)
         self.log_id = stored_log.id
 
     @property
@@ -71,10 +78,33 @@ class EventLog:
             Allocated log entry and resolved block.
         """
 
-        self._require_log()
-        stored_block = self._require_block(block)
-        entry = self._store.append_log_entry(self.log_id, stored_block.id)
-        return LogItem(entry=entry, block=stored_block)
+        with hook_operation(
+            self._hooks,
+            HookOperation.LOG_APPEND,
+            principal=self._principal_id,
+        ) as context:
+            self._require_log()
+            stored_block = self._require_block(block)
+            change = StructureChange[LogEntry](
+                kind=StructureKind.EVENT_LOG,
+                action=StructureAction.APPEND,
+                container_id=self.log_id,
+                block_id=stored_block.id,
+            )
+            before_change(self._hooks, context, change)
+            entry = self._store.append_log_entry(self.log_id, stored_block.id)
+            after_change(
+                self._hooks,
+                context,
+                StructureChange(
+                    kind=change.kind,
+                    action=change.action,
+                    container_id=change.container_id,
+                    block_id=change.block_id,
+                    after=entry,
+                ),
+            )
+            return LogItem(entry=entry, block=stored_block)
 
     def get(self, sequence: int) -> LogItem | None:
         """Return the visible item at one exact sequence position."""

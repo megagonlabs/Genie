@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 
 import pytest
 
@@ -79,6 +80,14 @@ def test_keyed_collection_lists_exact_and_recursive_namespaces() -> None:
         )
     ] == ["English", "aisle"]
     assert len(collection.items(limit=2)) == 2
+    assert collection.items(limit=0) == []
+
+    with pytest.raises(TypeError, match="recursive must be a boolean"):
+        collection.items(recursive=cast(bool, 1))
+    with pytest.raises(TypeError, match="limit must be an integer"):
+        collection.items(limit=cast(int, 1.5))
+    with pytest.raises(ValueError, match="limit must be greater than or equal to zero"):
+        collection.items(limit=-1)
 
 
 def test_keyed_collection_uses_atomic_compare_and_swap_updates() -> None:
@@ -251,6 +260,13 @@ def test_keyed_collection_requires_the_optional_backend_capability() -> None:
 
     with pytest.raises(UnsupportedOperation):
         KeyedCollection(memory, object(), collection=root)  # type: ignore[arg-type]
+
+    with pytest.raises(MemoryNotFound, match="collection block"):
+        KeyedCollection(memory, memory.backend, collection="missing")
+
+    collection = KeyedCollection(memory, memory.backend, collection=root)
+    with pytest.raises(TypeError, match="address must be a MemoryAddress"):
+        collection.get(cast(MemoryAddress, "bad-address"))
 
 
 def test_memory_and_handle_implement_keyed_access() -> None:

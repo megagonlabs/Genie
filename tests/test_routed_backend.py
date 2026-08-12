@@ -12,6 +12,7 @@ from genie import (
     AccessRule,
     CodecRegistry,
     EncodedValue,
+    HookContext,
     InMemoryBackend,
     InMemoryLinkStore,
     JsonCodec,
@@ -73,7 +74,7 @@ class AuditHook(MemoryHook):
 
         self.created: list[str] = []
 
-    def after_put(self, block: MemoryBlock) -> None:
+    def after_put(self, context: HookContext, block: MemoryBlock) -> None:
         """Record a stored block id."""
 
         self.created.append(block.id)
@@ -226,6 +227,51 @@ def test_routed_backend_children_inherit_parent_route() -> None:
 
     with pytest.raises(MemoryConflict):
         memory.put(parent=parent, type="note", value="wrong route", metadata={"route": "a"})
+
+
+def test_routed_backend_updates_blocks_without_changing_routes() -> None:
+    """Block updates stay in their owning route and cannot cross-route reparent."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend)
+    parent_a = memory.put(type="root", value="a", metadata={"route": "a"})
+    parent_b = memory.put(type="root", value="b", metadata={"route": "b"})
+    child = memory.put(parent=parent_b, type="note", value={"status": "new"})
+
+    updated = memory.update(child, value={"status": "done"})
+
+    assert backend.route_for_block(updated.id) == "b"
+    assert route_a.get_block(updated.id) is None
+    stored = route_b.get_block(updated.id)
+    assert stored is not None
+    assert stored.version == 2
+    route_b.put_block(
+        MemoryBlock(
+            id=parent_a.id,
+            type="shadow",
+            value="route-local duplicate used to expose an invalid move",
+        )
+    )
+
+    with pytest.raises(MemoryConflict, match="cannot be reparented across routes"):
+        backend.update_block(
+            replace(
+                stored,
+                parent_id=parent_a.id,
+                version=stored.version + 1,
+            ),
+            expected_version=stored.version,
+        )
+
+    unchanged = route_b.get_block(updated.id)
+    assert unchanged is not None
+    assert unchanged.parent_id == parent_b.id
 
 
 def test_routed_backend_merges_global_search_and_routes_scoped_search() -> None:
@@ -466,6 +512,8 @@ def test_routed_backend_rejects_cross_route_links_without_shared_link_store() ->
 def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
     """Route validation keeps each block owned by one backend route."""
 
+    with pytest.raises(ValueError, match="requires at least one route"):
+        RoutedBackend({})
     with pytest.raises(ValueError):
         RoutedBackend({"a": InMemoryBackend()}, default_route="missing")
 

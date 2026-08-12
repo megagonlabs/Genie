@@ -296,6 +296,29 @@ def test_get_unbounded_handle_requires_explicit_roots_for_traversal() -> None:
         scope.ancestors()
 
 
+def test_unbounded_handle_lists_links_for_explicit_blocks() -> None:
+    """An unbounded handle can inspect links without applying a synthetic root."""
+
+    memory = Memory()
+    source = memory.put(type="node", value="source")
+    target = memory.put(type="node", value="target")
+    link = memory.add_link(source, target, "related")
+    scope = memory.get_unbounded_handle()
+
+    assert scope.list_links(source) == [link]
+
+
+def test_unbounded_child_handle_can_remain_explicitly_unbounded() -> None:
+    """Trusted code can narrow capabilities without inventing a child root."""
+
+    parent = Memory().get_unbounded_handle(allow_global=True)
+
+    child = parent.get_handle(allow_global=True)
+
+    assert child.root_id is None
+    assert child.allow_global is True
+
+
 def test_get_unbounded_handle_requires_explicit_root_or_global_permission_for_search() -> None:
     """Unbounded handles cannot accidentally turn subtree search into global search."""
 

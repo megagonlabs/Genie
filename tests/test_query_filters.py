@@ -85,6 +85,44 @@ def test_canonical_filter_operators_still_work() -> None:
     assert [result.block.id for result in results] == [block.id]
 
 
+@pytest.mark.parametrize(
+    ("field", "condition", "matches"),
+    [
+        ("owner", {"$eq": "team"}, True),
+        ("owner", {"$eq": "other"}, False),
+        ("owner", {"$ne": "other"}, True),
+        ("owner", {"$ne": "team"}, False),
+        ("owner", {"$in": ["team", "other"]}, True),
+        ("owner", {"$in": ["other"]}, False),
+        ("metadata.priority", {"$gt": 1}, True),
+        ("metadata.priority", {"$gt": 2}, False),
+        ("metadata.priority", {"$gte": 2}, True),
+        ("metadata.priority", {"$gte": 3}, False),
+        ("metadata.priority", {"$lt": 3}, True),
+        ("metadata.priority", {"$lt": 2}, False),
+        ("metadata.priority", {"$lte": 2}, True),
+        ("metadata.priority", {"$lte": 1}, False),
+    ],
+)
+def test_canonical_filter_operator_truth_table(
+    field: str,
+    condition: dict[str, object],
+    matches: bool,
+) -> None:
+    """Every canonical comparison operator includes positive and negative cases."""
+
+    memory = Memory()
+    block = memory.put(
+        type="note",
+        value="canonical",
+        metadata={"priority": 2, "owner": "team"},
+    )
+
+    results = memory.search(filters={field: condition})
+
+    assert ([result.block.id for result in results] == [block.id]) is matches
+
+
 def test_filter_aliases_match_block_fields_and_do_not_mutate_inputs() -> None:
     """Filter aliases work for block fields while normalization copies inputs."""
 

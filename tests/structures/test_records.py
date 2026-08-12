@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta, timezone
+from typing import cast
 
 import pytest
 
 from genie import MemoryBlock, MemoryLink
 from genie.structures import (
+    GraphNeighbor,
     GraphPath,
     KeyBinding,
     KeyedItem,
@@ -204,6 +206,51 @@ def test_graph_path_rejects_broken_paths() -> None:
         GraphPath(block_ids=("mem_a", "mem_b"), links=(link,))
     with pytest.raises(ValueError, match="at least one"):
         GraphPath(block_ids=())
+
+
+def test_graph_neighbor_validates_direction_and_endpoint() -> None:
+    """A resolved neighbor must match one endpoint and a valid direction."""
+
+    source = MemoryBlock(type="node", value="source", id="mem_source")
+    target = MemoryBlock(type="node", value="target", id="mem_target")
+    link = MemoryLink(source.id, target.id, "related")
+
+    assert GraphNeighbor(target, link, "out").block == target
+    assert GraphNeighbor(source, link, "in").block == source
+    with pytest.raises(ValueError, match="GraphNeighbor direction"):
+        GraphNeighbor(source, link, "sideways")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="not the out neighbor"):
+        GraphNeighbor(source, link, "out")
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        lambda: KeyBinding("collection", cast(MemoryAddress, "bad"), "mem_block"),
+        lambda: KeyedItem(cast(KeyBinding, "bad"), MemoryBlock("note", "value")),
+        lambda: LogItem(cast(LogEntry, "bad"), MemoryBlock("note", "value")),
+        lambda: TemporalEntry(
+            "timeline",
+            "mem_block",
+            validity=cast(ValidityInterval, "bad"),
+        ),
+        lambda: TemporalItem(
+            cast(TemporalEntry, "bad"),
+            MemoryBlock("note", "value"),
+        ),
+        lambda: RevisionItem(
+            cast(RevisionEntry, "bad"),
+            MemoryBlock("note", "value"),
+        ),
+    ],
+)
+def test_structural_records_reject_wrong_component_types(
+    record: Callable[[], object],
+) -> None:
+    """Resolved records fail early when nested components have the wrong type."""
+
+    with pytest.raises(TypeError):
+        record()
 
 
 def test_revision_entry_has_a_separate_positive_revision_number() -> None:

@@ -113,6 +113,8 @@ def test_graph_walk_returns_breadth_first_simple_paths() -> None:
         (a.id, b.id),
         (a.id, c.id),
     ]
+    assert graph.walk(a, max_depth=0) == []
+    assert graph.walk(a, limit=0) == []
 
 
 def test_graph_walk_can_follow_incoming_edges() -> None:
@@ -153,6 +155,7 @@ def test_graph_shortest_path_is_depth_bounded() -> None:
     assert path is not None
     assert path.block_ids == (a.id, b.id, d.id)
     assert graph.shortest_path(a, d, relation="route", max_depth=1) is None
+    assert graph.shortest_path(a, d, relation="route", max_depth=0) is None
     same_node = graph.shortest_path(a, a, max_depth=0)
     assert same_node is not None
     assert same_node.block_ids == (a.id,)
