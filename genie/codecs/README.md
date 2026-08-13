@@ -14,7 +14,8 @@ Encoding and decoding deep-copy values; `NaN` and infinity are rejected.
 
 `CodecRegistry` uses an explicitly requested `content_type`, or the first codec
 whose `can_encode` accepts the value. The stored content type selects the codec
-again during decoding.
+again during decoding. Content types must be non-empty strings, and `encode`
+must return an `EncodedValue` carrying the codec's own content type.
 
 ```python
 memory.codecs.register(PreferenceCodec())
@@ -41,7 +42,9 @@ class PreferenceCodec:
 ```
 
 Choose stable content types and portable encoded data. Backends should not need
-application knowledge to interpret the original Python object.
+application knowledge to interpret the original Python object. `JsonCodec`
+validates stored payloads again during decode so malformed backend data fails
+instead of entering application code.
 
 ## Opt-in standard-library codecs
 

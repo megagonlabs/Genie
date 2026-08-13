@@ -465,6 +465,8 @@ class EnumCodec:
 def _require_content_type(codec_name: str, value: EncodedValue, expected: str) -> None:
     """Raise when an encoded value belongs to a different codec."""
 
+    if not isinstance(value, EncodedValue):
+        raise TypeError(f"{codec_name} can decode only EncodedValue instances.")
     if value.content_type != expected:
         raise TypeError(f"{codec_name} cannot decode {value.content_type!r}.")
 

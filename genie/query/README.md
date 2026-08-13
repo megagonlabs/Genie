@@ -19,7 +19,8 @@ results = memory.search(
 `Memory.search` normalizes friendly arguments into `MemoryQuery`: optional
 text and root id, one scope, optional block types and filters, and a
 non-negative limit. Backends return ranked `SearchResult` values containing a
-block, score, and reason.
+block, finite numeric score, and reason. Query construction validates runtime
+types and copies caller-owned type lists and nested filter operands.
 
 | Scope | Search area |
 | --- | --- |
@@ -29,12 +30,16 @@ block, score, and reason.
 | `links` | Blocks linked to the root |
 | `global` | All backend-visible blocks |
 
+Scopes other than `global` require a root when searching through `Memory`.
+
 A bounded handle cannot use search to escape its root or enable global or
 ancestor access that the handle disables.
 
 ## Filters
 
 Filters address block fields or metadata such as `metadata.priority`.
+Unprefixed names use declared `MemoryBlock` fields first, then metadata. `$in`
+requires a list-like collection; invalid or empty operator maps fail closed.
 Operators normalize as follows:
 
 | Friendly | Canonical |

@@ -10,7 +10,7 @@ from genie.policy.policy import (
     BUILTIN_OPERATION_NAMES,
     AccessRule,
     MemoryPolicy,
-    _FrozenOperationRules,
+    _freeze_operation_rules,
 )
 from genie.policy.principal import Principal
 
@@ -45,12 +45,9 @@ class PolicyEngine:
                 Genie operation.
         """
 
-        custom_operations = dict(operations or {})
-        reserved = BUILTIN_OPERATION_NAMES.intersection(custom_operations)
-        if reserved:
-            names = ", ".join(sorted(reserved))
-            raise ValueError(f"Custom policy operations cannot override built-ins: {names}.")
-        self.operations: Mapping[str, AccessRule] = _FrozenOperationRules(custom_operations)
+        self.operations: Mapping[str, AccessRule] = _freeze_operation_rules(
+            {} if operations is None else operations
+        )
 
     def require(
         self,
@@ -67,6 +64,8 @@ class PolicyEngine:
 
         Raises:
             AccessDenied: If the policy does not allow the operation.
+            TypeError: If the block, principal, policy, or operation has an
+                invalid runtime type.
             ValueError: If `operation` is neither built-in nor configured as a
                 custom operation.
         """
@@ -94,11 +93,19 @@ class PolicyEngine:
             `True` when the operation is allowed.
 
         Raises:
+            TypeError: If the block, principal, policy, or operation has an
+                invalid runtime type.
             ValueError: If `operation` is neither built-in nor configured as a
                 custom operation.
         """
 
+        if not isinstance(block, MemoryBlock):
+            raise TypeError("block must be a MemoryBlock.")
+        if not isinstance(principal, Principal):
+            raise TypeError("principal must be a Principal.")
         policy = block.policy or MemoryPolicy.owner_private()
+        if not isinstance(policy, MemoryPolicy):
+            raise TypeError("MemoryBlock policy must be a MemoryPolicy or None.")
         rule = self._rule_for(policy, operation)
         return rule.allows(principal, owner_id=block.created_by)
 
@@ -125,4 +132,8 @@ def _operation_name(operation: Operation | str) -> str:
 
     if isinstance(operation, Operation):
         return operation.value
+    if not isinstance(operation, str):
+        raise TypeError("operation must be an Operation or string.")
+    if not operation:
+        raise ValueError("operation must not be empty.")
     return operation

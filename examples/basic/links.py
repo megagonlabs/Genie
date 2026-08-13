@@ -1,4 +1,4 @@
-"""Represent cross-memory relationships with typed links and mounts.
+"""Create and update typed links, and represent symbolic mounts.
 
 Run from the repository root:
 
@@ -35,6 +35,7 @@ def main() -> None:
     informs = memory.add_link(requirement, outline, "informs", metadata={"weight": 0.9})
     memory.add_link(note, requirement, "mentions")
     mount = memory.add_mount(requirement, remote_root, metadata={"label": "external docs"})
+    reviewed_informs = memory.update_link(informs, metadata={"status": "reviewed"})
 
     outgoing = memory.list_links(requirement)
     incoming = memory.list_links(requirement, direction="in")
@@ -45,13 +46,17 @@ def main() -> None:
     subtree = memory.search("rollout", root=requirement, scope="subtree")
 
     print(f"outgoing relation from requirement: {outgoing[0].relation}")
+    print(f"updated outgoing link metadata: {reviewed_informs.metadata}")
     print(f"incoming relation to requirement: {incoming[0].relation}")
     print(f"link-scoped search result: {related[0].block.value}")
     print(f"mounts discovered from requirement: {len(discovered_mounts)}")
     print(f"mount target: {mounted_root.value if mounted_root else None}")
     print("local subtree search includes the mounted target: no")
 
-    assert informs in outgoing
+    assert reviewed_informs in outgoing
+    assert reviewed_informs.id == informs.id
+    assert reviewed_informs.metadata == {"weight": 0.9, "status": "reviewed"}
+    assert informs.metadata == {"weight": 0.9}
     assert [result.block.id for result in related] == [outline.id]
     assert mounts == [mount]
     assert discovered_mounts == [mount]

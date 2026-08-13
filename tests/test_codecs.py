@@ -112,6 +112,47 @@ def test_codec_registry_reports_unknown_requested_content_type() -> None:
         memory.put(type="note", value={"safe": True}, content_type="application/vnd.missing")
 
 
+def test_codec_registry_validates_codec_and_encoded_value_contracts() -> None:
+    """Invalid codec objects and dishonest encode results fail at the boundary."""
+
+    class WrongResultCodec:
+        content_type = "application/vnd.test.wrong-result"
+
+        def can_encode(self, value: Any) -> bool:
+            return True
+
+        def encode(self, value: Any) -> Any:
+            return object()
+
+        def decode(self, value: EncodedValue) -> Any:
+            return value.data
+
+    class WrongContentTypeCodec(WrongResultCodec):
+        content_type = "application/vnd.test.expected"
+
+        def encode(self, value: Any) -> EncodedValue:
+            return EncodedValue("application/vnd.test.other", value)
+
+    registry = CodecRegistry()
+    with pytest.raises(TypeError, match="MemoryCodec protocol"):
+        registry.register(object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="must return an EncodedValue"):
+        CodecRegistry([WrongResultCodec()]).encode("value")
+    with pytest.raises(ValueError, match="returned content type"):
+        CodecRegistry([WrongContentTypeCodec()]).encode("value")
+    with pytest.raises(TypeError, match="must be an EncodedValue"):
+        registry.decode(object())  # type: ignore[arg-type]
+
+
+def test_encoded_values_require_a_non_empty_string_content_type() -> None:
+    """Codec dispatch identities cannot be missing or use another value type."""
+
+    with pytest.raises(TypeError, match="content_type must be a string"):
+        EncodedValue(1, {})  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="content_type must not be empty"):
+        EncodedValue("", {})
+
+
 def test_json_codec_rejects_non_json_compatible_values() -> None:
     """The JSON codec rejects unsupported containers and non-finite floats."""
 
@@ -123,6 +164,8 @@ def test_json_codec_rejects_non_json_compatible_values() -> None:
         memory.put(type="bad", value={"score": math.nan})
     with pytest.raises(TypeError):
         memory.put(type="bad", value=Priority.HIGH)
+    with pytest.raises(TypeError, match="payload is not JSON-compatible"):
+        JsonCodec().decode(EncodedValue(JsonCodec.content_type, {1, 2, 3}))
 
 
 def test_memory_defaults_to_json_codec_only() -> None:

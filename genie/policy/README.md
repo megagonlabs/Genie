@@ -13,6 +13,10 @@ selected roles, or a combination.
 principal = Principal(id="agent:writer", roles=frozenset({"researcher"}))
 ```
 
+Principal ids and role names must be non-empty strings. Invalid principal
+inputs raise instead of falling back to the default `system` identity. Policy
+rules validate their field types and copy mutable input sets.
+
 `MemoryPolicy` controls read, write, search, upward traversal, and downward
 traversal:
 

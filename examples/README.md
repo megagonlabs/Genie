@@ -14,7 +14,8 @@ conda run -n "genie" python examples/<path>.py
    and metadata filters.
 3. [`basic/scoped_agents.py`](basic/scoped_agents.py): bounded handles for
    agents and sub-agents.
-4. [`basic/links.py`](basic/links.py): typed links, mounts, and linked search.
+4. [`basic/links.py`](basic/links.py): typed links, metadata updates, mounts,
+   and linked search.
 5. [`basic/policies.py`](basic/policies.py): private defaults and shared access.
 6. [`basic/hooks_codecs.py`](basic/hooks_codecs.py): hooks and custom or stdlib
    codecs.

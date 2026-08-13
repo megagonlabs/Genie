@@ -62,8 +62,12 @@ class JsonCodec:
             TypeError: If the encoded value was produced by another codec.
         """
 
+        if not isinstance(value, EncodedValue):
+            raise TypeError("JsonCodec can decode only EncodedValue instances.")
         if value.content_type != self.content_type:
             raise TypeError(f"JsonCodec cannot decode {value.content_type!r}.")
+        if not self.can_encode(value.data):
+            raise TypeError("JsonCodec payload is not JSON-compatible.")
         return deepcopy(value.data)
 
 

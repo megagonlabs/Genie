@@ -342,6 +342,20 @@ def test_transforming_hooks_reject_values_outside_their_contracts() -> None:
     with pytest.raises(TypeError, match="after_search hooks must return a list"):
         Memory(hooks=[BadSearchHook()]).search()
 
+    class BadSearchElementHook(MemoryHook):
+        """Return a list containing a value outside the result contract."""
+
+        def after_search(
+            self,
+            context: HookContext,
+            query: MemoryQuery,
+            results: list[SearchResult],
+        ) -> list[SearchResult]:
+            return cast(list[SearchResult], [object()])
+
+    with pytest.raises(TypeError, match="only SearchResult values"):
+        Memory(hooks=[BadSearchElementHook()]).search()
+
 
 def test_recursive_hook_put_skips_only_the_active_callback() -> None:
     """A hook-generated PUT completes without invoking the same callback again."""

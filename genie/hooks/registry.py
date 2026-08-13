@@ -232,6 +232,10 @@ class HookRegistry:
             if result is not _SKIPPED:
                 if not isinstance(result, list):
                     raise TypeError("after_search hooks must return a list.")
+                if any(not isinstance(item, SearchResult) for item in result):
+                    raise TypeError(
+                        "after_search hooks must return only SearchResult values."
+                    )
                 results = result
         return results
 

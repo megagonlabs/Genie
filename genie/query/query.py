@@ -35,12 +35,23 @@ class MemoryQuery:
         """Normalize scope, type, and filter inputs after initialization.
 
         Raises:
+            TypeError: If text, root, types, filters, or limit have invalid
+                runtime types.
             ValueError: If `scope` is invalid or `limit` is negative.
         """
 
+        if self.text is not None and not isinstance(self.text, str):
+            raise TypeError("MemoryQuery text must be a string or None.")
+        if self.root_id is not None and not isinstance(self.root_id, str):
+            raise TypeError("MemoryQuery root_id must be a string or None.")
         object.__setattr__(self, "scope", Scope(self.scope))
-        if isinstance(self.types, list):
-            object.__setattr__(self, "types", tuple(self.types))
+        if not isinstance(self.types, list | tuple):
+            raise TypeError("MemoryQuery types must be a list or tuple of strings.")
+        if any(not isinstance(type_name, str) for type_name in self.types):
+            raise TypeError("MemoryQuery types must contain only strings.")
+        object.__setattr__(self, "types", tuple(self.types))
         object.__setattr__(self, "filters", normalize_filters(self.filters))
+        if isinstance(self.limit, bool) or not isinstance(self.limit, int):
+            raise TypeError("MemoryQuery limit must be an integer.")
         if self.limit < 0:
             raise ValueError("MemoryQuery limit must be greater than or equal to zero.")

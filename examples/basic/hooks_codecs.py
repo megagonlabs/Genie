@@ -31,6 +31,7 @@ from genie import (
     InMemoryBackend,
     JsonCodec,
     Memory,
+    MemoryBlock,
     MemoryCodec,
     MemoryHook,
 )
@@ -103,12 +104,12 @@ class AuditHook(MemoryHook):
 
         self.created: list[str] = []
 
-    def before_put(self, context: HookContext, block):
+    def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
         """Mark blocks before they are stored."""
 
         return block.with_updates(metadata={**block.metadata, "audited": True})
 
-    def after_put(self, context: HookContext, block) -> None:
+    def after_put(self, context: HookContext, block: MemoryBlock) -> None:
         """Record stored block ids."""
 
         self.created.append(block.id)

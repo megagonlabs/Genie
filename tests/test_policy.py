@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import cast
 
 import pytest
 
@@ -140,6 +141,84 @@ def test_policy_roles_allow_access_without_principal_id_match() -> None:
 
     assert retrieved is not None
     assert retrieved.value == "role gated"
+
+
+def test_principals_validate_identity_and_isolate_caller_containers() -> None:
+    """Principal construction fails closed and copies mutable caller data."""
+
+    roles = {"reader"}
+    metadata = {"team": {"name": "search"}}
+    principal = Principal(id="agent", roles=roles, metadata=metadata)  # type: ignore[arg-type]
+
+    roles.add("admin")
+    metadata["team"]["name"] = "changed"
+
+    assert principal.roles == frozenset({"reader"})
+    assert principal.metadata == {"team": {"name": "search"}}
+    with pytest.raises(TypeError, match="Principal, string id, or None"):
+        Principal.coerce(object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="id must not be empty"):
+        Principal(id="")
+
+
+def test_access_rules_and_policies_validate_and_freeze_their_inputs() -> None:
+    """Policy data cannot retain mutable sets or malformed rule values."""
+
+    principals = {"agent:reader"}
+    rule = AccessRule.only(principals=principals)
+    principals.add("agent:admin")
+
+    assert rule.principals == frozenset({"agent:reader"})
+    with pytest.raises(TypeError, match="allow_all must be a boolean"):
+        AccessRule(allow_all="yes")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="read must be an AccessRule"):
+        MemoryPolicy(read="allow")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="must use an AccessRule"):
+        MemoryPolicy(operations={"export": "allow"})  # type: ignore[dict-item]
+    with pytest.raises(TypeError, match="must use an AccessRule"):
+        PolicyEngine(operations={"export": "allow"})  # type: ignore[dict-item]
+
+
+def test_memory_rejects_invalid_principals_and_policy_objects_at_entry() -> None:
+    """Public memory construction and writes reject malformed policy inputs."""
+
+    with pytest.raises(TypeError, match="principal must be"):
+        Memory(principal=object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="default_policy must be"):
+        Memory(default_policy=object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="MemoryBackend protocol"):
+        Memory(backend=object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="policy_engine must be"):
+        Memory(policy_engine=object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="codecs must be"):
+        Memory(codecs=object())  # type: ignore[arg-type]
+
+    memory = Memory()
+    with pytest.raises(TypeError, match="policy must be"):
+        memory.put(type="note", value="value", policy=object())  # type: ignore[arg-type]
+
+
+def test_policy_engine_rejects_malformed_evaluation_inputs() -> None:
+    """Policy evaluation fails clearly for invalid operation and record values."""
+
+    engine = PolicyEngine()
+    principal = Principal(id="agent")
+    block = MemoryBlock(type="note", value="value", created_by=principal.id)
+
+    with pytest.raises(TypeError, match="operation must be"):
+        engine.allows(cast(str, 1), block, principal)
+    with pytest.raises(ValueError, match="operation must not be empty"):
+        engine.allows("", block, principal)
+    with pytest.raises(TypeError, match="block must be"):
+        engine.allows(Operation.READ, cast(MemoryBlock, object()), principal)
+    with pytest.raises(TypeError, match="principal must be"):
+        engine.allows(Operation.READ, block, cast(Principal, object()))
+    with pytest.raises(TypeError, match="policy must be"):
+        engine.allows(
+            Operation.READ,
+            MemoryBlock(type="note", value="value", policy=cast(MemoryPolicy, "bad")),
+            principal,
+        )
 
 
 def test_policy_rule_can_allow_roles_and_block_owner() -> None:

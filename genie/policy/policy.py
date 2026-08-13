@@ -38,6 +38,24 @@ class AccessRule:
     roles: frozenset[str] = field(default_factory=frozenset)
     allow_owner: bool = False
 
+    def __post_init__(self) -> None:
+        """Validate flags and freeze principal and role collections."""
+
+        if not isinstance(self.allow_all, bool):
+            raise TypeError("AccessRule allow_all must be a boolean.")
+        if not isinstance(self.allow_owner, bool):
+            raise TypeError("AccessRule allow_owner must be a boolean.")
+        object.__setattr__(
+            self,
+            "principals",
+            _normalize_names(self.principals, field_name="principals"),
+        )
+        object.__setattr__(
+            self,
+            "roles",
+            _normalize_names(self.roles, field_name="roles"),
+        )
+
     @classmethod
     def allow(cls) -> "AccessRule":
         """Create a rule that allows every principal.
@@ -179,11 +197,16 @@ class MemoryPolicy:
     def __post_init__(self) -> None:
         """Validate and freeze custom operation rules."""
 
-        reserved = BUILTIN_OPERATION_NAMES.intersection(self.operations)
-        if reserved:
-            names = ", ".join(sorted(reserved))
-            raise ValueError(f"Custom policy operations cannot override built-ins: {names}.")
-        object.__setattr__(self, "operations", _FrozenOperationRules(self.operations))
+        for field_name in (
+            "read",
+            "write",
+            "search",
+            "traverse_up",
+            "traverse_down",
+        ):
+            if not isinstance(getattr(self, field_name), AccessRule):
+                raise TypeError(f"MemoryPolicy {field_name} must be an AccessRule.")
+        object.__setattr__(self, "operations", _freeze_operation_rules(self.operations))
 
     @classmethod
     def public(cls) -> "MemoryPolicy":
@@ -246,3 +269,44 @@ class MemoryPolicy:
             traverse_up=rule,
             traverse_down=rule,
         )
+
+
+def _normalize_names(
+    values: set[str] | frozenset[str],
+    *,
+    field_name: str,
+) -> frozenset[str]:
+    """Return validated access-rule names as an immutable set."""
+
+    if not isinstance(values, set | frozenset):
+        raise TypeError(f"AccessRule {field_name} must be a set of strings.")
+    if any(not isinstance(value, str) for value in values):
+        raise TypeError(f"AccessRule {field_name} must contain only strings.")
+    if any(not value for value in values):
+        raise ValueError(f"AccessRule {field_name} must not contain empty strings.")
+    return frozenset(values)
+
+
+def _freeze_operation_rules(
+    rules: Mapping[str, AccessRule],
+) -> _FrozenOperationRules:
+    """Validate and freeze application-defined policy operation rules."""
+
+    if not isinstance(rules, Mapping):
+        raise TypeError("Custom policy operations must be a mapping.")
+    validated: dict[str, AccessRule] = {}
+    for name, rule in rules.items():
+        if not isinstance(name, str):
+            raise TypeError("Custom policy operation names must be strings.")
+        if not name:
+            raise ValueError("Custom policy operation names must not be empty.")
+        if not isinstance(rule, AccessRule):
+            raise TypeError(
+                f"Custom policy operation {name!r} must use an AccessRule."
+            )
+        validated[name] = rule
+    reserved = BUILTIN_OPERATION_NAMES.intersection(validated)
+    if reserved:
+        names = ", ".join(sorted(reserved))
+        raise ValueError(f"Custom policy operations cannot override built-ins: {names}.")
+    return _FrozenOperationRules(validated)

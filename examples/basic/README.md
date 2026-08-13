@@ -7,7 +7,7 @@ These scripts introduce one core feature at a time:
 | `crud_blocks.py` | Block CRUD and child traversal |
 | `search_filters.py` | Text, type, subtree, and metadata filters |
 | `scoped_agents.py` | Bounded agent and sub-agent handles |
-| `links.py` | Links, mounts, and linked search |
+| `links.py` | Links, metadata updates, mounts, and linked search |
 | `policies.py` | Private defaults and shared access |
 | `hooks_codecs.py` | Hooks and custom codecs |
 | `stdlib_codecs.py` | Opt-in standard-library codecs |

@@ -57,17 +57,31 @@ class Memory:
             default_policy: Policy attached to new blocks when
                 `put(..., policy=None)`. Defaults to
                 `MemoryPolicy.owner_private()`.
+
+        Raises:
+            TypeError: If a configured backend, principal, policy engine,
+                codec registry, or default policy has the wrong type.
         """
 
-        self.backend: MemoryBackend = backend or InMemoryBackend()
+        if backend is not None and not isinstance(backend, MemoryBackend):
+            raise TypeError("backend must implement the MemoryBackend protocol.")
+        if policy_engine is not None and not isinstance(policy_engine, PolicyEngine):
+            raise TypeError("policy_engine must be a PolicyEngine.")
+        if codecs is not None and not isinstance(codecs, CodecRegistry):
+            raise TypeError("codecs must be a CodecRegistry.")
+        if default_policy is not None and not isinstance(default_policy, MemoryPolicy):
+            raise TypeError("default_policy must be a MemoryPolicy.")
+        self.backend: MemoryBackend = InMemoryBackend() if backend is None else backend
         self.principal = Principal.coerce(principal)
-        self.policy_engine = policy_engine or PolicyEngine()
+        self.policy_engine = PolicyEngine() if policy_engine is None else policy_engine
         if isinstance(hooks, HookRegistry):
             self.hooks = hooks
         else:
             self.hooks = HookRegistry(hooks)
-        self.codecs = codecs or CodecRegistry([JsonCodec()])
-        self.default_policy = default_policy or MemoryPolicy.owner_private()
+        self.codecs = CodecRegistry([JsonCodec()]) if codecs is None else codecs
+        self.default_policy = (
+            MemoryPolicy.owner_private() if default_policy is None else default_policy
+        )
 
     def put(
         self,
@@ -105,6 +119,8 @@ class Memory:
             HookOperation.PUT,
             principal_id=self.principal.id,
         ) as context:
+            if policy is not None and not isinstance(policy, MemoryPolicy):
+                raise TypeError("policy must be a MemoryPolicy or None.")
             parent_id = _block_id(parent)
             if parent_id is not None:
                 parent_block = self._require_raw(parent_id)
@@ -703,7 +719,8 @@ class Memory:
             AccessDenied: If the principal cannot search or traverse from the
                 query root.
             MemoryNotFound: If the query root does not exist.
-            ValueError: If the scope is invalid or limit is negative.
+            ValueError: If the scope is invalid, the limit is negative, or a
+                non-global scope has no root.
         """
 
         with self.hooks.operation(
@@ -894,8 +911,8 @@ class Memory:
             text=text,
             root_id=_block_id(root) if root is not None else None,
             scope=scope,
-            types=tuple(types),
-            filters=dict(filters or {}),
+            types=types,
+            filters={} if filters is None else filters,
             limit=limit,
         )
 
@@ -903,6 +920,10 @@ class Memory:
         """Check access required by a query root and scope."""
 
         if query.root_id is None:
+            if query.scope != Scope.GLOBAL:
+                raise ValueError(
+                    f"Search scope {query.scope.value!r} requires a root block."
+                )
             return
         root = self._require_raw(query.root_id)
         self.policy_engine.require(Operation.SEARCH, root, self.principal)

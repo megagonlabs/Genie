@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+import math
 from typing import Any, cast
 
 import pytest
 
-from genie import InMemoryBackend, Memory, MemoryQuery, Scope, SearchResult
+from genie import InMemoryBackend, Memory, MemoryBlock, MemoryQuery, Scope, SearchResult
 from genie.query.filters import normalize_filters
 
 
@@ -197,3 +198,104 @@ def test_filter_incompatible_comparisons_fail_closed() -> None:
     memory.put(type="note", value="note", metadata={"priority": "high"})
 
     assert memory.search(filters={"metadata.priority": {">": 1}}) == []
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"text": 1}, TypeError),
+        ({"root_id": 1}, TypeError),
+        ({"types": "note"}, TypeError),
+        ({"types": ("note", 1)}, TypeError),
+        ({"filters": []}, TypeError),
+        ({"filters": {1: "value"}}, TypeError),
+        ({"filters": {"owner": {1: "value"}}}, TypeError),
+        ({"limit": True}, TypeError),
+        ({"limit": 1.5}, TypeError),
+    ],
+)
+def test_query_rejects_invalid_runtime_field_types(
+    kwargs: dict[str, Any],
+    error: type[Exception],
+) -> None:
+    """Malformed query fields fail before they reach a backend adapter."""
+
+    with pytest.raises(error):
+        MemoryQuery(**kwargs)
+
+
+def test_memory_search_preserves_query_validation_at_the_public_boundary() -> None:
+    """Friendly search arguments are validated instead of silently coerced."""
+
+    memory = Memory()
+
+    with pytest.raises(TypeError, match="types must be a list or tuple"):
+        memory.search(types=cast(Any, "note"))
+    with pytest.raises(TypeError, match="filters must be a dictionary"):
+        memory.search(filters=cast(Any, []))
+
+
+def test_query_copies_nested_filter_operands_and_type_lists() -> None:
+    """Caller mutation cannot change a query after construction."""
+
+    owners = ["team"]
+    types = ["note"]
+    filters = {"owner": {"$in": owners}}
+    query = MemoryQuery(types=types, filters=filters)
+
+    owners.append("other")
+    types.append("task")
+
+    assert query.types == ("note",)
+    assert query.filters == {"owner": {"$in": ["team"]}}
+
+
+def test_filter_fields_use_declared_block_fields_before_metadata_fallback() -> None:
+    """Methods do not shadow metadata keys that happen to share their names."""
+
+    memory = Memory()
+    block = memory.put(
+        type="note",
+        value="value",
+        metadata={"with_updates": "metadata-value"},
+    )
+
+    results = memory.search(filters={"with_updates": "metadata-value"})
+
+    assert [result.block.id for result in results] == [block.id]
+
+
+def test_portable_in_filters_require_a_collection_and_empty_operators_fail_closed() -> None:
+    """Portable matching never treats strings or empty operator maps as matches."""
+
+    memory = Memory()
+    memory.put(type="note", value="value", metadata={"owner": "team"})
+
+    assert memory.search(filters={"owner": {"$in": "other-team"}}) == []
+    assert memory.search(filters={"owner": {}}) == []
+
+
+def test_non_global_search_requires_an_explicit_root() -> None:
+    """A missing scoped-search root cannot silently widen into a global scan."""
+
+    memory = Memory()
+    memory.put(type="note", value="visible only to a deliberate query")
+
+    with pytest.raises(ValueError, match="requires a root block"):
+        memory.search(scope=Scope.SUBTREE)
+
+
+def test_search_results_validate_backend_facing_record_fields() -> None:
+    """Malformed result records fail before ranking or policy filtering."""
+
+    block = MemoryBlock(type="note", value="value")
+
+    assert SearchResult(block, score=2).score == 2.0
+    with pytest.raises(TypeError, match="block must be a MemoryBlock"):
+        SearchResult(cast(MemoryBlock, object()))
+    with pytest.raises(TypeError, match="score must be a number"):
+        SearchResult(block, score=cast(float, True))
+    with pytest.raises(ValueError, match="score must be finite"):
+        SearchResult(block, score=math.nan)
+    with pytest.raises(TypeError, match="reason must be a string"):
+        SearchResult(block, reason=cast(str, 1))
