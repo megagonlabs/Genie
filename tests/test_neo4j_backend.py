@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import importlib.util
 import os
-from threading import RLock
+from threading import Condition, Event, RLock
 from typing import Any
 
 import pytest
@@ -35,6 +35,7 @@ from genie import (
     UnsupportedOperation,
 )
 from genie.backend.graph import neo4j as neo4j_module
+from genie.structures import KeyBinding, MemoryAddress, TemporalEntry
 from tests.structures.test_backend_contracts import (
     AcyclicLinkStoreContract,
     BlockStoreContract,
@@ -184,6 +185,9 @@ def test_neo4j_backend_close_is_idempotent_and_enforces_lifecycle() -> None:
     backend = object.__new__(Neo4jBackend)
     backend._driver = driver
     backend._lock = RLock()
+    backend._lifecycle = Condition(backend._lock)
+    backend._active_operations = 0
+    backend._closing = False
     backend._exception_types = ()
 
     backend.close()
@@ -192,6 +196,111 @@ def test_neo4j_backend_close_is_idempotent_and_enforces_lifecycle() -> None:
     assert driver.close_count == 1
     with pytest.raises(RuntimeError, match="closed"):
         backend.get_block("missing")
+
+
+def test_neo4j_backend_close_waits_for_active_operations() -> None:
+    """Closing never races a session that already leased the driver."""
+
+    operation_started = Event()
+    release_operation = Event()
+    driver_closed = Event()
+
+    class FakeSession:
+        def __enter__(self) -> FakeSession:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute_read(self, operation: object) -> None:
+            operation_started.set()
+            assert release_operation.wait(timeout=2)
+
+    class FakeDriver:
+        def session(self, **kwargs: object) -> FakeSession:
+            return FakeSession()
+
+        def close(self) -> None:
+            driver_closed.set()
+
+    backend = object.__new__(Neo4jBackend)
+    backend._driver = FakeDriver()
+    backend._bookmark_manager = object()
+    backend.database = "neo4j"
+    backend._lock = RLock()
+    backend._lifecycle = Condition(backend._lock)
+    backend._active_operations = 0
+    backend._closing = False
+    backend._exception_types = ()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        operation = executor.submit(backend.get_block, "missing")
+        assert operation_started.wait(timeout=2)
+        closing = executor.submit(backend.close)
+        with backend._lifecycle:
+            assert backend._lifecycle.wait_for(
+                lambda: backend._closing,
+                timeout=2,
+            )
+        assert not driver_closed.is_set()
+        release_operation.set()
+        assert operation.result(timeout=2) is None
+        closing.result(timeout=2)
+
+    assert driver_closed.is_set()
+
+
+def test_neo4j_backend_forwards_production_driver_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Connection, retry, encryption, and auth settings reach the driver."""
+
+    calls: dict[str, Any] = {}
+
+    class FakeDriver:
+        def verify_connectivity(self) -> None:
+            calls["verified"] = True
+
+        def close(self) -> None:
+            calls["closed"] = True
+
+    class FakeGraphDatabase:
+        @staticmethod
+        def bookmark_manager() -> object:
+            return "bookmark-manager"
+
+        @staticmethod
+        def driver(uri: str, *, auth: object, **options: object) -> FakeDriver:
+            calls.update(uri=uri, auth=auth, options=options)
+            return FakeDriver()
+
+    monkeypatch.setattr(
+        neo4j_module,
+        "_load_neo4j_driver",
+        lambda: (FakeGraphDatabase, ()),
+    )
+    monkeypatch.setattr(Neo4jBackend, "_initialize_schema", lambda self: None)
+
+    backend = Neo4jBackend(
+        "neo4j+s://example.test:7687",
+        auth=("neo4j", "secret"),
+        connection_timeout=4.5,
+        max_transaction_retry_time=12.0,
+        encrypted=True,
+    )
+    backend.close()
+
+    assert calls == {
+        "uri": "neo4j+s://example.test:7687",
+        "auth": ("neo4j", "secret"),
+        "options": {
+            "connection_timeout": 4.5,
+            "max_transaction_retry_time": 12.0,
+            "encrypted": True,
+        },
+        "verified": True,
+        "closed": True,
+    }
 
 
 _LIVE_URI = os.environ.get("GENIE_NEO4J_URI")
@@ -369,6 +478,49 @@ def test_live_neo4j_backend_matches_core_ownership_search_and_delete_behavior() 
 
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_explicit_cleanup_capabilities() -> None:
+    """Every explicit cleanup operation has the same behavior as SQLite."""
+
+    with _live_backend() as backend:
+        _clear_live_data(backend)
+        container = backend.put_block(
+            MemoryBlock(id="container", type="container", value={})
+        )
+        first = backend.put_block(MemoryBlock(id="first", type="item", value={}))
+        second = backend.put_block(MemoryBlock(id="second", type="item", value={}))
+
+        address = MemoryAddress(("tasks",), "first")
+        backend.bind_key(KeyBinding(container.id, address, first.id))
+        backend.delete_key_bindings_for_block(first.id)
+        assert backend.get_key(container.id, address) is None
+
+        assert backend.append_log_entry(container.id, first.id).sequence == 0
+        backend.delete_log_entries_for_block(first.id)
+        assert backend.list_log_entries(container.id) == []
+        assert backend.append_log_entry(container.id, second.id).sequence == 1
+
+        entry = TemporalEntry(
+            container.id,
+            first.id,
+            occurred_at=first.created_at,
+        )
+        backend.add_temporal_entry(entry)
+        backend.remove_temporal_entry(container.id, first.id)
+        assert backend.get_temporal_entry(container.id, first.id) is None
+        with pytest.raises(MemoryConflict, match="is not in temporal collection"):
+            backend.remove_temporal_entry(container.id, first.id)
+        backend.add_temporal_entry(entry)
+        backend.delete_temporal_entries_for_block(first.id)
+        assert backend.get_temporal_entry(container.id, first.id) is None
+
+        backend.add_link(MemoryLink(first.id, second.id, "related"))
+        backend.delete_links_for_block(first.id)
+        assert backend.list_links(first.id, direction="both") == []
+        assert backend.list_links(second.id, direction="both") == []
+        _clear_live_data(backend)
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_rejects_stale_writes_across_instances() -> None:
     """Database-resident locking protects CAS and subtree snapshots across drivers."""
 
@@ -398,12 +550,30 @@ def test_live_neo4j_backend_rejects_stale_writes_across_instances() -> None:
 
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
-def test_live_neo4j_backend_rejects_future_and_incomplete_schema() -> None:
-    """Runtime instances reject unsupported versions and missing owned indexes."""
+def test_live_neo4j_backend_rejects_future_and_incompatible_schema() -> None:
+    """Runtime instances reject unsupported versions and wrong schema objects."""
 
     backend = _live_backend()
     _clear_live_data(backend)
     try:
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (m:GenieSchema {name: 'genie'}) SET m.application_id = 'other'",
+            )
+        )
+        with pytest.raises(UnsupportedOperation, match="another application"):
+            _live_backend()
+        with pytest.raises(UnsupportedOperation, match="another application"):
+            _live_backend(initialize_schema=False)
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (m:GenieSchema {name: 'genie'}) SET m.application_id = $application_id",
+                application_id=neo4j_module._APPLICATION_ID,
+            )
+        )
+
         backend._raw_write(
             lambda tx: neo4j_module._consume(
                 tx,
@@ -423,7 +593,74 @@ def test_live_neo4j_backend_rejects_future_and_incomplete_schema() -> None:
         backend._schema_statement("DROP INDEX genie_block_type_idx IF EXISTS")
         with pytest.raises(UnsupportedOperation, match="missing or incompatible"):
             _live_backend(initialize_schema=False)
+
+        backend._schema_statement(
+            "CREATE TEXT INDEX genie_block_type_idx FOR (n:GenieBlock) ON (n.type)"
+        )
+        with pytest.raises(UnsupportedOperation, match="missing or incompatible"):
+            _live_backend(initialize_schema=False)
+    finally:
+        backend._schema_statement("DROP INDEX genie_block_type_idx IF EXISTS")
+        backend._initialize_schema()
+        _clear_live_data(backend)
+        backend.close()
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_coordinates_concurrent_initializers() -> None:
+    """Concurrent constructors leave one valid current schema."""
+
+    def initialize(_: int) -> Neo4jBackend:
+        return _live_backend()
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        backends = list(executor.map(initialize, range(4)))
+    try:
+        for backend in backends:
+            backend._validate_schema()
+    finally:
+        for backend in backends:
+            backend.close()
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_resumes_version_zero_migration() -> None:
+    """An interrupted or legacy version-zero schema migrates to the current version."""
+
+    backend = _live_backend()
+    _clear_live_data(backend)
+    try:
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (m:GenieSchema {name: 'genie'}) SET m.version = 0",
+            )
+        )
+        backend._schema_statement("DROP INDEX genie_block_type_idx IF EXISTS")
+
+        with _live_backend() as migrated:
+            state = migrated._read_schema_identity()
+            assert state == {
+                "application_id": neo4j_module._APPLICATION_ID,
+                "version": neo4j_module._SCHEMA_VERSION,
+            }
+            migrated._validate_schema_objects()
     finally:
         backend._initialize_schema()
         _clear_live_data(backend)
         backend.close()
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_rejects_wrong_credentials() -> None:
+    """A real authentication failure uses Genie's public backend error."""
+
+    assert _LIVE_URI is not None
+    with pytest.raises(BackendError, match="authentication or authorization"):
+        Neo4jBackend(
+            _LIVE_URI,
+            auth=("neo4j", "definitely-wrong-password"),
+            database=os.environ.get("GENIE_NEO4J_DATABASE", "neo4j"),
+            connection_timeout=1.0,
+            max_transaction_retry_time=1.0,
+        )

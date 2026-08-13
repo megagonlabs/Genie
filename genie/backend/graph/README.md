@@ -31,10 +31,13 @@ with Neo4jBackend(
   including CAS, conditional subtree deletion, and DAG insertion.
 - A shared bookmark manager preserves read-after-write ordering when operations
   use different sessions in a cluster.
-- Schema identity, version, owned constraints, and indexes are checked during
-  construction. `initialize_schema=False` validates without running DDL.
+- Schema identity, version, constraint type, index type, entity type, and index
+  state are checked during construction. Versioned migrations are idempotent so
+  interrupted DDL can be resumed. `initialize_schema=False` validates without
+  running DDL.
 - Driver failures use Genie's stable `BackendError` types. The original error
   remains available as `__cause__`.
+- `close()` waits for active operations before closing the shared driver.
 
 The schema initializer needs permission to create and inspect constraints and
 indexes. Runtime identities need normal Genie node and relationship access plus
@@ -44,6 +47,10 @@ permission to inspect the existing schema.
 
 Writes are serialized through one `GenieGuard` node. This favors correctness
 and matches SQLite's one-writer behavior, but it limits write throughput.
+
+Genie labels, relationship types, constraints, and indexes are backend-owned.
+Write through `Neo4jBackend`; direct database writes can bypass reference,
+temporal, and DAG checks.
 
 Portable search scans scoped candidates and then uses Genie's normal matcher.
 Use a separate search implementation when large full-text or vector indexes are

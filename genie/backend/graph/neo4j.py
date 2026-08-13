@@ -9,11 +9,12 @@ and makes compound checks and writes atomic across backend instances.
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 import json
 import math
-from threading import RLock
+from threading import Condition, RLock
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
 
@@ -50,6 +51,10 @@ _T = TypeVar("_T")
 _SCHEMA_VERSION = 1
 _APPLICATION_ID = "genie"
 _MUTATION_GUARD = "genie.mutations"
+_SCHEMA_INDEX_TIMEOUT_SECONDS = 300
+_UNIQUENESS_CONSTRAINT_TYPES = frozenset(
+    {"UNIQUENESS", "NODE_PROPERTY_UNIQUENESS"}
+)
 
 _CONSTRAINTS: dict[str, tuple[str, str]] = {
     "genie_schema_name_unique": ("GenieSchema", "name"),
@@ -135,13 +140,15 @@ class Neo4jBackend:
 
         graph_database, exception_types = _load_neo4j_driver()
         self.uri = uri
-        self.auth = auth
         self.database = database
         self.connection_timeout = float(connection_timeout)
         self.max_transaction_retry_time = float(max_transaction_retry_time)
         self.encrypted = encrypted
         self._exception_types = exception_types
         self._lock = RLock()
+        self._lifecycle = Condition(self._lock)
+        self._active_operations = 0
+        self._closing = False
         self._driver: Any | None = None
         self._bookmark_manager = graph_database.bookmark_manager()
 
@@ -187,17 +194,26 @@ class Neo4jBackend:
         self.close()
 
     def close(self) -> None:
-        """Close the owned Neo4j driver; repeated calls are safe."""
+        """Wait for active operations and close the owned driver safely."""
 
-        with self._lock:
+        with self._lifecycle:
+            while self._closing:
+                self._lifecycle.wait()
             driver = self._driver
             if driver is None:
                 return
+            self._closing = True
+            while self._active_operations:
+                self._lifecycle.wait()
             self._driver = None
-            try:
-                driver.close()
-            except self._exception_types as error:
-                raise _translate_neo4j_error(error) from error
+        try:
+            driver.close()
+        except self._exception_types as error:
+            raise _translate_neo4j_error(error) from error
+        finally:
+            with self._lifecycle:
+                self._closing = False
+                self._lifecycle.notify_all()
 
     # ------------------------------------------------------------------
     # Core block storage and ownership traversal
@@ -939,10 +955,10 @@ class Neo4jBackend:
     def _read(self, operation: Callable[[Any], _T]) -> _T:
         """Run one managed read transaction and translate driver failures."""
 
-        driver = self._require_driver()
         try:
-            with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
-                return session.execute_read(operation)
+            with self._operation_driver() as driver:
+                with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
+                    return session.execute_read(operation)
         except GenieError:
             raise
         except self._exception_types as error:
@@ -951,15 +967,14 @@ class Neo4jBackend:
     def _write(self, operation: Callable[[Any], _T]) -> _T:
         """Run one serialized managed write transaction."""
 
-        driver = self._require_driver()
-
         def guarded(tx: Any) -> _T:
             self._lock_mutations(tx)
             return operation(tx)
 
         try:
-            with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
-                return session.execute_write(guarded)
+            with self._operation_driver() as driver:
+                with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
+                    return session.execute_write(guarded)
         except GenieError:
             raise
         except self._exception_types as error:
@@ -980,11 +995,43 @@ class Neo4jBackend:
         )
 
     def _initialize_schema(self) -> None:
-        """Create Community-compatible constraints and indexes, then identify the schema."""
+        """Apply resumable migrations and validate the current graph schema."""
 
         existing_state = self._read_schema_identity()
-        if existing_state is not None:
-            self._validate_schema_identity(existing_state)
+        version = (
+            0
+            if existing_state is None
+            else self._schema_version(existing_state, allow_older=True)
+        )
+        for target_version in range(version + 1, _SCHEMA_VERSION + 1):
+            self._apply_schema_migration(target_version)
+            state = self._write_schema_identity(target_version)
+            self._validate_schema_identity(state)
+
+        # Repair a missing owned object at the current version. Each statement
+        # is idempotent so interrupted Neo4j DDL can be resumed safely.
+        self._ensure_schema_objects()
+        self._await_schema_indexes()
+        self._validate_schema_objects()
+        state = self._read_schema_identity()
+        if state is None:
+            raise UnsupportedOperation("The Genie Neo4j schema identity is missing.")
+        self._validate_schema_identity(state)
+
+    def _apply_schema_migration(self, target_version: int) -> None:
+        """Apply one idempotent schema migration."""
+
+        if target_version != 1:
+            raise UnsupportedOperation(
+                f"No Neo4j migration is available for schema version {target_version}."
+            )
+        self._ensure_schema_objects()
+        self._await_schema_indexes()
+        self._validate_schema_objects()
+
+    def _ensure_schema_objects(self) -> None:
+        """Create every missing constraint and index owned by Genie."""
+
         for name, (label, property_name) in _CONSTRAINTS.items():
             self._schema_statement(
                 f"CREATE CONSTRAINT {name} IF NOT EXISTS FOR (n:{label}) REQUIRE n.{property_name} IS UNIQUE"
@@ -992,24 +1039,46 @@ class Neo4jBackend:
         for name, (label, properties) in _INDEXES.items():
             joined = ", ".join(f"n.{property_name}" for property_name in properties)
             self._schema_statement(f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON ({joined})")
-        self._validate_schema_objects()
 
-        def identify(tx: Any) -> dict[str, Any]:
-            record = _single(
+    def _await_schema_indexes(self) -> None:
+        """Wait until every owned range index is online."""
+
+        for name in _INDEXES:
+            self._raw_read(
+                lambda tx, index_name=name: _consume(
+                    tx,
+                    "CALL db.awaitIndex($index_name, $timeout_seconds)",
+                    index_name=index_name,
+                    timeout_seconds=_SCHEMA_INDEX_TIMEOUT_SECONDS,
+                )
+            )
+
+    def _write_schema_identity(self, version: int) -> dict[str, Any]:
+        """Advance the owned schema identity without overwriting another owner."""
+
+        record = self._raw_write(
+            lambda tx: _single(
                 tx,
                 """
                 MERGE (m:GenieSchema {name: 'genie'})
                 ON CREATE SET m.application_id = $application_id, m.version = $version
+                WITH m
+                WHERE m.application_id = $application_id
+                SET m.version = CASE
+                    WHEN m.version IS NULL OR m.version < $version THEN $version
+                    ELSE m.version
+                END
                 RETURN m.application_id AS application_id, m.version AS version
                 """,
                 application_id=_APPLICATION_ID,
-                version=_SCHEMA_VERSION,
+                version=version,
             )
-            assert record is not None
-            return record
-
-        state = self._raw_write(identify)
-        self._validate_schema_identity(state)
+        )
+        if record is None:
+            raise UnsupportedOperation(
+                "The Neo4j schema identity belongs to another application."
+            )
+        return record
 
     def _validate_schema(self) -> None:
         """Validate an existing schema without attempting DDL."""
@@ -1029,6 +1098,16 @@ class Neo4jBackend:
         )
 
     def _validate_schema_identity(self, state: Mapping[str, Any]) -> None:
+        self._schema_version(state, allow_older=False)
+
+    def _schema_version(
+        self,
+        state: Mapping[str, Any],
+        *,
+        allow_older: bool,
+    ) -> int:
+        """Validate schema ownership and return its supported version."""
+
         application_id = state.get("application_id")
         version = state.get("version")
         if application_id != _APPLICATION_ID:
@@ -1039,66 +1118,115 @@ class Neo4jBackend:
             raise UnsupportedOperation(
                 f"Neo4j schema version {version} is newer than supported version {_SCHEMA_VERSION}."
             )
-        if version < _SCHEMA_VERSION:
+        if version < _SCHEMA_VERSION and not allow_older:
             raise UnsupportedOperation(f"No Neo4j migration is available from schema version {version}.")
+        return version
 
     def _validate_schema_objects(self) -> None:
         constraint_records = self._raw_read(
-            lambda tx: _records(tx, "SHOW CONSTRAINTS YIELD name, labelsOrTypes, properties RETURN name, labelsOrTypes, properties")
+            lambda tx: _records(
+                tx,
+                """
+                SHOW CONSTRAINTS
+                YIELD name, type, entityType, labelsOrTypes, properties
+                RETURN name, type, entityType, labelsOrTypes, properties
+                """,
+            )
         )
         constraints = {
-            str(record["name"]): (tuple(record["labelsOrTypes"]), tuple(record["properties"]))
+            str(record["name"]): (
+                str(record["type"]),
+                str(record["entityType"]),
+                tuple(record["labelsOrTypes"]),
+                tuple(record["properties"]),
+            )
             for record in constraint_records
             if record["name"] in _CONSTRAINTS
         }
         for name, (label, property_name) in _CONSTRAINTS.items():
-            if constraints.get(name) != ((label,), (property_name,)):
+            constraint = constraints.get(name)
+            if (
+                constraint is None
+                or constraint[0] not in _UNIQUENESS_CONSTRAINT_TYPES
+                or constraint[1:] != ("NODE", (label,), (property_name,))
+            ):
                 raise UnsupportedOperation(f"The Genie Neo4j constraint {name!r} is missing or incompatible.")
 
         index_records = self._raw_read(
-            lambda tx: _records(tx, "SHOW INDEXES YIELD name, labelsOrTypes, properties RETURN name, labelsOrTypes, properties")
+            lambda tx: _records(
+                tx,
+                """
+                SHOW INDEXES
+                YIELD name, type, entityType, labelsOrTypes, properties, state
+                RETURN name, type, entityType, labelsOrTypes, properties, state
+                """,
+            )
         )
         indexes = {
-            str(record["name"]): (tuple(record["labelsOrTypes"]), tuple(record["properties"]))
+            str(record["name"]): (
+                str(record["type"]),
+                str(record["entityType"]),
+                tuple(record["labelsOrTypes"]),
+                tuple(record["properties"]),
+                str(record["state"]),
+            )
             for record in index_records
             if record["name"] in _INDEXES
         }
         for name, (label, properties) in _INDEXES.items():
-            if indexes.get(name) != ((label,), properties):
+            if indexes.get(name) != ("RANGE", "NODE", (label,), properties, "ONLINE"):
                 raise UnsupportedOperation(f"The Genie Neo4j index {name!r} is missing or incompatible.")
 
     def _schema_statement(self, statement: str) -> None:
         self._raw_write(lambda tx: _consume(tx, statement))
 
     def _raw_read(self, operation: Callable[[Any], _T]) -> _T:
-        driver = self._require_driver()
         try:
-            with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
-                return session.execute_read(operation)
+            with self._operation_driver() as driver:
+                with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
+                    return session.execute_read(operation)
         except UnsupportedOperation:
             raise
         except self._exception_types as error:
             raise _translate_neo4j_error(error) from error
 
     def _raw_write(self, operation: Callable[[Any], _T]) -> _T:
-        driver = self._require_driver()
         try:
-            with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
-                return session.execute_write(operation)
+            with self._operation_driver() as driver:
+                with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
+                    return session.execute_write(operation)
         except UnsupportedOperation:
             raise
         except self._exception_types as error:
             raise _translate_neo4j_error(error) from error
 
     def _require_driver(self) -> Any:
-        with self._lock:
-            if self._driver is None:
+        with self._lifecycle:
+            if self._driver is None or self._closing:
                 raise RuntimeError("Neo4jBackend is closed.")
             return self._driver
 
+    @contextmanager
+    def _operation_driver(self) -> Iterator[Any]:
+        """Lease the driver so ``close`` cannot race an active session."""
+
+        with self._lifecycle:
+            if self._driver is None or self._closing:
+                raise RuntimeError("Neo4jBackend is closed.")
+            driver = self._driver
+            self._active_operations += 1
+        try:
+            yield driver
+        finally:
+            with self._lifecycle:
+                self._active_operations -= 1
+                if self._active_operations == 0:
+                    self._lifecycle.notify_all()
+
     def _discard_driver(self) -> None:
-        driver = self._driver
-        self._driver = None
+        with self._lifecycle:
+            driver = self._driver
+            self._driver = None
         if driver is None:
             return
         try:
