@@ -9,6 +9,7 @@ from genie.backend.composite import (
     RouteSelector,
     RoutedBackend,
 )
+from genie.backend.graph import Neo4jBackend
 from genie.backend.in_memory import InMemoryBackend
 from genie.backend.relational import SQLiteBackend
 from genie.backend.structure_capabilities import (
@@ -27,6 +28,7 @@ __all__ = [
     "KeyedStore",
     "LinkStore",
     "MemoryBackend",
+    "Neo4jBackend",
     "RoutedBackend",
     "RouteInfo",
     "RouteKey",

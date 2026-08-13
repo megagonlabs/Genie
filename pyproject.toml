@@ -24,6 +24,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+neo4j = [
+  "neo4j>=5.26",
+]
 dev = [
   "pytest>=8",
 ]

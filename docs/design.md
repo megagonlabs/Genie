@@ -82,6 +82,7 @@ multiple databases or indexes.
 | --- | --- |
 | `InMemoryBackend` | Process-local reference backend; all optional capabilities |
 | `SQLiteBackend` | Persistent local backend using built-in `sqlite3`; all optional capabilities |
+| `Neo4jBackend` | Optional official-driver graph backend; all optional capabilities |
 | `RoutedBackend` | Composite backend with application-defined storage routes |
 
 Backends must preserve ownership, clean dependent structural state, enforce

@@ -50,9 +50,9 @@ Operators normalize as follows:
 | `<`, `<=` | `$lt`, `$lte` |
 | `in` | `$in` |
 
-`InMemoryBackend` and `SQLiteBackend` use the same portable matcher; SQLite
-scans candidates in the requested scope. Other adapters may use richer indexes
-while preserving public query meaning.
+`InMemoryBackend`, `SQLiteBackend`, and `Neo4jBackend` use the same portable
+matcher. Persistent adapters scan candidates in the requested scope. Other
+adapters may use richer indexes while preserving public query meaning.
 
 ## Authorization flow
 

@@ -62,6 +62,7 @@ a required deployment topology.
 genie/backend/
   in_memory/reference.py
   relational/sqlite.py
+  graph/neo4j.py
   composite/routed.py
   base.py
   capabilities.py
@@ -72,11 +73,12 @@ genie/backend/
 | --- | --- | --- |
 | In-memory | `InMemoryBackend` | [In-memory](in_memory/README.md) |
 | Relational | `SQLiteBackend` | [Relational](relational/README.md) |
+| Graph | `Neo4jBackend` | [Neo4j](graph/README.md) |
 | Composite | `RoutedBackend` | [Composite](composite/README.md) |
 
 Shared protocols stay at the package root. Genie does not yet bundle document,
-key-value, columnar, graph, or time-series adapters. All bundled classes are
-available from `genie` and `genie.backend`.
+key-value, columnar, or time-series adapters. All bundled classes are available
+from `genie` and `genie.backend`.
 
 ## Optional structure capabilities
 

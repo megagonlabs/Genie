@@ -61,8 +61,9 @@ tools.
 ## Storage
 
 `InMemoryBackend` is the dependency-free reference backend for tests, examples,
-and prototypes. `SQLiteBackend` adds local persistence and supports all seven
-structure facades through Python's built-in SQLite driver:
+and prototypes. `SQLiteBackend` adds embedded persistence, while the optional
+`Neo4jBackend` adds graph persistence through the official Neo4j driver. Both
+support all seven structure facades. SQLite uses Python's built-in driver:
 
 ```python
 from genie import Memory, SQLiteBackend
@@ -75,7 +76,7 @@ with SQLiteBackend("memory.db") as backend:
 
 The command-line SQLite program is not required. See the [backend
 guide](genie/backend/README.md) for storage contracts, implementation details,
-and production considerations.
+and production considerations. Install `genie[neo4j]` when using Neo4j.
 
 ## Model and structures
 
@@ -137,3 +138,6 @@ Application storage     SQL, document, graph, vector, or hybrid
 conda run -n "genie" python -m pytest
 conda run -n "genie" python -m compileall -q genie tests examples lamps
 ```
+
+Run `./scripts/test_full.sh` for the complete suite against a disposable Neo4j
+container. Extra arguments are passed to pytest.
