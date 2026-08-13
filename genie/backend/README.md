@@ -80,6 +80,25 @@ Shared protocols stay at the package root. Genie does not yet bundle document,
 key-value, columnar, or time-series adapters. All bundled classes are available
 from `genie` and `genie.backend`.
 
+## Small production deployments
+
+`SQLiteBackend` and `Neo4jBackend` are suitable for small, controlled production
+deployments. Both provide atomic writes, conflict handling, schema checks, and
+all optional structure capabilities.
+
+| Backend | Good fit | Deployment responsibility |
+| --- | --- | --- |
+| `SQLiteBackend` | Local applications with modest write concurrency | Use a reliable local filesystem and manage file access and backups |
+| `Neo4jBackend` | Applications that already use a managed Neo4j server | Configure TLS, credentials, backups, monitoring, and capacity |
+
+Write through the Genie backend instead of changing its stored records directly.
+Neo4j writes are serialized for correctness, and portable search scans candidate
+blocks. Use a dedicated search implementation or a larger storage design when
+the dataset or traffic outgrows these limits.
+
+Genie is still an alpha library. Backend data safety and public API stability
+are separate concerns.
+
 ## Optional structure capabilities
 
 | Capability | Required behavior |
