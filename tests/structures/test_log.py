@@ -176,12 +176,14 @@ def test_event_log_requires_the_optional_backend_capability() -> None:
 
     memory = Memory()
     root = memory.put(type="log", value="events")
+    store = memory.backend
+    assert isinstance(store, SequenceStore)
 
     with pytest.raises(UnsupportedOperation):
         EventLog(memory, object(), log=root)  # type: ignore[arg-type]
 
     with pytest.raises(MemoryNotFound, match="Event log block"):
-        EventLog(memory, memory.backend, log="missing")
+        EventLog(memory, store, log="missing")
 
 
 def test_memory_and_handle_implement_sequence_access() -> None:

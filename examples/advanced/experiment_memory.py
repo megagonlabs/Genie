@@ -92,12 +92,14 @@ def main() -> None:
     assert temporal_item is not None
     assert catalog_item is not None
     assert lineage_path is not None
+    occurred_at = temporal_item.entry.occurred_at
+    assert occurred_at is not None
 
     print("ownership tree: experiment is inside the workspace")
     print(f"property graph: experiment --{produced.relation}--> first result")
     print(f"keyed collection: retrieval/current_experiment -> {catalog_item.value}")
     print(f"event log: {len(events.read())} experiment event")
-    print(f"temporal collection: experiment occurred on {temporal_item.entry.occurred_at.date()}")
+    print(f"temporal collection: experiment occurred on {occurred_at.date()}")
     print(f"lineage DAG: experiment -> first result -> second result ({len(lineage_path)} edges)")
     print(f"versioned records: revision {current.entry.revision} -> {current.block.value}")
 

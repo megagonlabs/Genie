@@ -334,18 +334,20 @@ def test_temporal_collection_requires_store_and_valid_optional_index() -> None:
 
     memory = Memory()
     root = memory.put(type="temporal_collection", value="timeline")
+    store = memory.backend
+    assert isinstance(store, TemporalStore)
 
     with pytest.raises(UnsupportedOperation):
         TemporalCollection(memory, object(), collection=root)  # type: ignore[arg-type]
     with pytest.raises(UnsupportedOperation):
         TemporalCollection(
             memory,
-            memory.backend,
+            store,
             collection=root,
             index=object(),  # type: ignore[arg-type]
         )
     with pytest.raises(MemoryNotFound, match="Temporal collection block"):
-        TemporalCollection(memory, memory.backend, collection="missing")
+        TemporalCollection(memory, store, collection="missing")
 
 
 def test_memory_and_handle_implement_temporal_access() -> None:

@@ -174,6 +174,7 @@ def test_query_accepts_tuple_types_and_string_scope() -> None:
 
     query = MemoryQuery(scope="subtree", types=("note",))
 
+    assert isinstance(query.scope, Scope)
     assert query.scope == Scope.SUBTREE
     assert query.types == ("note",)
 
@@ -181,7 +182,7 @@ def test_query_accepts_tuple_types_and_string_scope() -> None:
 def test_query_validation_and_immutability() -> None:
     """MemoryQuery rejects invalid scopes and remains immutable after creation."""
 
-    query = MemoryQuery(scope="links", types=cast(Any, ["note", "task"]))
+    query = MemoryQuery(scope="links", types=["note", "task"])
 
     assert query.scope == Scope.LINKS
     assert query.types == ("note", "task")

@@ -683,7 +683,9 @@ def test_update_hooks_cannot_change_protected_block_fields() -> None:
     with pytest.raises(ValueError, match="changed protected fields: parent_id"):
         memory.set(block, "after")
 
-    assert memory.get(block).value == "before"
+    stored = memory.get(block)
+    assert stored is not None
+    assert stored.value == "before"
 
 
 def test_link_hooks_cover_regular_acyclic_mount_and_update_operations() -> None:

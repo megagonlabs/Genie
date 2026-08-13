@@ -257,14 +257,16 @@ def test_keyed_collection_requires_the_optional_backend_capability() -> None:
 
     memory = Memory()
     root = memory.put(type="collection", value="preferences")
+    store = memory.backend
+    assert isinstance(store, KeyedStore)
 
     with pytest.raises(UnsupportedOperation):
         KeyedCollection(memory, object(), collection=root)  # type: ignore[arg-type]
 
     with pytest.raises(MemoryNotFound, match="collection block"):
-        KeyedCollection(memory, memory.backend, collection="missing")
+        KeyedCollection(memory, store, collection="missing")
 
-    collection = KeyedCollection(memory, memory.backend, collection=root)
+    collection = KeyedCollection(memory, store, collection=root)
     with pytest.raises(TypeError, match="address must be a MemoryAddress"):
         collection.get(cast(MemoryAddress, "bad-address"))
 
