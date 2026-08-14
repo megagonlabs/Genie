@@ -12,6 +12,21 @@ from examples.advanced.agent_memory import TaskAgent, TaskMemory
 from genie import InMemoryBackend, Memory
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+RUNNABLE_EXAMPLES = [
+    ("basic/crud_blocks.py", "CRUD and ownership"),
+    ("basic/scoped_agents.py", "Scoped agent handles"),
+    ("basic/search_filters.py", "Search and filters"),
+    ("basic/links.py", "Links and mounts"),
+    ("basic/routed_backend.py", "Routed storage and mounts"),
+    ("basic/policies.py", "Access policies"),
+    ("basic/hooks_codecs.py", "Hooks and codecs"),
+    ("basic/stdlib_codecs.py", "Standard-library codecs"),
+    ("basic/sqlite_persistence.py", "SQLite persistence"),
+    ("basic/basic_usage.py", "Integrated agent memory walkthrough"),
+    ("advanced/temporal_collection.py", "Temporal collection"),
+    ("advanced/agent_memory.py", "Compound memory for an agent"),
+    ("advanced/experiment_memory.py", "Experiment memory using all seven structures"),
+]
 
 
 def test_task_memory_exposes_values_while_hiding_facade_setup() -> None:
@@ -72,20 +87,7 @@ def test_task_agent_interprets_memory_and_selects_an_action() -> None:
 
 @pytest.mark.parametrize(
     ("example", "expected_heading"),
-    [
-        ("basic/crud_blocks.py", "CRUD and ownership"),
-        ("basic/scoped_agents.py", "Scoped agent handles"),
-        ("basic/search_filters.py", "Search and filters"),
-        ("basic/links.py", "Links and mounts"),
-        ("basic/routed_backend.py", "Routed storage and mounts"),
-        ("basic/policies.py", "Access policies"),
-        ("basic/hooks_codecs.py", "Hooks and codecs"),
-        ("basic/stdlib_codecs.py", "Standard-library codecs"),
-        ("basic/basic_usage.py", "Integrated agent memory walkthrough"),
-        ("advanced/temporal_collection.py", "Temporal collection"),
-        ("advanced/agent_memory.py", "Compound memory for an agent"),
-        ("advanced/experiment_memory.py", "Experiment memory using all seven structures"),
-    ],
+    RUNNABLE_EXAMPLES,
 )
 def test_example_runs_as_a_script(example: str, expected_heading: str) -> None:
     """Every example script runs successfully from the repository root."""
@@ -100,3 +102,17 @@ def test_example_runs_as_a_script(example: str, expected_heading: str) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.startswith(f"== {expected_heading} ==\n")
+
+
+def test_every_example_script_has_smoke_coverage() -> None:
+    """Keep newly added basic and advanced scripts in the runnable test set."""
+
+    examples_root = REPO_ROOT / "examples"
+    discovered = {
+        str(path.relative_to(examples_root))
+        for tier in ("basic", "advanced")
+        for path in (examples_root / tier).glob("*.py")
+        if path.name != "__init__.py"
+    }
+
+    assert {example for example, _ in RUNNABLE_EXAMPLES} == discovered

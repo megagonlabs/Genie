@@ -1,4 +1,4 @@
-"""Search memory with text, types, scopes, and metadata filters.
+"""Search memory with friendly arguments and portable query objects.
 
 Run from the repository root:
 
@@ -8,8 +8,8 @@ Run from the repository root:
 from __future__ import annotations
 
 if __package__ in {None, ""}:
-    from pathlib import Path
     import sys
+    from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path
@@ -18,7 +18,7 @@ else:
 
 ensure_repo_on_path()
 
-from genie import InMemoryBackend, Memory
+from genie import InMemoryBackend, Memory, MemoryQuery, Scope, SearchResult
 
 
 def main() -> None:
@@ -41,7 +41,8 @@ def main() -> None:
     )
     memory.put(type="note", value="Global note outside the project", metadata={"priority": 5})
 
-    results = memory.search(
+    # Memory.search accepts friendly keyword arguments for application code.
+    friendly_results = memory.search(
         "proposal",
         root=project,
         scope="subtree",
@@ -49,11 +50,33 @@ def main() -> None:
         filters={"metadata.priority": {">=": 2}, "owner": {"in": ["team"]}},
     )
 
+    # MemoryQuery is the validated, backend-portable request shape. Friendly
+    # filter operators are normalized when the query is constructed.
+    query = MemoryQuery(
+        text="proposal",
+        root_id=project.id,
+        scope=Scope.SUBTREE,
+        types=["requirement"],
+        filters={"metadata.priority": {">=": 2}, "owner": {"in": ["team"]}},
+        limit=10,
+    )
+    results: list[SearchResult] = memory.search(query)
+
     print("query: 'proposal' in the project subtree, priority >= 2")
+    print(f"normalized filters: {query.filters}")
     print(f"matches: {len(results)}")
     for result in results:
-        print(f"- {result.block.type}: {result.block.value}")
+        print(
+            f"- {result.block.type}: {result.block.value} "
+            f"(score={result.score}, reason={result.reason!r})"
+        )
 
+    assert results == friendly_results
+    assert query.scope is Scope.SUBTREE
+    assert query.filters == {
+        "metadata.priority": {"$gte": 2},
+        "owner": {"$in": ["team"]},
+    }
     assert [result.block.id for result in results] == [selected.id]
 
 
