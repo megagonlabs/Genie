@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from genie import AccessDenied, AccessRule, Memory, MemoryPolicy
+from genie import AccessDenied, AccessRule, Memory, MemoryBlock, MemoryPolicy
 from genie.memory.errors import MemoryConflict, MemoryNotFound
 
 
@@ -199,3 +199,20 @@ def test_returned_blocks_do_not_mutate_stored_values_or_metadata() -> None:
     assert reread is not None
     assert reread.value == {"items": ["original"]}
     assert reread.metadata == {"tags": ["source"]}
+
+
+def test_memory_block_defaults_and_updates_are_safe_value_objects() -> None:
+    """Block helpers create unique UTC identities and normalize cleared metadata."""
+
+    first = MemoryBlock(type="note", value="first", metadata={"source": "test"})
+    second = MemoryBlock(type="note", value="second")
+
+    cleared = first.with_updates(metadata=None)
+
+    assert first.id.startswith("mem_")
+    assert second.id.startswith("mem_")
+    assert first.id != second.id
+    assert first.created_at.utcoffset() is not None
+    assert first.updated_at.utcoffset() is not None
+    assert first.metadata == {"source": "test"}
+    assert cleared.metadata == {}

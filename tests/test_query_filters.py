@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
 import math
+from dataclasses import FrozenInstanceError
 from typing import Any, cast
 
 import pytest
 
 from genie import InMemoryBackend, Memory, MemoryBlock, MemoryQuery, Scope, SearchResult
-from genie.query.filters import normalize_filters
+from genie.query.filters import matches_filters, normalize_filters
 
 
 def test_search_filters_types_scopes_and_limits() -> None:
@@ -274,6 +274,18 @@ def test_portable_in_filters_require_a_collection_and_empty_operators_fail_close
 
     assert memory.search(filters={"owner": {"$in": "other-team"}}) == []
     assert memory.search(filters={"owner": {}}) == []
+
+
+def test_portable_filter_matching_fails_closed_for_non_string_keys() -> None:
+    """Adapter-side matching rejects malformed field and operator keys."""
+
+    block = MemoryBlock(type="note", value="value", metadata={"owner": "team"})
+
+    assert matches_filters(block, cast(dict[str, Any], {1: "team"})) is False
+    assert matches_filters(
+        block,
+        {"owner": cast(dict[str, Any], {1: "team"})},
+    ) is False
 
 
 def test_non_global_search_requires_an_explicit_root() -> None:

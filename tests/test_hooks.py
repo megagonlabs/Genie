@@ -37,6 +37,31 @@ from genie.structures import (
 )
 
 
+def test_default_hook_is_a_complete_noop_extension() -> None:
+    """The base hook can observe every operation family without changing behavior."""
+
+    memory = Memory(hooks=[MemoryHook()])
+    root = memory.put(type="collection", value="root")
+    note = memory.put(parent=root, type="note", value={"status": "new"})
+    target = memory.put(parent=root, type="note", value="target")
+
+    assert memory.get(note) == note
+    updated_note = memory.update(note, value={"status": "done"})
+    assert updated_note.value == {"status": "done"}
+    assert [result.block.id for result in memory.search("done")] == [note.id]
+    link = memory.add_link(note, target, "related")
+    updated_link = memory.update_link(link, metadata={"reviewed": True})
+    assert updated_link.metadata == {"reviewed": True}
+
+    keyed = KeyedCollection(memory, memory.backend, collection=root)
+    address = MemoryAddress((), "target")
+    keyed.bind(address, target)
+    keyed.unbind(address, expected=target)
+    memory.delete(note)
+
+    assert memory.get(note) is None
+
+
 def test_hooks_can_transform_and_observe_blocks() -> None:
     """Put hooks can transform blocks and observe stored ids."""
 
@@ -233,6 +258,11 @@ def test_after_search_hook_results_are_rechecked_for_policy_and_scope() -> None:
     injected = [
         SearchResult(block=private_inside, score=99, reason="injected private"),
         SearchResult(block=outside, score=98, reason="injected outside"),
+        SearchResult(
+            block=MemoryBlock(id="missing", type="note", value="missing"),
+            score=97,
+            reason="injected missing",
+        ),
     ]
     reader = Memory(
         backend=owner.backend,
@@ -333,9 +363,8 @@ def test_hook_registry_dispatch_requires_an_active_explicit_context() -> None:
 
     with pytest.raises(ValueError, match="active HookRegistry.operation"):
         registry.before_put(context, block)
-    with pytest.raises(ValueError):
-        with registry.operation("missing"):
-            pytest.fail("Invalid operations must fail before entering context.")
+    with pytest.raises(ValueError), registry.operation("missing"):
+        pytest.fail("Invalid operations must fail before entering context.")
 
 
 def test_transforming_hooks_reject_values_outside_their_contracts() -> None:
@@ -521,9 +550,8 @@ def test_hook_depth_limit_and_exception_cleanup() -> None:
         def after_put(self, context: HookContext, block) -> None:
             """Create two nested operation contexts from one callback."""
 
-            with self.registry.operation(HookOperation.GET):
-                with self.registry.operation(HookOperation.SEARCH):
-                    pytest.fail("Depth overflow should occur before entering context.")
+            with self.registry.operation(HookOperation.GET), self.registry.operation(HookOperation.SEARCH):
+                pytest.fail("Depth overflow should occur before entering context.")
 
     registry = HookRegistry(max_depth=1)
     registry.register(DeepHook(registry))
@@ -708,6 +736,35 @@ def test_update_hooks_cannot_change_protected_block_fields() -> None:
     stored = memory.get(block)
     assert stored is not None
     assert stored.value == "before"
+
+
+def test_update_link_hooks_cannot_change_topology() -> None:
+    """Link update hooks may change metadata but cannot retarget a relationship."""
+
+    class RetargetHook(MemoryHook):
+        """Attempt to change a protected link endpoint during metadata update."""
+
+        def before_update_link(self, context, current, proposed):
+            """Return a link whose target no longer matches stored topology."""
+
+            return type(proposed)(
+                source_id=proposed.source_id,
+                target_id="other-target",
+                relation=proposed.relation,
+                id=proposed.id,
+                metadata=proposed.metadata,
+                created_at=proposed.created_at,
+            )
+
+    memory = Memory(hooks=[RetargetHook()])
+    source = memory.put(type="node", value="source")
+    target = memory.put(type="node", value="target")
+    link = memory.add_link(source, target, "related")
+
+    with pytest.raises(ValueError, match="changed protected fields: target_id"):
+        memory.update_link(link, metadata={"reviewed": True})
+
+    assert memory.list_links(source) == [link]
 
 
 def test_link_hooks_cover_regular_acyclic_mount_and_update_operations() -> None:

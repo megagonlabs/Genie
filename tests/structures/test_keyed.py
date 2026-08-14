@@ -200,6 +200,29 @@ def test_key_bindings_are_cleaned_when_blocks_are_deleted() -> None:
         _ = collection.collection
 
 
+def test_keyed_collection_handles_a_stale_backend_binding_defensively() -> None:
+    """Exact reads report stale bindings while listings omit their missing targets."""
+
+    class StaleKeyBackend(InMemoryBackend):
+        """Simulate an adapter that leaves a binding after target deletion."""
+
+        def delete_key_bindings_for_block(self, block_id: str) -> None:
+            """Deliberately retain keyed state for the integrity-path test."""
+
+    backend = StaleKeyBackend()
+    memory = Memory(backend=backend)
+    root = memory.put(type="collection", value="preferences")
+    target = memory.put(type="preference", value="stale")
+    collection = KeyedCollection(memory, backend, collection=root)
+    address = MemoryAddress((), "stale")
+    collection.bind(address, target)
+    memory.delete(target)
+
+    with pytest.raises(MemoryNotFound, match="references missing memory block"):
+        collection.get_item(address)
+    assert collection.items() == []
+
+
 def test_key_binding_is_atomic_under_concurrent_writers() -> None:
     """Only one concurrent create-only bind can claim an address."""
 
@@ -269,6 +292,8 @@ def test_keyed_collection_requires_the_optional_backend_capability() -> None:
     collection = KeyedCollection(memory, store, collection=root)
     with pytest.raises(TypeError, match="address must be a MemoryAddress"):
         collection.get(cast(MemoryAddress, "bad-address"))
+    with pytest.raises(MemoryNotFound, match="Memory block 'missing'"):
+        collection.bind(MemoryAddress((), "missing"), "missing")
 
 
 def test_memory_and_handle_implement_keyed_access() -> None:

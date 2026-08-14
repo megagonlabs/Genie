@@ -7,8 +7,9 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import UTC, datetime
 from threading import Condition, Event, RLock
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -159,6 +160,52 @@ def test_neo4j_serialization_rejects_non_strict_json_and_policy_booleans() -> No
             {"block": {**properties, "storage_order": 0}, "parent_id": None}
         )
 
+
+def test_neo4j_serialization_rejects_invalid_versions_times_and_namespaces() -> None:
+    """Malformed caller values and stored primitives fail at stable boundaries."""
+
+    with pytest.raises(ValueError, match="block version"):
+        neo4j_module._block_properties(
+            MemoryBlock(id="note", type="note", value={}, version=0)
+        )
+    with pytest.raises(TypeError, match="created_at must be a datetime"):
+        neo4j_module._encode_datetime("bad", field_name="created_at")
+    with pytest.raises(ValueError, match="created_at must be timezone-aware"):
+        neo4j_module._encode_datetime(
+            datetime(2026, 1, 1),  # noqa: DTZ001 - deliberately malformed input
+            field_name="created_at",
+        )
+    with pytest.raises(BackendCorruption, match="JSON values must be strings"):
+        neo4j_module._load_json(1)
+    with pytest.raises(BackendCorruption, match="timestamps must be strings"):
+        neo4j_module._decode_datetime(1)
+    with pytest.raises(BackendCorruption, match="timestamp is invalid"):
+        neo4j_module._decode_datetime("not-a-timestamp")
+    with pytest.raises(BackendCorruption, match="timezone-aware"):
+        neo4j_module._decode_datetime("2026-01-01T00:00:00")
+    with pytest.raises(BackendCorruption, match="string lists"):
+        neo4j_module._decode_namespace("{}")
+
+
+@pytest.mark.parametrize(
+    ("decoder", "record", "message"),
+    [
+        (neo4j_module._link_from_record, {"link": {}}, "memory link"),
+        (neo4j_module._binding_from_record, {"binding": {}}, "key binding"),
+        (neo4j_module._log_entry_from_record, {"entry": {}}, "log entry"),
+        (neo4j_module._temporal_from_record, {"entry": {}}, "temporal entry"),
+    ],
+)
+def test_neo4j_record_decoders_translate_malformed_shapes(
+    decoder: Any,
+    record: dict[str, dict[str, object]],
+    message: str,
+) -> None:
+    """Every optional stored-record decoder maps malformed shapes to corruption."""
+
+    with pytest.raises(BackendCorruption, match=message):
+        decoder(record)
+
     properties = neo4j_module._block_properties(
         MemoryBlock(
             id="note",
@@ -206,6 +253,27 @@ def test_neo4j_driver_errors_map_to_public_errors(
     assert isinstance(neo4j_module._translate_neo4j_error(DriverFailure()), expected)
 
 
+def test_neo4j_driver_error_mapping_handles_retryable_and_unknown_failures() -> None:
+    """Retry hints and unknown driver failures retain stable public categories."""
+
+    class RetryableFailure(Exception):
+        def is_retryable(self) -> bool:
+            return True
+
+    class UnknownFailure(Exception):
+        def is_retryable(self) -> bool:
+            return False
+
+    assert isinstance(
+        neo4j_module._translate_neo4j_error(RetryableFailure("temporary")),
+        BackendUnavailable,
+    )
+    assert isinstance(
+        neo4j_module._translate_neo4j_error(UnknownFailure()),
+        BackendError,
+    )
+
+
 def test_neo4j_backend_close_is_idempotent_and_enforces_lifecycle() -> None:
     """Closing releases the owned driver and rejects later operations."""
 
@@ -241,7 +309,7 @@ def test_neo4j_backend_close_waits_for_active_operations() -> None:
     driver_closed = Event()
 
     class FakeSession:
-        def __enter__(self) -> FakeSession:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -283,6 +351,31 @@ def test_neo4j_backend_close_waits_for_active_operations() -> None:
         closing.result(timeout=2)
 
     assert driver_closed.is_set()
+
+
+def test_neo4j_backend_translates_driver_close_failures() -> None:
+    """Driver shutdown failures clear lifecycle state and use public errors."""
+
+    class DriverFailure(Exception):
+        code = "Neo.TransientError.Network.CommunicationError"
+
+    class FakeDriver:
+        def close(self) -> None:
+            raise DriverFailure("connection lost")
+
+    backend = object.__new__(Neo4jBackend)
+    backend._driver = FakeDriver()
+    backend._lock = RLock()
+    backend._lifecycle = Condition(backend._lock)
+    backend._active_operations = 0
+    backend._closing = False
+    backend._exception_types = (DriverFailure,)
+
+    with pytest.raises(BackendUnavailable, match="unavailable"):
+        backend.close()
+
+    assert backend._driver is None
+    assert backend._closing is False
 
 
 def test_neo4j_backend_forwards_production_driver_configuration(
@@ -336,6 +429,46 @@ def test_neo4j_backend_forwards_production_driver_configuration(
         "verified": True,
         "closed": True,
     }
+
+
+def test_neo4j_backend_discards_driver_after_unexpected_initialization_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected schema failures close the newly created driver before escape."""
+
+    closed = Event()
+
+    class FakeDriver:
+        def verify_connectivity(self) -> None:
+            return None
+
+        def close(self) -> None:
+            closed.set()
+
+    class FakeGraphDatabase:
+        @staticmethod
+        def bookmark_manager() -> object:
+            return object()
+
+        @staticmethod
+        def driver(*args: object, **kwargs: object) -> FakeDriver:
+            return FakeDriver()
+
+    monkeypatch.setattr(
+        neo4j_module,
+        "_load_neo4j_driver",
+        lambda: (FakeGraphDatabase, ()),
+    )
+    monkeypatch.setattr(
+        Neo4jBackend,
+        "_initialize_schema",
+        lambda self: (_ for _ in ()).throw(RuntimeError("unexpected schema failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected schema failure"):
+        Neo4jBackend("neo4j://example")
+
+    assert closed.is_set()
 
 
 _LIVE_URI = os.environ.get("GENIE_NEO4J_URI")
@@ -462,6 +595,164 @@ def test_live_neo4j_backend_preserves_link_identity_and_rolls_back_conflicts() -
         listed[0].metadata["tags"].append("local")
         assert backend.list_links(root.id) == [link]
         assert backend.update_link(replace(link, metadata={"tags": ["updated"]})).metadata == {"tags": ["updated"]}
+        _clear_live_data(backend)
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_rejects_invalid_link_mutations_and_directions() -> None:
+    """Link identity, existence, and directional reads are enforced by Neo4j."""
+
+    with _live_backend() as backend:
+        _clear_live_data(backend)
+        source = backend.put_block(MemoryBlock(id="source", type="node", value={}))
+        target = backend.put_block(MemoryBlock(id="target", type="node", value={}))
+        link = backend.add_link(
+            MemoryLink(source.id, target.id, "related", id="link")
+        )
+
+        with pytest.raises(MemoryConflict, match="does not exist"):
+            backend.update_link(
+                MemoryLink(source.id, target.id, "related", id="missing")
+            )
+        with pytest.raises(MemoryConflict, match="only metadata"):
+            backend.update_link(replace(link, target_id=source.id))
+        with pytest.raises(ValueError, match="direction"):
+            backend.list_links(source.id, direction="sideways")
+
+        assert backend.list_links(target.id, direction="in") == [link]
+        assert backend.list_links(source.id, relation="unrelated") == []
+        _clear_live_data(backend)
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_searches_every_scope_and_filters_candidates() -> None:
+    """Portable search applies scope, type, and text exclusion on real records."""
+
+    with _live_backend() as backend:
+        _clear_live_data(backend)
+        root = backend.put_block(
+            MemoryBlock(id="root", type="root", value={"text": "alpha"})
+        )
+        child = backend.put_block(
+            MemoryBlock(
+                id="child",
+                parent_id=root.id,
+                type="child",
+                value={"text": "beta"},
+            )
+        )
+        leaf = backend.put_block(
+            MemoryBlock(
+                id="leaf",
+                parent_id=child.id,
+                type="leaf",
+                value={"text": "gamma"},
+            )
+        )
+
+        assert [
+            result.block.id
+            for result in backend.search(
+                MemoryQuery(root_id=child.id, scope=Scope.SELF)
+            )
+        ] == [child.id]
+        assert [
+            result.block.id
+            for result in backend.search(
+                MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS)
+            )
+        ] == [leaf.id, child.id, root.id]
+        assert backend.search(
+            MemoryQuery(root_id="missing", scope=Scope.SELF)
+        ) == []
+        assert backend.search(MemoryQuery(types=["missing-type"])) == []
+        assert backend.search(MemoryQuery("missing text")) == []
+        assert {result.block.id for result in backend.search(MemoryQuery())} == {
+            root.id,
+            child.id,
+            leaf.id,
+        }
+        _clear_live_data(backend)
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_reports_corrupt_persisted_record_types() -> None:
+    """Malformed Neo4j properties fail through the backend corruption boundary."""
+
+    with _live_backend() as backend:
+        _clear_live_data(backend)
+        container = backend.put_block(
+            MemoryBlock(id="container", type="container", value={})
+        )
+        target = backend.put_block(MemoryBlock(id="target", type="item", value={}))
+        corrupt = backend.put_block(
+            MemoryBlock(id="corrupt", type="item", value={})
+        )
+        link = backend.add_link(
+            MemoryLink(container.id, target.id, "related", id="link")
+        )
+        address = MemoryAddress(("items",), "target")
+        backend.bind_key(KeyBinding(container.id, address, target.id))
+        log_entry = backend.append_log_entry(container.id, target.id)
+        temporal_entry = backend.add_temporal_entry(
+            TemporalEntry(
+                container.id,
+                target.id,
+                occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (b:GenieBlock {id: $id}) SET b.created_at = 1",
+                id=corrupt.id,
+            )
+        )
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (l:GenieLink {id: $id}) SET l.created_at = 1",
+                id=link.id,
+            )
+        )
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (n:GenieKeyBinding {collection_id: $id}) SET n.namespace_json = '{}'",
+                id=container.id,
+            )
+        )
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (n:GenieLogEntry {identity: $identity}) SET n.sequence = 'invalid'",
+                identity=neo4j_module._identity(
+                    log_entry.log_id,
+                    log_entry.sequence,
+                ),
+            )
+        )
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (n:GenieTemporalEntry {identity: $identity}) SET n.occurred_at = 'invalid'",
+                identity=neo4j_module._identity(
+                    temporal_entry.collection_id,
+                    temporal_entry.block_id,
+                ),
+            )
+        )
+
+        with pytest.raises(BackendCorruption, match="timestamps"):
+            backend.get_block(corrupt.id)
+        with pytest.raises(BackendCorruption, match="timestamps"):
+            backend.list_links(container.id)
+        with pytest.raises(BackendCorruption, match="namespace"):
+            backend.list_keys(container.id)
+        with pytest.raises(BackendCorruption, match="log entry"):
+            backend.list_log_entries(container.id)
+        with pytest.raises(BackendCorruption, match="timestamp"):
+            backend.get_temporal_entry(container.id, target.id)
         _clear_live_data(backend)
 
 
@@ -624,6 +915,47 @@ def test_live_neo4j_backend_rejects_future_and_incompatible_schema() -> None:
                 version=neo4j_module._SCHEMA_VERSION,
             )
         )
+
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (m:GenieSchema {name: 'genie'}) SET m.version = 'invalid'",
+            )
+        )
+        with pytest.raises(UnsupportedOperation, match="version is invalid"):
+            _live_backend(initialize_schema=False)
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (m:GenieSchema {name: 'genie'}) SET m.version = 0",
+            )
+        )
+        with pytest.raises(UnsupportedOperation, match="No Neo4j migration"):
+            _live_backend(initialize_schema=False)
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (m:GenieSchema {name: 'genie'}) SET m.version = $version",
+                version=neo4j_module._SCHEMA_VERSION,
+            )
+        )
+
+        backend._schema_statement(
+            "DROP CONSTRAINT genie_block_id_unique IF EXISTS"
+        )
+        with pytest.raises(UnsupportedOperation, match="constraint.*missing"):
+            _live_backend(initialize_schema=False)
+        backend._initialize_schema()
+
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (m:GenieSchema {name: 'genie'}) DELETE m",
+            )
+        )
+        with pytest.raises(UnsupportedOperation, match="not initialized"):
+            _live_backend(initialize_schema=False)
+        backend._initialize_schema()
 
         backend._schema_statement("DROP INDEX genie_block_type_idx IF EXISTS")
         with pytest.raises(UnsupportedOperation, match="missing or incompatible"):

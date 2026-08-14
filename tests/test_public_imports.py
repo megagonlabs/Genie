@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
+
 
 def test_package_all_exports_are_importable() -> None:
     """Every package-level `__all__` member resolves to an attribute."""
@@ -46,11 +48,11 @@ def test_layered_import_styles_work_for_common_types() -> None:
         TemporalIndex,
         TemporalStore,
     )
-    from genie.codecs import BytesCodec
     from genie.backend.composite import RoutedBackend as CompositeRoutedBackend
+    from genie.backend.graph import Neo4jBackend as GraphNeo4jBackend
     from genie.backend.in_memory import InMemoryBackend as GroupedInMemoryBackend
     from genie.backend.relational import SQLiteBackend as RelationalSQLiteBackend
-    from genie.backend.graph import Neo4jBackend as GraphNeo4jBackend
+    from genie.codecs import BytesCodec
     from genie.codecs.stdlib import BytesCodec as StdlibBytesCodec
     from genie.memory import LinkRelations as MemoryLinkRelations
     from genie.memory import Memory as MemoryFromPackage
@@ -100,3 +102,14 @@ def test_layered_import_styles_work_for_common_types() -> None:
     assert ValidityInterval is not None
     assert VersionedRecords is not None
     assert VersionedStore is not None
+
+
+def test_lazy_import_modules_reject_unknown_attributes() -> None:
+    """Focused lazy-import packages fail with normal attribute errors."""
+
+    from genie import memory, policy
+
+    with pytest.raises(AttributeError, match="Missing"):
+        memory.__getattr__("Missing")
+    with pytest.raises(AttributeError, match="Missing"):
+        policy.__getattr__("Missing")

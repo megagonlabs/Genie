@@ -18,6 +18,8 @@ from genie import (
     Memory,
     MemoryBlock,
     MemoryConflict,
+    MemoryLink,
+    MemoryNotFound,
     MemoryPolicy,
     RoutedBackend,
     UnsupportedOperation,
@@ -242,6 +244,26 @@ def test_lineage_update_rejects_an_edge_from_another_relation() -> None:
 
     with pytest.raises(ValueError, match="Expected lineage relation"):
         lineage.update_edge(other, metadata={"confidence": 1.0})
+
+
+def test_lineage_update_rejects_a_missing_canonical_edge() -> None:
+    """A caller-provided edge object is not trusted unless storage contains its id."""
+
+    memory = Memory()
+    first = memory.put(type="artifact", value="first")
+    second = memory.put(type="artifact", value="second")
+    forged = MemoryLink(
+        first.id,
+        second.id,
+        "derived_into",
+        id="missing-link",
+    )
+
+    with pytest.raises(MemoryNotFound, match="missing-link"):
+        LineageDAG(memory, relation="derived_into").update_edge(
+            forged,
+            metadata={"confidence": 1.0},
+        )
 
 
 def test_lineage_update_validates_the_canonical_stored_relation() -> None:

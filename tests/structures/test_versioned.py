@@ -40,6 +40,7 @@ def test_versioned_records_keep_keyed_identity_and_positive_revisions() -> None:
     first = records.append(address, blue)
     second = records.append(address, green)
 
+    assert records.collection == root
     assert registered.block == identity
     assert records.identity(address) == identity
     assert first.entry.record_id == identity.id

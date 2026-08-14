@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from examples.advanced.agent_memory import TaskAgent, TaskMemory
 from genie import InMemoryBackend, Memory
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

@@ -10,8 +10,11 @@ import pytest
 from genie import (
     AccessDenied,
     AccessRule,
+    InMemoryBackend,
     Memory,
     MemoryBlock,
+    MemoryConflict,
+    MemoryLink,
     MemoryNotFound,
     MemoryPolicy,
 )
@@ -175,6 +178,45 @@ def test_graph_walk_terminates_on_cycles_and_self_links() -> None:
     assert [path.block_ids for path in graph.walk(a, max_depth=20)] == [
         (a.id, b.id)
     ]
+    unreachable = memory.put(type="node", value="unreachable")
+    assert graph.shortest_path(a, unreachable, max_depth=20) is None
+
+
+def test_graph_rejects_an_unrelated_edge_returned_by_an_adapter() -> None:
+    """Graph traversal detects a backend edge that is unrelated to its requested node."""
+
+    class UnrelatedEdgeBackend(InMemoryBackend):
+        """Append one visible but unrelated edge to every link listing."""
+
+        unrelated: MemoryLink | None = None
+
+        def list_links(
+            self,
+            block_id: str,
+            *,
+            relation: str | None = None,
+            direction: LinkDirection = "out",
+        ) -> list[MemoryLink]:
+            """Return normal links plus the deliberately invalid adapter result."""
+
+            links = super().list_links(
+                block_id,
+                relation=relation,
+                direction=direction,
+            )
+            if self.unrelated is not None:
+                links.append(self.unrelated)
+            return links
+
+    backend = UnrelatedEdgeBackend()
+    memory = Memory(backend=backend)
+    requested = memory.put(type="node", value="requested")
+    left = memory.put(type="node", value="left")
+    right = memory.put(type="node", value="right")
+    backend.unrelated = MemoryLink(left.id, right.id, "related")
+
+    with pytest.raises(MemoryConflict, match="is not connected"):
+        PropertyGraph(memory).neighbors(requested)
 
 
 def test_graph_preserves_memory_handle_scope() -> None:

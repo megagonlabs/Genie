@@ -5,7 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from threading import Barrier
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -187,6 +187,21 @@ def test_standalone_link_store_updates_only_metadata() -> None:
         store.add_link(link)
 
 
+def test_standalone_link_store_validates_missing_updates_and_list_filters() -> None:
+    """Standalone link reads validate direction and honor relation and endpoint filters."""
+
+    store = InMemoryLinkStore()
+    related = store.add_link(MemoryLink("source", "target", "related"))
+    store.add_link(MemoryLink("other", "source", "different"))
+
+    assert store.list_links("target", direction="in") == [related]
+    assert store.list_links("source", relation="missing", direction="both") == []
+    with pytest.raises(ValueError, match="direction must be one of"):
+        store.list_links("source", direction=cast(Literal["out", "in", "both"], "sideways"))
+    with pytest.raises(MemoryConflict, match="does not exist"):
+        store.update_link(MemoryLink("source", "target", "related"))
+
+
 def test_standalone_link_store_rejects_concurrent_duplicate_ids() -> None:
     """The shared reference store atomically claims each link identity."""
 
@@ -285,6 +300,7 @@ def test_routed_backend_children_inherit_parent_route() -> None:
     assert backend.route_for_block(parent.id) == "b"
     assert backend.route_for_block(child.id) == "b"
     assert [block.id for block in memory.children(parent)] == [child.id]
+    assert [block.id for block in backend.ancestors(child.id)] == [parent.id]
 
     with pytest.raises(MemoryConflict):
         memory.put(parent=parent, type="note", value="wrong route", metadata={"route": "a"})
@@ -430,6 +446,9 @@ def test_routed_backend_supports_cross_route_links_with_shared_link_store() -> N
     assert memory.list_links(source) == [updated]
     assert [result.block.id for result in linked_results] == [target.id]
 
+    backend.delete_links_for_block(source.id)
+    assert memory.list_links(source) == []
+
 
 def test_routed_backend_updates_route_local_links() -> None:
     """Route-local links delegate metadata updates to their owning backend."""
@@ -444,6 +463,9 @@ def test_routed_backend_updates_route_local_links() -> None:
 
     assert memory.list_links(source) == [updated]
     assert updated.metadata == {"status": "reviewed"}
+
+    backend.delete_links_for_block(source.id)
+    assert memory.list_links(source) == []
 
 
 def test_routed_backend_supports_cross_route_mounts_as_symbolic_links() -> None:
@@ -590,6 +612,81 @@ def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
         memory.put(id="bad-route", type="note", value="bad", metadata={"route": "missing"})
     with pytest.raises(MemoryConflict):
         memory.put(id="same-id", type="note", value="second", metadata={"route": "b"})
+
+
+def test_routed_backend_missing_read_paths_are_empty_and_mutations_are_safe_noops() -> None:
+    """Unknown ids stay empty on reads and harmless cleanup operations."""
+
+    backend = RoutedBackend({"a": InMemoryBackend()}, default_route="a")
+
+    assert backend.get_block("missing") is None
+    assert backend.children("missing") == []
+    assert backend.ancestors("missing") == []
+    assert backend.descendants("missing", include_self=True) == []
+    assert backend.contains("missing", "also-missing") is False
+    assert backend.list_links("missing", direction="both") == []
+    assert backend.search(
+        MemoryQuery(root_id="missing", scope="subtree")
+    ) == []
+    backend.delete_block("missing")
+    backend.delete_links_for_block("missing")
+
+
+def test_routed_backend_detects_ambiguous_preexisting_ownership() -> None:
+    """A block discovered in multiple routes is rejected instead of chosen arbitrarily."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    route_a.put_block(MemoryBlock(id="duplicate", type="note", value="a"))
+    route_b.put_block(MemoryBlock(id="duplicate", type="note", value="b"))
+    backend = RoutedBackend({"a": route_a, "b": route_b}, default_route="a")
+
+    with pytest.raises(MemoryConflict, match="exists in multiple routes"):
+        backend.route_for_block("duplicate")
+    with pytest.raises(MemoryConflict, match="does not exist"):
+        backend.update_block(
+            MemoryBlock(id="missing", type="note", value="missing", version=2)
+        )
+
+
+def test_shared_link_search_applies_type_and_filter_constraints() -> None:
+    """Portable linked search applies every query constraint before ranking."""
+
+    backend = RoutedBackend(
+        {"a": InMemoryBackend(), "b": InMemoryBackend()},
+        route_selector=route_by_metadata,
+        default_route="a",
+        link_store=InMemoryLinkStore(),
+    )
+    memory = Memory(backend=backend)
+    source = memory.put(type="root", value="source", metadata={"route": "a"})
+    selected = memory.put(
+        type="note",
+        value="needle selected",
+        metadata={"route": "b", "priority": 2},
+    )
+    wrong_type = memory.put(
+        type="task",
+        value="needle task",
+        metadata={"route": "b", "priority": 2},
+    )
+    wrong_filter = memory.put(
+        type="note",
+        value="needle low",
+        metadata={"route": "b", "priority": 1},
+    )
+    for target in (selected, wrong_type, wrong_filter):
+        memory.add_link(source, target, "related")
+
+    results = memory.search(
+        "needle",
+        root=source,
+        scope="links",
+        types=["note"],
+        filters={"priority": {">=": 2}},
+    )
+
+    assert [result.block.id for result in results] == [selected.id]
 
 
 def test_routed_backend_discovers_preexisting_route_blocks() -> None:

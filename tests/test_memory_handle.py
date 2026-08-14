@@ -347,9 +347,10 @@ def test_get_handle_requires_root_and_get_unbounded_handle_is_explicit() -> None
     """Memory.get_handle creates bounded handles; unbounded access uses get_unbounded_handle."""
 
     memory = Memory()
+    missing_attribute = "scope"
 
     with pytest.raises(AttributeError):
-        getattr(memory, "scope")
+        getattr(memory, missing_attribute)
     with pytest.raises(TypeError):
         cast(Any, memory.get_handle)()
     with pytest.raises(ValueError):
@@ -385,3 +386,19 @@ def test_get_handle_requires_root_read_access_for_requested_principal() -> None:
 
     assert allowed.root_id == shared_root.id
     assert allowed.principal.id == "agent:allowed"
+
+
+def test_handle_delete_and_unbounded_ancestor_lookup_keep_explicit_boundaries() -> None:
+    """Scoped deletion works, while an unbounded handle cannot infer an ancestor root."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    child = memory.put(parent=root, type="child", value="child")
+    grandchild = memory.put(parent=child, type="grandchild", value="grandchild")
+
+    memory.get_handle(root=root).delete(child)
+
+    assert memory.get(child) is None
+    assert memory.get(grandchild) is None
+    with pytest.raises(AccessDenied, match="cannot infer which ancestors"):
+        memory.get_unbounded_handle(allow_up=True).ancestors()

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import datetime as dt
 import decimal
 import enum
 import math
-from typing import Any
 import uuid
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 import pytest
 
@@ -45,6 +45,14 @@ class UnsupportedDataclass:
     """Dataclass with a non-JSON field value."""
 
     values: set[int]
+
+
+@dataclass(frozen=True)
+class DataclassWithDerivedField:
+    """Dataclass whose non-init field must not enter the portable payload."""
+
+    value: str
+    derived: str = field(init=False, default="computed")
 
 
 class Priority(str, enum.Enum):
@@ -247,6 +255,39 @@ def test_stdlib_codecs_reject_malformed_encoded_payloads() -> None:
             codec.decode(encoded)
 
 
+def test_codecs_reject_wrong_encoded_objects_and_nested_payload_shapes() -> None:
+    """Direct decode calls validate both the wrapper and nested payload structure."""
+
+    codecs = [
+        BytesCodec(),
+        DatetimeCodec(),
+        DecimalCodec(),
+        UUIDCodec(),
+        DataclassCodec([DataclassPreference]),
+        EnumCodec([Priority]),
+        JsonCodec(),
+    ]
+    for codec in codecs:
+        with pytest.raises(TypeError):
+            codec.decode(cast(EncodedValue, object()))
+
+    with pytest.raises(TypeError, match="UUIDCodec payload must be a string"):
+        UUIDCodec().decode(EncodedValue(UUIDCodec.content_type, 123))
+    with pytest.raises(TypeError, match="payload must be a dictionary"):
+        DataclassCodec([DataclassPreference]).decode(
+            EncodedValue(DataclassCodec.content_type, [])
+        )
+    with pytest.raises(TypeError, match="must contain 'type' and 'fields'"):
+        DataclassCodec([DataclassPreference]).decode(
+            EncodedValue(
+                DataclassCodec.content_type,
+                {"type": 1, "fields": {}},
+            )
+        )
+    with pytest.raises(TypeError, match="payload must be a dictionary"):
+        EnumCodec([Priority]).decode(EncodedValue(EnumCodec.content_type, []))
+
+
 @pytest.mark.parametrize(
     ("codec", "value"),
     [
@@ -290,7 +331,7 @@ def test_datetime_codec_round_trips_datetime_date_and_time() -> None:
 
     memory = Memory(codecs=CodecRegistry([DatetimeCodec(), JsonCodec()]))
     values = [
-        dt.datetime(2026, 6, 30, 12, 15, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 6, 30, 12, 15, tzinfo=dt.UTC),
         dt.date(2026, 6, 30),
         dt.time(12, 15, 30),
     ]
@@ -367,6 +408,29 @@ def test_dataclass_codec_requires_registered_json_compatible_types() -> None:
     with pytest.raises(TypeError, match="requires a dataclass type"):
         DataclassCodec([str])  # type: ignore[list-item]
 
+    with pytest.raises(TypeError, match="only dataclass instances"):
+        registered_codec.encode(object())
+    assert registered_codec.can_encode(object()) is False
+    assert registered_codec.can_encode(DataclassPreference) is False
+
+
+def test_dataclass_codec_omits_derived_fields_and_rejects_nonportable_nesting() -> None:
+    """Only constructor fields enter payloads, and nested values remain strict JSON."""
+
+    codec = DataclassCodec([DataclassWithDerivedField, DataclassPreference])
+
+    encoded = codec.encode(DataclassWithDerivedField("stored"))
+
+    assert encoded.data["fields"] == {"value": "stored"}
+    invalid_values = [
+        DataclassPreference("style", [cast(int, math.inf)], {}),
+        DataclassPreference("style", [], {"priority": Priority.HIGH}),
+        DataclassPreference("style", [], cast(dict[str, Any], {1: "bad key"})),
+    ]
+    for value in invalid_values:
+        with pytest.raises(TypeError, match="not JSON-compatible"):
+            codec.encode(value)
+
 
 def test_enum_codec_round_trips_registered_enum_members() -> None:
     """EnumCodec stores registered enum members by type and name."""
@@ -396,3 +460,5 @@ def test_enum_codec_requires_registered_enum_types() -> None:
         EnumCodec().decode(encoded)
     with pytest.raises(TypeError, match="requires an enum type"):
         EnumCodec([str])  # type: ignore[list-item]
+    with pytest.raises(TypeError, match="only enum.Enum members"):
+        codec.encode("HIGH")

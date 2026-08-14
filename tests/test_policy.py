@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -177,6 +177,37 @@ def test_access_rules_and_policies_validate_and_freeze_their_inputs() -> None:
         MemoryPolicy(operations={"export": "allow"})  # type: ignore[dict-item]
     with pytest.raises(TypeError, match="must use an AccessRule"):
         PolicyEngine(operations={"export": "allow"})  # type: ignore[dict-item]
+
+
+def test_policy_models_reject_malformed_runtime_container_values() -> None:
+    """Runtime callers cannot bypass typed policy and principal container contracts."""
+
+    with pytest.raises(TypeError, match="id must be a string"):
+        Principal(id=cast(str, 7))
+    with pytest.raises(TypeError, match="metadata must be a dictionary"):
+        Principal(metadata=cast(dict[str, Any], []))
+    with pytest.raises(TypeError, match="roles must be a set"):
+        Principal(roles=cast(frozenset[str], ["reader"]))
+    with pytest.raises(TypeError, match="roles must contain only strings"):
+        Principal(roles=cast(frozenset[str], frozenset({1})))
+    with pytest.raises(ValueError, match="roles must not contain empty"):
+        Principal(roles=frozenset({""}))
+
+    with pytest.raises(TypeError, match="allow_owner must be a boolean"):
+        AccessRule(allow_owner=cast(bool, "yes"))
+    with pytest.raises(TypeError, match="principals must be a set"):
+        AccessRule(principals=cast(frozenset[str], ["agent"]))
+    with pytest.raises(TypeError, match="roles must contain only strings"):
+        AccessRule(roles=cast(frozenset[str], frozenset({1})))
+    with pytest.raises(ValueError, match="principals must not contain empty"):
+        AccessRule(principals=frozenset({""}))
+
+    with pytest.raises(TypeError, match="operations must be a mapping"):
+        MemoryPolicy(operations=cast(dict[str, AccessRule], []))
+    with pytest.raises(TypeError, match="names must be strings"):
+        MemoryPolicy(operations=cast(dict[str, AccessRule], {1: AccessRule.allow()}))
+    with pytest.raises(ValueError, match="names must not be empty"):
+        MemoryPolicy(operations={"": AccessRule.allow()})
 
 
 def test_memory_rejects_invalid_principals_and_policy_objects_at_entry() -> None:
@@ -449,6 +480,7 @@ def test_custom_operation_rules_are_deepcopy_friendly() -> None:
 
     assert copied_policy.operations["export"] == policy.operations["export"]
     assert copied_engine.operations["export"] == engine.operations["export"]
+    assert "export" in repr(policy.operations)
 
 
 def test_policy_engine_rejects_unknown_and_reserved_custom_operations() -> None:

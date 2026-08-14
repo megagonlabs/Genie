@@ -304,12 +304,73 @@ def test_temporal_entries_are_cleaned_when_blocks_are_deleted() -> None:
         _ = collection.collection
 
 
+def test_temporal_collection_handles_a_stale_backend_entry_defensively() -> None:
+    """Exact reads report stale entries while scans omit their missing targets."""
+
+    class StaleTemporalBackend(InMemoryBackend):
+        """Simulate an adapter that leaves temporal entries after target deletion."""
+
+        def delete_temporal_entries_for_block(self, block_id: str) -> None:
+            """Deliberately retain temporal state for the integrity-path test."""
+
+    backend = StaleTemporalBackend()
+    memory = Memory(backend=backend)
+    root = memory.put(type="temporal_collection", value="timeline")
+    target = memory.put(type="event", value="stale")
+    collection = TemporalCollection(memory, backend, collection=root)
+    collection.add(target, occurred_at=_time(1))
+    memory.delete(target)
+
+    with pytest.raises(MemoryNotFound, match="references missing memory block"):
+        collection.get(target)
+    assert collection.scan() == []
+
+
+def test_portable_temporal_scan_covers_negative_half_open_boundaries() -> None:
+    """Portable scans reject absent event times and disjoint validity intervals."""
+
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend)
+    root = memory.put(type="temporal_collection", value="timeline")
+    collection = TemporalCollection(
+        memory,
+        ScanOnlyTemporalStore(backend),
+        collection=root,
+    )
+    early = memory.put(type="event", value="early", id="mem_a")
+    at_stop = memory.put(type="event", value="at-stop", id="mem_b")
+    expired = memory.put(type="fact", value="expired", id="mem_c")
+    future = memory.put(type="fact", value="future", id="mem_d")
+    timeless = memory.put(type="fact", value="timeless", id="mem_e")
+    collection.add(early, occurred_at=_time(1))
+    collection.add(at_stop, occurred_at=_time(10))
+    collection.add(expired, validity=ValidityInterval(_time(1), _time(5)))
+    collection.add(future, validity=ValidityInterval(_time(10), _time(20)))
+    collection.add(timeless, validity=ValidityInterval(_time(1)))
+
+    assert collection.events(start=_time(5), stop=_time(10)) == []
+    assert collection.valid_at(_time(5)) == [
+        collection.get(timeless)
+    ]
+    assert collection.overlapping(ValidityInterval(_time(5), _time(10))) == [
+        collection.get(timeless)
+    ]
+    assert collection.overlapping(ValidityInterval(_time(20), _time(21))) == [
+        collection.get(timeless)
+    ]
+
+
 @pytest.mark.parametrize(
     "operation",
     [
-        lambda collection: collection.events(start=datetime(2026, 1, 1)),
+        lambda collection: collection.events(
+            start=datetime(2026, 1, 1)  # noqa: DTZ001 - invalid input
+        ),
+        lambda collection: collection.events(start=cast(datetime, "bad")),
         lambda collection: collection.events(start=_time(2), stop=_time(1)),
-        lambda collection: collection.valid_at(datetime(2026, 1, 1)),
+        lambda collection: collection.valid_at(
+            datetime(2026, 1, 1)  # noqa: DTZ001 - invalid input
+        ),
         lambda collection: collection.scan(overlaps=cast(ValidityInterval, "bad")),
         lambda collection: collection.scan(limit=-1),
         lambda collection: collection.scan(limit=True),
@@ -324,6 +385,8 @@ def test_temporal_collection_rejects_invalid_queries(
     memory = Memory(backend=backend)
     root = memory.put(type="temporal_collection", value="timeline")
     collection = TemporalCollection(memory, backend, collection=root)
+
+    assert collection.scan() == []
 
     with pytest.raises((TypeError, ValueError)):
         operation(collection)
@@ -348,6 +411,10 @@ def test_temporal_collection_requires_store_and_valid_optional_index() -> None:
         )
     with pytest.raises(MemoryNotFound, match="Temporal collection block"):
         TemporalCollection(memory, store, collection="missing")
+
+    collection = TemporalCollection(memory, store, collection=root)
+    with pytest.raises(MemoryNotFound, match="Memory block 'missing'"):
+        collection.add("missing", occurred_at=_time(1))
 
 
 def test_memory_and_handle_implement_temporal_access() -> None:

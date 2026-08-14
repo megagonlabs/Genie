@@ -49,6 +49,7 @@ def test_key_binding_uses_a_stable_namespaced_address() -> None:
         (("users", ""), "language", ValueError),
         (("users",), "", ValueError),
         ("users", "language", TypeError),
+        (1, "language", TypeError),
         (("users", 1), "language", TypeError),
     ],
 )
@@ -111,7 +112,7 @@ def test_validity_interval_rejects_naive_or_reversed_bounds() -> None:
     """Invalid temporal boundaries fail when the record is created."""
 
     with pytest.raises(ValueError, match="timezone-aware"):
-        ValidityInterval(valid_at=datetime(2026, 1, 1))
+        ValidityInterval(valid_at=datetime(2026, 1, 1))  # noqa: DTZ001 - invalid input
     with pytest.raises(ValueError, match="later than"):
         ValidityInterval(
             valid_at=datetime(2026, 2, 1, tzinfo=UTC),
@@ -228,7 +229,15 @@ def test_graph_neighbor_validates_direction_and_endpoint() -> None:
     [
         lambda: KeyBinding("collection", cast(MemoryAddress, "bad"), "mem_block"),
         lambda: KeyedItem(cast(KeyBinding, "bad"), MemoryBlock("note", "value")),
+        lambda: KeyedItem(
+            KeyBinding("collection", MemoryAddress((), "key"), "mem_block"),
+            cast(MemoryBlock, object()),
+        ),
         lambda: LogItem(cast(LogEntry, "bad"), MemoryBlock("note", "value")),
+        lambda: LogItem(
+            LogEntry("log", 0, "mem_block"),
+            cast(MemoryBlock, object()),
+        ),
         lambda: TemporalEntry(
             "timeline",
             "mem_block",
@@ -238,10 +247,43 @@ def test_graph_neighbor_validates_direction_and_endpoint() -> None:
             cast(TemporalEntry, "bad"),
             MemoryBlock("note", "value"),
         ),
+        lambda: TemporalItem(
+            TemporalEntry(
+                "timeline",
+                "mem_block",
+                occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            cast(MemoryBlock, object()),
+        ),
         lambda: RevisionItem(
             cast(RevisionEntry, "bad"),
             MemoryBlock("note", "value"),
         ),
+        lambda: RevisionItem(
+            RevisionEntry("record", 1, "mem_block"),
+            cast(MemoryBlock, object()),
+        ),
+        lambda: GraphPath(block_ids=cast(tuple[str, ...], object())),
+        lambda: GraphPath(block_ids=cast(tuple[str, ...], "mem_a")),
+        lambda: GraphPath(
+            block_ids=("mem_a", "mem_b"),
+            links=cast(tuple[MemoryLink, ...], object()),
+        ),
+        lambda: GraphPath(
+            block_ids=("mem_a", "mem_b"),
+            links=(cast(MemoryLink, object()),),
+        ),
+        lambda: GraphNeighbor(
+            cast(MemoryBlock, object()),
+            MemoryLink("mem_a", "mem_b", "related"),
+            "out",
+        ),
+        lambda: GraphNeighbor(
+            MemoryBlock("node", "value", id="mem_b"),
+            cast(MemoryLink, object()),
+            "out",
+        ),
+        lambda: ValidityInterval(cast(datetime, "not-a-datetime")),
     ],
 )
 def test_structural_records_reject_wrong_component_types(
@@ -283,6 +325,7 @@ def test_revision_item_requires_matching_block_id() -> None:
     "record",
     [
         lambda: KeyBinding("", MemoryAddress((), "key"), "mem_block"),
+        lambda: KeyBinding("   ", MemoryAddress((), "key"), "mem_block"),
         lambda: LogEntry("log", 1, ""),
         lambda: TemporalEntry(
             "",

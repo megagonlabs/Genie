@@ -9,6 +9,7 @@ import pytest
 from genie import (
     AccessDenied,
     AccessRule,
+    InMemoryBackend,
     LinkRelations,
     Memory,
     MemoryLink,
@@ -466,3 +467,37 @@ def test_child_handles_cannot_add_mount_access() -> None:
     child_scope = mount_parent_scope.get_handle(root=child, allow_mounts=True)
 
     assert child_scope.allow_mounts is True
+
+
+def test_reserved_mount_relation_is_rejected_by_non_mount_operations() -> None:
+    """Mount topology cannot enter the DAG API or be resolved from an ordinary link."""
+
+    memory = Memory()
+    source = memory.put(type="node", value="source")
+    target = memory.put(type="node", value="target")
+    ordinary = memory.add_link(source, target, "related")
+
+    with pytest.raises(ValueError, match="reserved mount relation"):
+        memory.add_acyclic_link(source, target, LinkRelations.MOUNT)
+    with pytest.raises(ValueError, match="Expected mount relation"):
+        memory.resolve_mount(ordinary)
+
+
+def test_update_link_rejects_a_dangling_non_mount_target() -> None:
+    """The memory layer detects a stale non-mount link returned by an adapter."""
+
+    class DanglingLinkBackend(InMemoryBackend):
+        """Simulate an adapter that failed to clean links during block deletion."""
+
+        def delete_links_for_block(self, block_id: str) -> None:
+            """Deliberately retain links so the public integrity check is exercised."""
+
+    backend = DanglingLinkBackend()
+    memory = Memory(backend=backend)
+    source = memory.put(type="node", value="source")
+    target = memory.put(type="node", value="target")
+    link = memory.add_link(source, target, "related")
+    memory.delete(target)
+
+    with pytest.raises(MemoryNotFound, match="Target memory block"):
+        memory.update_link(link, metadata={"stale": True})

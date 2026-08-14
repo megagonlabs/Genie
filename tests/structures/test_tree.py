@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from genie import AccessDenied, AccessRule, Memory, MemoryNotFound, MemoryPolicy
+from genie import (
+    AccessDenied,
+    AccessRule,
+    InMemoryBackend,
+    Memory,
+    MemoryBlock,
+    MemoryConflict,
+    MemoryNotFound,
+    MemoryPolicy,
+)
 from genie.structures import OwnershipAccess, OwnershipTree
 
 
@@ -43,12 +52,57 @@ def test_tree_traversal_is_bounded_at_the_facade_root() -> None:
 
     assert tree.root == root
     assert tree.parent(root) is None
+    assert tree.ancestors(root) == []
     assert tree.parent(leaf) == first
     assert tree.ancestors(leaf) == [first, root]
     assert tree.ancestors(leaf, include_self=True) == [leaf, first, root]
     assert tree.descendants() == [first, leaf, second]
     assert tree.descendants(first, include_self=True) == [first, leaf]
     assert outer not in tree.ancestors(leaf)
+
+
+def test_tree_detects_inconsistent_ancestor_and_child_indexes() -> None:
+    """The facade fails closed when an adapter returns broken ownership indexes."""
+
+    class CorruptTreeBackend(InMemoryBackend):
+        """Allow individual ownership index reads to be made inconsistent."""
+
+        broken_ancestor_id: str | None = None
+        repeated_child_id: str | None = None
+        repeated_root_id: str | None = None
+
+        def ancestors(self, block_id: str) -> list[MemoryBlock]:
+            """Hide a configured ancestor chain."""
+
+            if block_id == self.broken_ancestor_id:
+                return []
+            return super().ancestors(block_id)
+
+        def children(self, block_id: str) -> list[MemoryBlock]:
+            """Repeat the root beneath a configured child."""
+
+            children = super().children(block_id)
+            if block_id == self.repeated_child_id and self.repeated_root_id is not None:
+                repeated = self.get_block(self.repeated_root_id)
+                assert repeated is not None
+                children.append(repeated)
+            return children
+
+    backend = CorruptTreeBackend()
+    memory = Memory(backend=backend)
+    root = memory.put(type="root", value="root")
+    child = memory.put(parent=root, type="node", value="child")
+    tree = OwnershipTree(memory, root=root)
+
+    backend.broken_ancestor_id = child.id
+    with pytest.raises(AccessDenied, match="Cannot traverse"):
+        tree.ancestors(child)
+
+    backend.broken_ancestor_id = None
+    backend.repeated_child_id = child.id
+    backend.repeated_root_id = root.id
+    with pytest.raises(MemoryConflict, match="repeated memory block"):
+        tree.descendants()
 
 
 def test_tree_rejects_operations_outside_its_root() -> None:

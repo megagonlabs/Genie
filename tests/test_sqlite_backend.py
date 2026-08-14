@@ -6,9 +6,10 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier, Event
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -26,10 +27,11 @@ from genie import (
     MemoryConflict,
     MemoryLink,
     MemoryPolicy,
+    MemoryQuery,
     SQLiteBackend,
     UnsupportedOperation,
 )
-from genie.structures import KeyBinding, MemoryAddress
+from genie.structures import KeyBinding, MemoryAddress, TemporalEntry
 
 
 def test_sqlite_backend_implements_the_core_backend_protocol() -> None:
@@ -119,6 +121,47 @@ def test_sqlite_backend_persists_core_memory_state(tmp_path: Path) -> None:
     assert reopened.get(child.id) is None
     assert second.list_links(root.id, direction="both") == []
     second.close()
+
+
+def test_sqlite_backend_searches_every_core_scope() -> None:
+    """SQLite candidate selection covers global, ownership, ancestor, and link scopes."""
+
+    with SQLiteBackend() as backend:
+        root = backend.put_block(MemoryBlock(id="root", type="node", value="root"))
+        child = backend.put_block(
+            MemoryBlock(id="child", parent_id=root.id, type="node", value="child")
+        )
+        grandchild = backend.put_block(
+            MemoryBlock(
+                id="grandchild",
+                parent_id=child.id,
+                type="node",
+                value="grandchild",
+            )
+        )
+        outside = backend.put_block(
+            MemoryBlock(id="outside", type="node", value="outside")
+        )
+        backend.add_link(MemoryLink(child.id, outside.id, "related"))
+
+        def ids(scope: str, root_id: str | None) -> set[str]:
+            return {
+                result.block.id
+                for result in backend.search(
+                    MemoryQuery(scope=scope, root_id=root_id)
+                )
+            }
+
+        assert ids("global", None) == {root.id, child.id, grandchild.id, outside.id}
+        assert ids("self", child.id) == {child.id}
+        assert ids("subtree", root.id) == {root.id, child.id, grandchild.id}
+        assert ids("ancestors", grandchild.id) == {
+            root.id,
+            child.id,
+            grandchild.id,
+        }
+        assert ids("links", child.id) == {child.id, outside.id}
+        assert ids("subtree", "missing") == set()
 
 
 def test_sqlite_backend_rejects_conflicts_without_partial_changes() -> None:
@@ -238,6 +281,22 @@ def test_sqlite_backend_rejects_non_json_storage_values() -> None:
     with SQLiteBackend() as backend:
         with pytest.raises(TypeError, match="strict JSON"):
             backend.put_block(MemoryBlock(type="tuple", value=("not", "json")))
+        with pytest.raises(TypeError, match="created_at must be a datetime"):
+            backend.put_block(
+                MemoryBlock(
+                    type="bad-time",
+                    value={},
+                    created_at=cast(datetime, "bad"),
+                )
+            )
+        with pytest.raises(ValueError, match="created_at must be timezone-aware"):
+            backend.put_block(
+                MemoryBlock(
+                    type="naive-time",
+                    value={},
+                    created_at=datetime(2026, 1, 1),  # noqa: DTZ001 - invalid input
+                )
+            )
 
 
 @pytest.mark.parametrize(
@@ -245,12 +304,15 @@ def test_sqlite_backend_rejects_non_json_storage_values() -> None:
     [
         ("value_json", "{not-json"),
         ("value_json", "NaN"),
+        ("value_json", sqlite3.Binary(b"1")),
         ("created_at", "not-a-timestamp"),
+        ("created_at", 1),
+        ("created_at", "2026-01-01T00:00:00"),
     ],
 )
 def test_sqlite_backend_reports_invalid_stored_block_data_as_corruption(
     column: str,
-    stored_value: str,
+    stored_value: object,
 ) -> None:
     """Malformed rows fail through the documented backend error boundary."""
 
@@ -313,6 +375,46 @@ def test_sqlite_backend_reports_corrupt_structure_records() -> None:
             backend.list_keys(collection.id)
 
 
+def test_sqlite_backend_reports_corrupt_link_log_and_temporal_records() -> None:
+    """Every persisted optional record type maps malformed rows to corruption."""
+
+    with SQLiteBackend() as backend:
+        container = backend.put_block(
+            MemoryBlock(id="container", type="container", value={})
+        )
+        target = backend.put_block(MemoryBlock(id="target", type="note", value={}))
+        link = backend.add_link(MemoryLink(container.id, target.id, "related"))
+        log_entry = backend.append_log_entry(container.id, target.id)
+        temporal_entry = backend.add_temporal_entry(
+            TemporalEntry(
+                container.id,
+                target.id,
+                occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+        connection = backend._require_connection()
+        connection.execute(
+            "UPDATE links SET created_at = 'invalid' WHERE id = ?",
+            (link.id,),
+        )
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            "UPDATE log_entries SET sequence = -1 WHERE log_id = ? AND sequence = ?",
+            (log_entry.log_id, log_entry.sequence),
+        )
+        connection.execute(
+            "UPDATE temporal_entries SET occurred_at = 'invalid' WHERE collection_id = ? AND block_id = ?",
+            (temporal_entry.collection_id, temporal_entry.block_id),
+        )
+
+        with pytest.raises(BackendCorruption):
+            backend.list_links(container.id)
+        with pytest.raises(BackendCorruption, match="log entry"):
+            backend.list_log_entries(container.id)
+        with pytest.raises(BackendCorruption):
+            backend.get_temporal_entry(container.id, target.id)
+
+
 def test_sqlite_backend_context_manager_closes_connection() -> None:
     """The backend owns and closes its SQLite connection."""
 
@@ -321,6 +423,7 @@ def test_sqlite_backend_context_manager_closes_connection() -> None:
 
     with pytest.raises(RuntimeError, match="closed"):
         backend.get_block("missing")
+    backend.close()
 
 
 def test_sqlite_backend_rejects_newer_schema(tmp_path: Path) -> None:

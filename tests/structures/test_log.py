@@ -145,10 +145,33 @@ def test_event_log_cleanup_removes_deleted_log_state() -> None:
         _ = log.log
 
 
+def test_event_log_handles_a_stale_backend_entry_defensively() -> None:
+    """Exact reads report stale entries while scans omit their missing targets."""
+
+    class StaleLogBackend(InMemoryBackend):
+        """Simulate an adapter that leaves log entries after target deletion."""
+
+        def delete_log_entries_for_block(self, block_id: str) -> None:
+            """Deliberately retain log state for the integrity-path test."""
+
+    backend = StaleLogBackend()
+    memory = Memory(backend=backend)
+    root = memory.put(type="log", value="events")
+    target = memory.put(type="event", value="stale")
+    log = EventLog(memory, backend, log=root)
+    appended = log.append(target)
+    memory.delete(target)
+
+    with pytest.raises(MemoryNotFound, match="references missing memory block"):
+        log.get(appended.entry.sequence)
+    assert log.read() == []
+
+
 @pytest.mark.parametrize(
     "operation",
     [
         lambda log: log.get(-1),
+        lambda log: log.get(cast(int, True)),
         lambda log: log.read(start=-1),
         lambda log: log.read(stop=-1),
         lambda log: log.read(start=3, stop=2),
@@ -184,6 +207,10 @@ def test_event_log_requires_the_optional_backend_capability() -> None:
 
     with pytest.raises(MemoryNotFound, match="Event log block"):
         EventLog(memory, store, log="missing")
+
+    log = EventLog(memory, store, log=root)
+    with pytest.raises(MemoryNotFound, match="Memory block 'missing'"):
+        log.append("missing")
 
 
 def test_memory_and_handle_implement_sequence_access() -> None:

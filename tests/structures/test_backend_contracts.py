@@ -81,10 +81,24 @@ class BlockStoreContract(StructureBackendContract):
             )
 
     def test_block_reference_integrity_contract(self) -> None:
-        """Core writes reject missing identities and parent references."""
+        """Core writes reject duplicate identities and invalid parent references."""
 
         backend = self.make_backend()
+        existing = backend.put_block(
+            MemoryBlock(id="mem_existing", type="note", value={})
+        )
 
+        with pytest.raises(MemoryConflict):
+            backend.put_block(existing)
+        with pytest.raises(MemoryConflict):
+            backend.put_block(
+                MemoryBlock(
+                    id="mem_self_parent",
+                    parent_id="mem_self_parent",
+                    type="note",
+                    value={},
+                )
+            )
         with pytest.raises(MemoryConflict):
             backend.put_block(
                 MemoryBlock(
@@ -101,6 +115,7 @@ class BlockStoreContract(StructureBackendContract):
 
         assert backend.get_block("mem_orphan") is None
         assert backend.get_block("mem_missing") is None
+        backend.delete_block("mem_missing")
 
     def test_conditional_subtree_delete_contract(self) -> None:
         """Deletion rejects an incomplete or stale subtree snapshot."""
@@ -169,6 +184,13 @@ class KeyedStoreContract(StructureBackendContract):
                 root_address,
                 expected_block_id=first.id,
             )
+        store.unbind_key(
+            collection.id,
+            root_address,
+            expected_block_id=second.id,
+        )
+        assert store.get_key(collection.id, root_address) is None
+        store.bind_key(replacement)
 
         backend.delete_block(second.id)
         assert store.get_key(collection.id, root_address) is None
@@ -202,6 +224,53 @@ class KeyedStoreContract(StructureBackendContract):
 
         assert outcomes.count(True) == 1
         assert store.get_key(collection.id, address) is not None
+
+    def test_keyed_store_rejects_missing_references_and_invalid_pages(self) -> None:
+        """Keyed stores validate referential integrity and page arguments."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, KeyedStore)
+        store = cast(KeyedStore, backend)
+        collection, target = self.put_blocks(
+            backend,
+            "mem_collection",
+            "mem_target",
+        )
+        address = MemoryAddress((), "key")
+
+        with pytest.raises(MemoryConflict):
+            store.bind_key(KeyBinding("mem_missing", address, target.id))
+        with pytest.raises(MemoryConflict):
+            store.bind_key(KeyBinding(collection.id, address, "mem_missing"))
+        with pytest.raises(TypeError, match="recursive must be a boolean"):
+            store.list_keys(collection.id, recursive=cast(bool, 1))
+        with pytest.raises(TypeError, match="limit must be an integer"):
+            store.list_keys(collection.id, limit=cast(int, True))
+        with pytest.raises(ValueError, match="limit must be greater"):
+            store.list_keys(collection.id, limit=-1)
+
+    def test_keyed_store_explicit_cleanup_capability(self) -> None:
+        """Adapters can explicitly remove bindings for a deleted target or owner."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, KeyedStore)
+        store = cast(KeyedStore, backend)
+        collection, first, second = self.put_blocks(
+            backend,
+            "mem_collection",
+            "mem_first",
+            "mem_second",
+        )
+        first_address = MemoryAddress((), "first")
+        second_address = MemoryAddress((), "second")
+        store.bind_key(KeyBinding(collection.id, first_address, first.id))
+        store.bind_key(KeyBinding(collection.id, second_address, second.id))
+
+        store.delete_key_bindings_for_block(first.id)
+        assert store.get_key(collection.id, first_address) is None
+        assert store.get_key(collection.id, second_address) is not None
+        store.delete_key_bindings_for_block(collection.id)
+        assert store.list_keys(collection.id) == []
 
 
 class SequenceStoreContract(StructureBackendContract):
@@ -259,6 +328,53 @@ class SequenceStoreContract(StructureBackendContract):
             )
 
         assert sorted(entry.sequence for entry in entries) == list(range(100))
+
+    def test_sequence_store_rejects_missing_references_and_invalid_ranges(self) -> None:
+        """Sequence stores reject dangling appends and malformed range arguments."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, SequenceStore)
+        store = cast(SequenceStore, backend)
+        log, target = self.put_blocks(backend, "mem_log", "mem_target")
+
+        with pytest.raises(MemoryConflict):
+            store.append_log_entry("mem_missing", target.id)
+        with pytest.raises(MemoryConflict):
+            store.append_log_entry(log.id, "mem_missing")
+        with pytest.raises(TypeError, match="sequence must be an integer"):
+            store.get_log_entry(log.id, cast(int, True))
+        with pytest.raises(ValueError, match="sequence must be greater"):
+            store.get_log_entry(log.id, -1)
+        with pytest.raises(TypeError, match="reverse must be a boolean"):
+            store.list_log_entries(log.id, reverse=cast(bool, 1))
+        with pytest.raises(ValueError, match="stop must be greater"):
+            store.list_log_entries(log.id, start=2, stop=1)
+        with pytest.raises(TypeError, match="limit must be an integer"):
+            store.list_log_entries(log.id, limit=cast(int, True))
+        with pytest.raises(ValueError, match="limit must be greater"):
+            store.list_log_entries(log.id, limit=-1)
+
+    def test_sequence_store_explicit_cleanup_capability(self) -> None:
+        """Adapters can explicitly remove entries for a target or entire log."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, SequenceStore)
+        store = cast(SequenceStore, backend)
+        log, first, second = self.put_blocks(
+            backend,
+            "mem_log",
+            "mem_first",
+            "mem_second",
+        )
+        store.append_log_entry(log.id, first.id)
+        store.append_log_entry(log.id, second.id)
+
+        store.delete_log_entries_for_block(first.id)
+        assert [entry.block_id for entry in store.list_log_entries(log.id)] == [
+            second.id
+        ]
+        store.delete_log_entries_for_block(log.id)
+        assert store.list_log_entries(log.id) == []
 
 
 class TemporalStoreContract(StructureBackendContract):
@@ -356,6 +472,79 @@ class TemporalStoreContract(StructureBackendContract):
 
         assert outcomes.count(True) == 1
 
+    def test_temporal_store_rejects_missing_references_and_invalid_pages(self) -> None:
+        """Temporal stores validate references, removal state, and page limits."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, TemporalStore)
+        store = cast(TemporalStore, backend)
+        collection, target = self.put_blocks(
+            backend,
+            "mem_collection",
+            "mem_target",
+        )
+        entry = TemporalEntry(
+            collection.id,
+            target.id,
+            occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+        with pytest.raises(MemoryConflict):
+            store.add_temporal_entry(
+                TemporalEntry(
+                    "mem_missing",
+                    target.id,
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            )
+        with pytest.raises(MemoryConflict):
+            store.add_temporal_entry(
+                TemporalEntry(
+                    collection.id,
+                    "mem_missing",
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            )
+        with pytest.raises(MemoryConflict):
+            store.replace_temporal_entry(entry)
+        store.add_temporal_entry(entry)
+        store.remove_temporal_entry(collection.id, target.id)
+        assert store.get_temporal_entry(collection.id, target.id) is None
+        with pytest.raises(MemoryConflict):
+            store.remove_temporal_entry(collection.id, target.id)
+        with pytest.raises(TypeError, match="limit must be an integer"):
+            store.list_temporal_entries(collection.id, limit=cast(int, True))
+        with pytest.raises(ValueError, match="limit must be greater"):
+            store.list_temporal_entries(collection.id, limit=-1)
+
+    def test_temporal_store_explicit_cleanup_capability(self) -> None:
+        """Adapters can explicitly remove memberships for a target or collection."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, TemporalStore)
+        store = cast(TemporalStore, backend)
+        collection, first, second = self.put_blocks(
+            backend,
+            "mem_collection",
+            "mem_first",
+            "mem_second",
+        )
+        for target in (first, second):
+            store.add_temporal_entry(
+                TemporalEntry(
+                    collection.id,
+                    target.id,
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            )
+
+        store.delete_temporal_entries_for_block(first.id)
+        assert [
+            entry.block_id for entry in store.list_temporal_entries(collection.id)
+        ] == [second.id]
+        store.delete_temporal_entries_for_block(collection.id)
+        assert store.list_temporal_entries(collection.id) == []
+
 
 class TemporalIndexContract(StructureBackendContract):
     """Contract tests reusable by backends implementing ``TemporalIndex``."""
@@ -420,6 +609,101 @@ class TemporalIndexContract(StructureBackendContract):
             )
         ] == [valid.id]
 
+    def test_temporal_index_rejects_invalid_query_arguments(self) -> None:
+        """Indexed temporal queries reject malformed booleans, times, and limits."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, TemporalIndex)
+        index = cast(TemporalIndex, backend)
+
+        with pytest.raises(TypeError, match="occurred_only must be a boolean"):
+            index.query_temporal_entries("collection", occurred_only=cast(bool, 1))
+        with pytest.raises(TypeError, match="occurred_start must be a datetime"):
+            index.query_temporal_entries(
+                "collection",
+                occurred_start=cast(datetime, "bad"),
+            )
+        with pytest.raises(ValueError, match="occurred_start must be timezone-aware"):
+            index.query_temporal_entries(
+                "collection",
+                occurred_start=datetime(2026, 1, 1),  # noqa: DTZ001 - invalid input
+            )
+        with pytest.raises(ValueError, match="occurred_stop must be greater"):
+            index.query_temporal_entries(
+                "collection",
+                occurred_start=datetime(2026, 1, 2, tzinfo=UTC),
+                occurred_stop=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        with pytest.raises(TypeError, match="overlaps must be a ValidityInterval"):
+            index.query_temporal_entries(
+                "collection",
+                overlaps=cast(ValidityInterval, object()),
+            )
+        with pytest.raises(TypeError, match="limit must be an integer"):
+            index.query_temporal_entries("collection", limit=cast(int, True))
+        with pytest.raises(ValueError, match="limit must be greater"):
+            index.query_temporal_entries("collection", limit=-1)
+
+    def test_temporal_index_overlap_and_paging_contract(self) -> None:
+        """Overlap bounds and block-id cursors compose without boundary leaks."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, TemporalStore)
+        assert isinstance(backend, TemporalIndex)
+        store = cast(TemporalStore, backend)
+        index = cast(TemporalIndex, backend)
+        collection, first, second, third = self.put_blocks(
+            backend,
+            "mem_collection",
+            "mem_a",
+            "mem_b",
+            "mem_c",
+        )
+        for target, start, stop in (
+            (
+                first,
+                datetime(2026, 1, 1, tzinfo=UTC),
+                datetime(2026, 1, 3, tzinfo=UTC),
+            ),
+            (
+                second,
+                datetime(2026, 1, 2, tzinfo=UTC),
+                None,
+            ),
+            (
+                third,
+                datetime(2026, 1, 4, tzinfo=UTC),
+                datetime(2026, 1, 5, tzinfo=UTC),
+            ),
+        ):
+            store.add_temporal_entry(
+                TemporalEntry(
+                    collection.id,
+                    target.id,
+                    validity=ValidityInterval(start, stop),
+                )
+            )
+
+        assert [
+            entry.block_id
+            for entry in index.query_temporal_entries(
+                collection.id,
+                overlaps=ValidityInterval(
+                    datetime(2026, 1, 2, tzinfo=UTC),
+                    datetime(2026, 1, 4, tzinfo=UTC),
+                ),
+                after_block_id=first.id,
+                limit=1,
+            )
+        ] == [second.id]
+        assert [
+            entry.block_id
+            for entry in index.query_temporal_entries(
+                collection.id,
+                overlaps=ValidityInterval(datetime(2026, 1, 5, tzinfo=UTC)),
+            )
+        ] == [second.id]
+
 
 class AcyclicLinkStoreContract(StructureBackendContract):
     """Contract tests reusable by backends implementing ``AcyclicLinkStore``."""
@@ -473,6 +757,34 @@ class AcyclicLinkStoreContract(StructureBackendContract):
             outcomes = list(executor.map(add, links))
 
         assert outcomes.count(True) == 1
+
+    def test_acyclic_link_store_rejects_missing_endpoints(self) -> None:
+        """Atomic DAG insertion preserves identity and endpoint integrity."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, AcyclicLinkStore)
+        store = cast(AcyclicLinkStore, backend)
+        source, target = self.put_blocks(backend, "mem_source", "mem_target")
+
+        with pytest.raises(MemoryConflict):
+            store.add_acyclic_link(
+                MemoryLink("mem_missing", target.id, "derived_into")
+            )
+        with pytest.raises(MemoryConflict):
+            store.add_acyclic_link(
+                MemoryLink(source.id, "mem_missing", "derived_into")
+            )
+        stored = MemoryLink(
+            source.id,
+            target.id,
+            "derived_into",
+            id="mem_link",
+        )
+        assert store.add_acyclic_link(stored) == stored
+        with pytest.raises(MemoryConflict):
+            store.add_acyclic_link(
+                MemoryLink(source.id, target.id, "derived_into", id=stored.id)
+            )
 
 
 class TestInMemoryStructureBackendContracts(
