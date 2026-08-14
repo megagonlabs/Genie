@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from threading import Barrier
 from typing import Any, Literal
 
 import pytest
@@ -185,6 +187,31 @@ def test_standalone_link_store_updates_only_metadata() -> None:
         store.add_link(link)
 
 
+def test_standalone_link_store_rejects_concurrent_duplicate_ids() -> None:
+    """The shared reference store atomically claims each link identity."""
+
+    store = InMemoryLinkStore()
+    link = MemoryLink(
+        source_id="source",
+        target_id="target",
+        relation="related",
+        id="shared-link",
+    )
+
+    def add(_: int) -> bool:
+        try:
+            store.add_link(link)
+        except MemoryConflict:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        outcomes = list(executor.map(add, range(48)))
+
+    assert outcomes.count(True) == 1
+    assert store.list_links("source") == [link]
+
+
 def test_routed_backend_routes_root_blocks_to_owning_stores() -> None:
     """Independent root blocks can live in different backend stores."""
 
@@ -206,6 +233,40 @@ def test_routed_backend_routes_root_blocks_to_owning_stores() -> None:
     assert route_a.get_block(block_b.id) is None
     assert route_b.get_block(block_b.id) is not None
     assert route_b.get_block(block_a.id) is None
+
+
+def test_routed_backend_atomically_assigns_one_owning_route() -> None:
+    """Concurrent creates cannot place one block id in multiple routes."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    barrier = Barrier(2)
+    candidates = [
+        MemoryBlock(id="shared", type="note", value="a", metadata={"route": "a"}),
+        MemoryBlock(id="shared", type="note", value="b", metadata={"route": "b"}),
+    ]
+
+    def put(block: MemoryBlock) -> bool:
+        barrier.wait()
+        try:
+            backend.put_block(block)
+        except MemoryConflict:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(put, candidates))
+
+    assert outcomes.count(True) == 1
+    assert sum(
+        route.get_block("shared") is not None
+        for route in (route_a, route_b)
+    ) == 1
 
 
 def test_routed_backend_children_inherit_parent_route() -> None:

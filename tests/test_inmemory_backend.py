@@ -238,3 +238,23 @@ def test_inmemory_backend_read_paths_return_defensive_copies() -> None:
     child_after_search = backend.get_block(child.id)
     assert child_after_search is not None
     assert child_after_search.value == {"items": ["child"]}
+
+
+def test_inmemory_link_scope_search_has_deterministic_tie_order() -> None:
+    """Linked candidates preserve first-seen link endpoint order."""
+
+    backend = InMemoryBackend()
+    root = backend.put_block(MemoryBlock(id="root", type="node", value={}))
+    first = backend.put_block(MemoryBlock(id="first", type="node", value={}))
+    second = backend.put_block(MemoryBlock(id="second", type="node", value={}))
+    backend.add_link(MemoryLink(root.id, second.id, "related", id="first-link"))
+    backend.add_link(MemoryLink(first.id, root.id, "related", id="second-link"))
+
+    result_ids = [
+        result.block.id
+        for result in backend.search(
+            MemoryQuery(root_id=root.id, scope="links")
+        )
+    ]
+
+    assert result_ids == [root.id, second.id, first.id]

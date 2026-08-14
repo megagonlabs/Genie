@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryConflict, MemoryNotFound
@@ -285,7 +285,9 @@ class PropertyGraph:
         """Resolve one edge to a visible neighbor relative to ``block_id``."""
 
         if edge.source_id == block_id and edge.target_id == block_id:
-            direction = "in" if requested_direction == "in" else "out"
+            direction: Literal["out", "in"] = (
+                "in" if requested_direction == "in" else "out"
+            )
             neighbor_id = block_id
         elif edge.source_id == block_id:
             direction = "out"

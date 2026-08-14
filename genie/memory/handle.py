@@ -412,8 +412,8 @@ class MemoryHandle:
         return [
             link
             for link in links
-            if self._memory.contains(self.root_id, link.source_id)
-            and self._memory.contains(self.root_id, link.target_id)
+            if self._memory._contains_raw(self.root_id, link.source_id)
+            and self._memory._contains_raw(self.root_id, link.target_id)
         ]
 
     def add_mount(
@@ -597,7 +597,7 @@ class MemoryHandle:
         return [
             result
             for result in results
-            if self._memory.contains(self.root_id, result.block.id)
+            if self._memory._contains_raw(self.root_id, result.block.id)
         ]
 
     def get_handle(
@@ -692,7 +692,7 @@ class MemoryHandle:
 
         if self.root_id is None or block_id is None:
             return
-        if not self._memory.contains(self.root_id, block_id):
+        if not self._memory._contains_raw(self.root_id, block_id):
             raise AccessDenied(
                 f"Memory block {block_id!r} is outside memory handle root {self.root_id!r}."
             )

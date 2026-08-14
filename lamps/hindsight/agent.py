@@ -403,14 +403,14 @@ class HindsightAgent:
                 },
             )
             self._memory_ids[candidate.key] = result["id"]
-        for candidate in links:
+        for link_candidate in links:
             self._call(
                 "link_memories",
                 {
-                    "source_id": self._require_memory_id(candidate.source_key),
-                    "target_id": self._require_memory_id(candidate.target_key),
-                    "relation": candidate.relation,
-                    "metadata": deepcopy(candidate.metadata),
+                    "source_id": self._require_memory_id(link_candidate.source_key),
+                    "target_id": self._require_memory_id(link_candidate.target_key),
+                    "relation": link_candidate.relation,
+                    "metadata": deepcopy(link_candidate.metadata),
                 },
             )
         self._call(

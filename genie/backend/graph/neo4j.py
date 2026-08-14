@@ -8,12 +8,12 @@ and makes compound checks and writes atomic across backend instances.
 
 from __future__ import annotations
 
+import json
+import math
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
-import json
-import math
 from threading import Condition, RLock
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
@@ -1013,10 +1013,10 @@ class Neo4jBackend:
         self._ensure_schema_objects()
         self._await_schema_indexes()
         self._validate_schema_objects()
-        state = self._read_schema_identity()
-        if state is None:
+        current_state = self._read_schema_identity()
+        if current_state is None:
             raise UnsupportedOperation("The Genie Neo4j schema identity is missing.")
-        self._validate_schema_identity(state)
+        self._validate_schema_identity(current_state)
 
     def _apply_schema_migration(self, target_version: int) -> None:
         """Apply one idempotent schema migration."""
@@ -1044,14 +1044,19 @@ class Neo4jBackend:
         """Wait until every owned range index is online."""
 
         for name in _INDEXES:
-            self._raw_read(
-                lambda tx, index_name=name: _consume(
-                    tx,
-                    "CALL db.awaitIndex($index_name, $timeout_seconds)",
-                    index_name=index_name,
-                    timeout_seconds=_SCHEMA_INDEX_TIMEOUT_SECONDS,
-                )
+            self._await_schema_index(name)
+
+    def _await_schema_index(self, index_name: str) -> None:
+        """Wait until one owned range index is online."""
+
+        self._raw_read(
+            lambda tx: _consume(
+                tx,
+                "CALL db.awaitIndex($index_name, $timeout_seconds)",
+                index_name=index_name,
+                timeout_seconds=_SCHEMA_INDEX_TIMEOUT_SECONDS,
             )
+        )
 
     def _write_schema_identity(self, version: int) -> dict[str, Any]:
         """Advance the owned schema identity without overwriting another owner."""
@@ -1614,10 +1619,10 @@ def _encode_rule(rule: AccessRule) -> dict[str, Any]:
 
 def _decode_rule(payload: Mapping[str, Any]) -> AccessRule:
     return AccessRule(
-        allow_all=bool(payload["allow_all"]),
+        allow_all=payload["allow_all"],
         principals=frozenset(payload["principals"]),
         roles=frozenset(payload["roles"]),
-        allow_owner=bool(payload["allow_owner"]),
+        allow_owner=payload["allow_owner"],
     )
 
 
@@ -1631,9 +1636,12 @@ def _load_json(value: object) -> Any:
     if not isinstance(value, str):
         raise BackendCorruption("Stored Neo4j JSON values must be strings.")
     try:
-        return json.loads(value)
+        decoded = json.loads(value)
     except json.JSONDecodeError as error:
         raise BackendCorruption("Stored Neo4j JSON is invalid.") from error
+    if not _is_strict_json(decoded):
+        raise BackendCorruption("Stored Neo4j JSON is not strict JSON data.")
+    return decoded
 
 
 def _is_strict_json(value: Any) -> bool:

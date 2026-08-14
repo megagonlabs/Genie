@@ -85,8 +85,9 @@ class InMemoryBackend:
             Defensive copy of the block, or `None` when missing.
         """
 
-        block = self._blocks.get(block_id)
-        return _copy_block(block) if block is not None else None
+        with self._structure_lock:
+            block = self._blocks.get(block_id)
+            return _copy_block(block) if block is not None else None
 
     def update_block(
         self,
@@ -175,10 +176,11 @@ class InMemoryBackend:
             Defensive copies of direct child blocks.
         """
 
-        return [
-            _copy_block(self._blocks[child_id])
-            for child_id in self._children.get(block_id, ())
-        ]
+        with self._structure_lock:
+            return [
+                _copy_block(self._blocks[child_id])
+                for child_id in self._children.get(block_id, ())
+            ]
 
     def ancestors(self, block_id: str) -> list[MemoryBlock]:
         """Return ancestors from nearest parent upward.
@@ -190,15 +192,16 @@ class InMemoryBackend:
             Defensive copies of ancestor blocks.
         """
 
-        ancestors: list[MemoryBlock] = []
-        block = self._blocks.get(block_id)
-        while block is not None and block.parent_id is not None:
-            parent = self._blocks.get(block.parent_id)
-            if parent is None:
-                break
-            ancestors.append(_copy_block(parent))
-            block = parent
-        return ancestors
+        with self._structure_lock:
+            ancestors: list[MemoryBlock] = []
+            block = self._blocks.get(block_id)
+            while block is not None and block.parent_id is not None:
+                parent = self._blocks.get(block.parent_id)
+                if parent is None:
+                    break
+                ancestors.append(_copy_block(parent))
+                block = parent
+            return ancestors
 
     def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
         """Return descendants in depth-first order.
@@ -211,12 +214,13 @@ class InMemoryBackend:
             Defensive copies of descendant blocks.
         """
 
-        blocks: list[MemoryBlock] = []
-        if include_self and block_id in self._blocks:
-            blocks.append(_copy_block(self._blocks[block_id]))
-        for child_id in self._children.get(block_id, ()):
-            blocks.extend(self.descendants(child_id, include_self=True))
-        return blocks
+        with self._structure_lock:
+            blocks: list[MemoryBlock] = []
+            if include_self and block_id in self._blocks:
+                blocks.append(_copy_block(self._blocks[block_id]))
+            for child_id in self._children.get(block_id, ()):
+                blocks.extend(self.descendants(child_id, include_self=True))
+            return blocks
 
     def contains(self, root_id: str, block_id: str) -> bool:
         """Return whether `block_id` is in `root_id`'s subtree.
@@ -229,11 +233,12 @@ class InMemoryBackend:
             `True` when `block_id` is equal to or below `root_id`.
         """
 
-        if root_id not in self._blocks:
-            return False
-        if root_id == block_id:
-            return True
-        return any(block.id == block_id for block in self.descendants(root_id))
+        with self._structure_lock:
+            if root_id not in self._blocks:
+                return False
+            if root_id == block_id:
+                return True
+            return any(block.id == block_id for block in self.descendants(root_id))
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
         """Atomically bind an unused collection address to a block.
@@ -792,25 +797,28 @@ class InMemoryBackend:
             Search results sorted by descending score.
         """
 
-        candidates = self._scope_candidates(query)
-        results: list[SearchResult] = []
-        text = query.text.casefold() if query.text else None
-        for block in candidates:
-            if query.types and block.type not in query.types:
-                continue
-            if query.filters and not matches_filters(block, query.filters):
-                continue
-            score = 1.0
-            reason = "matched filters"
-            if text:
-                haystack = f"{block.type} {block.value!r} {block.metadata!r}".casefold()
-                if text not in haystack:
+        with self._structure_lock:
+            candidates = self._scope_candidates(query)
+            results: list[SearchResult] = []
+            text = query.text.casefold() if query.text else None
+            for block in candidates:
+                if query.types and block.type not in query.types:
                     continue
-                score = float(haystack.count(text) or 1)
-                reason = "matched text"
-            results.append(SearchResult(block=_copy_block(block), score=score, reason=reason))
-        results.sort(key=lambda result: result.score, reverse=True)
-        return results[: query.limit]
+                if query.filters and not matches_filters(block, query.filters):
+                    continue
+                score = 1.0
+                reason = "matched filters"
+                if text:
+                    haystack = f"{block.type} {block.value!r} {block.metadata!r}".casefold()
+                    if text not in haystack:
+                        continue
+                    score = float(haystack.count(text) or 1)
+                    reason = "matched text"
+                results.append(
+                    SearchResult(block=_copy_block(block), score=score, reason=reason)
+                )
+            results.sort(key=lambda result: result.score, reverse=True)
+            return results[: query.limit]
 
     def _scope_candidates(self, query: MemoryQuery) -> list[MemoryBlock]:
         """Return candidate blocks before text/type/filter matching."""
@@ -826,10 +834,13 @@ class InMemoryBackend:
         if query.scope == Scope.ANCESTORS:
             return [self._blocks[query.root_id], *self.ancestors(query.root_id)]
         if query.scope == Scope.LINKS:
-            block_ids: set[str] = set()
+            block_ids: list[str] = []
+            seen: set[str] = set()
             for link in self.list_links(query.root_id, direction="both"):
-                block_ids.add(link.source_id)
-                block_ids.add(link.target_id)
+                for block_id in (link.source_id, link.target_id):
+                    if block_id not in seen:
+                        seen.add(block_id)
+                        block_ids.append(block_id)
             return [self._blocks[block_id] for block_id in block_ids if block_id in self._blocks]
         return list(self._blocks.values())
 

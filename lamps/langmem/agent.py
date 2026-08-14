@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Literal
 
@@ -318,15 +318,15 @@ class LangMemAgent:
                     "entities": list(candidate.entities),
                 },
             )
-        for candidate in links:
+        for link_candidate in links:
             self._call(
                 "link_memories",
                 {
-                    "source_collection": candidate.source_collection,
-                    "source_key": candidate.source_key,
-                    "target_collection": candidate.target_collection,
-                    "target_key": candidate.target_key,
-                    "relation": candidate.relation,
+                    "source_collection": link_candidate.source_collection,
+                    "source_key": link_candidate.source_key,
+                    "target_collection": link_candidate.target_collection,
+                    "target_key": link_candidate.target_key,
+                    "relation": link_candidate.relation,
                 },
             )
 

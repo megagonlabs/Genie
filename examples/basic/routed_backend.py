@@ -118,7 +118,7 @@ def main() -> None:
     print(f"US note inherited route: {backend.route_for_block(us_note.id)}")
     print(f"mount link relation: {eu_rollout_link.relation}")
     print(f"mounts discovered before APAC registration: {len(pending_mounts)} (EU and APAC)")
-    print(f"APAC mount before route registration: unresolved")
+    print("APAC mount before route registration: unresolved")
     print(f"EU subtree search result: {eu_results[0].block.value}")
     print(f"EU mount target: {mounted_root.value if mounted_root else None}")
     print(f"APAC project route after registration: {backend.route_for_block(apac_project.id)}")

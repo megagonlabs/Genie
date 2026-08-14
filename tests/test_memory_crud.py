@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from genie import AccessDenied, AccessRule, Memory, MemoryPolicy
@@ -91,6 +93,38 @@ def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
         memory.put(type="note", value="orphan", parent="missing")
 
 
+def test_contains_enforces_root_traversal_and_candidate_read_policy() -> None:
+    """Public containment does not expose private ownership membership."""
+
+    owner = Memory(principal="owner")
+    public_root = owner.put(
+        type="root",
+        value="public",
+        policy=MemoryPolicy.public(),
+    )
+    private_child = owner.put(
+        parent=public_root,
+        type="note",
+        value="private",
+    )
+    private_root = owner.put(type="root", value="private")
+    reader = Memory(
+        backend=owner.backend,
+        principal="reader",
+        policy_engine=owner.policy_engine,
+        hooks=owner.hooks,
+        codecs=owner.codecs,
+    )
+
+    assert owner.contains(public_root, private_child)
+    assert reader.contains(public_root, private_child) is False
+    assert reader.contains(public_root, "missing") is False
+    with pytest.raises(AccessDenied):
+        reader.contains(private_root, private_root)
+    with pytest.raises(MemoryNotFound):
+        reader.contains("missing", private_child)
+
+
 def test_update_requires_dict_values() -> None:
     """Value updates are accepted only for dictionary values."""
 
@@ -116,6 +150,29 @@ def test_metadata_only_update_preserves_value_and_versions() -> None:
     assert reread is not None
     assert reread.value == ["keep"]
     assert reread.metadata == {"source": "initial", "priority": 2}
+
+
+def test_block_metadata_requires_a_strict_json_dictionary() -> None:
+    """In-memory use enforces the same portable metadata shape as persistence."""
+
+    memory = Memory()
+
+    with pytest.raises(TypeError, match="dictionary"):
+        memory.put(
+            type="note",
+            value="invalid",
+            metadata=cast(dict[str, Any], []),
+        )
+    with pytest.raises(TypeError, match="strict JSON"):
+        memory.put(
+            type="note",
+            value="invalid",
+            metadata={"confidence": float("nan")},
+        )
+
+    block = memory.put(type="note", value={})
+    with pytest.raises(TypeError, match="dictionary"):
+        memory.update(block, metadata=cast(dict[str, Any], []))
 
 
 def test_returned_blocks_do_not_mutate_stored_values_or_metadata() -> None:

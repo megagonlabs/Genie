@@ -9,13 +9,12 @@ from typing import Any
 from uuid import uuid4
 
 from genie.hooks.base import MemoryHook
-from genie.hooks.events import HookContext, HookOperation, StructureChange
+from genie.hooks.events import HookContext, HookOperation, HookOrigin, StructureChange
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import HookRecursionError
 from genie.memory.links import MemoryLink
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
-
 
 _CURRENT_OPERATION: ContextVar[HookContext | None] = ContextVar(
     "genie_current_hook_operation",
@@ -102,7 +101,7 @@ class HookRegistry:
             operation = HookOperation(operation)
         parent = _CURRENT_OPERATION.get()
         depth = parent.depth + 1 if parent is not None else 0
-        origin = "hook" if _ACTIVE_CALLBACKS.get() else "caller"
+        origin: HookOrigin = "hook" if _ACTIVE_CALLBACKS.get() else "caller"
         if origin == "hook" and depth > self.max_depth:
             raise HookRecursionError(
                 f"Hook operation depth {depth} exceeds configured maximum "
@@ -141,18 +140,20 @@ class HookRegistry:
         if hooks:
             current = _SUPPRESSED_HOOKS.get()
             selected = frozenset((id(self), id(hook)) for hook in hooks)
-            token = _SUPPRESSED_HOOKS.set(current | selected)
+            hooks_token = _SUPPRESSED_HOOKS.set(current | selected)
             try:
                 yield
             finally:
-                _SUPPRESSED_HOOKS.reset(token)
+                _SUPPRESSED_HOOKS.reset(hooks_token)
             return
 
-        token = _SUPPRESSED_REGISTRIES.set(_SUPPRESSED_REGISTRIES.get() | {id(self)})
+        registries_token = _SUPPRESSED_REGISTRIES.set(
+            _SUPPRESSED_REGISTRIES.get() | {id(self)}
+        )
         try:
             yield
         finally:
-            _SUPPRESSED_REGISTRIES.reset(token)
+            _SUPPRESSED_REGISTRIES.reset(registries_token)
 
     def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
         """Dispatch ``before_put`` in registration order."""

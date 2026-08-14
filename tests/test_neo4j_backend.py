@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-import importlib.util
-import os
 from threading import Condition, Event, RLock
 from typing import Any
 
@@ -28,8 +29,8 @@ from genie import (
     MemoryPolicy,
     MemoryQuery,
     Neo4jBackend,
-    SequenceStore,
     Scope,
+    SequenceStore,
     TemporalIndex,
     TemporalStore,
     UnsupportedOperation,
@@ -136,6 +137,40 @@ def test_neo4j_serialization_reports_corrupt_stored_values() -> None:
     properties["value_json"] = "{not-json"
 
     with pytest.raises(BackendCorruption, match="JSON"):
+        neo4j_module._block_from_record(
+            {"block": {**properties, "storage_order": 0}, "parent_id": None}
+        )
+
+
+def test_neo4j_serialization_rejects_non_strict_json_and_policy_booleans() -> None:
+    """Stored non-finite values and truthy policy strings are corruption."""
+
+    properties = neo4j_module._block_properties(
+        MemoryBlock(
+            id="note",
+            type="note",
+            value={},
+            policy=MemoryPolicy.public(),
+        )
+    )
+    properties["value_json"] = "NaN"
+    with pytest.raises(BackendCorruption, match="strict JSON"):
+        neo4j_module._block_from_record(
+            {"block": {**properties, "storage_order": 0}, "parent_id": None}
+        )
+
+    properties = neo4j_module._block_properties(
+        MemoryBlock(
+            id="note",
+            type="note",
+            value={},
+            policy=MemoryPolicy.public(),
+        )
+    )
+    policy = neo4j_module._load_json(properties["policy_json"])
+    policy["read"]["allow_all"] = "false"
+    properties["policy_json"] = json.dumps(policy)
+    with pytest.raises(BackendCorruption, match="memory block"):
         neo4j_module._block_from_record(
             {"block": {**properties, "storage_order": 0}, "parent_id": None}
         )

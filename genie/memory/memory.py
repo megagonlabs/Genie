@@ -112,7 +112,8 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write under the parent.
             MemoryNotFound: If the parent id does not exist.
-            TypeError: If no codec can encode the value.
+            TypeError: If metadata is not a strict JSON dictionary or no codec
+                can encode the value.
         """
 
         with self.hooks.operation(
@@ -133,13 +134,14 @@ class Memory:
                 value=encoded.data,
                 parent_id=parent_id,
                 content_type=encoded.content_type,
-                metadata=deepcopy(metadata or {}),
+                metadata=_copy_metadata(metadata),
                 policy=policy if policy is not None else self.default_policy,
                 created_by=self.principal.id,
             )
             block = self.hooks.before_put(context, block)
             if block.parent_id != parent_id:
                 raise ValueError("before_put hooks cannot change a block's parent_id.")
+            block = block.with_updates(metadata=_copy_metadata(block.metadata))
             stored = self.backend.put_block(block)
             self.hooks.after_put(context, stored)
             return self._decode_block(stored)
@@ -212,6 +214,7 @@ class Memory:
                 version=block.version + 1,
             )
             updated = self.hooks.before_update(context, block, proposed)
+            updated = updated.with_updates(metadata=_copy_metadata(updated.metadata))
             _require_update_hook_invariants(proposed, updated)
             stored = self.backend.update_block(updated, expected_version=block.version)
             self.hooks.after_update(context, block, stored)
@@ -239,7 +242,7 @@ class Memory:
             MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
             TypeError: If `value` is provided and the existing decoded value is
-                not a dictionary.
+                not a dictionary, or metadata is not a strict JSON dictionary.
         """
 
         with self.hooks.operation(
@@ -254,7 +257,9 @@ class Memory:
                     raise TypeError("Value updates require the existing memory value to be a dict.")
                 decoded_value = {**decoded_value, **value}
             encoded = self.codecs.encode(decoded_value, block.content_type)
-            updated_metadata = deepcopy({**block.metadata, **(metadata or {})})
+            updated_metadata = _copy_metadata(
+                {**block.metadata, **_copy_metadata(metadata)}
+            )
             proposed = block.with_updates(
                 value=encoded.data,
                 metadata=updated_metadata,
@@ -262,6 +267,7 @@ class Memory:
                 version=block.version + 1,
             )
             updated = self.hooks.before_update(context, block, proposed)
+            updated = updated.with_updates(metadata=_copy_metadata(updated.metadata))
             _require_update_hook_invariants(proposed, updated)
             stored = self.backend.update_block(updated, expected_version=block.version)
             self.hooks.after_update(context, block, stored)
@@ -369,6 +375,7 @@ class Memory:
             AccessDenied: If the principal cannot write the source or read the
                 target.
             MemoryNotFound: If either endpoint is missing.
+            TypeError: If metadata is not a strict JSON dictionary.
         """
 
         return self._add_link(
@@ -403,6 +410,7 @@ class Memory:
                 target. A pending mount without a registered target is governed
                 by its source policy.
             MemoryNotFound: If the link or a non-mount endpoint is missing.
+            TypeError: If metadata is not a strict JSON dictionary.
         """
 
         with self.hooks.operation(
@@ -422,9 +430,12 @@ class Memory:
                 self.policy_engine.require(Operation.READ, target, self.principal)
             updated = replace(
                 stored,
-                metadata=deepcopy({**stored.metadata, **metadata}),
+                metadata=_copy_metadata(
+                    {**stored.metadata, **_copy_metadata(metadata)}
+                ),
             )
             updated = self.hooks.before_update_link(context, stored, updated)
+            updated = replace(updated, metadata=_copy_metadata(updated.metadata))
             _require_link_hook_invariants(stored, updated, callback="before_update_link")
             persisted = self.backend.update_link(updated)
             self.hooks.after_update_link(context, stored, persisted)
@@ -458,6 +469,7 @@ class Memory:
                 target.
             MemoryConflict: If existing or proposed links would contain a cycle.
             MemoryNotFound: If either endpoint is missing.
+            TypeError: If metadata is not a strict JSON dictionary.
             UnsupportedOperation: If the backend lacks atomic DAG insertion.
         """
 
@@ -503,9 +515,10 @@ class Memory:
                 source_id=source_block.id,
                 target_id=target_block.id,
                 relation=relation,
-                metadata=deepcopy(metadata or {}),
+                metadata=_copy_metadata(metadata),
             )
             hooked = self.hooks.before_add_link(context, proposed)
+            hooked = replace(hooked, metadata=_copy_metadata(hooked.metadata))
             _require_link_hook_invariants(proposed, hooked, callback="before_add_link")
             if acyclic_backend is not None:
                 stored = acyclic_backend.add_acyclic_link(hooked)
@@ -573,6 +586,7 @@ class Memory:
             AccessDenied: If the principal cannot write the source or read the
                 target.
             MemoryNotFound: If either endpoint is missing.
+            TypeError: If metadata is not a strict JSON dictionary.
         """
 
         return self._add_link(
@@ -852,17 +866,35 @@ class Memory:
         )
 
     def contains(self, root: str | MemoryBlock, block_id: str | MemoryBlock) -> bool:
-        """Return whether one block is inside another block's subtree.
+        """Return whether a readable block is inside a traversable subtree.
 
         Args:
             root: Potential subtree root block or id.
             block_id: Candidate block or id.
 
         Returns:
-            `True` when `block_id` is equal to or below `root`.
+            `True` when the candidate is equal to or below the root and its
+            read policy permits the current principal. Missing candidates and
+            unreadable candidates return `False`.
+
+        Raises:
+            AccessDenied: If downward traversal from the root is denied.
+            MemoryNotFound: If the root does not exist.
         """
 
-        return self.backend.contains(_block_id(root), _block_id(block_id))
+        root_id = _block_id(root)
+        candidate_id = _block_id(block_id)
+        root_block = self._require_raw(root_id)
+        self.policy_engine.require(Operation.TRAVERSE_DOWN, root_block, self.principal)
+        candidate = self.backend.get_block(candidate_id)
+        if candidate is None or not self._contains_raw(root_id, candidate_id):
+            return False
+        return self.policy_engine.allows(Operation.READ, candidate, self.principal)
+
+    def _contains_raw(self, root_id: str, block_id: str) -> bool:
+        """Return backend ownership membership without policy evaluation."""
+
+        return self.backend.contains(root_id, block_id)
 
     def _new_handle(
         self,
@@ -1023,9 +1055,9 @@ class Memory:
         if query.scope == Scope.SELF:
             return block_id == query.root_id
         if query.scope == Scope.SUBTREE:
-            return self.backend.contains(query.root_id, block_id)
+            return self._contains_raw(query.root_id, block_id)
         if query.scope == Scope.ANCESTORS:
-            return block_id == query.root_id or self.backend.contains(block_id, query.root_id)
+            return block_id == query.root_id or self._contains_raw(block_id, query.root_id)
         if query.scope == Scope.LINKS:
             if block_id == query.root_id:
                 return True
@@ -1063,6 +1095,20 @@ def _require_update_hook_invariants(
             "before_update hooks may change only value, metadata, and "
             f"content_type; changed protected fields: {names}."
         )
+
+
+def _copy_metadata(metadata: object | None) -> dict[str, Any]:
+    """Validate and copy one public or hook-produced metadata dictionary."""
+
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, dict):
+        raise TypeError("metadata must be a dictionary or None.")
+    try:
+        encoded = JsonCodec().encode(metadata)
+    except TypeError as error:
+        raise TypeError("metadata must contain only strict JSON data.") from error
+    return encoded.data
 
 
 def _require_link_hook_invariants(

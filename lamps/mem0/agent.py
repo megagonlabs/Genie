@@ -341,14 +341,14 @@ class Mem0Agent:
                 },
             )
             self._memory_ids[candidate.key] = result["id"]
-        for candidate in updates:
-            memory_id = self._memory_ids.get(candidate.key)
+        for update_candidate in updates:
+            memory_id = self._memory_ids.get(update_candidate.key)
             if memory_id is None:
-                raise ValueError(f"Unknown memory key {candidate.key!r}.")
+                raise ValueError(f"Unknown memory key {update_candidate.key!r}.")
             arguments: dict[str, Any] = {
                 "memory_id": memory_id,
-                "text": candidate.text,
-                "metadata": deepcopy(candidate.metadata) or None,
+                "text": update_candidate.text,
+                "metadata": deepcopy(update_candidate.metadata) or None,
             }
             self._call("update_memory", arguments)
         if mental_model is not None:

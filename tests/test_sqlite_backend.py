@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-import sqlite3
 from threading import Barrier, Event
 from typing import Any
 
@@ -28,6 +29,7 @@ from genie import (
     SQLiteBackend,
     UnsupportedOperation,
 )
+from genie.structures import KeyBinding, MemoryAddress
 
 
 def test_sqlite_backend_implements_the_core_backend_protocol() -> None:
@@ -236,6 +238,79 @@ def test_sqlite_backend_rejects_non_json_storage_values() -> None:
     with SQLiteBackend() as backend:
         with pytest.raises(TypeError, match="strict JSON"):
             backend.put_block(MemoryBlock(type="tuple", value=("not", "json")))
+
+
+@pytest.mark.parametrize(
+    ("column", "stored_value"),
+    [
+        ("value_json", "{not-json"),
+        ("value_json", "NaN"),
+        ("created_at", "not-a-timestamp"),
+    ],
+)
+def test_sqlite_backend_reports_invalid_stored_block_data_as_corruption(
+    column: str,
+    stored_value: str,
+) -> None:
+    """Malformed rows fail through the documented backend error boundary."""
+
+    with SQLiteBackend() as backend:
+        block = backend.put_block(MemoryBlock(id="note", type="note", value={}))
+        connection = backend._require_connection()
+        connection.execute(
+            f"UPDATE blocks SET {column} = ? WHERE id = ?",
+            (stored_value, block.id),
+        )
+
+        with pytest.raises(BackendCorruption):
+            backend.get_block(block.id)
+
+
+def test_sqlite_backend_rejects_corrupt_policy_boolean_values() -> None:
+    """Truthy strings in stored policies cannot silently widen access."""
+
+    with SQLiteBackend() as backend:
+        block = backend.put_block(
+            MemoryBlock(
+                id="note",
+                type="note",
+                value={},
+                policy=MemoryPolicy.public(),
+            )
+        )
+        connection = backend._require_connection()
+        policy_json = connection.execute(
+            "SELECT policy_json FROM blocks WHERE id = ?",
+            (block.id,),
+        ).fetchone()[0]
+        payload = json.loads(policy_json)
+        payload["read"]["allow_all"] = "false"
+        connection.execute(
+            "UPDATE blocks SET policy_json = ? WHERE id = ?",
+            (json.dumps(payload), block.id),
+        )
+
+        with pytest.raises(BackendCorruption, match="memory block"):
+            backend.get_block(block.id)
+
+
+def test_sqlite_backend_reports_corrupt_structure_records() -> None:
+    """Invalid optional-capability records use the same corruption boundary."""
+
+    with SQLiteBackend() as backend:
+        collection = backend.put_block(
+            MemoryBlock(id="collection", type="collection", value={})
+        )
+        target = backend.put_block(MemoryBlock(id="target", type="note", value={}))
+        address = MemoryAddress(("notes",), "target")
+        backend.bind_key(KeyBinding(collection.id, address, target.id))
+        backend._require_connection().execute(
+            "UPDATE key_bindings SET namespace_json = '{}' WHERE collection_id = ?",
+            (collection.id,),
+        )
+
+        with pytest.raises(BackendCorruption, match="namespace"):
+            backend.list_keys(collection.id)
 
 
 def test_sqlite_backend_context_manager_closes_connection() -> None:

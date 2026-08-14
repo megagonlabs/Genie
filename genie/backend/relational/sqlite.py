@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import math
+import sqlite3
 from collections import defaultdict, deque
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
-import json
-import math
 from pathlib import Path
-import sqlite3
 from threading import RLock
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Self
@@ -312,7 +312,7 @@ class SQLiteBackend:
                         "A memory block cannot be moved under one of its descendants."
                     )
             try:
-                parameters = (
+                parameters: tuple[Any, ...] = (
                     block.parent_id,
                     block.type,
                     _dump_json(block.value, field_name="block value"),
@@ -1672,32 +1672,42 @@ def _block_values(block: MemoryBlock) -> tuple[Any, ...]:
 def _block_from_row(row: sqlite3.Row) -> MemoryBlock:
     """Reconstruct a memory block from one SQLite row."""
 
-    return MemoryBlock(
-        id=str(row["id"]),
-        parent_id=str(row["parent_id"]) if row["parent_id"] is not None else None,
-        type=str(row["type"]),
-        value=_load_json(row["value_json"]),
-        content_type=str(row["content_type"]),
-        metadata=_load_json(row["metadata_json"]),
-        policy=_decode_policy(row["policy_json"]),
-        created_at=_decode_datetime(row["created_at"]),
-        updated_at=_decode_datetime(row["updated_at"]),
-        created_by=str(row["created_by"]) if row["created_by"] is not None else None,
-        version=int(row["version"]),
-    )
+    try:
+        return MemoryBlock(
+            id=str(row["id"]),
+            parent_id=str(row["parent_id"]) if row["parent_id"] is not None else None,
+            type=str(row["type"]),
+            value=_load_json(row["value_json"]),
+            content_type=str(row["content_type"]),
+            metadata=_load_json(row["metadata_json"]),
+            policy=_decode_policy(row["policy_json"]),
+            created_at=_decode_datetime(row["created_at"]),
+            updated_at=_decode_datetime(row["updated_at"]),
+            created_by=str(row["created_by"]) if row["created_by"] is not None else None,
+            version=int(row["version"]),
+        )
+    except BackendCorruption:
+        raise
+    except (KeyError, TypeError, ValueError) as error:
+        raise BackendCorruption("Stored SQLite memory block is invalid.") from error
 
 
 def _link_from_row(row: sqlite3.Row) -> MemoryLink:
     """Reconstruct a typed link from one SQLite row."""
 
-    return MemoryLink(
-        id=str(row["id"]),
-        source_id=str(row["source_id"]),
-        target_id=str(row["target_id"]),
-        relation=str(row["relation"]),
-        metadata=_load_json(row["metadata_json"]),
-        created_at=_decode_datetime(row["created_at"]),
-    )
+    try:
+        return MemoryLink(
+            id=str(row["id"]),
+            source_id=str(row["source_id"]),
+            target_id=str(row["target_id"]),
+            relation=str(row["relation"]),
+            metadata=_load_json(row["metadata_json"]),
+            created_at=_decode_datetime(row["created_at"]),
+        )
+    except BackendCorruption:
+        raise
+    except (KeyError, TypeError, ValueError) as error:
+        raise BackendCorruption("Stored SQLite memory link is invalid.") from error
 
 
 def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
@@ -1748,14 +1758,19 @@ def _binding_from_row(row: sqlite3.Row) -> KeyBinding:
 
     from genie.structures.records import KeyBinding, MemoryAddress
 
-    return KeyBinding(
-        collection_id=str(row["collection_id"]),
-        address=MemoryAddress(
-            namespace=_decode_namespace(row["namespace_json"]),
-            key=str(row["key"]),
-        ),
-        block_id=str(row["block_id"]),
-    )
+    try:
+        return KeyBinding(
+            collection_id=str(row["collection_id"]),
+            address=MemoryAddress(
+                namespace=_decode_namespace(row["namespace_json"]),
+                key=str(row["key"]),
+            ),
+            block_id=str(row["block_id"]),
+        )
+    except BackendCorruption:
+        raise
+    except (KeyError, TypeError, ValueError) as error:
+        raise BackendCorruption("Stored SQLite key binding is invalid.") from error
 
 
 def _log_entry_from_row(row: sqlite3.Row) -> LogEntry:
@@ -1763,11 +1778,14 @@ def _log_entry_from_row(row: sqlite3.Row) -> LogEntry:
 
     from genie.structures.records import LogEntry
 
-    return LogEntry(
-        log_id=str(row["log_id"]),
-        sequence=int(row["sequence"]),
-        block_id=str(row["block_id"]),
-    )
+    try:
+        return LogEntry(
+            log_id=str(row["log_id"]),
+            sequence=int(row["sequence"]),
+            block_id=str(row["block_id"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise BackendCorruption("Stored SQLite log entry is invalid.") from error
 
 
 def _temporal_values(entry: TemporalEntry) -> tuple[str, str, str | None, str | None, str | None]:
@@ -1796,26 +1814,31 @@ def _temporal_from_row(row: sqlite3.Row) -> TemporalEntry:
 
     from genie.structures.records import TemporalEntry, ValidityInterval
 
-    validity = None
-    if row["valid_at"] is not None:
-        validity = ValidityInterval(
-            valid_at=_decode_datetime(row["valid_at"]),
-            invalid_at=(
-                _decode_datetime(row["invalid_at"])
-                if row["invalid_at"] is not None
+    try:
+        validity = None
+        if row["valid_at"] is not None:
+            validity = ValidityInterval(
+                valid_at=_decode_datetime(row["valid_at"]),
+                invalid_at=(
+                    _decode_datetime(row["invalid_at"])
+                    if row["invalid_at"] is not None
+                    else None
+                ),
+            )
+        return TemporalEntry(
+            collection_id=str(row["collection_id"]),
+            block_id=str(row["block_id"]),
+            occurred_at=(
+                _decode_datetime(row["occurred_at"])
+                if row["occurred_at"] is not None
                 else None
             ),
+            validity=validity,
         )
-    return TemporalEntry(
-        collection_id=str(row["collection_id"]),
-        block_id=str(row["block_id"]),
-        occurred_at=(
-            _decode_datetime(row["occurred_at"])
-            if row["occurred_at"] is not None
-            else None
-        ),
-        validity=validity,
-    )
+    except BackendCorruption:
+        raise
+    except (KeyError, TypeError, ValueError) as error:
+        raise BackendCorruption("Stored SQLite temporal entry is invalid.") from error
 
 
 def _encode_policy(policy: MemoryPolicy | None) -> str | None:
@@ -1871,10 +1894,10 @@ def _decode_rule(payload: dict[str, Any]) -> AccessRule:
     """Reconstruct one access rule from stored JSON data."""
 
     return AccessRule(
-        allow_all=bool(payload["allow_all"]),
+        allow_all=payload["allow_all"],
         principals=frozenset(payload["principals"]),
         roles=frozenset(payload["roles"]),
-        allow_owner=bool(payload["allow_owner"]),
+        allow_owner=payload["allow_owner"],
     )
 
 
@@ -1896,8 +1919,14 @@ def _load_json(value: object) -> Any:
     """Decode one JSON text value into an isolated Python object."""
 
     if not isinstance(value, str):
-        raise TypeError("Stored SQLite JSON values must be strings.")
-    return json.loads(value)
+        raise BackendCorruption("Stored SQLite JSON values must be strings.")
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise BackendCorruption("Stored SQLite JSON is invalid.") from error
+    if not _is_strict_json(decoded):
+        raise BackendCorruption("Stored SQLite JSON is not strict JSON data.")
+    return decoded
 
 
 def _is_strict_json(value: Any) -> bool:
@@ -1931,10 +1960,13 @@ def _decode_datetime(value: object) -> datetime:
     """Decode one stored ISO 8601 datetime and normalize it to UTC."""
 
     if not isinstance(value, str):
-        raise TypeError("Stored SQLite timestamps must be strings.")
-    timestamp = datetime.fromisoformat(value)
+        raise BackendCorruption("Stored SQLite timestamps must be strings.")
+    try:
+        timestamp = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise BackendCorruption("Stored SQLite timestamp is invalid.") from error
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-        raise ValueError("Stored SQLite timestamps must be timezone-aware.")
+        raise BackendCorruption("Stored SQLite timestamps must be timezone-aware.")
     return timestamp.astimezone(UTC)
 
 
@@ -1951,7 +1983,7 @@ def _decode_namespace(value: object) -> tuple[str, ...]:
     if not isinstance(decoded, list) or not all(
         isinstance(segment, str) for segment in decoded
     ):
-        raise TypeError("Stored SQLite key namespaces must be string lists.")
+        raise BackendCorruption("Stored SQLite key namespaces must be string lists.")
     return tuple(decoded)
 
 

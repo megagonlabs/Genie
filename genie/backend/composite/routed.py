@@ -8,10 +8,11 @@ indexes/stores.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from collections.abc import Mapping
-from typing import Callable, Literal, overload
+from threading import RLock
+from typing import Literal, overload
 
 from genie.backend.base import MemoryBackend
 from genie.backend.capabilities import LinkStore, SearchIndex, TraversalIndex
@@ -52,6 +53,7 @@ class InMemoryLinkStore:
         """Create an empty link store."""
 
         self._links: dict[str, MemoryLink] = {}
+        self._lock = RLock()
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
         """Store a link.
@@ -66,11 +68,12 @@ class InMemoryLinkStore:
             MemoryConflict: If the link id already exists.
         """
 
-        if link.id in self._links:
-            raise MemoryConflict(f"Memory link {link.id!r} already exists.")
-        link = _copy_link(link)
-        self._links[link.id] = link
-        return _copy_link(link)
+        with self._lock:
+            if link.id in self._links:
+                raise MemoryConflict(f"Memory link {link.id!r} already exists.")
+            link = _copy_link(link)
+            self._links[link.id] = link
+            return _copy_link(link)
 
     def update_link(self, link: MemoryLink) -> MemoryLink:
         """Replace the metadata of an existing link.
@@ -86,14 +89,15 @@ class InMemoryLinkStore:
                 metadata changed.
         """
 
-        previous = self._links.get(link.id)
-        if previous is None:
-            raise MemoryConflict(f"Memory link {link.id!r} does not exist.")
-        if not _same_link_identity(previous, link):
-            raise MemoryConflict("Link updates can change only metadata.")
-        link = _copy_link(link)
-        self._links[link.id] = link
-        return _copy_link(link)
+        with self._lock:
+            previous = self._links.get(link.id)
+            if previous is None:
+                raise MemoryConflict(f"Memory link {link.id!r} does not exist.")
+            if not _same_link_identity(previous, link):
+                raise MemoryConflict("Link updates can change only metadata.")
+            link = _copy_link(link)
+            self._links[link.id] = link
+            return _copy_link(link)
 
     def list_links(
         self,
@@ -118,17 +122,18 @@ class InMemoryLinkStore:
 
         if direction not in {"out", "in", "both"}:
             raise ValueError("direction must be one of 'out', 'in', or 'both'.")
-        selected: list[MemoryLink] = []
-        for link in self._links.values():
-            if relation is not None and link.relation != relation:
-                continue
-            if direction == "out" and link.source_id == block_id:
-                selected.append(_copy_link(link))
-            elif direction == "in" and link.target_id == block_id:
-                selected.append(_copy_link(link))
-            elif direction == "both" and block_id in {link.source_id, link.target_id}:
-                selected.append(_copy_link(link))
-        return selected
+        with self._lock:
+            selected: list[MemoryLink] = []
+            for link in self._links.values():
+                if relation is not None and link.relation != relation:
+                    continue
+                if direction == "out" and link.source_id == block_id:
+                    selected.append(_copy_link(link))
+                elif direction == "in" and link.target_id == block_id:
+                    selected.append(_copy_link(link))
+                elif direction == "both" and block_id in {link.source_id, link.target_id}:
+                    selected.append(_copy_link(link))
+            return selected
 
     def delete_links_for_block(self, block_id: str) -> None:
         """Delete links connected to a block.
@@ -137,9 +142,10 @@ class InMemoryLinkStore:
             block_id: Block id whose links should be removed.
         """
 
-        for link_id, link in list(self._links.items()):
-            if link.source_id == block_id or link.target_id == block_id:
-                self._links.pop(link_id, None)
+        with self._lock:
+            for link_id, link in list(self._links.items()):
+                if link.source_id == block_id or link.target_id == block_id:
+                    self._links.pop(link_id, None)
 
 
 class RoutedBackend:
@@ -192,6 +198,7 @@ class RoutedBackend:
         self.link_store = link_store
         self.enforce_tree_route = enforce_tree_route
         self._catalog: dict[str, RouteKey] = {}
+        self._lock = RLock()
         if self.default_route not in self.routes:
             raise ValueError(f"Default route {self.default_route!r} is not configured.")
 
@@ -224,16 +231,17 @@ class RoutedBackend:
                 if replacing it would orphan cataloged blocks.
         """
 
-        if route in self.routes:
-            if not replace:
-                raise MemoryConflict(f"Route {route!r} is already configured.")
-            if route in self._catalog.values():
-                raise MemoryConflict(
-                    f"Route {route!r} cannot be replaced because it owns cataloged blocks."
-                )
-        self.routes[route] = backend
-        if make_default:
-            self.default_route = route
+        with self._lock:
+            if route in self.routes:
+                if not replace:
+                    raise MemoryConflict(f"Route {route!r} is already configured.")
+                if route in self._catalog.values():
+                    raise MemoryConflict(
+                        f"Route {route!r} cannot be replaced because it owns cataloged blocks."
+                    )
+            self.routes[route] = backend
+            if make_default:
+                self.default_route = route
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
         """Persist a new block to its owning route.
@@ -249,12 +257,13 @@ class RoutedBackend:
                 the selected route conflicts with the parent route.
         """
 
-        if self.get_block(block.id) is not None:
-            raise MemoryConflict(f"Memory block {block.id!r} already exists.")
-        route = self._route_for_new_block(block)
-        stored = self.routes[route].put_block(block)
-        self._catalog[stored.id] = route
-        return stored
+        with self._lock:
+            if self.get_block(block.id) is not None:
+                raise MemoryConflict(f"Memory block {block.id!r} already exists.")
+            route = self._route_for_new_block(block)
+            stored = self.routes[route].put_block(block)
+            self._catalog[stored.id] = route
+            return stored
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
         """Fetch a block by id from its owning route.
@@ -284,17 +293,18 @@ class RoutedBackend:
         enabled.
         """
 
-        route = self._route_for_existing_block(block.id)
-        if block.parent_id is not None and self.enforce_tree_route:
-            parent_route = self._route_for_existing_block(block.parent_id)
-            if parent_route != route:
-                raise MemoryConflict("A memory block cannot be reparented across routes.")
-        stored = self.routes[route].update_block(
-            block,
-            expected_version=expected_version,
-        )
-        self._catalog[stored.id] = route
-        return stored
+        with self._lock:
+            route = self._route_for_existing_block(block.id)
+            if block.parent_id is not None and self.enforce_tree_route:
+                parent_route = self._route_for_existing_block(block.parent_id)
+                if parent_route != route:
+                    raise MemoryConflict("A memory block cannot be reparented across routes.")
+            stored = self.routes[route].update_block(
+                block,
+                expected_version=expected_version,
+            )
+            self._catalog[stored.id] = route
+            return stored
 
     def delete_block(
         self,
@@ -308,18 +318,19 @@ class RoutedBackend:
             block_id: Memory block id. Missing ids are ignored.
         """
 
-        route = self._route_for_existing_block(block_id, missing_ok=True)
-        if route is None:
-            return
-        descendants = self.descendants(block_id, include_self=True)
-        self.routes[route].delete_block(
-            block_id,
-            expected_versions=expected_versions,
-        )
-        for block in descendants:
-            self._catalog.pop(block.id, None)
-            if self.link_store is not None:
-                self.link_store.delete_links_for_block(block.id)
+        with self._lock:
+            route = self._route_for_existing_block(block_id, missing_ok=True)
+            if route is None:
+                return
+            descendants = self.descendants(block_id, include_self=True)
+            self.routes[route].delete_block(
+                block_id,
+                expected_versions=expected_versions,
+            )
+            for block in descendants:
+                self._catalog.pop(block.id, None)
+                if self.link_store is not None:
+                    self.link_store.delete_links_for_block(block.id)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
         """Return direct children for a block id.
@@ -407,13 +418,14 @@ class RoutedBackend:
                 link store.
         """
 
-        source_route = self._route_for_existing_block(link.source_id)
-        target_route = self._route_for_existing_block(link.target_id)
-        if self.link_store is not None:
-            return self.link_store.add_link(link)
-        if source_route != target_route:
-            raise MemoryConflict("Cross-route links require a shared link_store.")
-        return self.routes[source_route].add_link(link)
+        with self._lock:
+            source_route = self._route_for_existing_block(link.source_id)
+            target_route = self._route_for_existing_block(link.target_id)
+            if self.link_store is not None:
+                return self.link_store.add_link(link)
+            if source_route != target_route:
+                raise MemoryConflict("Cross-route links require a shared link_store.")
+            return self.routes[source_route].add_link(link)
 
     def update_link(self, link: MemoryLink) -> MemoryLink:
         """Replace link metadata in the shared store or source route.
@@ -429,10 +441,11 @@ class RoutedBackend:
                 metadata changed.
         """
 
-        if self.link_store is not None:
-            return self.link_store.update_link(link)
-        source_route = self._route_for_existing_block(link.source_id)
-        return self.routes[source_route].update_link(link)
+        with self._lock:
+            if self.link_store is not None:
+                return self.link_store.update_link(link)
+            source_route = self._route_for_existing_block(link.source_id)
+            return self.routes[source_route].update_link(link)
 
     def list_links(
         self,
@@ -466,13 +479,14 @@ class RoutedBackend:
             block_id: Block id whose connected links should be removed.
         """
 
-        if self.link_store is not None:
-            self.link_store.delete_links_for_block(block_id)
-            return
-        route = self._route_for_existing_block(block_id, missing_ok=True)
-        if route is None:
-            return
-        self.routes[route].delete_links_for_block(block_id)
+        with self._lock:
+            if self.link_store is not None:
+                self.link_store.delete_links_for_block(block_id)
+                return
+            route = self._route_for_existing_block(block_id, missing_ok=True)
+            if route is None:
+                return
+            self.routes[route].delete_links_for_block(block_id)
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
         """Search through the shared search index or route-local indexes.
@@ -553,23 +567,24 @@ class RoutedBackend:
     ) -> RouteKey | None:
         """Find the route that owns an existing block."""
 
-        route = self._catalog.get(block_id)
-        if route is not None:
-            return route
+        with self._lock:
+            route = self._catalog.get(block_id)
+            if route is not None:
+                return route
 
-        discovered: list[RouteKey] = [
-            route_key
-            for route_key, backend in self.routes.items()
-            if backend.get_block(block_id) is not None
-        ]
-        if not discovered:
-            if missing_ok:
-                return None
-            raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
-        if len(discovered) > 1:
-            raise MemoryConflict(f"Memory block {block_id!r} exists in multiple routes.")
-        self._catalog[block_id] = discovered[0]
-        return discovered[0]
+            discovered: list[RouteKey] = [
+                route_key
+                for route_key, backend in self.routes.items()
+                if backend.get_block(block_id) is not None
+            ]
+            if not discovered:
+                if missing_ok:
+                    return None
+                raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
+            if len(discovered) > 1:
+                raise MemoryConflict(f"Memory block {block_id!r} exists in multiple routes.")
+            self._catalog[block_id] = discovered[0]
+            return discovered[0]
 
     def _search_linked_blocks(self, query: MemoryQuery) -> list[SearchResult]:
         """Search blocks connected to a root through the shared link store."""
@@ -577,10 +592,13 @@ class RoutedBackend:
         root_id = query.root_id
         if root_id is None:
             return []
-        linked_ids: set[str] = set()
+        linked_ids: list[str] = []
+        seen: set[str] = set()
         for link in self.list_links(root_id, direction="both"):
-            linked_ids.add(link.source_id)
-            linked_ids.add(link.target_id)
+            for block_id in (link.source_id, link.target_id):
+                if block_id not in seen:
+                    seen.add(block_id)
+                    linked_ids.append(block_id)
         blocks = [
             block
             for block_id in linked_ids

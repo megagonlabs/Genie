@@ -84,6 +84,25 @@ def test_link_metadata_is_defensively_copied() -> None:
     assert memory.list_links(source)[0].metadata == {"tags": ["original"]}
 
 
+def test_link_metadata_requires_a_strict_json_dictionary() -> None:
+    """Link creation and updates reject nonportable metadata."""
+
+    memory = Memory()
+    source = memory.put(type="note", value="source")
+    target = memory.put(type="note", value="target")
+
+    with pytest.raises(TypeError, match="dictionary"):
+        memory.add_link(
+            source,
+            target,
+            "related",
+            metadata=cast(dict[str, Any], []),
+        )
+    link = memory.add_link(source, target, "related")
+    with pytest.raises(TypeError, match="strict JSON"):
+        memory.update_link(link, metadata={"confidence": float("inf")})
+
+
 def test_update_link_merges_canonical_metadata_and_preserves_identity() -> None:
     """Link updates persist merged metadata without changing link identity."""
 

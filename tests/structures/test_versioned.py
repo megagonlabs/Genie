@@ -175,7 +175,7 @@ def test_revision_deletion_leaves_a_gap_and_does_not_reuse_numbers() -> None:
     third_block = memory.put(type="revision", value="third")
     records.register(address, identity)
     first = records.append(address, first_block)
-    second = records.append(address, second_block)
+    records.append(address, second_block)
 
     memory.delete(second_block)
     third = records.append(address, third_block)

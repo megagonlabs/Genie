@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryNotFound
 from genie.memory.links import LinkRelations, MemoryLink
 from genie.structures.access import AcyclicLinkWriter, BlockRef, LinkDirection

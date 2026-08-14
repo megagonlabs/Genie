@@ -82,6 +82,7 @@ mount links without entering their targets. Handle mount operations require
 - Links with unreadable endpoints are hidden.
 - Bounded handles reject out-of-scope references.
 - Handles need policy override permission to choose a new block's policy.
+- Block and link metadata must be strict JSON dictionaries.
 - Returned JSON values and metadata are defensive copies.
 - Hooks cannot widen an authorized parent or search scope.
 - Hook callbacks may perform nested memory operations; active callbacks are

@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier
 
-from genie import InMemoryBackend, Memory, MemoryBlock, MemoryConflict
+from genie import InMemoryBackend, Memory, MemoryConflict
 from genie.structures import LineageDAG, PropertyGraph, TemporalCollection
 
 

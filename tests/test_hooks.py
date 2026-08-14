@@ -92,6 +92,28 @@ def test_before_put_hook_cannot_change_parent_after_authorization() -> None:
     assert memory.children(outside) == []
 
 
+def test_transforming_hooks_cannot_store_nonportable_metadata() -> None:
+    """Hook-produced metadata still follows the public strict JSON contract."""
+
+    class InvalidMetadataHook(MemoryHook):
+        """Hook that returns a value forbidden by the metadata contract."""
+
+        def before_put(
+            self,
+            context: HookContext,
+            block: MemoryBlock,
+        ) -> MemoryBlock:
+            """Attach a non-JSON object."""
+
+            return block.with_updates(metadata={"invalid": object()})
+
+    memory = Memory(hooks=[InvalidMetadataHook()])
+
+    with pytest.raises(TypeError, match="strict JSON"):
+        memory.put(id="invalid", type="note", value="not stored")
+    assert memory.backend.get_block("invalid") is None
+
+
 def test_search_hooks_can_rewrite_and_trim_results() -> None:
     """Search hooks can rewrite queries and trim result lists."""
 

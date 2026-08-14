@@ -83,6 +83,7 @@ class TemporalCollection:
         self._store = store
         self._hooks = resolve_hooks(access, hooks)
         self._principal_id = principal_id(access)
+        self._index: TemporalIndex | None
         if index is not None:
             self._index = index
         elif isinstance(store, TemporalIndex):
