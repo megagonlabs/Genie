@@ -35,40 +35,38 @@ _SEARCH_LIMIT = 1_000
 
 @dataclass(frozen=True, slots=True)
 class MemoryScope:
-    """Exact Mem0-style entity scope bound to one tool set."""
+    """Open-source Mem0 session identifiers bound to one tool set."""
 
     user_id: str | None = None
     agent_id: str | None = None
-    app_id: str | None = None
     run_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate that the scope is useful and contains non-empty ids."""
 
-        for field in ("user_id", "agent_id", "app_id", "run_id"):
+        for field in ("user_id", "agent_id", "run_id"):
             value = getattr(self, field)
             if value is not None:
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError("Mem0 scope ids must be non-empty strings or None.")
                 object.__setattr__(self, field, value.strip())
-        values = (self.user_id, self.agent_id, self.app_id, self.run_id)
+        values = (self.user_id, self.agent_id, self.run_id)
         if not any(value is not None for value in values):
             raise ValueError("At least one Mem0 scope id is required.")
 
     def as_dict(self) -> dict[str, str | None]:
-        """Return the four canonical scope fields."""
+        """Return the session identifiers accepted by open-source Mem0."""
 
         return {
             "user_id": self.user_id,
             "agent_id": self.agent_id,
-            "app_id": self.app_id,
             "run_id": self.run_id,
         }
 
 
 @dataclass(frozen=True, slots=True)
 class ExtractedFactRecord:
-    """Resolved view of one canonical Mem0-inspired fact record."""
+    """Resolved view of one Mem0-inspired extracted-memory record."""
 
     block: MemoryBlock
     text: str
@@ -106,7 +104,7 @@ class ExtractedFactRecord:
         return _parse_timestamp(cast(str, value), field="metadata.occurred_at")
 
     def canonical_value(self) -> dict[str, Any]:
-        """Return the exact canonical value stored in the Genie block."""
+        """Return the exact record value stored in the Genie block."""
 
         return deepcopy(cast(dict[str, Any], self.block.value))
 
@@ -211,21 +209,22 @@ class Mem0Memory:
         occurred_at: datetime | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ExtractedFactRecord:
-        """Store a canonical fact record and link records sharing entities.
+        """Store an extracted-memory record and link records sharing entities.
 
-        Exact duplicate text in the same four-field scope returns the existing
-        record. This mirrors Mem0's content-hash deduplication at a small scale.
+        Exact duplicate text in the same session scope returns the existing
+        record. This deterministic rule stands in for Mem0's model-driven
+        extraction and conflict-resolution pipeline.
 
         Args:
             text: Extracted memory text.
-            scope: Exact user, agent, application, and run scope.
+            scope: User, agent, and run identifiers used for session scope.
             kind: Lamp-level `fact` or `experience` classification.
             entities: Entity names used by graph retrieval.
             occurred_at: Optional event time represented by the memory.
             metadata: Additional application metadata.
 
         Returns:
-            New or existing canonical fact record.
+            New or existing extracted-memory record.
         """
 
         normalized_text = _required_text(text, field="text")
@@ -261,7 +260,7 @@ class Mem0Memory:
         record_id = f"mem0_{uuid4().hex}"
         payload = {
             "id": record_id,
-            "text": normalized_text,
+            "memory": normalized_text,
             **scope.as_dict(),
             "hash": content_hash,
             "metadata": record_metadata,
@@ -303,7 +302,7 @@ class Mem0Memory:
         existing entity links accurate.
 
         Args:
-            memory_id: Canonical fact-record id.
+            memory_id: Extracted-memory record id.
             scope: Exact scope required to access the record.
             text: Optional replacement text.
             metadata: Optional application metadata to merge.
@@ -339,7 +338,7 @@ class Mem0Memory:
         block = self.memory.update(
             stored.block,
             value={
-                "text": new_text,
+                "memory": new_text,
                 "hash": new_hash,
                 "metadata": merged_metadata,
                 "updated_at": updated_at,
@@ -547,7 +546,7 @@ class Mem0Memory:
         return _mental_model_from_block(block) if block is not None else None
 
     def _records(self, scope: MemoryScope) -> list[ExtractedFactRecord]:
-        """Return all canonical records from one exact application scope."""
+        """Return all records from one exact session scope."""
 
         records = [
             _record_from_block(item.block)
@@ -590,13 +589,12 @@ def _scope_namespace(scope: MemoryScope) -> tuple[str, ...]:
         "records",
         f"user={scope.user_id or '-'}",
         f"agent={scope.agent_id or '-'}",
-        f"app={scope.app_id or '-'}",
         f"run={scope.run_id or '-'}",
     )
 
 
 def _record_address(scope: MemoryScope, memory_id: str) -> MemoryAddress:
-    """Return the exact keyed address for one canonical record id."""
+    """Return the exact keyed address for one record id."""
 
     return MemoryAddress(_scope_namespace(scope), memory_id)
 
@@ -608,13 +606,12 @@ def _mental_model_address(scope: MemoryScope, name: str) -> MemoryAddress:
 
 
 def _record_index(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return searchable block metadata for one canonical record payload."""
+    """Return searchable block metadata for one record payload."""
 
     metadata = cast(dict[str, Any], payload["metadata"])
     return {
         "user_id": payload["user_id"],
         "agent_id": payload["agent_id"],
-        "app_id": payload["app_id"],
         "run_id": payload["run_id"],
         "hash": payload["hash"],
         "kind": metadata["kind"],
@@ -624,17 +621,16 @@ def _record_index(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _record_from_block(block: MemoryBlock) -> ExtractedFactRecord:
-    """Decode and validate a canonical fact-record block."""
+    """Decode and validate one extracted-memory block."""
 
     if block.type != FACT_RECORD_TYPE or not isinstance(block.value, dict):
         raise TypeError(f"Block {block.id!r} is not a Mem0 fact record.")
     value = cast(dict[str, Any], block.value)
     expected = {
         "id",
-        "text",
+        "memory",
         "user_id",
         "agent_id",
-        "app_id",
         "run_id",
         "hash",
         "metadata",
@@ -642,18 +638,17 @@ def _record_from_block(block: MemoryBlock) -> ExtractedFactRecord:
         "updated_at",
     }
     if set(value) != expected or value.get("id") != block.id:
-        raise TypeError(f"Block {block.id!r} does not have the canonical fact-record shape.")
+        raise TypeError(f"Block {block.id!r} does not have the expected memory-record shape.")
     metadata = value.get("metadata")
     if not isinstance(metadata, dict):
         raise TypeError(f"Block {block.id!r} has invalid record metadata.")
     _validate_kind(metadata.get("kind"))
     return ExtractedFactRecord(
         block=block,
-        text=cast(str, value["text"]),
+        text=cast(str, value["memory"]),
         scope=MemoryScope(
             user_id=cast(str | None, value["user_id"]),
             agent_id=cast(str | None, value["agent_id"]),
-            app_id=cast(str | None, value["app_id"]),
             run_id=cast(str | None, value["run_id"]),
         ),
         hash=cast(str, value["hash"]),

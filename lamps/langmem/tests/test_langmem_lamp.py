@@ -8,6 +8,7 @@ import pytest
 
 from genie import InMemoryBackend, Memory
 from genie.structures import MemoryAddress
+from lamps.langmem.agent import LangMemTools
 from lamps.langmem.demo import answer_demo_question, build_demo_agent, main, teach_demo_agent
 from lamps.langmem.memory_store import (
     ITEM_RELATION,
@@ -35,8 +36,8 @@ def _store():  # type: ignore[no-untyped-def]
             "episode",
             {"observation": str, "thoughts": str, "action": str, "result": str},
         ),
-        (*BASE, "mental_models"): ValueSchema(
-            "mental_model",
+        (*BASE, "profiles"): ValueSchema(
+            "user_profile",
             {"name": str, "summary": str, "principles": list, "source_keys": list},
         ),
     }
@@ -124,6 +125,27 @@ def test_unregistered_namespace_accepts_a_different_value_shape() -> None:
 
     assert item.value == "Remember the confirmation code."
     assert item.schema_name is None
+
+
+def test_delete_removes_the_item_and_its_structural_memberships() -> None:
+    store, handle = _store()
+    namespace = (*BASE, "episodes")
+    item = store.create(
+        namespace,
+        "obsolete",
+        _episode("An obsolete event occurred.", "It is no longer relevant."),
+        occurred_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+
+    result = LangMemTools(store, base_namespace=BASE).call(
+        "manage_memory",
+        {"action": "delete", "collection": "episodes", "key": item.key},
+    )
+
+    assert result == {"action": "delete", "item": item.canonical_value()}
+    assert store.get(namespace, item.key) is None
+    assert handle.search(types=[ITEM_TYPE], limit=20) == []
+    assert store.structures.timeline.get(item.block.id) is None
 
 
 def test_contextual_key_is_unique_only_inside_its_exact_namespace() -> None:
@@ -239,7 +261,7 @@ def test_graph_retrieval_traverses_typed_links_inside_namespace_scope() -> None:
         _episode("A seat needed changing.", "The correction succeeded."),
     )
     model = store.create(
-        (*BASE, "mental_models"),
+        (*BASE, "profiles"),
         "travel",
         {
             "name": "Travel profile",
@@ -261,10 +283,10 @@ def test_graph_retrieval_traverses_typed_links_inside_namespace_scope() -> None:
     assert len(links) == 1
 
 
-def test_mental_model_is_a_regular_item_with_its_own_supplied_schema() -> None:
+def test_semantic_profile_is_a_regular_item_with_its_own_supplied_schema() -> None:
     store, _ = _store()
     model = store.create(
-        (*BASE, "mental_models"),
+        (*BASE, "profiles"),
         "travel",
         {
             "name": "Travel profile",
@@ -274,8 +296,8 @@ def test_mental_model_is_a_regular_item_with_its_own_supplied_schema() -> None:
         },
     )
 
-    assert model.schema_name == "mental_model"
-    assert model.namespace[-1] == "mental_models"
+    assert model.schema_name == "user_profile"
+    assert model.namespace[-1] == "profiles"
     assert store.get(model.namespace, model.key) == model
 
 

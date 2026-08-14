@@ -21,13 +21,14 @@ follow any schema:
 }
 ```
 
-The demo registers three schemas:
+The demo registers three application schemas that correspond to LangMem's
+semantic collection, episodic, and semantic-profile patterns:
 
 | Namespace | Value fields |
 | --- | --- |
 | Semantic | `subject`, `predicate`, `object`, `context` |
 | Episode | `observation`, `thoughts`, `action`, `result` |
-| Mental model | `name`, `summary`, `principles`, `source_keys` |
+| Semantic profile | `name`, `summary`, `principles`, `source_keys` |
 
 `ValueSchema` is a dependency-free stand-in for an application-supplied
 validator such as Pydantic. Unregistered namespaces may hold any value accepted
@@ -40,12 +41,12 @@ metadata, so they do not change the supplied value schema.
 | --- | --- |
 | Hierarchical namespace | `MemoryAddress.namespace` and the wrapper field |
 | Contextual key | Atomic `KeyedCollection` binding within one namespace |
-| Create and update | `LangMemStore`; updates preserve block identity |
+| Create, update, and delete | `LangMemStore`; updates preserve block identity |
 | Direct retrieval | Exact keyed lookup |
 | Relevant-value retrieval | Deterministic token overlap |
 | Dated episodes | `TemporalCollection` using metadata annotations |
 | Related items | Application-labeled `PropertyGraph` edges |
-| Mental model | Regular item in its own schema and namespace |
+| Semantic profile | Regular item in its own schema and namespace |
 | Agent access | Namespace-bound manage, get, search, and link tools |
 
 Ownership keeps items under one store root; links do not imply ownership.
@@ -53,10 +54,11 @@ Schema meaning, ranking, synthesis, and agent behavior remain application code.
 
 ## Demo workflow
 
-The deterministic travel agent stores two facts, two episodes, and one mental
-model; adds three links; retrieves the model by key; searches values and a time
-range; then follows two graph hops from a seat preference to a successful
-episode and its supporting model.
+The deterministic travel agent stores two facts, two episodes, and one semantic
+profile; adds three links; retrieves the profile by key; searches values and a
+time range; then follows two graph hops from a seat preference to a successful
+episode and its supporting profile. The `manage_memory` tool also supports the
+same create/update/delete lifecycle as LangMem's default management tool.
 
 See [the lamp guide](../README.md) for run commands and the shared output
 format.
@@ -64,13 +66,15 @@ format.
 ## Limits
 
 The lamp does not reproduce LangMem's LLM extraction and consolidation,
-Pydantic integration, prompt optimization, background reflection, embeddings,
-or LangGraph `BaseStore`. Token overlap is lexical, not semantic similarity.
+Pydantic integration, prompt optimization, background memory managers,
+embeddings, or LangGraph `BaseStore`. The deterministic agent demonstrates the
+hot-path tool pattern; it does not run an automatic background manager. Token
+overlap is lexical, not semantic similarity.
 
 Temporal and graph queries are application extensions; documented LangMem
 storage covers direct access, semantic search, and metadata filtering. The
-mental-model schema is also supplied by this demo rather than built into
-LangMem or Genie.
+profile schema is supplied by this demo; LangMem accepts application-defined
+schemas rather than requiring these particular fields.
 
 References: [concepts](https://langchain-ai.github.io/langmem/concepts/conceptual_guide/),
 [semantic schemas](https://langchain-ai.github.io/langmem/guides/extract_semantic_memories/),

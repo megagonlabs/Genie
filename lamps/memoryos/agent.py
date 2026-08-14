@@ -88,12 +88,12 @@ class MemoryOSTools:
             ),
             ToolDefinition(
                 name="retrieve_memory",
-                description="Retrieve short-, mid-, and long-term context and heat matching pages.",
+                description="Retrieve all tiers and heat the sessions containing matching pages.",
                 parameters={"query": "string", "limit": "integer"},
             ),
             ToolDefinition(
                 name="update_long_term",
-                description="Promote heated pages into the profile and knowledge collections.",
+                description="Promote pages from hot sessions into profile and knowledge collections.",
                 parameters={
                     "profile_updates": "object",
                     "profile_source_page_ids": "list[page id]",
@@ -399,6 +399,7 @@ def _qa_result(qa: ShortTermQA) -> dict[str, Any]:
 def _page_result(page: MidTermPage) -> dict[str, Any]:
     return {
         "page_id": page.id,
+        "session_id": page.session_id,
         "source_key": page.source_key,
         "summary": page.summary,
         "dialogue": {
@@ -406,8 +407,8 @@ def _page_result(page: MidTermPage) -> dict[str, Any]:
             "agent_response": page.agent_response,
             "timestamp": _format_timestamp(page.occurred_at),
         },
-        "heat": page.heat,
-        "visit_count": page.visit_count,
+        "segment_heat": page.segment_heat,
+        "segment_visit_count": page.segment_visit_count,
     }
 
 

@@ -313,6 +313,19 @@ class LangMemStore:
         )
         return _item_from_block(block) if block is not None else None
 
+    def delete(self, namespace: Sequence[str], key: str) -> LangMemItem:
+        """Delete one namespaced item and return its last stored value.
+
+        Raises:
+            KeyError: If the namespace/key pair does not exist.
+        """
+
+        existing = self.get(namespace, key)
+        if existing is None:
+            raise KeyError(f"Item {key!r} was not found in namespace {tuple(namespace)!r}.")
+        self.memory.delete(existing.block)
+        return existing
+
     def search(
         self,
         namespace_prefix: Sequence[str],

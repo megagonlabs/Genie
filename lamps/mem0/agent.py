@@ -389,13 +389,13 @@ class Mem0Agent:
         )["memories"]
         model = self._call("get_mental_model", {"name": mental_model_name})["mental_model"]
 
-        preference = semantic[0]["text"] if semantic else "No matching preference was found."
+        preference = semantic[0]["memory"] if semantic else "No matching preference was found."
         timeline = _format_bullets(
-            (memory["text"] for memory in temporal),
+            (memory["memory"] for memory in temporal),
             empty="No events found.",
         )
         connected = _format_bullets(
-            (memory["text"] for memory in graph),
+            (memory["memory"] for memory in graph),
             empty="No related memories.",
         )
         synthesis = model["content"] if model is not None else "No mental model is available."
@@ -432,7 +432,7 @@ class Mem0Agent:
 
 
 def _record_result(record: ExtractedFactRecord) -> dict[str, Any]:
-    """Return the canonical JSON-compatible fact record."""
+    """Return the JSON-compatible extracted-memory record."""
 
     return record.canonical_value()
 

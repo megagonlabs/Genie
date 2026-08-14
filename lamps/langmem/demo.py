@@ -41,8 +41,8 @@ def build_demo_agent() -> LangMemAgent:
             "episode",
             {"observation": str, "thoughts": str, "action": str, "result": str},
         ),
-        (*BASE_NAMESPACE, "mental_models"): ValueSchema(
-            "mental_model",
+        (*BASE_NAMESPACE, "profiles"): ValueSchema(
+            "user_profile",
             {"name": str, "summary": str, "principles": list, "source_keys": list},
         ),
     }
@@ -58,7 +58,7 @@ def build_demo_agent() -> LangMemAgent:
 
 
 def teach_demo_agent(agent: LangMemAgent) -> None:
-    """Have the agent retain facts, episodes, a mental model, and relations."""
+    """Have the agent retain facts, episodes, a semantic profile, and relations."""
 
     agent.learn(
         memories=(
@@ -109,7 +109,7 @@ def teach_demo_agent(agent: LangMemAgent) -> None:
                 entities=("Alice", "flight"),
             ),
             MemoryCandidate(
-                collection="mental_models",
+                collection="profiles",
                 key="alice-travel-profile",
                 value={
                     "name": "Alice travel profile",
@@ -140,14 +140,14 @@ def teach_demo_agent(agent: LangMemAgent) -> None:
             MemoryLinkCandidate(
                 source_collection="episodes",
                 source_key="seat-correction-completed",
-                target_collection="mental_models",
+                target_collection="profiles",
                 target_key="alice-travel-profile",
                 relation="supports",
             ),
             MemoryLinkCandidate(
                 source_collection="semantic",
                 source_key="hotel-preference",
-                target_collection="mental_models",
+                target_collection="profiles",
                 target_key="alice-travel-profile",
                 relation="supports",
             ),
@@ -165,8 +165,8 @@ def answer_demo_question(agent: LangMemAgent) -> str:
         end="2025-04-11T23:59:59Z",
         graph_collection="semantic",
         graph_key="seat-preference",
-        mental_model_collection="mental_models",
-        mental_model_key="alice-travel-profile",
+        profile_collection="profiles",
+        profile_key="alice-travel-profile",
     )
 
 

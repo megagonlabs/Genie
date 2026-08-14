@@ -33,7 +33,6 @@ def build_demo_agent() -> Mem0Agent:
     scope = MemoryScope(
         user_id="alice",
         agent_id="travel-agent",
-        app_id="trip-planner",
         run_id="planning-session-42",
     )
     return Mem0Agent(name="travel-agent", tools=Mem0Tools(store, scope=scope))

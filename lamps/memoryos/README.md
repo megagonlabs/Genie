@@ -17,28 +17,31 @@ Short-term memory is a FIFO of `memoryos.short_term_qa` values:
 }
 ```
 
-Its demo capacity is two. Before deleting the oldest item, overflow turns it
-into a mid-term page:
+Its demo capacity is two. Overflow turns the oldest item into a mid-term page.
+MemoryOS normally groups pages into topic-similar sessions; to keep the mapping
+small and visible, this lamp represents each promoted page as a one-page
+session:
 
 ```python
 {
     "page_id": "page_...",
+    "session_id": "session_...",
     "source_qa_key": "aisle-problem",
     "summary": "A prior aisle-seat booking required a correction.",
     "dialogue": {"user_input": "...", "agent_response": "...", "timestamp": "..."},
-    "heat": 2.0,
-    "visit_count": 1,
+    "H_segment": 2.0,
+    "N_visit": 1,
 }
 ```
 
-`memoryos.next_page` links preserve page order. A relevant retrieval adds one
-visit and one heat point; a configured threshold allows a deterministic
-long-term update.
+`memoryos.next_page` links preserve page order. In MemoryOS, heat and visit
+counts belong to the containing session, not to an individual page. A relevant
+retrieval in this lamp adds one visit and one heat point to the page's one-page
+session; a configured threshold allows a deterministic long-term update.
 
 Long-term memory contains an updateable profile dictionary plus separate user
 and assistant knowledge collections. Knowledge entries store `owner`,
-`knowledge`, `timestamp`, and `source_page_ids`. The profile acts as this demo's
-mental model.
+`knowledge`, `timestamp`, and `source_page_ids`.
 
 ## Genie mapping
 
@@ -47,9 +50,9 @@ mental model.
 | Memory tiers | Owned subtrees through `OwnershipTree` |
 | Short-term FIFO | QA blocks appended to an `EventLog` |
 | Overflow | Oldest QA becomes a page, then leaves short-term storage |
-| Mid-term pages | Separate `EventLog` |
+| Mid-term sessions/pages | One-page-session blocks in a separate `EventLog` |
 | Page order | Cycle-protected `LineageDAG` edges |
-| Heat | Explicit fields updated after matching retrieval |
+| Session heat | `H_segment` and `N_visit` updated after matching retrieval |
 | Stable conversation key | `KeyedCollection` binding transferred to the page |
 | Profile | One updateable keyed record |
 | User and assistant facts | Separate bounded `EventLog` collections |
@@ -58,7 +61,7 @@ mental model.
 | Agent access | `MemoryOSTools` wraps a bounded hierarchy |
 
 Ownership defines the tier hierarchy; links represent chronology and
-derivation. Capacity, summaries, heat, profile meaning, extraction, ranking,
+derivation. Capacity, summaries, session heat, profile meaning, extraction, ranking,
 and agent behavior remain application code.
 
 ## Demo workflow
@@ -74,14 +77,16 @@ format.
 ## Limits
 
 The lamp does not reproduce MemoryOS's LLM summarization, dialogue-continuity
-classification, embeddings, keyword extraction, similarity thresholds, heat
-formula, LFU mid-term eviction, persistence files, parallel retrieval, or
-response pipeline. It uses lexical overlap and a simple `+1` heat rule.
+classification, topic-based grouping of several pages into one session,
+embeddings, keyword extraction, similarity thresholds, the recency/interaction
+heat formula, LFU mid-term session eviction, persistence files, parallel
+retrieval, or response pipeline. It uses lexical overlap, one-page sessions,
+and a simple `+1` heat rule. The explicit `update_long_term` call stands in for
+MemoryOS's automatic update of hot segments.
 
 Temporal and graph retrieval are explicit demo APIs. Page links adapt
-MemoryOS's `pre_page`/`next_page` chronology to Genie traversal. MemoryOS calls
-the synthesized state a user profile; this demo calls it a mental model for
-consistency with the lamp series.
+MemoryOS's `pre_page`/`next_page` chronology to Genie traversal. The long-term
+dictionary is called a user profile here, matching MemoryOS terminology.
 
 References: [documentation](https://bai-lab.github.io/MemoryOS/docs),
 [repository](https://github.com/BAI-LAB/MemoryOS),

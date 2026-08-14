@@ -51,7 +51,7 @@ def make_bank() -> HindsightMemoryBank:
 
 
 def test_atomic_memory_unit_preserves_canonical_fields_and_curation_state() -> None:
-    """One block stores the complete atomic memory-unit structure."""
+    """One block stores the lamp's compact atomic memory-unit structure."""
 
     bank = make_bank()
     unit = bank.retain(

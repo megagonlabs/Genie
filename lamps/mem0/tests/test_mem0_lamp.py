@@ -38,7 +38,6 @@ def _store(*, clock=None):  # type: ignore[no-untyped-def]
     scope = MemoryScope(
         user_id="alice",
         agent_id="assistant",
-        app_id="travel",
         run_id="run-1",
     )
     return (
@@ -52,7 +51,7 @@ def _store(*, clock=None):  # type: ignore[no-untyped-def]
     )
 
 
-def test_fact_record_has_exact_canonical_shape_and_scoped_hash_deduplication() -> None:
+def test_fact_record_has_oss_shaped_memory_field_and_scoped_hash_deduplication() -> None:
     store, handle, scope = _store()
 
     record = store.add(
@@ -72,10 +71,9 @@ def test_fact_record_has_exact_canonical_shape_and_scoped_hash_deduplication() -
     assert record.block.type == FACT_RECORD_TYPE
     assert set(value) == {
         "id",
-        "text",
+        "memory",
         "user_id",
         "agent_id",
-        "app_id",
         "run_id",
         "hash",
         "metadata",
@@ -83,7 +81,7 @@ def test_fact_record_has_exact_canonical_shape_and_scoped_hash_deduplication() -
         "updated_at",
     }
     assert value["id"] == record.id == record.block.id
-    assert value["hash"] == hashlib.md5(value["text"].encode("utf-8")).hexdigest()
+    assert value["hash"] == hashlib.md5(value["memory"].encode("utf-8")).hexdigest()
     assert value["metadata"] == {
         "source": "conversation-1",
         "kind": "fact",
@@ -98,7 +96,6 @@ def test_fact_record_has_exact_canonical_shape_and_scoped_hash_deduplication() -
                 "records",
                 "user=alice",
                 "agent=assistant",
-                "app=travel",
                 "run=run-1",
             ),
             record.id,
@@ -112,7 +109,6 @@ def test_exact_scope_isolates_deduplication_and_retrieval() -> None:
     bob_scope = MemoryScope(
         user_id="bob",
         agent_id="assistant",
-        app_id="travel",
         run_id="run-1",
     )
 
@@ -276,11 +272,10 @@ def test_agent_uses_all_four_retrieval_paths_and_exposes_a_trace(capsys) -> None
     [
         MemoryScope(user_id="alice"),
         MemoryScope(agent_id="assistant"),
-        MemoryScope(app_id="travel"),
         MemoryScope(run_id="run-1"),
     ],
 )
-def test_each_canonical_id_can_independently_define_a_scope(scope: MemoryScope) -> None:
+def test_each_oss_session_id_can_independently_define_a_scope(scope: MemoryScope) -> None:
     assert any(value is not None for value in scope.as_dict().values())
 
 

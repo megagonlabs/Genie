@@ -11,7 +11,7 @@ not a drop-in implementation.
 | Graph boundary | Root block and bounded handle |
 | Entity | `graphiti.entity` block |
 | Source episode | `graphiti.episode` block |
-| Temporal fact | `graphiti.temporal_fact` block |
+| Relationship fact | `graphiti.temporal_fact` block used as an edge record |
 | Subject and object | `PropertyGraph` edges from fact to entities |
 | Provenance | Graph edges from fact to episodes |
 | Episode time | `TemporalCollection` event membership |
@@ -23,6 +23,13 @@ Intervals are half-open: `[valid_from, valid_to)`, with no `valid_to` meaning
 still valid. When an exclusive relation such as `lives_in` changes, the new
 fact's `valid_from` closes the previous interval. The update episode supports
 both the new fact and the end of the old one.
+
+Graphiti stores facts as relationships between entity nodes. This lamp
+materializes each relationship as a block because Genie temporal membership
+indexes blocks; the subject/object links preserve the same triplet. Graphiti's
+bi-temporal distinction maps to `MemoryBlock.created_at` for ingestion time and
+`ValidityInterval` for effective time. Episode `observed_at` is source event
+time, not another fact-validity field.
 
 ## Tools and workflow
 
@@ -53,11 +60,15 @@ Francisco. Her `lives_in` history is:
 
 ## Limits
 
-The lamp omits Graphiti's LLM extraction, entity resolution, ontology
-management, embeddings, hybrid ranking, and graph-database engine. Structured
-fact candidates replace natural-language extraction. The focus is portable
-owned blocks, scoped access, graph relationships, provenance, temporal
-membership, and cycle-protected succession.
+The lamp omits Graphiti's LLM extraction, entity resolution, prescribed and
+learned ontology, entity summaries, communities, embeddings, hybrid ranking,
+group management, and graph-database engine. Structured fact candidates
+replace natural-language extraction. The focus is portable owned blocks,
+scoped access, graph relationships, provenance, temporal membership, and
+cycle-protected succession.
+
+References: [Graphiti repository](https://github.com/getzep/graphiti) and
+[adding episodes](https://help.getzep.com/graphiti/core-concepts/adding-episodes).
 
 Run and test commands plus the shared agent format are in the [lamp
 guide](../README.md).

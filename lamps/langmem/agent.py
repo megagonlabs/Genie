@@ -64,12 +64,12 @@ class LangMemTools:
         self.definitions = (
             ToolDefinition(
                 name="manage_memory",
-                description="Create or update a structured value under a bound namespace.",
+                description="Create, update, or delete a structured value under a bound namespace.",
                 parameters={
-                    "action": "create | update",
+                    "action": "create | update | delete",
                     "collection": "string",
                     "key": "string",
-                    "value": "schema-shaped object",
+                    "value": "schema-shaped object; omitted for delete",
                     "occurred_at": "optional ISO 8601 timestamp",
                     "entities": "list[string]",
                 },
@@ -140,10 +140,10 @@ class LangMemTools:
     def _manage_memory(
         self,
         *,
-        action: Literal["create", "update"],
+        action: Literal["create", "update", "delete"],
         collection: str,
         key: str,
-        value: dict[str, Any],
+        value: dict[str, Any] | None = None,
         occurred_at: str | None = None,
         entities: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -156,6 +156,8 @@ class LangMemTools:
             else None
         )
         if action == "create":
+            if value is None:
+                raise ValueError("value is required when action is 'create'.")
             item = self._store.create(
                 namespace,
                 key,
@@ -164,6 +166,8 @@ class LangMemTools:
                 entities=entities or (),
             )
         elif action == "update":
+            if value is None:
+                raise ValueError("value is required when action is 'update'.")
             item = self._store.update(
                 namespace,
                 key,
@@ -171,8 +175,12 @@ class LangMemTools:
                 occurred_at=timestamp,
                 entities=entities,
             )
+        elif action == "delete":
+            if value is not None or occurred_at is not None or entities is not None:
+                raise ValueError("delete accepts only collection and key.")
+            item = self._store.delete(namespace, key)
         else:
-            raise ValueError("action must be 'create' or 'update'.")
+            raise ValueError("action must be 'create', 'update', or 'delete'.")
         return {"action": action, "item": _item_result(item)}
 
     def _get_memory(self, *, collection: str, key: str) -> dict[str, Any]:
@@ -339,14 +347,14 @@ class LangMemAgent:
         end: str,
         graph_collection: str,
         graph_key: str,
-        mental_model_collection: str,
-        mental_model_key: str,
+        profile_collection: str,
+        profile_key: str,
     ) -> str:
         """Combine direct, lexical, temporal, and graph retrieval."""
 
         model = self._call(
             "get_memory",
-            {"collection": mental_model_collection, "key": mental_model_key},
+            {"collection": profile_collection, "key": profile_key},
         )["item"]
         recalled = self._call(
             "search_memory",
@@ -376,7 +384,7 @@ class LangMemAgent:
         )["results"]
 
         model_summary = (
-            model["value"]["summary"] if model is not None else "No mental model found."
+            model["value"]["summary"] if model is not None else "No semantic profile found."
         )
         relevant = "\n".join(
             f"- {_display_item(result['item'])}" for result in recalled
@@ -391,7 +399,7 @@ class LangMemAgent:
         ) or "- No related memories."
         return (
             f"Question: {question}\n"
-            f"Mental model: {model_summary}\n"
+            f"Semantic profile: {model_summary}\n"
             f"Relevant memories:\n{relevant}\n"
             f"Experience timeline:\n{dated}\n"
             f"Graph context:\n{connected}"
@@ -419,7 +427,7 @@ def _display_item(item: dict[str, Any]) -> str:
     if all(field in value for field in ("observation", "result")):
         return f"{value['observation']} Result: {value['result']}"
     if all(field in value for field in ("name", "summary")):
-        return f"Mental model {value['name']}: {value['summary']}"
+        return f"Semantic profile {value['name']}: {value['summary']}"
     return str(value)
 
 

@@ -85,7 +85,7 @@ def test_short_term_is_fifo_and_overflow_becomes_a_mid_term_page() -> None:
     assert len(handle.search(types=[MID_TERM_TYPE], limit=20)) == 1
 
 
-def test_mid_term_pages_store_summary_dialogue_heat_and_chronology_links() -> None:
+def test_mid_term_pages_store_one_page_session_state_and_chronology_links() -> None:
     memory, handle = _memory(short_capacity=1)
     _add(memory, "first", 1, summary="First summarized dialogue.")
     _add(memory, "second", 2, summary="Second summarized dialogue.")
@@ -95,21 +95,23 @@ def test_mid_term_pages_store_summary_dialogue_heat_and_chronology_links() -> No
     links = handle.list_links(first.block, relation=NEXT_PAGE_RELATION, direction="out")
 
     assert first.summary == "First summarized dialogue."
-    assert first.heat == 1.0
-    assert first.visit_count == 0
+    assert first.session_id.startswith("session_")
+    assert first.segment_heat == 1.0
+    assert first.segment_visit_count == 0
     assert set(first.block.value) == {
         "page_id",
+        "session_id",
         "source_qa_key",
         "summary",
         "dialogue",
-        "heat",
-        "visit_count",
+        "H_segment",
+        "N_visit",
     }
     assert len(links) == 1 and links[0].target_id == second.id
     assert memory.structures.page_lineage.successors(first.block)[0].block == second.block
 
 
-def test_matching_retrieval_increments_page_heat_and_visit_count() -> None:
+def test_matching_retrieval_increments_segment_heat_and_visit_count() -> None:
     memory, _ = _memory(short_capacity=1)
     _add(memory, "window-seat", 1, summary="Alice prefers a window seat.")
     _add(memory, "current", 2)
@@ -118,9 +120,9 @@ def test_matching_retrieval_increments_page_heat_and_visit_count() -> None:
     bundle = memory.retrieve_memory("Alice window seat")
     after = memory.mid_term()[0]
 
-    assert before.heat == 1.0 and before.visit_count == 0
+    assert before.segment_heat == 1.0 and before.segment_visit_count == 0
     assert [page.id for page in bundle.mid_term] == [before.id]
-    assert after.heat == 2.0 and after.visit_count == 1
+    assert after.segment_heat == 2.0 and after.segment_visit_count == 1
 
 
 def test_long_term_update_requires_heated_source_pages() -> None:

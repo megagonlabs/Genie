@@ -40,7 +40,7 @@ def build_demo_agent() -> MemoryOSAgent:
 
 
 def teach_demo_agent(agent: MemoryOSAgent) -> None:
-    """Have the agent exercise FIFO promotion, heat, and long-term updates."""
+    """Have the agent exercise FIFO promotion, segment heat, and long-term updates."""
 
     agent.learn(
         conversations=(

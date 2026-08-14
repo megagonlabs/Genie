@@ -4,6 +4,13 @@ Lamps are runnable application-level memory patterns composed from Genie.
 Some are inspired by other systems, but they are architectural examples—not
 compatibility layers or production implementations.
 
+Each lamp preserves the represented project's primary memory abstraction and
+one characteristic workflow. It may replace model calls, specialized indexes,
+or production storage with deterministic application code so the example runs
+locally. Any extra Genie structure is labeled as an extension rather than an
+upstream feature. The mappings below were checked against the linked official
+projects and documentation on 2026-08-13.
+
 Each `lamps/<name>` package should:
 
 - explain its model mapping and deliberate limits;
@@ -35,9 +42,10 @@ guides document only their unique stored model, workflow, results, and limits.
 
 ## Included lamps
 
-- [Graphiti](graphiti/README.md): temporal knowledge graph and provenance.
-- [Hindsight](hindsight/README.md): atomic units, mental models, and combined
-  retrieval.
-- [LangMem](langmem/README.md): schema-defined namespace/key/value items.
-- [Mem0](mem0/README.md): scoped extracted-fact records.
-- [MemoryOS](memoryos/README.md): short-, mid-, and long-term hierarchy.
+| Lamp | Preserved upstream idea | Characteristic workflow |
+| --- | --- | --- |
+| [Graphiti](graphiti/README.md) | Entity nodes, temporal relationship facts, episodes, provenance | Add episodes, invalidate changing facts, query current and historical relationships |
+| [Hindsight](hindsight/README.md) | World/experience facts, derived observations, four-way retrieval, mental models | Retain, recall, and assemble a deterministic stand-in for reflection |
+| [LangMem](langmem/README.md) | Schema-shaped values at namespace/key addresses | Agent-managed create/update/delete plus direct and relevant-memory retrieval |
+| [Mem0](mem0/README.md) | Extracted memories scoped by user/agent/run identifiers | Add, update, and retrieve compact memories; deterministic extraction substitutes for an LLM |
+| [MemoryOS](memoryos/README.md) | Short-term FIFO, mid-term sessions/pages, heat, profile and knowledge stores | Overflow, heat relevant sessions, and consolidate hot context into long-term memory |

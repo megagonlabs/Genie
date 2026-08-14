@@ -168,7 +168,7 @@ class HindsightMemoryBank:
         tags: Sequence[str] = (),
         provenance: dict[str, Any] | None = None,
     ) -> MemoryUnit:
-        """Store one complete atomic memory unit.
+        """Store one compact application-owned memory unit.
 
         Args:
             text: Narrative fact or experience text.

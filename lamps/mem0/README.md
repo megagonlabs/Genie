@@ -5,15 +5,15 @@ scoped handles, and links. It is not a Mem0 compatibility layer.
 
 ## Memory shape
 
-Each `mem0.fact_record` value has the requested canonical fields:
+Each `mem0.fact_record` value uses the main fields returned by the open-source
+Mem0 memory API, plus lamp-owned metadata:
 
 ```python
 {
     "id": "mem0_...",
-    "text": "Alice now prefers window seats on flights.",
+    "memory": "Alice now prefers window seats on flights.",
     "user_id": "alice",
     "agent_id": "travel-agent",
-    "app_id": "trip-planner",
     "run_id": "planning-session-42",
     "hash": "...",
     "metadata": {
@@ -27,20 +27,24 @@ Each `mem0.fact_record` value has the requested canonical fields:
 }
 ```
 
-The Genie block id is also the record id. MD5 is used only for exact content
-deduplication within one scope, not for security. Event time belongs in
-`metadata.occurred_at`; creation and update times describe ingestion.
+The Genie block id is also the record id. Open-source Mem0 accepts `user_id`,
+`agent_id`, and `run_id`; `app_id` belongs to the hosted platform and is not
+used here. MD5 and exact duplicate suppression are transparent deterministic
+substitutes for Mem0's LLM-based extraction and conflict handling, not a claim
+about its current deduplication algorithm. Event time in
+`metadata.occurred_at` is a lamp extension; creation and update times describe
+ingestion.
 
 Mental models are separate `mem0.mental_model` blocks with source ids. That is
-a demo convention, not part of the canonical fact record.
+a demo convention, not part of an open-source Mem0 record.
 
 ## Genie mapping
 
 | Behavior | Genie implementation |
 | --- | --- |
-| Fact record | One block with the canonical value shape |
-| User/agent/app/run scope | `MemoryScope` mapped to a `KeyedCollection` address |
-| Exact deduplication | MD5 of normalized text within the bound scope |
+| Extracted memory | One block with an OSS-shaped `memory` field |
+| User/agent/run scope | `MemoryScope` mapped to a `KeyedCollection` address |
+| Extraction/conflict stand-in | Exact MD5 duplicate suppression within the bound scope |
 | Update | `MemoryHandle.update`; id and `created_at` remain stable |
 | Facts and experiences | `metadata.kind`; event time indexed by `TemporalCollection` |
 | Relevant-memory retrieval | Lexical scoring over text and entities |
@@ -63,12 +67,16 @@ format.
 
 ## Limits
 
-The lamp does not use an extraction LLM, embeddings, BM25, external vector or
-graph stores, deletion history, or the hosted Mem0 API. Current open-source
-Mem0 no longer exposes its earlier graph store as a traversable graph, so
-`search_graph` is an application-owned Genie extension rather than a Mem0 API.
+The lamp begins with agent-supplied extracted-memory candidates, whereas Mem0
+normally accepts messages and uses an LLM to extract and reconcile memories.
+It does not reproduce embeddings, BM25, reranking, expiration, deletion,
+history, external vector stores, or the hosted API. Current open-source Mem0
+uses entity links during hybrid retrieval but no longer exposes its earlier
+graph store as a traversable graph, so `search_graph` is an application-owned
+Genie extension rather than a Mem0 API. Temporal search and the separate mental
+model are also deliberate extensions.
 
-References: [get memory](https://docs.mem0.ai/api-reference/memory/get-memory),
-[add memories](https://docs.mem0.ai/api-reference/memory/add-memories),
+References: [open-source repository](https://github.com/mem0ai/mem0),
+[open-source implementation](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py),
 [graph-memory migration](https://docs.mem0.ai/platform/features/graph-memory),
-and [updates](https://docs.mem0.ai/core-concepts/memory-operations/update).
+and [memory operations](https://docs.mem0.ai/open-source/python-quickstart).

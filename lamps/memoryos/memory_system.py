@@ -59,17 +59,18 @@ class ShortTermQA:
 
 @dataclass(frozen=True, slots=True)
 class MidTermPage:
-    """One summarized dialogue page promoted from short-term memory."""
+    """One summarized page in a compact one-page mid-term session."""
 
     block: MemoryBlock
+    session_id: str
     source_key: str
     summary: str
     user_input: str
     agent_response: str
     occurred_at: datetime
     sequence: int
-    heat: float
-    visit_count: int
+    segment_heat: float
+    segment_visit_count: int
     entities: tuple[str, ...]
 
     @property
@@ -81,7 +82,7 @@ class MidTermPage:
 
 @dataclass(frozen=True, slots=True)
 class LongTermProfile:
-    """Current long-term user-profile dictionary used as a mental model."""
+    """Current long-term user-profile dictionary."""
 
     block: MemoryBlock
     data: dict[str, Any]
@@ -102,7 +103,7 @@ class KnowledgeEntry:
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeDraft:
-    """Deterministic stand-in for one fact extracted from heated pages."""
+    """Deterministic stand-in for one fact extracted from a hot session."""
 
     knowledge: str
     source_page_ids: tuple[str, ...]
@@ -240,7 +241,7 @@ class MemoryOSMemory:
             memory: Bounded handle owning all memory tiers.
             structures: Tree, keyed, log, temporal, and graph views.
             short_term_capacity: Maximum QA pairs retained before FIFO promotion.
-            heat_threshold: Minimum page heat required for long-term consolidation.
+            heat_threshold: Minimum session heat required for long-term consolidation.
             knowledge_capacity: Maximum entries retained per knowledge owner.
             clock: Optional UTC clock for deterministic tests.
         """
@@ -331,8 +332,8 @@ class MemoryOSMemory:
     def retrieve_memory(self, query: str, *, limit: int = 5) -> RetrievalBundle:
         """Retrieve context from short, mid, profile, and both knowledge stores.
 
-        Matching mid-term pages gain one visit and one heat point. This is a
-        deliberately transparent approximation of MemoryOS segment heat.
+        Matching pages increment the visit count and heat of their one-page
+        sessions. This is a transparent approximation of MemoryOS segment heat.
         """
 
         normalized_query = _required_text(query, field="query")
@@ -374,7 +375,7 @@ class MemoryOSMemory:
         user_knowledge: Sequence[KnowledgeDraft] = (),
         assistant_knowledge: Sequence[KnowledgeDraft] = (),
     ) -> tuple[LongTermProfile, tuple[KnowledgeEntry, ...], tuple[KnowledgeEntry, ...]]:
-        """Consolidate heated pages into profile and knowledge stores."""
+        """Consolidate pages from hot one-page sessions into long-term stores."""
 
         profile_sources = self._require_heated_pages(profile_source_page_ids)
         existing = self.get_user_profile()
@@ -552,9 +553,11 @@ class MemoryOSMemory:
     def _promote_qa(self, qa: ShortTermQA) -> MidTermPage:
         previous = self.mid_term()
         page_id = f"page_{uuid4().hex}"
+        session_id = f"session_{uuid4().hex}"
         summary = cast(str, qa.block.metadata["summary"])
         payload = {
             "page_id": page_id,
+            "session_id": session_id,
             "source_qa_key": qa.key,
             "summary": summary,
             "dialogue": {
@@ -562,8 +565,8 @@ class MemoryOSMemory:
                 "agent_response": qa.agent_response,
                 "timestamp": _format_timestamp(qa.occurred_at),
             },
-            "heat": 1.0,
-            "visit_count": 0,
+            "H_segment": 1.0,
+            "N_visit": 0,
         }
         block = self.structures.tree.create_child(
             parent=self.structures.mid_term.log,
@@ -571,7 +574,7 @@ class MemoryOSMemory:
             type=MID_TERM_TYPE,
             value=payload,
             metadata={
-                "heat": 1.0,
+                "segment_heat": 1.0,
                 "occurred_at": _format_timestamp(qa.occurred_at),
                 "entities": list(qa.entities),
             },
@@ -598,11 +601,11 @@ class MemoryOSMemory:
         return page
 
     def _record_page_visit(self, page: MidTermPage) -> MidTermPage:
-        updated_heat = page.heat + 1.0
+        updated_heat = page.segment_heat + 1.0
         block = self.memory.update(
             page.block,
-            value={"heat": updated_heat, "visit_count": page.visit_count + 1},
-            metadata={"heat": updated_heat},
+            value={"H_segment": updated_heat, "N_visit": page.segment_visit_count + 1},
+            metadata={"segment_heat": updated_heat},
         )
         return _page_from_block(block, sequence=page.sequence)
 
@@ -615,9 +618,10 @@ class MemoryOSMemory:
             page = self.get_page(page_id)
             if page is None:
                 raise ValueError(f"Source page {page_id!r} does not exist.")
-            if page.heat < self.heat_threshold:
+            if page.segment_heat < self.heat_threshold:
                 raise ValueError(
-                    f"Source page {page_id!r} heat {page.heat:.1f} is below "
+                    f"Source page {page_id!r} belongs to a segment with heat "
+                    f"{page.segment_heat:.1f}, below "
                     f"threshold {self.heat_threshold:.1f}."
                 )
             pages.append(page)
@@ -740,14 +744,15 @@ def _page_from_block(block: MemoryBlock, *, sequence: int) -> MidTermPage:
     dialogue = cast(dict[str, Any], value["dialogue"])
     return MidTermPage(
         block=block,
+        session_id=cast(str, value["session_id"]),
         source_key=cast(str, value["source_qa_key"]),
         summary=cast(str, value["summary"]),
         user_input=cast(str, dialogue["user_input"]),
         agent_response=cast(str, dialogue["agent_response"]),
         occurred_at=_parse_timestamp(cast(str, dialogue["timestamp"]), field="timestamp"),
         sequence=sequence,
-        heat=float(value["heat"]),
-        visit_count=cast(int, value["visit_count"]),
+        segment_heat=float(value["H_segment"]),
+        segment_visit_count=cast(int, value["N_visit"]),
         entities=tuple(cast(list[str], block.metadata.get("entities", []))),
     )
 
