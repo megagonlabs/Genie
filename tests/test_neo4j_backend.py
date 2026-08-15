@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Condition, Event, RLock
-from typing import Any, Self
+from typing import Any, Self, cast, Literal
 
 import pytest
 
@@ -118,15 +118,11 @@ def test_neo4j_serialization_is_strict_and_defensive() -> None:
         metadata={"nested": {"value": "kept"}},
     )
     properties = neo4j_module._block_properties(original)
-    reconstructed = neo4j_module._block_from_record(
-        {"block": {**properties, "storage_order": 0}, "parent_id": None}
-    )
+    reconstructed = neo4j_module._block_from_record({"block": {**properties, "storage_order": 0}, "parent_id": None})
 
     assert reconstructed == original
     reconstructed.value["items"].append("local")
-    assert neo4j_module._block_from_record(
-        {"block": {**properties, "storage_order": 0}, "parent_id": None}
-    ).value == {"items": [1, True, None]}
+    assert neo4j_module._block_from_record({"block": {**properties, "storage_order": 0}, "parent_id": None}).value == {"items": [1, True, None]}
     with pytest.raises(TypeError, match="strict JSON"):
         neo4j_module._block_properties(MemoryBlock(type="invalid", value=(1, 2)))
 
@@ -138,9 +134,7 @@ def test_neo4j_serialization_reports_corrupt_stored_values() -> None:
     properties["value_json"] = "{not-json"
 
     with pytest.raises(BackendCorruption, match="JSON"):
-        neo4j_module._block_from_record(
-            {"block": {**properties, "storage_order": 0}, "parent_id": None}
-        )
+        neo4j_module._block_from_record({"block": {**properties, "storage_order": 0}, "parent_id": None})
 
 
 def test_neo4j_serialization_rejects_non_strict_json_and_policy_booleans() -> None:
@@ -156,20 +150,16 @@ def test_neo4j_serialization_rejects_non_strict_json_and_policy_booleans() -> No
     )
     properties["value_json"] = "NaN"
     with pytest.raises(BackendCorruption, match="strict JSON"):
-        neo4j_module._block_from_record(
-            {"block": {**properties, "storage_order": 0}, "parent_id": None}
-        )
+        neo4j_module._block_from_record({"block": {**properties, "storage_order": 0}, "parent_id": None})
 
 
 def test_neo4j_serialization_rejects_invalid_versions_times_and_namespaces() -> None:
     """Malformed caller values and stored primitives fail at stable boundaries."""
 
     with pytest.raises(ValueError, match="block version"):
-        neo4j_module._block_properties(
-            MemoryBlock(id="note", type="note", value={}, version=0)
-        )
+        neo4j_module._block_properties(MemoryBlock(id="note", type="note", value={}, version=0))
     with pytest.raises(TypeError, match="created_at must be a datetime"):
-        neo4j_module._encode_datetime("bad", field_name="created_at")
+        neo4j_module._encode_datetime(cast(datetime, "bad"), field_name="created_at")
     with pytest.raises(ValueError, match="created_at must be timezone-aware"):
         neo4j_module._encode_datetime(
             datetime(2026, 1, 1),  # noqa: DTZ001 - deliberately malformed input
@@ -218,9 +208,7 @@ def test_neo4j_record_decoders_translate_malformed_shapes(
     policy["read"]["allow_all"] = "false"
     properties["policy_json"] = json.dumps(policy)
     with pytest.raises(BackendCorruption, match="memory block"):
-        neo4j_module._block_from_record(
-            {"block": {**properties, "storage_order": 0}, "parent_id": None}
-        )
+        neo4j_module._block_from_record({"block": {**properties, "storage_order": 0}, "parent_id": None})
 
 
 @pytest.mark.parametrize(
@@ -606,18 +594,14 @@ def test_live_neo4j_backend_rejects_invalid_link_mutations_and_directions() -> N
         _clear_live_data(backend)
         source = backend.put_block(MemoryBlock(id="source", type="node", value={}))
         target = backend.put_block(MemoryBlock(id="target", type="node", value={}))
-        link = backend.add_link(
-            MemoryLink(source.id, target.id, "related", id="link")
-        )
+        link = backend.add_link(MemoryLink(source.id, target.id, "related", id="link"))
 
         with pytest.raises(MemoryConflict, match="does not exist"):
-            backend.update_link(
-                MemoryLink(source.id, target.id, "related", id="missing")
-            )
+            backend.update_link(MemoryLink(source.id, target.id, "related", id="missing"))
         with pytest.raises(MemoryConflict, match="only metadata"):
             backend.update_link(replace(link, target_id=source.id))
         with pytest.raises(ValueError, match="direction"):
-            backend.list_links(source.id, direction="sideways")
+            backend.list_links(source.id, direction=cast(Literal["out", "in", "both"], "sideways"))
 
         assert backend.list_links(target.id, direction="in") == [link]
         assert backend.list_links(source.id, relation="unrelated") == []
@@ -630,9 +614,7 @@ def test_live_neo4j_backend_searches_every_scope_and_filters_candidates() -> Non
 
     with _live_backend() as backend:
         _clear_live_data(backend)
-        root = backend.put_block(
-            MemoryBlock(id="root", type="root", value={"text": "alpha"})
-        )
+        root = backend.put_block(MemoryBlock(id="root", type="root", value={"text": "alpha"}))
         child = backend.put_block(
             MemoryBlock(
                 id="child",
@@ -650,21 +632,9 @@ def test_live_neo4j_backend_searches_every_scope_and_filters_candidates() -> Non
             )
         )
 
-        assert [
-            result.block.id
-            for result in backend.search(
-                MemoryQuery(root_id=child.id, scope=Scope.SELF)
-            )
-        ] == [child.id]
-        assert [
-            result.block.id
-            for result in backend.search(
-                MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS)
-            )
-        ] == [leaf.id, child.id, root.id]
-        assert backend.search(
-            MemoryQuery(root_id="missing", scope=Scope.SELF)
-        ) == []
+        assert [result.block.id for result in backend.search(MemoryQuery(root_id=child.id, scope=Scope.SELF))] == [child.id]
+        assert [result.block.id for result in backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS))] == [leaf.id, child.id, root.id]
+        assert backend.search(MemoryQuery(root_id="missing", scope=Scope.SELF)) == []
         assert backend.search(MemoryQuery(types=["missing-type"])) == []
         assert backend.search(MemoryQuery("missing text")) == []
         assert {result.block.id for result in backend.search(MemoryQuery())} == {
@@ -681,16 +651,10 @@ def test_live_neo4j_backend_reports_corrupt_persisted_record_types() -> None:
 
     with _live_backend() as backend:
         _clear_live_data(backend)
-        container = backend.put_block(
-            MemoryBlock(id="container", type="container", value={})
-        )
+        container = backend.put_block(MemoryBlock(id="container", type="container", value={}))
         target = backend.put_block(MemoryBlock(id="target", type="item", value={}))
-        corrupt = backend.put_block(
-            MemoryBlock(id="corrupt", type="item", value={})
-        )
-        link = backend.add_link(
-            MemoryLink(container.id, target.id, "related", id="link")
-        )
+        corrupt = backend.put_block(MemoryBlock(id="corrupt", type="item", value={}))
+        link = backend.add_link(MemoryLink(container.id, target.id, "related", id="link"))
         address = MemoryAddress(("items",), "target")
         backend.bind_key(KeyBinding(container.id, address, target.id))
         log_entry = backend.append_log_entry(container.id, target.id)
@@ -809,9 +773,7 @@ def test_live_neo4j_backend_explicit_cleanup_capabilities() -> None:
 
     with _live_backend() as backend:
         _clear_live_data(backend)
-        container = backend.put_block(
-            MemoryBlock(id="container", type="container", value={})
-        )
+        container = backend.put_block(MemoryBlock(id="container", type="container", value={}))
         first = backend.put_block(MemoryBlock(id="first", type="item", value={}))
         second = backend.put_block(MemoryBlock(id="second", type="item", value={}))
 
@@ -940,9 +902,7 @@ def test_live_neo4j_backend_rejects_future_and_incompatible_schema() -> None:
             )
         )
 
-        backend._schema_statement(
-            "DROP CONSTRAINT genie_block_id_unique IF EXISTS"
-        )
+        backend._schema_statement("DROP CONSTRAINT genie_block_id_unique IF EXISTS")
         with pytest.raises(UnsupportedOperation, match="constraint.*missing"):
             _live_backend(initialize_schema=False)
         backend._initialize_schema()
@@ -961,9 +921,7 @@ def test_live_neo4j_backend_rejects_future_and_incompatible_schema() -> None:
         with pytest.raises(UnsupportedOperation, match="missing or incompatible"):
             _live_backend(initialize_schema=False)
 
-        backend._schema_statement(
-            "CREATE TEXT INDEX genie_block_type_idx FOR (n:GenieBlock) ON (n.type)"
-        )
+        backend._schema_statement("CREATE TEXT INDEX genie_block_type_idx FOR (n:GenieBlock) ON (n.type)")
         with pytest.raises(UnsupportedOperation, match="missing or incompatible"):
             _live_backend(initialize_schema=False)
     finally:

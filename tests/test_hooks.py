@@ -27,6 +27,7 @@ from genie import (
     SearchResult,
     StructureAction,
     StructureChange,
+    KeyedStore,
 )
 from genie.structures import (
     EventLog,
@@ -53,7 +54,7 @@ def test_default_hook_is_a_complete_noop_extension() -> None:
     updated_link = memory.update_link(link, metadata={"reviewed": True})
     assert updated_link.metadata == {"reviewed": True}
 
-    keyed = KeyedCollection(memory, memory.backend, collection=root)
+    keyed = KeyedCollection(memory, cast(KeyedStore, memory.backend), collection=root)
     address = MemoryAddress((), "target")
     keyed.bind(address, target)
     keyed.unbind(address, expected=target)
@@ -711,9 +712,7 @@ def test_set_and_update_hooks_transform_and_observe_committed_blocks() -> None:
         HookOperation.SET,
         HookOperation.UPDATE,
     ]
-    assert [context.operation_id for context in hook.before] == [
-        context.operation_id for context in hook.after
-    ]
+    assert [context.operation_id for context in hook.before] == [context.operation_id for context in hook.after]
 
 
 def test_update_hooks_cannot_change_protected_block_fields() -> None:
@@ -827,12 +826,8 @@ def test_link_hooks_cover_regular_acyclic_mount_and_update_operations() -> None:
         HookOperation.ADD_MOUNT,
     ]
     assert [context.operation for context in hook.updated] == [HookOperation.UPDATE_LINK]
-    assert [context.operation_id for context in hook.added] == [
-        context.operation_id for context in hook.added_after
-    ]
-    assert [context.operation_id for context in hook.updated] == [
-        context.operation_id for context in hook.updated_after
-    ]
+    assert [context.operation_id for context in hook.added] == [context.operation_id for context in hook.added_after]
+    assert [context.operation_id for context in hook.updated] == [context.operation_id for context in hook.updated_after]
 
 
 def test_structure_hooks_cover_keys_logs_and_temporal_membership() -> None:
@@ -886,9 +881,7 @@ def test_structure_hooks_cover_keys_logs_and_temporal_membership() -> None:
         StructureAction.REMOVE,
     ]
     assert [change.action for change, _ in hook.after] == actions
-    assert [context.operation_id for _, context in hook.before] == [
-        context.operation_id for _, context in hook.after
-    ]
+    assert [context.operation_id for _, context in hook.before] == [context.operation_id for _, context in hook.after]
     append_before = hook.before[3][0]
     append_after = hook.after[3][0]
     assert append_before.after is None
