@@ -306,8 +306,7 @@ class Memory:
                 block.id,
                 expected_versions={candidate.id: candidate.version for candidate in blocks_to_delete},
             )
-            for decoded_block in decoded_blocks:
-                self.hooks.after_delete(context, decoded_block)
+            self.hooks.after_delete(context, *decoded_blocks)
 
     def children(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
         """Return readable direct children for a block.

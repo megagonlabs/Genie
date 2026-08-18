@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -43,6 +44,7 @@ _SUPPRESSED_HOOKS: ContextVar[frozenset[tuple[int, int]]] = ContextVar(
     default=frozenset(),
 )
 _SKIPPED = object()
+_LOGGER = logging.getLogger(__name__)
 
 
 class HookRegistry:
@@ -50,6 +52,21 @@ class HookRegistry:
 
     Dispatch methods require the explicit context yielded by ``operation``.
     ``Memory`` and structure facades manage this lifecycle for normal use.
+
+    Observing callbacks are isolated from one another. Every hook receives
+    ``after_put``, ``after_update``, ``after_get``, ``after_traverse``,
+    ``after_add_link``, ``after_update_link``, ``after_structure_change``,
+    ``after_delete``, ``on_denied``, and ``on_operation_end`` even when another
+    hook raises, and a recursive delete reports every removed block before any
+    failure surfaces. What these callbacks report is already decided, so
+    stopping at the first failure would only destroy the records the remaining
+    hooks and blocks are owed. Collected failures are still reported: they are
+    attached as notes to an exception the caller is already receiving, raised
+    when there is none, and merely logged for hooks that declare ``fail_open``.
+
+    Callbacks that can still change what the caller stores or receives, meaning
+    every ``before_`` callback and ``after_search``, fail fast and ignore
+    ``fail_open``.
     """
 
     def __init__(
@@ -244,8 +261,7 @@ class HookRegistry:
     def after_put(self, context: HookContext, block: MemoryBlock) -> None:
         """Dispatch ``after_put`` in registration order."""
 
-        for hook in self._hooks_for(context):
-            self._invoke(context, hook, "after_put", block)
+        self._dispatch_observers(context, "after_put", block)
 
     def before_update(
         self,
@@ -269,8 +285,7 @@ class HookRegistry:
     ) -> None:
         """Dispatch ``after_update`` in registration order."""
 
-        for hook in self._hooks_for(context):
-            self._invoke(context, hook, "after_update", previous, stored)
+        self._dispatch_observers(context, "after_update", previous, stored)
 
     def before_get(self, context: HookContext, block_id: str) -> None:
         """Dispatch ``before_get`` in registration order."""
@@ -281,8 +296,7 @@ class HookRegistry:
     def after_get(self, context: HookContext, block: MemoryBlock | None) -> None:
         """Dispatch ``after_get`` in registration order."""
 
-        for hook in self._hooks_for(context):
-            self._invoke(context, hook, "after_get", block)
+        self._dispatch_observers(context, "after_get", block)
 
     def before_search(
         self,
@@ -303,7 +317,11 @@ class HookRegistry:
         query: MemoryQuery,
         results: list[SearchResult],
     ) -> list[SearchResult]:
-        """Dispatch ``after_search`` in registration order."""
+        """Dispatch ``after_search`` in registration order.
+
+        These hooks rerank and filter what the caller receives, so a failure
+        stops dispatch instead of passing unreviewed results through.
+        """
 
         for hook in self._hooks_for(context):
             result = self._invoke(context, hook, "after_search", query, results)
@@ -326,8 +344,7 @@ class HookRegistry:
     def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
         """Dispatch ``after_traverse`` in registration order."""
 
-        for hook in self._hooks_for(context):
-            self._invoke(context, hook, "after_traverse", traversal)
+        self._dispatch_observers(context, "after_traverse", traversal)
 
     def before_add_link(self, context: HookContext, link: MemoryLink) -> MemoryLink:
         """Dispatch ``before_add_link`` in registration order."""
@@ -341,8 +358,7 @@ class HookRegistry:
     def after_add_link(self, context: HookContext, link: MemoryLink) -> None:
         """Dispatch ``after_add_link`` in registration order."""
 
-        for hook in self._hooks_for(context):
-            self._invoke(context, hook, "after_add_link", link)
+        self._dispatch_observers(context, "after_add_link", link)
 
     def before_update_link(
         self,
@@ -366,8 +382,7 @@ class HookRegistry:
     ) -> None:
         """Dispatch ``after_update_link`` in registration order."""
 
-        for hook in self._hooks_for(context):
-            self._invoke(context, hook, "after_update_link", previous, stored)
+        self._dispatch_observers(context, "after_update_link", previous, stored)
 
     def before_structure_change(
         self,
@@ -386,8 +401,7 @@ class HookRegistry:
     ) -> None:
         """Dispatch ``after_structure_change`` in registration order."""
 
-        for hook in self._hooks_for(context):
-            self._invoke(context, hook, "after_structure_change", change)
+        self._dispatch_observers(context, "after_structure_change", change)
 
     def before_delete(self, context: HookContext, block: MemoryBlock) -> None:
         """Dispatch ``before_delete`` in registration order."""
@@ -395,11 +409,22 @@ class HookRegistry:
         for hook in self._hooks_for(context):
             self._invoke(context, hook, "before_delete", block)
 
-    def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
-        """Dispatch ``after_delete`` in registration order."""
+    def after_delete(self, context: HookContext, *blocks: MemoryBlock) -> None:
+        """Dispatch ``after_delete`` for every deleted block, in order.
 
-        for hook in self._hooks_for(context):
-            self._invoke(context, hook, "after_delete", block)
+        A recursive delete commits its whole subtree at once, so the record of
+        one removed block is not the caller's to trade for another's: every
+        block is reported to every hook before any failure surfaces.
+
+        Args:
+            context: Active operation context.
+            *blocks: Deleted blocks, in deletion order.
+        """
+
+        failures: list[Exception] = []
+        for block in blocks:
+            failures.extend(self._collect(context, "after_delete", block))
+        _report_failures(failures, "after_delete")
 
     def on_denied(
         self,
@@ -424,22 +449,8 @@ class HookRegistry:
             error: Refusal being raised, so hook failures cannot replace it.
         """
 
-        failures: list[Exception] = []
-        for hook in self._hooks_for(context):
-            try:
-                self._invoke(context, hook, "on_denied", operation, subject_id, reason)
-            except Exception as raised:
-                failures.append(raised)
-        if not failures:
-            return
-        if error is not None:
-            for failure in failures:
-                error.add_note(f"on_denied hook failed: {failure!r}")
-            return
-        first, *rest = failures
-        for failure in rest:
-            first.add_note(f"Another on_denied hook failed: {failure!r}")
-        raise first
+        failures = self._collect(context, "on_denied", operation, subject_id, reason)
+        _report_failures(failures, "on_denied", error)
 
     def _new_context(
         self,
@@ -503,22 +514,8 @@ class HookRegistry:
         already failed, and raised when the operation itself succeeded.
         """
 
-        failures: list[Exception] = []
-        for hook in self._hooks_for(context):
-            try:
-                self._invoke(context, hook, "on_operation_end", outcome, error)
-            except Exception as raised:
-                failures.append(raised)
-        if not failures:
-            return
-        if error is not None:
-            for failure in failures:
-                error.add_note(f"on_operation_end hook failed: {failure!r}")
-            return
-        first, *rest = failures
-        for failure in rest:
-            first.add_note(f"Another on_operation_end hook failed: {failure!r}")
-        raise first
+        failures = self._collect(context, "on_operation_end", outcome, error)
+        _report_failures(failures, "on_operation_end", error)
 
     def _hooks_for(self, context: HookContext) -> list[MemoryHook]:
         """Return registered hooks after validating the dispatch context."""
@@ -534,6 +531,64 @@ class HookRegistry:
                 "scope groups the operations inside it and dispatches nothing."
             )
         return self._hooks
+
+    def _dispatch_observers(
+        self,
+        context: HookContext,
+        callback_name: str,
+        *args: object,
+    ) -> None:
+        """Dispatch one observing callback to every hook, then report failures.
+
+        Args:
+            context: Active operation context.
+            callback_name: Observing callback to invoke on each hook.
+            *args: Arguments passed after the context.
+
+        Raises:
+            Exception: The first collected failure, once every hook has run.
+        """
+
+        _report_failures(self._collect(context, callback_name, *args), callback_name)
+
+    def _collect(
+        self,
+        context: HookContext,
+        callback_name: str,
+        *args: object,
+    ) -> list[Exception]:
+        """Invoke one observing callback on every hook and collect its failures.
+
+        Dispatch continues past a raising hook because the work being observed
+        is already decided: the failure cannot undo it, and stopping would only
+        deny the remaining hooks their record. Failures from hooks that declare
+        ``fail_open`` are logged and dropped here rather than returned.
+
+        Args:
+            context: Active operation context.
+            callback_name: Observing callback to invoke on each hook.
+            *args: Arguments passed after the context.
+
+        Returns:
+            Failures raised by hooks that are not fail-open, in dispatch order.
+        """
+
+        failures: list[Exception] = []
+        for hook in self._hooks_for(context):
+            try:
+                self._invoke(context, hook, callback_name, *args)
+            except Exception as raised:
+                if _fails_open(hook):
+                    _LOGGER.error(
+                        "Contained %s failure from fail-open hook %s during %s.",
+                        callback_name,
+                        type(hook).__name__,
+                        context.operation,
+                        exc_info=raised,
+                    )
+                    continue
+                failures.append(raised)
+        return failures
 
     def _invoke(
         self,
@@ -557,6 +612,44 @@ class HookRegistry:
             return getattr(hook, callback_name)(context, *args)
         finally:
             _ACTIVE_CALLBACKS.reset(token)
+
+
+def _fails_open(hook: MemoryHook) -> bool:
+    """Return whether a hook's observing failures must stay contained."""
+
+    return bool(getattr(hook, "fail_open", False))
+
+
+def _report_failures(
+    failures: list[Exception],
+    callback: str,
+    error: BaseException | None = None,
+) -> None:
+    """Report collected callback failures without losing or substituting any.
+
+    Args:
+        failures: Failures collected from hooks that are not fail-open.
+        callback: Callback that failed, named in the reported notes.
+        error: Exception already leaving the operation, when there is one. Hook
+            failures become notes on it so they cannot replace what the caller
+            is receiving.
+
+    Raises:
+        Exception: The first collected failure, when the operation has no error
+            of its own to preserve. Any remaining failures are attached to it
+            as notes so no failure is hidden by another.
+    """
+
+    if not failures:
+        return
+    if error is not None:
+        for failure in failures:
+            error.add_note(f"{callback} hook failed: {failure!r}")
+        return
+    first, *rest = failures
+    for failure in rest:
+        first.add_note(f"Another {callback} hook failed: {failure!r}")
+    raise first
 
 
 def _require_type(value: object, expected: type[Any], callback: str) -> Any:

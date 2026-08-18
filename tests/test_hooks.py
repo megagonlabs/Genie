@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Lock
@@ -997,6 +998,254 @@ def test_after_hooks_run_only_after_successful_mutations() -> None:
     assert (hook.key_before, hook.key_after) == (2, 1)
 
 
+class RecordingSinkHook(MemoryHook):
+    """Hook that records the committed work and reads reported to it."""
+
+    def __init__(self) -> None:
+        self.stored: list[str] = []
+        self.deleted: list[str] = []
+        self.disclosed: list[TraversalKind] = []
+
+    def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+        """Record a stored block."""
+
+        self.stored.append(block.id)
+
+    def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
+        """Record a deleted block."""
+
+        self.deleted.append(block.id)
+
+    def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
+        """Record a completed structural read."""
+
+        self.disclosed.append(traversal.kind)
+
+
+class BrokenSinkHook(MemoryHook):
+    """Hook whose observing callbacks fail like an unreachable audit sink."""
+
+    def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+        """Fail after the block is already stored."""
+
+        raise RuntimeError("audit sink down")
+
+    def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
+        """Fail after the block is already deleted."""
+
+        raise RuntimeError("audit sink down")
+
+    def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
+        """Fail after the read has already disclosed its blocks."""
+
+        raise RuntimeError("audit sink down")
+
+
+def test_recursive_delete_records_every_block_when_one_sink_fails() -> None:
+    """A sink that drops out mid-subtree costs no block and no hook its record."""
+
+    class FlakySinkHook(MemoryHook):
+        """Record every deletion but fail on one of them."""
+
+        def __init__(self, fail_on: int) -> None:
+            self.fail_on = fail_on
+            self.deleted: list[str] = []
+
+        def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
+            """Record the deletion, then fail once."""
+
+            self.deleted.append(block.id)
+            if len(self.deleted) == self.fail_on:
+                raise RuntimeError("audit sink down")
+
+    flaky = FlakySinkHook(fail_on=3)
+    recording = RecordingSinkHook()
+    memory = Memory(hooks=[flaky, recording])
+    root = memory.put(type="root", value="root")
+    parent = root
+    for level in range(4):
+        parent = memory.put(parent=parent, type="note", value=f"level {level}")
+
+    with pytest.raises(RuntimeError, match="audit sink down"):
+        memory.delete(root)
+
+    assert memory.get(root) is None
+    assert len(recording.deleted) == 5
+    assert recording.deleted == flaky.deleted
+
+
+def test_after_hook_failure_does_not_skip_the_hooks_behind_it() -> None:
+    """One failing observer cannot cost the hooks behind it their record."""
+
+    first = RecordingSinkHook()
+    second = RecordingSinkHook()
+    memory = Memory(hooks=[first, BrokenSinkHook(), second])
+
+    with pytest.raises(RuntimeError, match="audit sink down"):
+        memory.put(type="root", value="root")
+    stored_id = first.stored[0]
+    with pytest.raises(RuntimeError, match="audit sink down"):
+        memory.children(stored_id)
+
+    assert memory.get(stored_id) is not None
+    assert first.stored == second.stored == [stored_id]
+    assert first.disclosed == second.disclosed == [TraversalKind.CHILDREN]
+
+
+def test_after_hook_failures_are_reported_together() -> None:
+    """Every collected observer failure surfaces instead of hiding the rest."""
+
+    class NamedFailingHook(MemoryHook):
+        """Fail with an identifiable message."""
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def after_update(self, context: HookContext, previous, stored) -> None:
+            """Fail so the registry must report this hook."""
+
+            raise RuntimeError(f"sink {self.name} down")
+
+    memory = Memory(hooks=[NamedFailingHook("a"), NamedFailingHook("b")])
+    block = memory.put(type="note", value="one")
+
+    with pytest.raises(RuntimeError, match="sink a down") as raised:
+        memory.set(block, "two")
+
+    assert any("sink b down" in note for note in raised.value.__notes__)
+    assert any("after_update" in note for note in raised.value.__notes__)
+
+    stored = memory.get(block)
+    assert stored is not None
+    assert stored.value == "two"
+
+
+def test_transforming_callbacks_stop_at_the_first_failure() -> None:
+    """A failed transform never passes an unreviewed value to the next hook."""
+
+    class BrokenTransformHook(MemoryHook):
+        """Fail while transforming a proposed block and search results."""
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Fail before the block is authorized to be stored."""
+
+            raise RuntimeError("transform down")
+
+        def after_search(self, context: HookContext, query, results) -> list[SearchResult]:
+            """Fail before results can be redacted."""
+
+            raise RuntimeError("transform down")
+
+    class CountingHook(MemoryHook):
+        """Count the transforming callbacks that reach this hook."""
+
+        def __init__(self) -> None:
+            self.proposed = 0
+            self.reviewed = 0
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Count proposed blocks."""
+
+            self.proposed += 1
+            return block
+
+        def after_search(self, context: HookContext, query, results) -> list[SearchResult]:
+            """Count reviewed result lists."""
+
+            self.reviewed += 1
+            return results
+
+    counting = CountingHook()
+    memory = Memory(hooks=[BrokenTransformHook(), counting])
+
+    with pytest.raises(RuntimeError, match="transform down"):
+        memory.put(type="note", value="rejected")
+    with pytest.raises(RuntimeError, match="transform down"):
+        memory.search("needle")
+
+    assert (counting.proposed, counting.reviewed) == (0, 0)
+
+
+def test_fail_open_sink_failures_never_reach_the_caller(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A fail-open sink's outage is logged instead of breaking the operation."""
+
+    class FlakyAuditHook(BrokenSinkHook):
+        """Best-effort sink that must not break callers when it fails."""
+
+        fail_open = True
+
+    recording = RecordingSinkHook()
+    memory = Memory(hooks=[FlakyAuditHook(), recording])
+
+    with caplog.at_level(logging.ERROR):
+        root = memory.put(type="root", value="root")
+        child = memory.put(parent=root, type="note", value="child")
+        memory.children(root)
+        memory.delete(root)
+
+    assert recording.stored == [root.id, child.id]
+    assert recording.deleted == [root.id, child.id]
+    assert recording.disclosed == [TraversalKind.CHILDREN]
+    reported = [record.getMessage() for record in caplog.records]
+    assert sum("after_put" in message for message in reported) == 2
+    assert sum("after_delete" in message for message in reported) == 2
+    assert sum("after_traverse" in message for message in reported) == 1
+    assert all("FlakyAuditHook" in message for message in reported)
+    assert all(record.exc_info is not None for record in caplog.records)
+
+
+def test_fail_open_does_not_contain_transforming_failures() -> None:
+    """A fail-open hook that fails while transforming still stops the operation."""
+
+    class FlakyTransformHook(MemoryHook):
+        """Declare fail-open while failing in transforming callbacks."""
+
+        fail_open = True
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Fail while rewriting a proposed block."""
+
+            raise RuntimeError("transform down")
+
+        def after_search(self, context: HookContext, query, results) -> list[SearchResult]:
+            """Fail while filtering results the caller would receive."""
+
+            raise RuntimeError("transform down")
+
+    memory = Memory(hooks=[FlakyTransformHook()])
+
+    with pytest.raises(RuntimeError, match="transform down"):
+        memory.put(type="note", value="rejected")
+    with pytest.raises(RuntimeError, match="transform down"):
+        memory.search("needle")
+
+
+def test_fail_open_is_decided_per_hook() -> None:
+    """Containing one sink's failure does not contain another hook's failure."""
+
+    class FlakyAuditHook(BrokenSinkHook):
+        """Sink whose failures stay contained."""
+
+        fail_open = True
+
+    class StrictAuditHook(MemoryHook):
+        """Sink whose failures must still reach the caller."""
+
+        def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+            """Fail as a hook that has not opted out of breaking callers."""
+
+            raise RuntimeError("strict sink down")
+
+    memory = Memory(hooks=[FlakyAuditHook(), StrictAuditHook()])
+
+    with pytest.raises(RuntimeError, match="strict sink down") as raised:
+        memory.put(type="note", value="one")
+
+    assert getattr(raised.value, "__notes__", []) == []
+
+
 class RecordingTraversalHook(MemoryHook):
     """Hook that records every structural read reported to it."""
 
@@ -1066,13 +1315,8 @@ def test_before_traverse_names_a_read_that_has_disclosed_nothing_yet() -> None:
     memory.list_links(note)
     memory.contains(root, note)
 
-    assert [
-        (traversal.blocks, traversal.links, traversal.contained)
-        for traversal in hook.before
-    ] == [((), (), None)] * 4
-    assert [traversal.kind for traversal in hook.before] == [
-        traversal.kind for traversal in hook.after
-    ]
+    assert [(traversal.blocks, traversal.links, traversal.contained) for traversal in hook.before] == [((), (), None)] * 4
+    assert [traversal.kind for traversal in hook.before] == [traversal.kind for traversal in hook.after]
 
 
 def test_traverse_hooks_separate_one_block_of_mounts_from_a_subtree_scan() -> None:
@@ -1102,9 +1346,7 @@ def test_traverse_hooks_separate_one_block_of_mounts_from_a_subtree_scan() -> No
         root.id,
         [root_mount.id, branch_mount.id],
     )
-    assert {(traversal.relation, traversal.direction) for traversal in hook.after} == {
-        (LinkRelations.MOUNT, "out")
-    }
+    assert {(traversal.relation, traversal.direction) for traversal in hook.after} == {(LinkRelations.MOUNT, "out")}
 
 
 def test_traversal_events_report_only_what_policy_disclosed() -> None:
@@ -1243,10 +1485,7 @@ def test_subtree_walk_reports_one_traversal_per_visited_block() -> None:
 
     assert [block.id for block in tree.descendants()] == [branch.id, leaf.id]
 
-    assert [
-        (traversal.origin_id, tuple(block.id for block in traversal.blocks))
-        for traversal in hook.after
-    ] == [
+    assert [(traversal.origin_id, tuple(block.id for block in traversal.blocks)) for traversal in hook.after] == [
         (root.id, (branch.id,)),
         (branch.id, (leaf.id,)),
         (leaf.id, ()),
@@ -1265,9 +1504,7 @@ def test_traversal_through_a_handle_reports_its_sandbox() -> None:
 
     assert [block.id for block in handle.children()] == [note.id]
 
-    assert {
-        context.attributes["handle.root"] for context in hook.contexts
-    } == {root.id}
+    assert {context.attributes["handle.root"] for context in hook.contexts} == {root.id}
 
 
 class RecordingTerminalHook(MemoryHook):
@@ -1522,6 +1759,48 @@ def test_operation_end_reports_every_terminal_hook_failure_once() -> None:
         memory.put(type="note", value="one")
 
     assert any("sink b down" in note for note in raised.value.__notes__)
+
+
+def test_fail_open_contains_terminal_and_denial_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A fail-open sink adds no note to a refusal and no error to a success."""
+
+    class FlakyTerminalHook(MemoryHook):
+        """Fail in both unpaired callbacks without breaking callers."""
+
+        fail_open = True
+
+        def on_denied(self, context: HookContext, operation, subject_id, reason) -> None:
+            """Fail while reporting a refusal."""
+
+            raise RuntimeError("audit sink down")
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Fail while reporting a terminal event."""
+
+            raise RuntimeError("audit sink down")
+
+    recording = RecordingTerminalHook()
+    memory = Memory(principal="owner", hooks=[FlakyTerminalHook(), recording])
+
+    with caplog.at_level(logging.ERROR):
+        root = memory.put(type="root", value="root")
+        outside = memory.put(type="other", value="outside")
+        handle = memory.get_handle(root=root)
+        with pytest.raises(AccessDenied) as refusal:
+            handle.get(outside)
+        with pytest.raises(MemoryNotFound) as missing:
+            memory.set("blk_missing", "value")
+
+    for raised in (refusal.value, missing.value):
+        notes = getattr(raised, "__notes__", [])
+        assert not [note for note in notes if "audit sink down" in note]
+    assert [outcome for _, outcome, _ in recording.events[-2:]] == [
+        HookOutcome.DENIED,
+        HookOutcome.ERROR,
+    ]
+    assert sum("on_denied" in record.getMessage() for record in caplog.records) == 1
 
 
 def test_operation_end_respects_suppression() -> None:
@@ -2059,11 +2338,7 @@ class RecordingContextHook(MemoryHook):
     def attributes_for(self, operation: HookOperation) -> list[dict[str, str]]:
         """Return recorded attributes for one kind of operation."""
 
-        return [
-            dict(context.attributes)
-            for context in self.contexts
-            if context.operation == operation
-        ]
+        return [dict(context.attributes) for context in self.contexts if context.operation == operation]
 
 
 def test_context_reports_no_attributes_and_one_shared_start_time_by_default() -> None:
@@ -2125,10 +2400,7 @@ def test_memory_attributes_reach_every_operation_it_opens() -> None:
         agent.get(root)
 
     assert len(hook.contexts) == 4
-    assert all(
-        dict(context.attributes) == {"service": "genie", "tenant": "acme"}
-        for context in hook.contexts
-    )
+    assert all(dict(context.attributes) == {"service": "genie", "tenant": "acme"} for context in hook.contexts)
 
 
 @pytest.mark.parametrize(
@@ -2162,9 +2434,7 @@ def test_scope_groups_the_operations_of_one_caller_defined_span() -> None:
     assert {context.parent_operation_id for context in inside} == {span.operation_id}
     assert {context.depth for context in inside} == {1}
     assert {context.origin for context in inside} == {"caller"}
-    assert all(
-        dict(context.attributes) == {"run_id": "r1", "turn": "7"} for context in inside
-    )
+    assert all(dict(context.attributes) == {"run_id": "r1", "turn": "7"} for context in inside)
     assert [context.parent_operation_id for context in outside] == [None]
     assert [dict(context.attributes) for context in outside] == [{}]
 
@@ -2198,9 +2468,7 @@ def test_scope_attributes_reach_nested_and_hook_originated_operations() -> None:
         keyed.bind(MemoryAddress((), "one"), note)
 
     assert all(dict(context.attributes) == {"run_id": "r1"} for context in hook.contexts)
-    derived = next(
-        context for context in hook.contexts if context.operation == HookOperation.PUT
-    )
+    derived = next(context for context in hook.contexts if context.operation == HookOperation.PUT)
     assert (derived.origin, derived.depth) == ("hook", 2)
     assert HookOperation.KEY_BIND in {context.operation for context in hook.contexts}
 
@@ -2382,9 +2650,7 @@ def test_scopes_are_isolated_across_concurrent_runs() -> None:
         list(executor.map(run, range(24)))
 
     assert len(hook.contexts) == 24
-    assert {context.attributes["run_id"] for context in hook.contexts} == {
-        f"r{index}" for index in range(24)
-    }
+    assert {context.attributes["run_id"] for context in hook.contexts} == {f"r{index}" for index in range(24)}
     assert len({context.parent_operation_id for context in hook.contexts}) == 24
 
 

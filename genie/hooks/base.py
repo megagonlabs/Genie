@@ -24,7 +24,24 @@ class MemoryHook:
     Subclasses can override one or more methods. Hooks run inside the public
     `Memory` operation flow, so they should avoid long-running or unreliable
     side effects unless the application is prepared for those failures.
+
+    Callbacks that only observe finished work are isolated from one another:
+    every hook receives them even when another hook raises, so one unreachable
+    sink cannot cost the others the record they are owed.
+
+    Attributes:
+        fail_open: Whether failures of this hook's observing callbacks are
+            contained and logged instead of raised. Observing callbacks are the
+            `after_*` callbacks that return `None`, `on_denied`, and
+            `on_operation_end`; what they report is already decided when they
+            run, so a best-effort audit sink can declare that its own outages
+            must not break callers. This never applies to `before_*` callbacks
+            or to `after_search`, which still shape what gets stored or
+            returned: a redaction hook whose failure was contained there would
+            silently pass through the value it existed to change.
     """
+
+    fail_open: bool = False
 
     def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
         """Run before a block is stored.
@@ -278,6 +295,10 @@ class MemoryHook:
 
     def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
         """Run after a block is deleted.
+
+        Recursive deletion calls this once per removed block. Those deletions
+        are already committed, so every block reaches every hook even when one
+        of them raises.
 
         Args:
             context: Operation context shared with the matching before callback.

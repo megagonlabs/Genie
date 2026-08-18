@@ -301,24 +301,49 @@ Hooks cannot widen normal access: `before_put` cannot change the authorized
 parent, changed searches are authorized again, and final search results are
 filtered again. Hooks are trusted extensions with application data access.
 
-Dispatch is synchronous, exceptions propagate, and Genie does not retry hooks
-or include external effects in backend transactions. A before-hook failure
-prevents its mutation; an after-hook failure occurs after commit. Keep hooks
-fast, repeat-safe, and reliable.
+Dispatch is synchronous, and Genie does not retry hooks or include external
+effects in backend transactions. Keep hooks fast, repeat-safe, and reliable.
+What a failing hook costs depends on whether it can still change the outcome.
 
-Terminal and denial callbacks are dispatched to every hook even when one of
-them raises, so an unreliable observer cannot cost another hook its cleanup or
-its audit record. Their failures never replace the exception the caller
-receives: a failing `on_denied` still lets the `AccessDenied` through, and a
-failing `on_operation_end` still lets the operation's own error through. Those
-failures are attached to that exception as notes, and are raised only when
-there is no caller-visible error to preserve.
+| Callbacks | A failure |
+| --- | --- |
+| `before_*` and `after_search` | Stops dispatch and fails the operation. |
+| `after_*` returning `None`, `on_denied`, `on_operation_end` | Is collected; every hook still runs. |
+
+A failure before the commit point is a veto and has to stop everything: an
+aborted `put` stores nothing, and a failed `after_search` returns no results
+rather than results a redaction hook never reviewed. The observing callbacks
+report work that is already decided. Stopping there cannot undo it and can only
+destroy the records the remaining hooks and blocks are owed, so dispatch
+continues and the collected failures are reported once it finishes: attached as
+notes to an exception the caller is already receiving, and raised otherwise,
+first failure first, with the rest as notes on it so none hides another. A
+failing `on_denied` therefore still lets the `AccessDenied` through, and a
+failing `on_operation_end` still lets the operation's own error through.
+
+A best-effort sink can declare that its own outages must not reach callers:
+
+```python
+class AuditHook(MemoryHook):
+    fail_open = True
+
+    def after_put(self, context, block):
+        self.sink.send(context.operation_id, block.id)
+```
+
+`fail_open` covers the observing callbacks only, for the same reason they are
+isolated. `before_*` and `after_search` ignore it, because containing a failure
+there would silently store or return the value the hook existed to change.
+Contained failures are logged with their traceback to the
+`genie.hooks.registry` logger, so a sink that is failing stays visible.
 
 Recursive deletion calls `before_delete` for every block in the authorized
 snapshot. A concurrent change raises `MemoryConflict`; before hooks may already
-have run, but after hooks run only following successful deletion. Cascading
-backend cleanup of links and structural references is represented by the block
-deletion rather than separate structural events.
+have run, but after hooks run only following successful deletion. Every deleted
+block then reaches every hook before any failure surfaces, so deleting five
+blocks with a sink that fails on the third still records five deletions.
+Cascading backend cleanup of links and structural references is represented by
+the block deletion rather than separate structural events.
 
 Related: [Memory](../memory/README.md), [Structures](../structures/README.md),
 [Queries](../query/README.md), and [Policies](../policy/README.md).
