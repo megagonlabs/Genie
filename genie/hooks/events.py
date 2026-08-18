@@ -32,6 +32,19 @@ class HookOperation(StrEnum):
 HookOrigin = Literal["caller", "hook"]
 
 
+class HookOutcome(StrEnum):
+    """Terminal result of one logical operation.
+
+    ``DENIED`` marks a policy refusal, which is an expected decision rather
+    than a fault. Every other failure is ``ERROR``; hooks can inspect the
+    reported exception when they need a finer classification.
+    """
+
+    SUCCESS = "success"
+    DENIED = "denied"
+    ERROR = "error"
+
+
 @dataclass(frozen=True, slots=True)
 class HookContext:
     """Causal context for one logical operation.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from genie.hooks.events import HookContext, StructureChange
+from genie.hooks.events import HookContext, HookOutcome, StructureChange
 from genie.memory.block import MemoryBlock
 from genie.memory.links import MemoryLink
 from genie.query.query import MemoryQuery
@@ -245,6 +245,31 @@ class MemoryHook:
         Args:
             context: Operation context shared with the matching before callback.
             block: Deleted block.
+        """
+
+        return None
+
+    def on_operation_end(
+        self,
+        context: HookContext,
+        outcome: HookOutcome,
+        error: BaseException | None,
+    ) -> None:
+        """Run exactly once when a logical operation finishes.
+
+        Unlike the paired callbacks, this one runs for every operation that
+        starts, whether it commits, is refused, or fails. It is the right place
+        to close a span, record latency, and release state stashed by a before
+        callback, and it is the only callback that observes refusals and
+        failures on operations whose before callbacks never ran.
+
+        The reported ``error`` is the exception leaving the operation. Genie
+        never lets an exception raised here replace it.
+
+        Args:
+            context: Context shared with the operation's other callbacks.
+            outcome: Whether the operation committed, was denied, or failed.
+            error: Exception ending the operation, or `None` after success.
         """
 
         return None

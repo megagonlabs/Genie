@@ -28,6 +28,45 @@ while resolving blocks, so applications should treat `get` hooks as block
 lookups rather than one event per high-level facade read. Backend access is a
 trusted boundary and intentionally bypasses hooks and policy.
 
+## Terminal events
+
+Paired callbacks report work that happens; `on_operation_end` reports what
+became of it. It runs exactly once for every operation that starts, after that
+operation's other callbacks, with one of three outcomes.
+
+| Outcome | Meaning |
+| --- | --- |
+| `success` | The operation completed and any mutation committed. |
+| `denied` | Policy refused the operation. |
+| `error` | The operation failed for any other reason. |
+
+Because it always runs, it is where a hook closes a span, records latency, and
+releases state stashed by a before callback. It is also the only callback that
+observes refusals and failures: a denied `set` never reaches `before_update`,
+and a failed one reaches `before_update` but never `after_update`.
+
+```python
+class MetricsHook(MemoryHook):
+    def before_put(self, context, block):
+        self.started[context.operation_id] = monotonic()
+        return block
+
+    def on_operation_end(self, context, outcome, error):
+        started = self.started.pop(context.operation_id, None)
+        record(context.operation, outcome, started)
+```
+
+Refusals are reported for the operations in the table above, which covers
+`get`, `put`, `set`, `update`, `delete`, `search`, and link mutations. Calls
+that never start an operation still report nothing: `children`, `ancestors`,
+`list_links`, `contains`, mount listing, and `MemoryHandle` boundary checks
+reject before dispatch begins. A terminal event identifies the operation and
+principal rather than the target block, so records that need a subject id
+should read it from the paired callbacks.
+
+An operation rejected before it starts has no terminal event, so exceeding
+`max_depth` raises `HookRecursionError` without one.
+
 ## Writing a hook
 
 Hooks run in registration order. Transforming callbacks pass their result to
@@ -104,6 +143,12 @@ Dispatch is synchronous, exceptions propagate, and Genie does not retry hooks
 or include external effects in backend transactions. A before-hook failure
 prevents its mutation; an after-hook failure occurs after commit. Keep hooks
 fast, repeat-safe, and reliable.
+
+Terminal callbacks are dispatched to every hook even when one of them raises,
+so an unreliable observer cannot cost another hook its cleanup. A terminal
+failure never replaces the exception leaving the operation; it is attached to
+that exception as a note, and is raised only when the operation itself
+succeeded.
 
 Recursive deletion calls `before_delete` for every block in the authorized
 snapshot. A concurrent change raises `MemoryConflict`; before hooks may already

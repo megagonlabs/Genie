@@ -14,6 +14,8 @@ from genie import (
     AccessRule,
     HookContext,
     HookOperation,
+    HookOrigin,
+    HookOutcome,
     HookRecursionError,
     HookRegistry,
     InMemoryBackend,
@@ -21,6 +23,7 @@ from genie import (
     MemoryBlock,
     MemoryConflict,
     MemoryHook,
+    MemoryNotFound,
     MemoryPolicy,
     MemoryQuery,
     Scope,
@@ -978,3 +981,352 @@ def test_after_hooks_run_only_after_successful_mutations() -> None:
 
     assert (hook.link_before, hook.link_after) == (2, 1)
     assert (hook.key_before, hook.key_after) == (2, 1)
+
+
+class RecordingTerminalHook(MemoryHook):
+    """Hook that records the terminal event of every operation it observes."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[HookOperation, HookOutcome, str | None]] = []
+        self.contexts: list[HookContext] = []
+
+    def on_operation_end(
+        self,
+        context: HookContext,
+        outcome: HookOutcome,
+        error: BaseException | None,
+    ) -> None:
+        """Record the operation, outcome, and error type."""
+
+        self.events.append((context.operation, outcome, type(error).__name__ if error is not None else None))
+        self.contexts.append(context)
+
+
+def test_operation_end_reports_success_for_committed_operations() -> None:
+    """Successful operations report one terminal event with no error."""
+
+    hook = RecordingTerminalHook()
+    memory = Memory(hooks=[hook])
+    root = memory.put(type="collection", value="root")
+    note = memory.put(parent=root, type="note", value={"status": "new"})
+    memory.get(note)
+    memory.set(note, {"status": "open"})
+    memory.update(note, metadata={"reviewed": True})
+    memory.search("open")
+    link = memory.add_link(note, root, "related")
+    memory.update_link(link, metadata={"checked": True})
+    memory.delete(note)
+
+    assert [operation for operation, _, _ in hook.events] == [
+        HookOperation.PUT,
+        HookOperation.PUT,
+        HookOperation.GET,
+        HookOperation.SET,
+        HookOperation.UPDATE,
+        HookOperation.SEARCH,
+        HookOperation.ADD_LINK,
+        HookOperation.UPDATE_LINK,
+        HookOperation.DELETE,
+    ]
+    assert {outcome for _, outcome, _ in hook.events} == {HookOutcome.SUCCESS}
+    assert {error for _, _, error in hook.events} == {None}
+
+
+def test_operation_end_shares_the_operation_id_with_paired_callbacks() -> None:
+    """The terminal event carries the same context as before and after callbacks."""
+
+    class PairedHook(MemoryHook):
+        """Record operation ids seen by each put callback."""
+
+        def __init__(self) -> None:
+            self.ids: list[str] = []
+
+        def before_put(self, context: HookContext, block):
+            """Record the before id."""
+
+            self.ids.append(context.operation_id)
+            return block
+
+        def after_put(self, context: HookContext, block) -> None:
+            """Record the after id."""
+
+            self.ids.append(context.operation_id)
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Record the terminal id."""
+
+            self.ids.append(context.operation_id)
+
+    hook = PairedHook()
+    Memory(hooks=[hook]).put(type="note", value="one")
+
+    assert len(hook.ids) == 3
+    assert len(set(hook.ids)) == 1
+
+
+def test_operation_end_reports_policy_refusals_no_other_callback_observes() -> None:
+    """Denied operations report a terminal event even when no before callback ran."""
+
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root")
+    note = owner.put(parent=root, type="note", value="secret")
+    hook = RecordingTerminalHook()
+    attacker = Memory(
+        backend=owner.backend,
+        principal="attacker",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+    )
+
+    attempts = {
+        "get": lambda: attacker.get(note),
+        "set": lambda: attacker.set(note, "overwritten"),
+        "update": lambda: attacker.update(note, metadata={"tampered": True}),
+        "delete": lambda: attacker.delete(note),
+        "put": lambda: attacker.put(parent=root, type="note", value="injected"),
+        "search": lambda: attacker.search("secret", root=root, scope="subtree"),
+        "add_link": lambda: attacker.add_link(note, root, "related"),
+    }
+    denied: list[str] = []
+    for label, attempt in attempts.items():
+        try:
+            attempt()
+        except AccessDenied:
+            denied.append(label)
+
+    assert denied == list(attempts)
+    assert [operation for operation, _, _ in hook.events] == [
+        HookOperation.GET,
+        HookOperation.SET,
+        HookOperation.UPDATE,
+        HookOperation.DELETE,
+        HookOperation.PUT,
+        HookOperation.SEARCH,
+        HookOperation.ADD_LINK,
+    ]
+    assert {outcome for _, outcome, _ in hook.events} == {HookOutcome.DENIED}
+    assert {error for _, _, error in hook.events} == {"AccessDenied"}
+
+
+def test_operation_end_separates_refusals_from_other_failures() -> None:
+    """Non-policy failures report `ERROR` and carry the raised exception."""
+
+    hook = RecordingTerminalHook()
+    memory = Memory(hooks=[hook])
+    note = memory.put(type="note", value="one")
+
+    with pytest.raises(MemoryNotFound):
+        memory.set("blk_missing", "value")
+    with pytest.raises(TypeError):
+        memory.put(type="note", value=object())
+    with pytest.raises(MemoryConflict):
+        memory.add_acyclic_link(note, note, "derived_into")
+
+    assert [(outcome, error) for _, outcome, error in hook.events[1:]] == [
+        (HookOutcome.ERROR, "MemoryNotFound"),
+        (HookOutcome.ERROR, "TypeError"),
+        (HookOutcome.ERROR, "MemoryConflict"),
+    ]
+
+
+def test_operation_end_always_releases_state_stashed_by_a_before_callback() -> None:
+    """A failing operation still reaches the terminal callback, so state cannot leak."""
+
+    class TimingHook(MemoryHook):
+        """Track in-flight operations between the before and terminal callbacks."""
+
+        def __init__(self) -> None:
+            self.in_flight: dict[str, HookOperation] = {}
+            self.completed = 0
+
+        def before_put(self, context: HookContext, block):
+            """Start tracking one operation."""
+
+            self.in_flight[context.operation_id] = context.operation
+            return block
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Stop tracking the operation regardless of outcome."""
+
+            self.in_flight.pop(context.operation_id, None)
+            self.completed += 1
+
+    class VetoHook(MemoryHook):
+        """Reject every proposed block."""
+
+        def before_put(self, context: HookContext, block):
+            """Fail after the tracking hook has already started."""
+
+            raise RuntimeError("veto")
+
+    timing = TimingHook()
+    memory = Memory(hooks=[timing, VetoHook()])
+    for _ in range(25):
+        with pytest.raises(RuntimeError, match="veto"):
+            memory.put(type="note", value="rejected")
+
+    assert timing.in_flight == {}
+    assert timing.completed == 25
+
+
+def test_operation_end_failure_does_not_mask_the_operation_error() -> None:
+    """A failing terminal hook cannot replace the exception leaving the operation."""
+
+    class BrokenTerminalHook(MemoryHook):
+        """Fail inside the terminal callback."""
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Simulate an unreachable audit sink."""
+
+            raise RuntimeError("audit sink down")
+
+    recording = RecordingTerminalHook()
+    memory = Memory(hooks=[BrokenTerminalHook(), recording])
+
+    with pytest.raises(MemoryNotFound) as raised:
+        memory.set("blk_missing", "value")
+
+    assert any("audit sink down" in note for note in raised.value.__notes__)
+    assert [(outcome, error) for _, outcome, error in recording.events] == [
+        (HookOutcome.ERROR, "MemoryNotFound"),
+    ]
+
+
+def test_operation_end_failure_does_not_skip_other_hooks() -> None:
+    """One unreliable terminal hook cannot cost another hook its terminal event."""
+
+    class BrokenTerminalHook(MemoryHook):
+        """Fail inside the terminal callback."""
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Simulate an unreachable audit sink."""
+
+            raise RuntimeError("audit sink down")
+
+    first = RecordingTerminalHook()
+    second = RecordingTerminalHook()
+    memory = Memory(hooks=[first, BrokenTerminalHook(), second])
+
+    with pytest.raises(RuntimeError, match="audit sink down"):
+        memory.put(type="note", value="one")
+
+    assert [outcome for _, outcome, _ in first.events] == [HookOutcome.SUCCESS]
+    assert [outcome for _, outcome, _ in second.events] == [HookOutcome.SUCCESS]
+
+
+def test_operation_end_reports_every_terminal_hook_failure_once() -> None:
+    """Multiple terminal failures surface together instead of hiding each other."""
+
+    class NamedFailingHook(MemoryHook):
+        """Fail with an identifiable message."""
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Fail so the registry must report this hook."""
+
+            raise RuntimeError(f"sink {self.name} down")
+
+    memory = Memory(hooks=[NamedFailingHook("a"), NamedFailingHook("b")])
+
+    with pytest.raises(RuntimeError, match="sink a down") as raised:
+        memory.put(type="note", value="one")
+
+    assert any("sink b down" in note for note in raised.value.__notes__)
+
+
+def test_operation_end_respects_suppression() -> None:
+    """Suppressed hooks and registries skip the terminal callback."""
+
+    first = RecordingTerminalHook()
+    second = RecordingTerminalHook()
+    registry = HookRegistry([first, second])
+    memory = Memory(hooks=registry)
+
+    with registry.suppress(first):
+        memory.put(type="note", value="first")
+    with registry.suppress():
+        memory.put(type="note", value="second")
+    memory.put(type="note", value="third")
+
+    assert len(first.events) == 1
+    assert len(second.events) == 2
+
+
+def test_operation_end_can_write_derived_records_without_recursing() -> None:
+    """A terminal callback may use memory again; its own callback is skipped."""
+
+    class AuditingHook(MemoryHook):
+        """Write one audit block per caller operation."""
+
+        def __init__(self) -> None:
+            self.memory: Memory | None = None
+            self.observed: list[tuple[HookOperation, HookOrigin, int]] = []
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Record the event and persist it through memory."""
+
+            self.observed.append((context.operation, context.origin, context.depth))
+            if context.origin == "hook" or self.memory is None:
+                return
+            self.memory.put(type="audit", value={"operation": str(context.operation), "outcome": str(outcome)})
+
+    hook = AuditingHook()
+    memory = Memory(hooks=[hook])
+    hook.memory = memory
+
+    memory.put(type="note", value="one")
+
+    assert hook.observed == [(HookOperation.PUT, "caller", 0)]
+    assert [result.block.value["operation"] for result in memory.search(types=["audit"])] == ["put"]
+
+
+def test_operation_end_covers_structure_facade_operations() -> None:
+    """Structure facades report terminal events through the shared registry."""
+
+    hook = RecordingTerminalHook()
+    memory = Memory(hooks=[hook])
+    collection = memory.put(type="collection", value="keys")
+    target = memory.put(type="note", value="target")
+    keyed = KeyedCollection(memory, cast(KeyedStore, memory.backend), collection=collection)
+    address = MemoryAddress((), "one")
+
+    keyed.bind(address, target)
+    with pytest.raises(MemoryConflict):
+        keyed.bind(address, target)
+
+    assert (HookOperation.KEY_BIND, HookOutcome.SUCCESS, None) in hook.events
+    assert (HookOperation.KEY_BIND, HookOutcome.ERROR, "MemoryConflict") in hook.events
+
+
+def test_no_terminal_event_when_an_operation_never_starts() -> None:
+    """An operation rejected by the depth guard reports no terminal event."""
+
+    class DeepHook(MemoryHook):
+        """Start a nested operation beyond the configured depth."""
+
+        def __init__(self, registry: HookRegistry) -> None:
+            self.registry = registry
+            self.terminal: list[HookOperation] = []
+
+        def after_put(self, context: HookContext, block) -> None:
+            """Exceed the depth limit from inside a callback."""
+
+            with self.registry.operation(HookOperation.GET):
+                pytest.fail("Depth overflow should occur before entering context.")
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Record which operations reached a terminal event."""
+
+            self.terminal.append(context.operation)
+
+    registry = HookRegistry(max_depth=0)
+    hook = DeepHook(registry)
+    registry.register(hook)
+
+    with pytest.raises(HookRecursionError):
+        Memory(hooks=registry).put(type="note", value="too deep")
+
+    assert hook.terminal == [HookOperation.PUT]

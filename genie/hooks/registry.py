@@ -9,10 +9,11 @@ from typing import Any
 from uuid import uuid4
 
 from genie.hooks.base import MemoryHook
-from genie.hooks.events import HookContext, HookOperation, HookOrigin, StructureChange
+from genie.hooks.events import HookContext, HookOperation, HookOrigin, HookOutcome, StructureChange
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import HookRecursionError
 from genie.memory.links import MemoryLink
+from genie.policy.engine import AccessDenied
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
 
@@ -85,6 +86,10 @@ class HookRegistry:
     ) -> Iterator[HookContext]:
         """Create causal context around one logical operation.
 
+        Leaving the context dispatches ``on_operation_end`` exactly once for
+        every operation that starts, so hooks always observe a terminal event
+        even when the operation is refused or fails.
+
         Args:
             operation: Logical operation being performed.
             principal_id: Acting principal when available.
@@ -93,7 +98,8 @@ class HookRegistry:
             Context shared by the operation's before and after callbacks.
 
         Raises:
-            HookRecursionError: If nested operations exceed ``max_depth``.
+            HookRecursionError: If nested operations exceed ``max_depth``. The
+                operation does not start, so no terminal event is dispatched.
             ValueError: If ``operation`` is not a recognized hook operation.
         """
 
@@ -116,10 +122,19 @@ class HookRegistry:
             principal_id=principal_id,
         )
         token = _CURRENT_OPERATION.set(context)
+        outcome = HookOutcome.SUCCESS
+        error: BaseException | None = None
         try:
             yield context
+        except BaseException as raised:
+            error = raised
+            outcome = HookOutcome.DENIED if isinstance(raised, AccessDenied) else HookOutcome.ERROR
+            raise
         finally:
-            _CURRENT_OPERATION.reset(token)
+            try:
+                self._dispatch_operation_end(context, outcome, error)
+            finally:
+                _CURRENT_OPERATION.reset(token)
 
     @contextmanager
     def suppress(self, *hooks: MemoryHook) -> Iterator[None]:
@@ -311,6 +326,37 @@ class HookRegistry:
 
         for hook in self._hooks_for(context):
             self._invoke(context, hook, "after_delete", block)
+
+    def _dispatch_operation_end(
+        self,
+        context: HookContext,
+        outcome: HookOutcome,
+        error: BaseException | None,
+    ) -> None:
+        """Dispatch the terminal callback once per hook in registration order.
+
+        Every hook is called even when an earlier hook raises, so one
+        unreliable observer cannot cost another hook the cleanup or audit
+        record it is owed. Failures are reported as notes on an operation that
+        already failed, and raised when the operation itself succeeded.
+        """
+
+        failures: list[Exception] = []
+        for hook in self._hooks_for(context):
+            try:
+                self._invoke(context, hook, "on_operation_end", outcome, error)
+            except Exception as raised:
+                failures.append(raised)
+        if not failures:
+            return
+        if error is not None:
+            for failure in failures:
+                error.add_note(f"on_operation_end hook failed: {failure!r}")
+            return
+        first, *rest = failures
+        for failure in rest:
+            first.add_note(f"Another on_operation_end hook failed: {failure!r}")
+        raise first
 
     def _hooks_for(self, context: HookContext) -> list[MemoryHook]:
         """Return registered hooks after validating the dispatch context."""
