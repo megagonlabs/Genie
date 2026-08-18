@@ -10,6 +10,8 @@ from genie.hooks.events import (
     StructureAction,
     StructureChange,
     StructureKind,
+    Traversal,
+    TraversalKind,
     freeze_attributes,
 )
 from genie.hooks.registry import HookRegistry
@@ -27,5 +29,7 @@ __all__ = [
     "StructureAction",
     "StructureChange",
     "StructureKind",
+    "Traversal",
+    "TraversalKind",
     "freeze_attributes",
 ]

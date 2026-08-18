@@ -16,6 +16,7 @@ from genie.hooks.events import (
     HookOrigin,
     HookOutcome,
     StructureChange,
+    Traversal,
     freeze_attributes,
 )
 from genie.memory.block import MemoryBlock
@@ -315,6 +316,18 @@ class HookRegistry:
                     )
                 results = result
         return results
+
+    def before_traverse(self, context: HookContext, traversal: Traversal) -> None:
+        """Dispatch ``before_traverse`` in registration order."""
+
+        for hook in self._hooks_for(context):
+            self._invoke(context, hook, "before_traverse", traversal)
+
+    def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
+        """Dispatch ``after_traverse`` in registration order."""
+
+        for hook in self._hooks_for(context):
+            self._invoke(context, hook, "after_traverse", traversal)
 
     def before_add_link(self, context: HookContext, link: MemoryLink) -> MemoryLink:
         """Dispatch ``before_add_link`` in registration order."""

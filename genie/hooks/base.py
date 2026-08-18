@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from genie.hooks.events import HandleCapability, HookContext, HookOutcome, StructureChange
+from genie.hooks.events import (
+    HandleCapability,
+    HookContext,
+    HookOutcome,
+    StructureChange,
+    Traversal,
+)
 from genie.memory.block import MemoryBlock
 from genie.memory.links import MemoryLink
 from genie.policy.engine import Operation
@@ -137,6 +143,36 @@ class MemoryHook:
         """
 
         return results
+
+    def before_traverse(self, context: HookContext, traversal: Traversal) -> None:
+        """Run before a structural read follows relationships between blocks.
+
+        This covers direct children, ancestors, link listing, mount listing and
+        discovery, and subtree membership tests. Traversal results are
+        backend-owned and already filtered by the reading principal's read
+        policy, so this callback observes the read rather than narrowing or
+        widening it.
+
+        Args:
+            context: Operation context shared with the matching after callback.
+            traversal: Read about to run, with nothing disclosed yet.
+        """
+
+        return None
+
+    def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
+        """Run after a structural read discloses blocks, links, or membership.
+
+        This is where a subtree read becomes visible to an audit trail: the
+        traversal carries every block or link the caller receives, so a hook
+        can record the volume and identity of what one call disclosed.
+
+        Args:
+            context: Operation context shared with the matching before callback.
+            traversal: Completed read, carrying what it disclosed.
+        """
+
+        return None
 
     def before_add_link(self, context: HookContext, link: MemoryLink) -> MemoryLink:
         """Run before a regular, acyclic, or mount link is stored.

@@ -20,6 +20,7 @@ from genie import (
     HookRecursionError,
     HookRegistry,
     InMemoryBackend,
+    LinkRelations,
     Memory,
     MemoryBlock,
     MemoryConflict,
@@ -32,12 +33,15 @@ from genie import (
     SearchResult,
     StructureAction,
     StructureChange,
+    Traversal,
+    TraversalKind,
     KeyedStore,
 )
 from genie.structures import (
     EventLog,
     KeyedCollection,
     MemoryAddress,
+    OwnershipTree,
     TemporalCollection,
     VersionedRecords,
 )
@@ -55,9 +59,17 @@ def test_default_hook_is_a_complete_noop_extension() -> None:
     updated_note = memory.update(note, value={"status": "done"})
     assert updated_note.value == {"status": "done"}
     assert [result.block.id for result in memory.search("done")] == [note.id]
+    assert [block.id for block in memory.children(root)] == [note.id, target.id]
+    assert [block.id for block in memory.ancestors(note)] == [root.id]
+    assert memory.contains(root, note) is True
     link = memory.add_link(note, target, "related")
+    assert memory.list_links(note) == [link]
     updated_link = memory.update_link(link, metadata={"reviewed": True})
     assert updated_link.metadata == {"reviewed": True}
+    mount = memory.add_mount(note, target)
+    assert memory.list_mounts(note) == [mount]
+    assert memory.discover_mounts(root) == [mount]
+    assert memory.resolve_mount(mount) == target
 
     keyed = KeyedCollection(memory, cast(KeyedStore, memory.backend), collection=root)
     address = MemoryAddress((), "target")
@@ -985,6 +997,279 @@ def test_after_hooks_run_only_after_successful_mutations() -> None:
     assert (hook.key_before, hook.key_after) == (2, 1)
 
 
+class RecordingTraversalHook(MemoryHook):
+    """Hook that records every structural read reported to it."""
+
+    def __init__(self) -> None:
+        self.before: list[Traversal] = []
+        self.after: list[Traversal] = []
+        self.contexts: list[HookContext] = []
+
+    def before_traverse(self, context: HookContext, traversal: Traversal) -> None:
+        """Record the read that is about to run."""
+
+        self.before.append(traversal)
+        self.contexts.append(context)
+
+    def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
+        """Record the read and everything it disclosed."""
+
+        self.after.append(traversal)
+        self.contexts.append(context)
+
+
+def test_traverse_hooks_cover_children_ancestors_links_and_containment() -> None:
+    """Every structural read reports what it followed and what it disclosed."""
+
+    hook = RecordingTraversalHook()
+    memory = Memory(hooks=[hook])
+    root = memory.put(type="root", value="root")
+    note = memory.put(parent=root, type="note", value="one")
+    link = memory.add_link(note, root, "related")
+
+    memory.children(root)
+    memory.ancestors(note)
+    memory.list_links(note, relation="related", direction="out")
+    memory.contains(root, note)
+
+    children, ancestors, links, contains = hook.after
+    assert [traversal.kind for traversal in hook.after] == [
+        TraversalKind.CHILDREN,
+        TraversalKind.ANCESTORS,
+        TraversalKind.LINKS,
+        TraversalKind.CONTAINS,
+    ]
+    assert [traversal.origin_id for traversal in hook.after] == [
+        root.id,
+        note.id,
+        note.id,
+        root.id,
+    ]
+    assert [block.id for block in children.blocks] == [note.id]
+    assert [block.id for block in ancestors.blocks] == [root.id]
+    assert [stored.id for stored in links.links] == [link.id]
+    assert (links.relation, links.direction) == ("related", "out")
+    assert (contains.target_id, contains.contained) == (note.id, True)
+
+
+def test_before_traverse_names_a_read_that_has_disclosed_nothing_yet() -> None:
+    """The before callback describes the read; only the after callback carries results."""
+
+    hook = RecordingTraversalHook()
+    memory = Memory(hooks=[hook])
+    root = memory.put(type="root", value="root")
+    note = memory.put(parent=root, type="note", value="one")
+    memory.add_link(note, root, "related")
+
+    memory.children(root)
+    memory.ancestors(note)
+    memory.list_links(note)
+    memory.contains(root, note)
+
+    assert [
+        (traversal.blocks, traversal.links, traversal.contained)
+        for traversal in hook.before
+    ] == [((), (), None)] * 4
+    assert [traversal.kind for traversal in hook.before] == [
+        traversal.kind for traversal in hook.after
+    ]
+
+
+def test_traverse_hooks_separate_one_block_of_mounts_from_a_subtree_scan() -> None:
+    """Mount reads name the mount relation and distinguish a scan from a listing."""
+
+    hook = RecordingTraversalHook()
+    memory = Memory(hooks=[hook])
+    root = memory.put(type="root", value="root")
+    branch = memory.put(parent=root, type="branch", value="branch")
+    outside = memory.put(type="other", value="outside")
+    root_mount = memory.add_mount(root, outside)
+    branch_mount = memory.add_mount(branch, outside)
+    hook.before.clear()
+    hook.after.clear()
+
+    assert memory.list_mounts(root) == [root_mount]
+    assert memory.discover_mounts(root) == [root_mount, branch_mount]
+
+    listed, discovered = hook.after
+    assert [traversal.kind for traversal in hook.before] == [
+        TraversalKind.MOUNTS,
+        TraversalKind.SUBTREE_MOUNTS,
+    ]
+    assert [traversal.links for traversal in hook.before] == [(), ()]
+    assert (listed.origin_id, [link.id for link in listed.links]) == (root.id, [root_mount.id])
+    assert (discovered.origin_id, [link.id for link in discovered.links]) == (
+        root.id,
+        [root_mount.id, branch_mount.id],
+    )
+    assert {(traversal.relation, traversal.direction) for traversal in hook.after} == {
+        (LinkRelations.MOUNT, "out")
+    }
+
+
+def test_traversal_events_report_only_what_policy_disclosed() -> None:
+    """Filtered blocks are absent from the traversal rather than reported as refusals."""
+
+    class DenialAwareHook(RecordingTraversalHook):
+        """Record refusals alongside the reads that were allowed."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.denials: list[HookOperation] = []
+
+        def on_denied(self, context: HookContext, operation, subject_id, reason) -> None:
+            """Record the operation that was refused."""
+
+            self.denials.append(context.operation)
+
+    hook = DenialAwareHook()
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    visible = owner.put(parent=root, type="note", value="public", policy=MemoryPolicy.public())
+    hidden = owner.put(parent=root, type="note", value="secret")
+    reader = Memory(
+        backend=owner.backend,
+        principal="reader",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+    )
+
+    assert [block.id for block in reader.children(root)] == [visible.id]
+    assert reader.contains(root, hidden) is False
+
+    children, contains = hook.after
+    assert [block.id for block in children.blocks] == [visible.id]
+    assert (contains.target_id, contains.contained) == (hidden.id, False)
+    assert hook.denials == []
+
+
+def test_traversal_events_pair_with_the_operation_that_performed_them() -> None:
+    """Both traversal callbacks and the terminal event share one operation."""
+
+    class PairedHook(RecordingTraversalHook):
+        """Record the terminal event of every traversal operation."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[tuple[HookOperation, HookOutcome]] = []
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Record the operation and its outcome."""
+
+            self.events.append((context.operation, outcome))
+
+    hook = PairedHook()
+    memory = Memory(hooks=[hook])
+    root = memory.put(type="root", value="root")
+    memory.put(parent=root, type="note", value="one")
+    hook.events.clear()
+
+    memory.children(root)
+    memory.contains(root, root)
+
+    assert hook.events == [
+        (HookOperation.CHILDREN, HookOutcome.SUCCESS),
+        (HookOperation.CONTAINS, HookOutcome.SUCCESS),
+    ]
+    assert [context.operation for context in hook.contexts] == [
+        HookOperation.CHILDREN,
+        HookOperation.CHILDREN,
+        HookOperation.CONTAINS,
+        HookOperation.CONTAINS,
+    ]
+    assert len({context.operation_id for context in hook.contexts}) == 2
+
+
+def test_refused_traversal_reports_no_disclosure() -> None:
+    """A read that policy refuses never reaches the traversal callbacks."""
+
+    class TerminalTraversalHook(RecordingTraversalHook):
+        """Record the outcome of every traversal operation."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.outcomes: list[tuple[HookOperation, HookOutcome]] = []
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Record the operation and its outcome."""
+
+            self.outcomes.append((context.operation, outcome))
+
+    hook = TerminalTraversalHook()
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root")
+    child = owner.put(parent=root, type="note", value="secret")
+    attacker = Memory(
+        backend=owner.backend,
+        principal="attacker",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+    )
+
+    for attempt in (
+        lambda: attacker.children(root),
+        lambda: attacker.ancestors(child),
+        lambda: attacker.list_links(root),
+        lambda: attacker.contains(root, child),
+        lambda: attacker.list_mounts(root),
+        lambda: attacker.discover_mounts(root),
+    ):
+        with pytest.raises(AccessDenied):
+            attempt()
+
+    assert (hook.before, hook.after) == ([], [])
+    assert hook.outcomes == [
+        (HookOperation.CHILDREN, HookOutcome.DENIED),
+        (HookOperation.ANCESTORS, HookOutcome.DENIED),
+        (HookOperation.LIST_LINKS, HookOutcome.DENIED),
+        (HookOperation.CONTAINS, HookOutcome.DENIED),
+        (HookOperation.LIST_MOUNTS, HookOutcome.DENIED),
+        (HookOperation.DISCOVER_MOUNTS, HookOutcome.DENIED),
+    ]
+
+
+def test_subtree_walk_reports_one_traversal_per_visited_block() -> None:
+    """A facade walk over a subtree is audited as the reads it performs."""
+
+    hook = RecordingTraversalHook()
+    memory = Memory(hooks=[hook])
+    root = memory.put(type="root", value="root")
+    branch = memory.put(parent=root, type="branch", value="branch")
+    leaf = memory.put(parent=branch, type="note", value="leaf")
+    tree = OwnershipTree(memory, root=root)
+    hook.after.clear()
+
+    assert [block.id for block in tree.descendants()] == [branch.id, leaf.id]
+
+    assert [
+        (traversal.origin_id, tuple(block.id for block in traversal.blocks))
+        for traversal in hook.after
+    ] == [
+        (root.id, (branch.id,)),
+        (branch.id, (leaf.id,)),
+        (leaf.id, ()),
+    ]
+
+
+def test_traversal_through_a_handle_reports_its_sandbox() -> None:
+    """Reads performed through a handle carry the handle's boundary labels."""
+
+    hook = RecordingTraversalHook()
+    memory = Memory(hooks=[hook])
+    root = memory.put(type="root", value="root")
+    note = memory.put(parent=root, type="note", value="one")
+    handle = memory.get_handle(root=root)
+    hook.contexts.clear()
+
+    assert [block.id for block in handle.children()] == [note.id]
+
+    assert {
+        context.attributes["handle.root"] for context in hook.contexts
+    } == {root.id}
+
+
 class RecordingTerminalHook(MemoryHook):
     """Hook that records the terminal event of every operation it observes."""
 
@@ -1743,7 +2028,7 @@ def test_unreportable_refusals_still_reach_the_caller_as_access_denied() -> None
     agent_handle = agent.get_handle(root=root)
     hook.attempts = [
         lambda: agent_handle.get(outside.id),
-        lambda: agent.children(outside.id),
+        lambda: agent.get_handle(root=outside.id),
     ]
 
     agent.put(parent=root, type="note", value="triggers the callback")

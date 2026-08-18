@@ -40,6 +40,8 @@ from genie.hooks import (
     StructureAction,
     StructureChange,
     StructureKind,
+    Traversal,
+    TraversalKind,
 )
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import (
@@ -116,5 +118,7 @@ __all__ = [
     "StructureKind",
     "TemporalIndex",
     "TemporalStore",
+    "Traversal",
+    "TraversalKind",
     "UnsupportedOperation",
 ]

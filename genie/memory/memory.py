@@ -17,6 +17,8 @@ from genie.hooks import (
     HookOperation,
     HookRegistry,
     MemoryHook,
+    Traversal,
+    TraversalKind,
     freeze_attributes,
 )
 from genie.memory.block import MemoryBlock, new_memory_id, utc_now
@@ -322,13 +324,18 @@ class Memory:
             MemoryNotFound: If the parent does not exist.
         """
 
-        block = self._require_raw(_block_id(block_id))
-        self._require_access_outside_operation(HookOperation.CHILDREN, Operation.TRAVERSE_DOWN, block)
-        return [
-            self._decode_block(child)
-            for child in self.backend.children(block.id)
-            if self.policy_engine.allows(Operation.READ, child, self.principal)
-        ]
+        with self._operation(HookOperation.CHILDREN) as context:
+            block = self._require_raw(_block_id(block_id))
+            self._require_access(context, Operation.TRAVERSE_DOWN, block)
+            traversal = Traversal(kind=TraversalKind.CHILDREN, origin_id=block.id)
+            self.hooks.before_traverse(context, traversal)
+            children = [
+                self._decode_block(child)
+                for child in self.backend.children(block.id)
+                if self.policy_engine.allows(Operation.READ, child, self.principal)
+            ]
+            self.hooks.after_traverse(context, replace(traversal, blocks=tuple(children)))
+            return children
 
     def ancestors(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
         """Return readable ancestors for a block.
@@ -345,13 +352,18 @@ class Memory:
             MemoryNotFound: If the block does not exist.
         """
 
-        block = self._require_raw(_block_id(block_id))
-        self._require_access_outside_operation(HookOperation.ANCESTORS, Operation.TRAVERSE_UP, block)
-        return [
-            self._decode_block(ancestor)
-            for ancestor in self.backend.ancestors(block.id)
-            if self.policy_engine.allows(Operation.READ, ancestor, self.principal)
-        ]
+        with self._operation(HookOperation.ANCESTORS) as context:
+            block = self._require_raw(_block_id(block_id))
+            self._require_access(context, Operation.TRAVERSE_UP, block)
+            traversal = Traversal(kind=TraversalKind.ANCESTORS, origin_id=block.id)
+            self.hooks.before_traverse(context, traversal)
+            ancestors = [
+                self._decode_block(ancestor)
+                for ancestor in self.backend.ancestors(block.id)
+                if self.policy_engine.allows(Operation.READ, ancestor, self.principal)
+            ]
+            self.hooks.after_traverse(context, replace(traversal, blocks=tuple(ancestors)))
+            return ancestors
 
     def add_link(
         self,
@@ -547,13 +559,27 @@ class Memory:
             ValueError: If `direction` is invalid.
         """
 
-        block = self._require_raw(_block_id(block_id))
-        self._require_access_outside_operation(HookOperation.LIST_LINKS, Operation.READ, block)
-        return [
-            link
-            for link in self.backend.list_links(block.id, relation=relation, direction=direction)
-            if self._can_read_link_endpoints(link)
-        ]
+        with self._operation(HookOperation.LIST_LINKS) as context:
+            block = self._require_raw(_block_id(block_id))
+            self._require_access(context, Operation.READ, block)
+            traversal = Traversal(
+                kind=TraversalKind.LINKS,
+                origin_id=block.id,
+                relation=relation,
+                direction=direction,
+            )
+            self.hooks.before_traverse(context, traversal)
+            links = [
+                link
+                for link in self.backend.list_links(
+                    block.id,
+                    relation=relation,
+                    direction=direction,
+                )
+                if self._can_read_link_endpoints(link)
+            ]
+            self.hooks.after_traverse(context, replace(traversal, links=tuple(links)))
+            return links
 
     def add_mount(
         self,
@@ -603,19 +629,33 @@ class Memory:
             Readable outgoing mount links. Mounts whose target route has not
             been registered yet are returned as pending symbolic references;
             resolving them returns `None` until the target becomes available.
+
+        Raises:
+            AccessDenied: If the principal cannot read `source`.
+            MemoryNotFound: If `source` does not exist.
         """
 
-        source_block = self._require_raw(_block_id(source))
-        self._require_access_outside_operation(HookOperation.LIST_MOUNTS, Operation.READ, source_block)
-        return [
-            link
-            for link in self.backend.list_links(
-                source_block.id,
+        with self._operation(HookOperation.LIST_MOUNTS) as context:
+            source_block = self._require_raw(_block_id(source))
+            self._require_access(context, Operation.READ, source_block)
+            traversal = Traversal(
+                kind=TraversalKind.MOUNTS,
+                origin_id=source_block.id,
                 relation=LinkRelations.MOUNT,
                 direction="out",
             )
-            if self._can_read_mount(link)
-        ]
+            self.hooks.before_traverse(context, traversal)
+            mounts = [
+                link
+                for link in self.backend.list_links(
+                    source_block.id,
+                    relation=LinkRelations.MOUNT,
+                    direction="out",
+                )
+                if self._can_read_mount(link)
+            ]
+            self.hooks.after_traverse(context, replace(traversal, links=tuple(mounts)))
+            return mounts
 
     def discover_mounts(
         self,
@@ -643,25 +683,33 @@ class Memory:
             MemoryNotFound: If `root` does not exist.
         """
 
-        root_id = _block_id(root)
-        root_block = self._require_raw(root_id)
-        self._require_access_outside_operation(HookOperation.DISCOVER_MOUNTS, Operation.SEARCH, root_block)
-        self._require_access_outside_operation(HookOperation.DISCOVER_MOUNTS, Operation.TRAVERSE_DOWN, root_block)
-
-        mounts: list[MemoryLink] = []
-        for candidate in self.backend.descendants(root_id, include_self=include_self):
-            if not self.policy_engine.allows(Operation.READ, candidate, self.principal):
-                continue
-            mounts.extend(
-                link
-                for link in self.backend.list_links(
-                    candidate.id,
-                    relation=LinkRelations.MOUNT,
-                    direction="out",
-                )
-                if self._can_read_mount(link)
+        with self._operation(HookOperation.DISCOVER_MOUNTS) as context:
+            root_id = _block_id(root)
+            root_block = self._require_raw(root_id)
+            self._require_access(context, Operation.SEARCH, root_block)
+            self._require_access(context, Operation.TRAVERSE_DOWN, root_block)
+            traversal = Traversal(
+                kind=TraversalKind.SUBTREE_MOUNTS,
+                origin_id=root_block.id,
+                relation=LinkRelations.MOUNT,
+                direction="out",
             )
-        return mounts
+            self.hooks.before_traverse(context, traversal)
+            mounts: list[MemoryLink] = []
+            for candidate in self.backend.descendants(root_id, include_self=include_self):
+                if not self.policy_engine.allows(Operation.READ, candidate, self.principal):
+                    continue
+                mounts.extend(
+                    link
+                    for link in self.backend.list_links(
+                        candidate.id,
+                        relation=LinkRelations.MOUNT,
+                        direction="out",
+                    )
+                    if self._can_read_mount(link)
+                )
+            self.hooks.after_traverse(context, replace(traversal, links=tuple(mounts)))
+            return mounts
 
     def resolve_mount(self, mount: MemoryLink) -> MemoryBlock | None:
         """Resolve a mount link to its target block.
@@ -879,14 +927,25 @@ class Memory:
             MemoryNotFound: If the root does not exist.
         """
 
-        root_id = _block_id(root)
-        candidate_id = _block_id(block_id)
-        root_block = self._require_raw(root_id)
-        self._require_access_outside_operation(HookOperation.CONTAINS, Operation.TRAVERSE_DOWN, root_block)
-        candidate = self.backend.get_block(candidate_id)
-        if candidate is None or not self._contains_raw(root_id, candidate_id):
-            return False
-        return self.policy_engine.allows(Operation.READ, candidate, self.principal)
+        with self._operation(HookOperation.CONTAINS) as context:
+            root_id = _block_id(root)
+            candidate_id = _block_id(block_id)
+            root_block = self._require_raw(root_id)
+            self._require_access(context, Operation.TRAVERSE_DOWN, root_block)
+            traversal = Traversal(
+                kind=TraversalKind.CONTAINS,
+                origin_id=root_block.id,
+                target_id=candidate_id,
+            )
+            self.hooks.before_traverse(context, traversal)
+            candidate = self.backend.get_block(candidate_id)
+            contained = (
+                candidate is not None
+                and self._contains_raw(root_id, candidate_id)
+                and self.policy_engine.allows(Operation.READ, candidate, self.principal)
+            )
+            self.hooks.after_traverse(context, replace(traversal, contained=contained))
+            return contained
 
     def _contains_raw(self, root_id: str, block_id: str) -> bool:
         """Return backend ownership membership without policy evaluation."""
@@ -1027,9 +1086,9 @@ class Memory:
     ) -> None:
         """Require policy access for a call that starts no operation.
 
-        Traversal, listing, and handle creation have no paired callbacks, so a
-        refusal opens one operation context to carry the denial and its
-        terminal event. Allowed calls stay unobserved.
+        Mount resolution and handle creation have no paired callbacks, so a
+        refusal opens one operation context to carry the denial and its terminal
+        event. Allowed calls stay unobserved.
 
         Args:
             hook_operation: Logical operation to report the refusal under.

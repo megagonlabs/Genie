@@ -12,6 +12,7 @@ maintenance.
 | `before_update` | `after_update` | Block `set` and dictionary/metadata `update` |
 | `before_get` | `after_get` | Exact block lookup |
 | `before_search` | `after_search` | Search |
+| `before_traverse` | `after_traverse` | Children, ancestors, link and mount listing, and containment |
 | `before_delete` | `after_delete` | Each block in recursive deletion |
 | `before_add_link` | `after_add_link` | Regular, acyclic, and mount link creation |
 | `before_update_link` | `after_update_link` | Link metadata update |
@@ -25,12 +26,62 @@ keyed collections, event logs, and temporal collections; `action` identifies
 the specific mutation. Versioned records reuse key and log events rather than
 emitting duplicates.
 
-Traversal, link listing, facade reads, handle creation, and direct backend
-calls have no paired callbacks. Traversal, listing, and handle creation still
-report refusals; see below. Facades may perform ordinary `get` calls while
-resolving blocks, so applications should treat `get` hooks as block lookups
-rather than one event per high-level facade read. Backend access is a trusted
-boundary and intentionally bypasses hooks and policy.
+Mount resolution, facade reads, handle creation, and direct backend calls have
+no paired callbacks. Mount resolution and handle creation still report refusals;
+see below. Facades may perform ordinary `get` calls while resolving blocks, so
+applications should treat `get` hooks as block lookups rather than one event per
+high-level facade read. Backend access is a trusted boundary and intentionally
+bypasses hooks and policy.
+
+## Traversal
+
+A read that follows relationships names a starting block rather than the blocks
+it returns, so one call can disclose many. `before_traverse` and
+`after_traverse` cover `children`, `ancestors`, `list_links`, `contains`,
+`list_mounts`, and `discover_mounts`. Both receive an immutable `Traversal`: the
+before callback sees the read that is about to run, and the after callback sees
+the same read carrying what it disclosed.
+
+| `kind` | `origin_id` | Disclosed by the after callback |
+| --- | --- | --- |
+| `children` | Parent block | `blocks` |
+| `ancestors` | Starting block | `blocks` |
+| `links` | Listed block | `links`, with the requested `relation` and `direction` |
+| `contains` | Subtree root | `contained`, for the candidate in `target_id` |
+| `mounts` | Source block | `links`, the mounts leaving that block |
+| `mounts.subtree` | Scanned root | `links`, the mounts found anywhere below it |
+
+`mounts` and `mounts.subtree` report the same kind of record from very different
+amounts of memory, so they are separate kinds: a scan is one event covering every
+readable block under `origin_id`, and a hook that treated it as a single-block
+listing would understate what it disclosed. Both report the reserved mount
+relation and the outgoing `direction` they filtered on.
+
+```python
+class ReadVolumeHook(MemoryHook):
+    def after_traverse(self, context, traversal):
+        record(
+            principal=context.principal_id,
+            kind=traversal.kind,
+            origin=traversal.origin_id,
+            disclosed=len(traversal.blocks) + len(traversal.links),
+        )
+```
+
+Traversal results are backend-owned and already filtered by the reading
+principal's read policy, so these callbacks observe a read rather than narrowing
+or widening it. A block the principal cannot read is absent from `blocks`, and
+`contains` reports `contained=False` instead of refusing.
+
+Structures walk the ownership tree through these operations rather than around
+them, so `OwnershipTree.descendants()` reports one `children` traversal for each
+block it visits. A subtree read is therefore visible in the trail as the reads
+that produced it.
+
+The event reports the read `Memory` performed. A `MemoryHandle` hides links
+whose other endpoint lies outside its root after that read completes, so a
+handle's link listing can report links the caller never receives. The listing
+is never narrower than what the caller sees.
 
 ## Terminal events
 

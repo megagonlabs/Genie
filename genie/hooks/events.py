@@ -9,7 +9,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Generic, Literal, TypeVar
 
-from genie.memory.block import utc_now
+from genie.memory.block import MemoryBlock, utc_now
+from genie.memory.links import MemoryLink
 
 _EMPTY_ATTRIBUTES: Mapping[str, str] = MappingProxyType({})
 
@@ -17,10 +18,9 @@ _EMPTY_ATTRIBUTES: Mapping[str, str] = MappingProxyType({})
 class HookOperation(StrEnum):
     """Logical operations and spans that appear in a hook context.
 
-    Traversal, link listing, mount listing, and handle creation appear here so
-    refusals can be reported. They do not have paired before and after
-    callbacks, so they reach hooks only through ``on_denied`` and the matching
-    terminal event.
+    Mount resolution and handle creation appear here so refusals can be
+    reported. They do not have paired before and after callbacks, so they reach
+    hooks only through ``on_denied`` and the matching terminal event.
 
     ``SCOPE`` is the one member that dispatches nothing. It marks a
     caller-defined span opened with ``HookRegistry.scope``, which names work
@@ -230,3 +230,65 @@ class StructureChange(Generic[RecordT]):
     block_id: str
     before: RecordT | None = None
     after: RecordT | None = None
+
+
+class TraversalKind(StrEnum):
+    """Relationships a structural read can follow.
+
+    ``LINKS`` covers link listing in any direction, and ``CONTAINS`` covers a
+    subtree membership test, which follows ownership without returning what it
+    finds.
+
+    ``MOUNTS`` and ``SUBTREE_MOUNTS`` separate the symbolic mounts of one block
+    from a scan that collects them from every readable block under a root. The
+    two report the same kind of record from very different amounts of memory, so
+    a trail that could not tell them apart would understate the second.
+    """
+
+    CHILDREN = "children"
+    ANCESTORS = "ancestors"
+    LINKS = "links"
+    CONTAINS = "contains"
+    MOUNTS = "mounts"
+    SUBTREE_MOUNTS = "mounts.subtree"
+
+
+@dataclass(frozen=True, slots=True)
+class Traversal:
+    """One structural read that follows relationships between blocks.
+
+    A traversal names a starting block rather than the blocks it returns, so
+    one call can disclose many. Both callbacks receive the same value: the
+    before callback sees the read that is about to run, and the after callback
+    sees the same read carrying what it disclosed.
+
+    Traversal results are already filtered by the reading principal's read
+    policy, and blocks that policy hides are absent rather than reported as
+    refusals.
+
+    Attributes:
+        kind: Relationship the read follows.
+        origin_id: Block the read starts from, which is the scanned root of a
+            subtree read.
+        target_id: Candidate block of a containment test, and `None` for every
+            other kind.
+        relation: Relation the read filtered on, when one applies. A mount read
+            reports the reserved mount relation.
+        direction: Link direction relative to `origin_id` for a link or mount
+            read, and `None` for every other kind.
+        blocks: Decoded blocks a `children` or `ancestors` read disclosed.
+            Empty until the read completes.
+        links: Links a link or mount read disclosed. Empty until the read
+            completes.
+        contained: Result of a containment test. `None` until the test
+            completes, and for every other kind.
+    """
+
+    kind: TraversalKind
+    origin_id: str
+    target_id: str | None = None
+    relation: str | None = None
+    direction: Literal["out", "in", "both"] | None = None
+    blocks: tuple[MemoryBlock, ...] = ()
+    links: tuple[MemoryLink, ...] = ()
+    contained: bool | None = None
