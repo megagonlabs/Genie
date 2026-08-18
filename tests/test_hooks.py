@@ -472,7 +472,7 @@ def test_alternating_put_update_recursion_stops_at_active_callback() -> None:
             self.enabled = False
             self.memory: Memory | None = None
             self.target: MemoryBlock | None = None
-            self.calls: list[tuple[HookOperation, int]] = []
+            self.calls: list[tuple[HookOperation | str, int]] = []
 
         def after_put(self, context: HookContext, block: MemoryBlock) -> None:
             """Turn every observed PUT into an UPDATE while enabled."""
@@ -989,7 +989,7 @@ class RecordingTerminalHook(MemoryHook):
     """Hook that records the terminal event of every operation it observes."""
 
     def __init__(self) -> None:
-        self.events: list[tuple[HookOperation, HookOutcome, str | None]] = []
+        self.events: list[tuple[HookOperation | str, HookOutcome, str | None]] = []
         self.contexts: list[HookContext] = []
 
     def on_operation_end(
@@ -1139,7 +1139,7 @@ def test_operation_end_always_releases_state_stashed_by_a_before_callback() -> N
         """Track in-flight operations between the before and terminal callbacks."""
 
         def __init__(self) -> None:
-            self.in_flight: dict[str, HookOperation] = {}
+            self.in_flight: dict[str, HookOperation | str] = {}
             self.completed = 0
 
         def before_put(self, context: HookContext, block):
@@ -1265,7 +1265,7 @@ def test_operation_end_can_write_derived_records_without_recursing() -> None:
 
         def __init__(self) -> None:
             self.memory: Memory | None = None
-            self.observed: list[tuple[HookOperation, HookOrigin, int]] = []
+            self.observed: list[tuple[HookOperation | str, HookOrigin, int]] = []
 
         def on_operation_end(self, context: HookContext, outcome, error) -> None:
             """Record the event and persist it through memory."""
@@ -1311,7 +1311,7 @@ def test_no_terminal_event_when_an_operation_never_starts() -> None:
 
         def __init__(self, registry: HookRegistry) -> None:
             self.registry = registry
-            self.terminal: list[HookOperation] = []
+            self.terminal: list[HookOperation | str] = []
 
         def after_put(self, context: HookContext, block) -> None:
             """Exceed the depth limit from inside a callback."""
@@ -1338,7 +1338,7 @@ class RecordingDenialHook(MemoryHook):
     """Hook that records every refusal reported to it."""
 
     def __init__(self) -> None:
-        self.denials: list[tuple[HookOperation, str, str | None]] = []
+        self.denials: list[tuple[HookOperation | str, str, str | None]] = []
         self.reasons: list[str] = []
         self.contexts: list[HookContext] = []
 
@@ -1751,3 +1751,417 @@ def test_unreportable_refusals_still_reach_the_caller_as_access_denied() -> None
     assert hook.errors == ["AccessDenied", "AccessDenied"]
     assert [note for note in hook.notes if "could not be reported" in note] == hook.notes
     assert len(hook.notes) == 2
+
+
+class RecordingContextHook(MemoryHook):
+    """Hook that records the context of every operation it observes."""
+
+    def __init__(self) -> None:
+        self.contexts: list[HookContext] = []
+        self.lock = Lock()
+
+    def on_operation_end(
+        self,
+        context: HookContext,
+        outcome: HookOutcome,
+        error: BaseException | None,
+    ) -> None:
+        """Record one context per finished operation."""
+
+        with self.lock:
+            self.contexts.append(context)
+
+    def attributes_for(self, operation: HookOperation) -> list[dict[str, str]]:
+        """Return recorded attributes for one kind of operation."""
+
+        return [
+            dict(context.attributes)
+            for context in self.contexts
+            if context.operation == operation
+        ]
+
+
+def test_context_reports_no_attributes_and_one_shared_start_time_by_default() -> None:
+    """A context carries an immutable empty mapping and the operation's start."""
+
+    class PairedContextHook(MemoryHook):
+        """Collect the context seen by each put callback."""
+
+        def __init__(self) -> None:
+            self.contexts: list[HookContext] = []
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Record the before context."""
+
+            self.contexts.append(context)
+            return block
+
+        def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+            """Record the after context."""
+
+            self.contexts.append(context)
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Record the terminal context."""
+
+            self.contexts.append(context)
+
+    hook = PairedContextHook()
+    opened = datetime.now(UTC)
+    Memory(hooks=[hook]).put(type="note", value="one")
+    closed = datetime.now(UTC)
+
+    context = hook.contexts[0]
+    assert [seen.started_at for seen in hook.contexts] == [context.started_at] * 3
+    assert opened <= context.started_at <= closed
+    assert dict(context.attributes) == {}
+    with pytest.raises(TypeError):
+        cast(dict[str, str], context.attributes)["injected"] = "value"
+
+
+def test_memory_attributes_reach_every_operation_it_opens() -> None:
+    """Configured memory attributes label every operation and refusal context."""
+
+    hook = RecordingContextHook()
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root")
+    agent = Memory(
+        backend=owner.backend,
+        principal="agent",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+        attributes={"service": "genie", "tenant": "acme"},
+    )
+    note = agent.put(type="note", value="one")
+    agent.get(note)
+    agent.search("one")
+    with pytest.raises(AccessDenied):
+        agent.get(root)
+
+    assert len(hook.contexts) == 4
+    assert all(
+        dict(context.attributes) == {"service": "genie", "tenant": "acme"}
+        for context in hook.contexts
+    )
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [{"run": 7}, {7: "run"}, "run=7", [("run", "7")]],
+)
+def test_memory_rejects_attributes_that_are_not_string_pairs(attributes: object) -> None:
+    """Attributes are validated when memory is configured, not at first use."""
+
+    with pytest.raises(TypeError, match="attributes must be a mapping"):
+        Memory(attributes=cast(Any, attributes))
+
+
+def test_scope_groups_the_operations_of_one_caller_defined_span() -> None:
+    """Operations inside a scope become its children and inherit its labels."""
+
+    hook = RecordingContextHook()
+    memory = Memory(hooks=[hook])
+    with memory.hooks.scope("agent.turn", attributes={"run_id": "r1", "turn": "7"}) as span:
+        note = memory.put(type="note", value="one")
+        memory.get(note)
+    memory.get(note)
+
+    inside, outside = hook.contexts[:2], hook.contexts[2:]
+    assert span.is_scope and span.operation == "agent.turn"
+    assert {context.parent_operation_id for context in inside} == {span.operation_id}
+    assert {context.depth for context in inside} == {1}
+    assert {context.origin for context in inside} == {"caller"}
+    assert all(
+        dict(context.attributes) == {"run_id": "r1", "turn": "7"} for context in inside
+    )
+    assert [context.parent_operation_id for context in outside] == [None]
+    assert [dict(context.attributes) for context in outside] == [{}]
+
+
+def test_scope_attributes_reach_nested_and_hook_originated_operations() -> None:
+    """Everything caused inside a scope inherits it, whatever the nesting depth."""
+
+    class DerivingHook(RecordingContextHook):
+        """Write one derived block from inside a callback."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.memory: Memory | None = None
+
+        def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+            """Record an audit block for caller-initiated notes."""
+
+            if block.type == "note" and self.memory is not None:
+                self.memory.put(type="audit", value={"block": block.id})
+
+    hook = DerivingHook()
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, hooks=[hook])
+    hook.memory = memory
+    collection = memory.put(type="collection", value="keys")
+    keyed = KeyedCollection(memory, backend, collection=collection)
+    hook.contexts.clear()
+
+    with memory.hooks.scope("agent.turn", attributes={"run_id": "r1"}):
+        note = memory.put(type="note", value="one")
+        keyed.bind(MemoryAddress((), "one"), note)
+
+    assert all(dict(context.attributes) == {"run_id": "r1"} for context in hook.contexts)
+    derived = next(
+        context for context in hook.contexts if context.operation == HookOperation.PUT
+    )
+    assert (derived.origin, derived.depth) == ("hook", 2)
+    assert HookOperation.KEY_BIND in {context.operation for context in hook.contexts}
+
+
+def test_scope_dispatches_no_callbacks_of_its_own() -> None:
+    """A scope opens context without becoming an observable operation."""
+
+    class CountingHook(RecordingContextHook):
+        """Count every callback the registry dispatches."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Count one before callback."""
+
+            self.calls.append("before_put")
+            return block
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Count one terminal event and record its context."""
+
+            self.calls.append("on_operation_end")
+            super().on_operation_end(context, outcome, error)
+
+    hook = CountingHook()
+    memory = Memory(hooks=[hook])
+    with memory.hooks.scope("agent.turn"):
+        pass
+
+    assert hook.calls == []
+    assert hook.contexts == []
+
+    with memory.hooks.scope("agent.turn"):
+        memory.put(type="note", value="one")
+
+    assert hook.calls == ["before_put", "on_operation_end"]
+    assert [context.operation for context in hook.contexts] == [HookOperation.PUT]
+
+
+def test_nested_scopes_inherit_and_override_attributes() -> None:
+    """An inner scope adds labels and replaces the outer ones it repeats."""
+
+    hook = RecordingContextHook()
+    memory = Memory(hooks=[hook])
+    with memory.hooks.scope("agent.run", attributes={"run_id": "r1", "turn": "6"}) as run:
+        with memory.hooks.scope("agent.turn", attributes={"turn": "7"}) as turn:
+            memory.put(type="note", value="one")
+
+    context = hook.contexts[0]
+    assert turn.parent_operation_id == run.operation_id
+    assert dict(turn.attributes) == {"run_id": "r1", "turn": "7"}
+    assert context.parent_operation_id == turn.operation_id
+    assert context.depth == 2
+    assert dict(context.attributes) == {"run_id": "r1", "turn": "7"}
+
+
+def test_operation_attributes_extend_the_ones_a_scope_provides() -> None:
+    """Operation attributes and principals refine what the scope established."""
+
+    registry = HookRegistry()
+    with registry.scope(
+        "agent.turn",
+        principal_id="agent",
+        attributes={"run_id": "r1", "turn": "7"},
+    ):
+        with registry.operation(
+            HookOperation.PUT,
+            attributes={"turn": "8", "tool": "search"},
+        ) as inherited:
+            pass
+        with registry.operation(HookOperation.GET, principal_id="auditor") as replaced:
+            pass
+
+    assert dict(inherited.attributes) == {"run_id": "r1", "turn": "8", "tool": "search"}
+    assert inherited.principal_id == "agent"
+    assert replaced.principal_id == "auditor"
+
+
+def test_scope_context_cannot_dispatch_hook_callbacks() -> None:
+    """Scopes group operations, so they cannot stand in for one."""
+
+    registry = HookRegistry([MemoryHook()])
+    block = MemoryBlock(type="note", value="one")
+    with registry.scope("agent.turn") as span:
+        with pytest.raises(ValueError, match="cannot be dispatched with a scope"):
+            registry.before_put(span, block)
+        with registry.operation(HookOperation.PUT) as context:
+            assert context.is_scope is False
+            registry.before_put(context, block)
+
+
+@pytest.mark.parametrize("name", [None, 7, HookOperation.PUT.value.encode()])
+def test_scope_rejects_names_that_are_not_strings(name: object) -> None:
+    """A scope name is a caller-defined string."""
+
+    registry = HookRegistry()
+    with pytest.raises(TypeError, match="Scope name must be a string"):
+        with registry.scope(cast(Any, name)):
+            pass
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+def test_scope_rejects_empty_names(name: str) -> None:
+    """An unnamed scope would group operations under nothing."""
+
+    registry = HookRegistry()
+    with pytest.raises(ValueError, match="Scope name must not be empty"):
+        with registry.scope(name):
+            pass
+
+
+def test_scope_context_is_released_after_an_error() -> None:
+    """A failing scope leaves later operations at the top level."""
+
+    hook = RecordingContextHook()
+    memory = Memory(hooks=[hook])
+    with pytest.raises(RuntimeError):
+        with memory.hooks.scope("agent.turn", attributes={"run_id": "r1"}):
+            memory.put(type="note", value="one")
+            raise RuntimeError("the turn failed")
+    memory.put(type="note", value="two")
+
+    failed, recovered = hook.contexts
+    assert (failed.depth, dict(failed.attributes)) == (1, {"run_id": "r1"})
+    assert (recovered.depth, recovered.parent_operation_id) == (0, None)
+    assert dict(recovered.attributes) == {}
+
+
+def test_scopes_are_isolated_across_concurrent_runs() -> None:
+    """Concurrent agent runs never observe each other's grouping labels."""
+
+    hook = RecordingContextHook()
+    memory = Memory(hooks=[hook])
+
+    def run(index: int) -> None:
+        """Perform one labeled operation in its own scope."""
+
+        with memory.hooks.scope("agent.turn", attributes={"run_id": f"r{index}"}):
+            memory.put(type="note", value=index)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(run, range(24)))
+
+    assert len(hook.contexts) == 24
+    assert {context.attributes["run_id"] for context in hook.contexts} == {
+        f"r{index}" for index in range(24)
+    }
+    assert len({context.parent_operation_id for context in hook.contexts}) == 24
+
+
+def test_scope_opened_inside_a_hook_respects_the_depth_limit() -> None:
+    """Hook-originated scopes are bounded like hook-originated operations."""
+
+    class ScopingHook(MemoryHook):
+        """Open a scope from inside a callback."""
+
+        def __init__(self) -> None:
+            self.registry = HookRegistry([self], max_depth=0)
+            self.errors: list[str] = []
+
+        def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+            """Record what happens when the scope exceeds the limit."""
+
+            try:
+                with self.registry.scope("audit.batch"):
+                    pass
+            except HookRecursionError as raised:
+                self.errors.append(type(raised).__name__)
+
+    hook = ScopingHook()
+    Memory(hooks=hook.registry).put(type="note", value="one")
+
+    assert hook.errors == ["HookRecursionError"]
+
+
+def test_handle_attributes_distinguish_sandboxes_that_share_a_principal() -> None:
+    """The trail records which handle performed the work, not only who did."""
+
+    hook = RecordingContextHook()
+    memory = Memory(principal="agent", hooks=[hook], attributes={"service": "genie"})
+    first_root = memory.put(type="root", value="first")
+    second_root = memory.put(type="root", value="second")
+    narrow = memory.get_handle(root=first_root)
+    wide = memory.get_handle(root=second_root, allow_up=True, allow_global=True)
+    hook.contexts.clear()
+
+    narrow.put(type="note", value="one")
+    wide.put(type="note", value="two")
+    with pytest.raises(AccessDenied):
+        narrow.get(second_root.id)
+
+    written = hook.attributes_for(HookOperation.PUT)
+    refused = hook.attributes_for(HookOperation.GET)
+    assert {context.principal_id for context in hook.contexts} == {"agent"}
+    assert written[0] == {
+        "service": "genie",
+        "handle.id": narrow.id,
+        "handle.capabilities": "",
+        "handle.root": first_root.id,
+    }
+    assert written[1] == {
+        "service": "genie",
+        "handle.id": wide.id,
+        "handle.capabilities": "ancestors,global_search",
+        "handle.root": second_root.id,
+    }
+    assert refused == [written[0]]
+    assert narrow.id != wide.id
+
+
+def test_handle_attributes_describe_unbounded_and_narrowed_handles() -> None:
+    """Capabilities and roots are reported as the boundary actually stands."""
+
+    hook = RecordingContextHook()
+    memory = Memory(hooks=[hook])
+    root = memory.put(type="root", value="root")
+    unbounded = memory.get_unbounded_handle(allow_mounts=True, allow_policy_override=True)
+    child = memory.get_handle(root=root, allow_up=True, allow_mounts=True).get_handle(
+        root=root,
+        allow_mounts=True,
+    )
+
+    assert dict(unbounded.attributes) == {
+        "handle.id": unbounded.id,
+        "handle.capabilities": "mounts,policy_override",
+    }
+    assert dict(child.attributes) == {
+        "handle.id": child.id,
+        "handle.capabilities": "mounts",
+        "handle.root": root.id,
+    }
+
+
+def test_handle_attributes_label_facade_operations_inside_a_scope() -> None:
+    """Structure facades report the same span and sandbox as memory operations."""
+
+    hook = RecordingContextHook()
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, hooks=[hook])
+    root = memory.put(type="root", value="root")
+    handle = memory.get_handle(root=root)
+    collection = handle.put(type="collection", value="keys")
+    keyed = KeyedCollection(handle, backend, collection=collection)
+    hook.contexts.clear()
+
+    with memory.hooks.scope("agent.turn", attributes={"run_id": "r1"}):
+        note = handle.put(type="note", value="one")
+        keyed.bind(MemoryAddress((), "one"), note)
+
+    expected = {"run_id": "r1", **dict(handle.attributes)}
+    assert hook.attributes_for(HookOperation.KEY_BIND) == [expected]
+    assert hook.attributes_for(HookOperation.PUT) == [expected]

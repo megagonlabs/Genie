@@ -49,7 +49,9 @@ than committing stale work.
 Hooks cover block lifecycle, search, link mutations, and explicit key, log, and
 temporal changes. Every operation that starts also reports one terminal outcome
 event, and every policy or handle refusal is reported with its subject and the
-check that produced it, so denials and failures stay observable. Changed
+check that produced it, so denials and failures stay observable. Every event
+carries its start time and inherited string attributes, and caller-defined
+scopes group the operations of one agent run, turn, or tool call. Changed
 searches are authorized again and final results are filtered again. Reentrant callbacks are
 skipped with bounded causal context. Hooks run synchronously; external side
 effects are not backend transactions.

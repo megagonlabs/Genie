@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 from uuid import uuid4
 
 from genie.hooks.base import MemoryHook
-from genie.hooks.events import HandleCapability, HookContext, HookOperation, HookOrigin, HookOutcome, StructureChange
+from genie.hooks.events import (
+    HandleCapability,
+    HookContext,
+    HookOperation,
+    HookOrigin,
+    HookOutcome,
+    StructureChange,
+    freeze_attributes,
+)
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import HookRecursionError
 from genie.memory.links import MemoryLink
@@ -83,6 +91,7 @@ class HookRegistry:
         operation: HookOperation | str,
         *,
         principal_id: str | None = None,
+        attributes: Mapping[str, str] | None = None,
     ) -> Iterator[HookContext]:
         """Create causal context around one logical operation.
 
@@ -91,8 +100,12 @@ class HookRegistry:
         even when the operation is refused or fails.
 
         Args:
-            operation: Logical operation being performed.
-            principal_id: Acting principal when available.
+            operation: Logical operation being performed. Use ``scope`` for
+                spans Genie does not model.
+            principal_id: Acting principal when available. Defaults to the
+                principal of the enclosing operation or scope.
+            attributes: Attributes to add to the ones inherited from the
+                enclosing operation or scope. Added attributes win on conflict.
 
         Yields:
             Context shared by the operation's before and after callbacks.
@@ -100,27 +113,13 @@ class HookRegistry:
         Raises:
             HookRecursionError: If nested operations exceed ``max_depth``. The
                 operation does not start, so no terminal event is dispatched.
+            TypeError: If the attributes are not strings.
             ValueError: If ``operation`` is not a recognized hook operation.
         """
 
         if not isinstance(operation, HookOperation):
             operation = HookOperation(operation)
-        parent = _CURRENT_OPERATION.get()
-        depth = parent.depth + 1 if parent is not None else 0
-        origin: HookOrigin = "hook" if _ACTIVE_CALLBACKS.get() else "caller"
-        if origin == "hook" and depth > self.max_depth:
-            raise HookRecursionError(
-                f"Hook operation depth {depth} exceeds configured maximum "
-                f"{self.max_depth}."
-            )
-        context = HookContext(
-            operation_id=f"hookop_{uuid4().hex}",
-            parent_operation_id=parent.operation_id if parent is not None else None,
-            operation=operation,
-            origin=origin,
-            depth=depth,
-            principal_id=principal_id,
-        )
+        context = self._new_context(operation, principal_id, attributes)
         token = _CURRENT_OPERATION.set(context)
         outcome = HookOutcome.SUCCESS
         error: BaseException | None = None
@@ -135,6 +134,57 @@ class HookRegistry:
                 self._dispatch_operation_end(context, outcome, error)
             finally:
                 _CURRENT_OPERATION.reset(token)
+
+    @contextmanager
+    def scope(
+        self,
+        name: str,
+        *,
+        principal_id: str | None = None,
+        attributes: Mapping[str, str] | None = None,
+    ) -> Iterator[HookContext]:
+        """Group the memory operations of one caller-defined logical span.
+
+        A scope names work Genie does not model, such as an agent run, a turn,
+        or a tool call. It opens causal context without dispatching any
+        callback: operations started inside it become children of the scope and
+        inherit its attributes at any nesting depth. Hooks therefore receive
+        the grouping key on every event without the scope itself appearing as
+        an operation.
+
+        Args:
+            name: Caller-defined span name, such as ``"agent.turn"``. Scope
+                names are free-form and are never coerced to a
+                ``HookOperation``.
+            principal_id: Acting principal when available. Defaults to the
+                principal of the enclosing operation or scope.
+            attributes: Attributes inherited by everything inside the scope,
+                added to the ones inherited from an enclosing operation or
+                scope.
+
+        Yields:
+            Context describing the scope. Hooks never receive it directly; it
+            reaches them as the parent operation id and inherited attributes of
+            the operations inside.
+
+        Raises:
+            HookRecursionError: If scopes opened inside hooks exceed
+                ``max_depth``.
+            TypeError: If ``name`` is not a string or the attributes are not
+                strings.
+            ValueError: If ``name`` is empty.
+        """
+
+        if not isinstance(name, str):
+            raise TypeError("Scope name must be a string.")
+        if not name.strip():
+            raise ValueError("Scope name must not be empty.")
+        context = self._new_context(name, principal_id, attributes)
+        token = _CURRENT_OPERATION.set(context)
+        try:
+            yield context
+        finally:
+            _CURRENT_OPERATION.reset(token)
 
     @contextmanager
     def suppress(self, *hooks: MemoryHook) -> Iterator[None]:
@@ -367,6 +417,50 @@ class HookRegistry:
             first.add_note(f"Another on_denied hook failed: {failure!r}")
         raise first
 
+    def _new_context(
+        self,
+        operation: HookOperation | str,
+        principal_id: str | None,
+        attributes: Mapping[str, str] | None,
+    ) -> HookContext:
+        """Create context nested under the active operation or scope.
+
+        Args:
+            operation: Logical operation, or a scope name.
+            principal_id: Acting principal, or `None` to inherit one.
+            attributes: Attributes to add to the inherited ones.
+
+        Returns:
+            Context describing the new operation or scope.
+
+        Raises:
+            HookRecursionError: If a hook-originated context exceeds
+                ``max_depth``.
+            TypeError: If the attributes are not strings.
+        """
+
+        parent = _CURRENT_OPERATION.get()
+        depth = parent.depth + 1 if parent is not None else 0
+        origin: HookOrigin = "hook" if _ACTIVE_CALLBACKS.get() else "caller"
+        if origin == "hook" and depth > self.max_depth:
+            raise HookRecursionError(
+                f"Hook operation depth {depth} exceeds configured maximum "
+                f"{self.max_depth}."
+            )
+        added = freeze_attributes(attributes)
+        acting = principal_id
+        if acting is None and parent is not None:
+            acting = parent.principal_id
+        return HookContext(
+            operation_id=f"hookop_{uuid4().hex}",
+            parent_operation_id=parent.operation_id if parent is not None else None,
+            operation=operation,
+            origin=origin,
+            depth=depth,
+            principal_id=acting,
+            attributes=added if parent is None else {**parent.attributes, **added},
+        )
+
     def _dispatch_operation_end(
         self,
         context: HookContext,
@@ -405,6 +499,11 @@ class HookRegistry:
             raise ValueError(
                 "Hook callbacks require the context yielded by the active "
                 "HookRegistry.operation()."
+            )
+        if context.is_scope:
+            raise ValueError(
+                "Hook callbacks cannot be dispatched with a scope context. A "
+                "scope groups the operations inside it and dispatches nothing."
             )
         return self._hooks
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
@@ -29,17 +30,25 @@ def principal_id(access: object) -> str | None:
     return identifier if isinstance(identifier, str) else None
 
 
+def context_attributes(access: object) -> Mapping[str, str] | None:
+    """Return an access object's hook context attributes when available."""
+
+    candidate = getattr(access, "attributes", None)
+    return candidate if isinstance(candidate, Mapping) else None
+
+
 def hook_operation(
     hooks: HookRegistry | None,
     operation: HookOperation,
     *,
     principal: str | None,
+    attributes: Mapping[str, str] | None = None,
 ) -> AbstractContextManager[HookContext | None]:
     """Return a registry operation context or a no-op context."""
 
     if hooks is None:
         return nullcontext(None)
-    return hooks.operation(operation, principal_id=principal)
+    return hooks.operation(operation, principal_id=principal, attributes=attributes)
 
 
 def before_change(

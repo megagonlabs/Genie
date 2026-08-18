@@ -36,8 +36,9 @@ references, provenance, and cross-cutting relationships.
 ## Trusted and restricted access
 
 `Memory` configures one backend, principal, policy engine, default policy,
-codecs, and hooks. It provides block CRUD, traversal, links, mounts, search,
-and handle creation. Keep it in trusted application code.
+codecs, hooks, and the `attributes` reported to hooks. It provides block CRUD,
+traversal, links, mounts, search, and handle creation. Keep it in trusted
+application code.
 
 ```python
 from genie import InMemoryBackend, Memory
@@ -60,6 +61,11 @@ Only `Memory.get_unbounded_handle(...)` creates an administrative handle.
 
 Scope and policy are independent: a block must be inside the handle's allowed
 scope and permitted by its `MemoryPolicy`.
+
+Each handle also has its own `id` and reports its root and enabled capabilities
+to hooks through `attributes`, so an audit trail can tell which sandbox did the
+work when several handles share one principal. See
+[hooks](../hooks/README.md#scopes-and-attributes).
 
 ## Mounts
 

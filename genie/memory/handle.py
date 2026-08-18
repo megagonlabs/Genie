@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, overload
+from uuid import uuid4
 
-from genie.hooks import HandleCapability, HookOperation, HookRegistry
+from genie.hooks import HandleCapability, HookOperation, HookRegistry, freeze_attributes
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import HookRecursionError
 from genie.memory.links import LinkRelations, MemoryLink
@@ -25,6 +28,10 @@ class MemoryHandle:
     traversal modes. It supports scoped CRUD, traversal, links, mounts, search,
     and child handles. Child handles may reduce access further but cannot
     increase it.
+
+    Each handle has its own `id` and reports its boundary to hooks through
+    `attributes`, so work done through one sandbox is distinguishable in an
+    audit trail from work done by the same principal through another.
     """
 
     def __init__(
@@ -65,6 +72,7 @@ class MemoryHandle:
         )
 
         self._memory = memory
+        self.id = f"handle_{uuid4().hex}"
         self.root_id = root_id
         self.principal = principal
         self.default_scope = default_scope
@@ -72,6 +80,30 @@ class MemoryHandle:
         self.allow_global = allow_global
         self.allow_mounts = allow_mounts
         self.allow_policy_override = allow_policy_override
+        self._boundary_attributes = freeze_attributes(
+            _boundary_attributes(
+                handle_id=self.id,
+                root_id=root_id,
+                allow_up=allow_up,
+                allow_global=allow_global,
+                allow_mounts=allow_mounts,
+                allow_policy_override=allow_policy_override,
+            )
+        )
+
+    @property
+    def attributes(self) -> Mapping[str, str]:
+        """Return the hook context attributes reported by this handle.
+
+        The mapping combines the underlying memory's attributes with this
+        handle's boundary: `handle.id`, `handle.capabilities` as a
+        comma-separated list of the enabled `ancestors`, `global_search`,
+        `mounts`, and `policy_override` capabilities, and `handle.root` for a
+        rooted handle. Boundary attributes win on conflict, and an unbounded
+        handle reports no root.
+        """
+
+        return MappingProxyType({**self._memory.attributes, **self._boundary_attributes})
 
     def put(
         self,
@@ -746,6 +778,7 @@ class MemoryHandle:
             hooks=self._memory.hooks,
             codecs=self._memory.codecs,
             default_policy=self._memory.default_policy,
+            attributes=self.attributes,
         )
 
     @property
@@ -780,7 +813,11 @@ class MemoryHandle:
 
         denied = AccessDenied(message)
         try:
-            with self._hooks.operation(hook_operation, principal_id=self.principal.id) as context:
+            with self._hooks.operation(
+                hook_operation,
+                principal_id=self.principal.id,
+                attributes=self.attributes,
+            ) as context:
                 self._hooks.on_denied(context, capability, subject_id, message, error=denied)
                 raise denied
         except HookRecursionError as unreportable:
@@ -810,6 +847,50 @@ class MemoryHandle:
                 block_id,
                 f"Memory block {block_id!r} is outside memory handle root {self.root_id!r}.",
             )
+
+
+def _boundary_attributes(
+    *,
+    handle_id: str,
+    root_id: str | None,
+    allow_up: bool,
+    allow_global: bool,
+    allow_mounts: bool,
+    allow_policy_override: bool,
+) -> dict[str, str]:
+    """Describe one handle boundary as hook context attributes.
+
+    Capabilities are reported as one stable key so a trail can be grouped and
+    compared without knowing which capabilities exist. A handle with no
+    capabilities reports an empty list rather than omitting the key.
+
+    Args:
+        handle_id: Stable id of the handle being described.
+        root_id: Handle root, or `None` for an unbounded handle.
+        allow_up: Whether ancestor access is enabled.
+        allow_global: Whether global search is enabled.
+        allow_mounts: Whether mount access is enabled.
+        allow_policy_override: Whether explicit block policies are allowed.
+
+    Returns:
+        Attributes describing the handle. `handle.root` is omitted for an
+        unbounded handle.
+    """
+
+    capabilities = ",".join(
+        name
+        for name, enabled in (
+            ("ancestors", allow_up),
+            ("global_search", allow_global),
+            ("mounts", allow_mounts),
+            ("policy_override", allow_policy_override),
+        )
+        if enabled
+    )
+    attributes = {"handle.id": handle_id, "handle.capabilities": capabilities}
+    if root_id is not None:
+        attributes["handle.root"] = root_id
+    return attributes
 
 
 @overload

@@ -10,7 +10,14 @@ from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureC
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryConflict, MemoryNotFound, UnsupportedOperation
 from genie.policy.engine import AccessDenied
-from genie.structures._hooks import after_change, before_change, hook_operation, principal_id, resolve_hooks
+from genie.structures._hooks import (
+    after_change,
+    before_change,
+    context_attributes,
+    hook_operation,
+    principal_id,
+    resolve_hooks,
+)
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.records import KeyBinding, KeyedItem, MemoryAddress
 
@@ -28,7 +35,14 @@ class KeyedCollection:
     compare-and-swap updates.
     """
 
-    __slots__ = ("_access", "_hooks", "_principal_id", "_store", "collection_id")
+    __slots__ = (
+        "_access",
+        "_attributes",
+        "_hooks",
+        "_principal_id",
+        "_store",
+        "collection_id",
+    )
 
     def __init__(
         self,
@@ -63,6 +77,7 @@ class KeyedCollection:
         self._store = store
         self._hooks = resolve_hooks(access, hooks)
         self._principal_id = principal_id(access)
+        self._attributes = context_attributes(access)
         self.collection_id = stored_collection.id
 
     @property
@@ -90,6 +105,7 @@ class KeyedCollection:
             self._hooks,
             HookOperation.KEY_BIND,
             principal=self._principal_id,
+            attributes=self._attributes,
         ) as context:
             _require_address(address)
             self._require_collection()
@@ -136,6 +152,7 @@ class KeyedCollection:
             self._hooks,
             HookOperation.KEY_REBIND,
             principal=self._principal_id,
+            attributes=self._attributes,
         ) as context:
             _require_address(address)
             self._require_collection()
@@ -262,6 +279,7 @@ class KeyedCollection:
             self._hooks,
             HookOperation.KEY_UNBIND,
             principal=self._principal_id,
+            attributes=self._attributes,
         ) as context:
             _require_address(address)
             self._require_collection()

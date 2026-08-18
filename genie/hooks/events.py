@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Generic, Literal, TypeVar
+
+from genie.memory.block import utc_now
+
+_EMPTY_ATTRIBUTES: Mapping[str, str] = MappingProxyType({})
 
 
 class HookOperation(StrEnum):
@@ -77,6 +84,36 @@ class HookOutcome(StrEnum):
     ERROR = "error"
 
 
+def freeze_attributes(attributes: Mapping[str, str] | None) -> Mapping[str, str]:
+    """Validate hook context attributes and return an immutable copy.
+
+    Attributes are flat string pairs, so audit records, metric labels, and
+    tracing spans can carry them without further conversion.
+
+    Args:
+        attributes: Attributes to normalize, or `None` for no attributes.
+
+    Returns:
+        Read-only mapping of string keys to string values.
+
+    Raises:
+        TypeError: If the value is not a mapping of strings to strings.
+    """
+
+    if attributes is None:
+        return _EMPTY_ATTRIBUTES
+    if not isinstance(attributes, Mapping):
+        raise TypeError("attributes must be a mapping of string keys to string values.")
+    for key, value in attributes.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise TypeError(
+                "attributes must be a mapping of string keys to string values."
+            )
+    if not attributes:
+        return _EMPTY_ATTRIBUTES
+    return MappingProxyType(dict(attributes))
+
+
 @dataclass(frozen=True, slots=True)
 class HookContext:
     """Causal context for one logical operation.
@@ -84,19 +121,50 @@ class HookContext:
     Attributes:
         operation_id: Unique id shared by the operation's before and after
             callbacks.
-        parent_operation_id: Id of the operation active when this one began.
-        operation: Logical operation being performed.
+        parent_operation_id: Id of the operation or scope active when this one
+            began.
+        operation: Logical operation being performed, or the caller-defined
+            name of a scope.
         origin: Whether the operation began in caller code or inside a hook.
         depth: Zero-based nesting depth.
         principal_id: Acting principal when one is available.
+        attributes: Read-only string labels describing this operation, the
+            access object that performed it, and the scopes containing it.
+            Nested operations inherit them at any depth, so hooks can group
+            related work without knowing how calls nest.
+        started_at: Timezone-aware UTC timestamp taken when the operation
+            began. With the terminal event it gives the operation's duration.
     """
 
     operation_id: str
     parent_operation_id: str | None
-    operation: HookOperation
+    operation: HookOperation | str
     origin: HookOrigin
     depth: int
     principal_id: str | None = None
+    attributes: Mapping[str, str] = _EMPTY_ATTRIBUTES
+    started_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        """Validate attributes and freeze them against hook mutation.
+
+        Raises:
+            TypeError: If the attributes are not a mapping of strings to
+                strings.
+        """
+
+        object.__setattr__(self, "attributes", freeze_attributes(self.attributes))
+
+    @property
+    def is_scope(self) -> bool:
+        """Return whether this context names a caller-defined scope.
+
+        Scope contexts carry a free-form name rather than a `HookOperation` and
+        dispatch no callbacks, so hooks see them only as the parent id and
+        inherited attributes of the operations inside them.
+        """
+
+        return not isinstance(self.operation, HookOperation)
 
 
 class StructureKind(StrEnum):

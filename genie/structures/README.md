@@ -18,7 +18,8 @@ may participate in several structures.
 
 Facades receive `Memory` or `MemoryHandle`; a handle keeps its normal subtree
 and policy restrictions. Explicit key, log, and temporal mutations reuse the
-access object's hook registry when available.
+access object's hook registry, principal, and hook context attributes when
+available.
 
 ## Shared records
 

@@ -129,7 +129,8 @@ memory = Memory(hooks=[audit_hook])
 
 Every callback receives a `HookContext`. It provides one operation id shared by
 before and after callbacks, an optional parent operation id, the operation type,
-acting principal id, zero-based depth, and an origin of `caller` or `hook`.
+acting principal id, zero-based depth, an origin of `caller` or `hook`,
+inherited `attributes`, and the `started_at` timestamp of the operation.
 `Memory` and structure facades create and pass this context. Code that dispatches
 through `HookRegistry` directly must use the context yielded by
 `HookRegistry.operation()`; dispatch does not create an implicit operation.
@@ -138,6 +139,63 @@ Block-update hooks may transform only value, metadata, and content type. Link
 hooks may transform only metadata. Genie checks protected identity, ownership,
 topology, policy, timestamp, and version fields before persistence. Structural
 hooks observe immutable backend-owned records rather than rewriting them.
+
+## Scopes and attributes
+
+Genie names the operations it performs. Applications name the work that causes
+them, such as an agent run, a turn, or a tool call. `HookRegistry.scope()`
+groups the operations of one caller-defined span and labels them:
+
+```python
+with memory.hooks.scope("agent.turn", attributes={"run_id": run, "turn": "7"}):
+    handle.put(type="note", value=draft)
+    handle.search("open questions")
+```
+
+A scope dispatches no callbacks. It opens causal context, so operations started
+inside it become its children and inherit its attributes at any nesting depth.
+A hook can therefore group work by label without knowing how the calls nest:
+
+```python
+class AuditHook(MemoryHook):
+    def on_operation_end(self, context, outcome, error):
+        record(
+            run=context.attributes.get("run_id"),
+            operation=context.operation,
+            outcome=outcome,
+            elapsed=datetime.now(UTC) - context.started_at,
+        )
+```
+
+Attributes are a read-only mapping of strings to strings. Each context inherits
+the attributes of the operation or scope containing it, and attributes added by
+the operation itself win on conflict. `Memory` adds the attributes it was
+configured with:
+
+```python
+memory = Memory(hooks=[audit_hook], attributes={"service": "memory"})
+```
+
+A `MemoryHandle` adds its own boundary on top of them:
+
+| Attribute | Value |
+| --- | --- |
+| `handle.id` | Stable id of the handle that performed the operation. |
+| `handle.root` | Handle root. Omitted by an unbounded handle. |
+| `handle.capabilities` | Enabled `ancestors`, `global_search`, `mounts`, and `policy_override` capabilities, comma-separated. |
+
+Two handles with the same principal are therefore distinguishable in the trail,
+including in the refusal reported when one tries to leave its sandbox.
+
+Attributes describe the causal chain rather than the acting object alone: a
+derived write a hook performs inside a handle operation inherits that handle's
+labels. Use `origin` and `depth` to tell caller-initiated work from work a hook
+caused.
+
+Scope contexts stay outside the callback contract. Hooks never receive one, so
+`context.operation` is always a `HookOperation` inside a callback; the free-form
+name belongs to the context the caller holds, which reports `is_scope`.
+Dispatching a callback with a scope context raises `ValueError`.
 
 ## Nested operations and recursion
 
@@ -155,7 +213,12 @@ caller PUT
 
 Each registry also limits hook-originated nesting, defaulting to depth 16.
 Exceeding it raises `HookRecursionError`. Context is isolated between threads
-and asynchronous tasks and is reset even when a callback raises.
+and asynchronous tasks and is reset even when a callback raises, so concurrent
+agent runs never observe one another's scopes.
+
+A scope is a nesting level as well: operations directly inside one report depth
+1, and a scope opened from inside a hook is bounded by `max_depth` exactly like
+an operation.
 
 A hook that wants only caller-initiated events can return early when
 `context.origin == "hook"`. This also prevents different hooks that create

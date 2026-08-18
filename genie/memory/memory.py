@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -10,7 +12,13 @@ from genie.backend.base import MemoryBackend
 from genie.backend.in_memory import InMemoryBackend
 from genie.backend.structure_capabilities import AcyclicLinkStore
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec
-from genie.hooks import HookContext, HookOperation, HookRegistry, MemoryHook
+from genie.hooks import (
+    HookContext,
+    HookOperation,
+    HookRegistry,
+    MemoryHook,
+    freeze_attributes,
+)
 from genie.memory.block import MemoryBlock, new_memory_id, utc_now
 from genie.memory.errors import HookRecursionError, MemoryNotFound, UnsupportedOperation
 from genie.memory.links import LinkRelations, MemoryLink
@@ -28,11 +36,12 @@ class Memory:
     """Main interface for a Genie memory system.
 
     `Memory` configures the backend, codecs, hooks, policy engine, default
-    principal, and default policy. Trusted application code usually keeps this
-    object and passes bounded `MemoryHandle` objects to agents. It coordinates
-    parent/child ownership, scoped access, links, mounts, search, hooks, and
-    codecs without owning application business logic, memory structure, storage
-    layout, retrieval strategy, or value meaning.
+    principal, default policy, and the attributes hooks observe. Trusted
+    application code usually keeps this object and passes bounded
+    `MemoryHandle` objects to agents. It coordinates parent/child ownership,
+    scoped access, links, mounts, search, hooks, and codecs without owning
+    application business logic, memory structure, storage layout, retrieval
+    strategy, or value meaning.
     """
 
     def __init__(
@@ -44,6 +53,7 @@ class Memory:
         hooks: list[MemoryHook] | HookRegistry | None = None,
         codecs: CodecRegistry | None = None,
         default_policy: MemoryPolicy | None = None,
+        attributes: Mapping[str, str] | None = None,
     ) -> None:
         """Create the main memory interface.
 
@@ -57,10 +67,15 @@ class Memory:
             default_policy: Policy attached to new blocks when
                 `put(..., policy=None)`. Defaults to
                 `MemoryPolicy.owner_private()`.
+            attributes: String labels attached to every hook context this
+                memory opens, such as a service, tenant, or deployment name.
+                Operations inside a `HookRegistry` scope inherit that scope's
+                attributes as well, and these win on conflict.
 
         Raises:
             TypeError: If a configured backend, principal, policy engine,
-                codec registry, or default policy has the wrong type.
+                codec registry, default policy, or attribute has the wrong
+                type.
         """
 
         if backend is not None and not isinstance(backend, MemoryBackend):
@@ -82,6 +97,7 @@ class Memory:
         self.default_policy = (
             MemoryPolicy.owner_private() if default_policy is None else default_policy
         )
+        self.attributes = freeze_attributes(attributes)
 
     def put(
         self,
@@ -116,10 +132,7 @@ class Memory:
                 can encode the value.
         """
 
-        with self.hooks.operation(
-            HookOperation.PUT,
-            principal_id=self.principal.id,
-        ) as context:
+        with self._operation(HookOperation.PUT) as context:
             if policy is not None and not isinstance(policy, MemoryPolicy):
                 raise TypeError("policy must be a MemoryPolicy or None.")
             parent_id = _block_id(parent)
@@ -160,10 +173,7 @@ class Memory:
             TypeError: If no codec can decode the stored value.
         """
 
-        with self.hooks.operation(
-            HookOperation.GET,
-            principal_id=self.principal.id,
-        ) as context:
+        with self._operation(HookOperation.GET) as context:
             actual_id = _block_id(block_id)
             self.hooks.before_get(context, actual_id)
             block = self.backend.get_block(actual_id)
@@ -199,10 +209,7 @@ class Memory:
             TypeError: If no codec can encode the value.
         """
 
-        with self.hooks.operation(
-            HookOperation.SET,
-            principal_id=self.principal.id,
-        ) as context:
+        with self._operation(HookOperation.SET) as context:
             block = self._require_raw(_block_id(block_id))
             self._require_access(context, Operation.WRITE, block)
             encoded = self.codecs.encode(value, content_type)
@@ -245,10 +252,7 @@ class Memory:
                 not a dictionary, or metadata is not a strict JSON dictionary.
         """
 
-        with self.hooks.operation(
-            HookOperation.UPDATE,
-            principal_id=self.principal.id,
-        ) as context:
+        with self._operation(HookOperation.UPDATE) as context:
             block = self._require_raw(_block_id(block_id))
             self._require_access(context, Operation.WRITE, block)
             decoded_value = self.codecs.decode(EncodedValue(block.content_type, block.value))
@@ -288,10 +292,7 @@ class Memory:
             MemoryNotFound: If the block does not exist.
         """
 
-        with self.hooks.operation(
-            HookOperation.DELETE,
-            principal_id=self.principal.id,
-        ) as context:
+        with self._operation(HookOperation.DELETE) as context:
             block = self._require_raw(_block_id(block_id))
             blocks_to_delete = self.backend.descendants(block.id, include_self=True)
             for candidate in blocks_to_delete:
@@ -413,10 +414,7 @@ class Memory:
             TypeError: If metadata is not a strict JSON dictionary.
         """
 
-        with self.hooks.operation(
-            HookOperation.UPDATE_LINK,
-            principal_id=self.principal.id,
-        ) as context:
+        with self._operation(HookOperation.UPDATE_LINK) as context:
             stored = self._require_stored_link(link)
             source = self._require_raw(stored.source_id)
             self._require_access(context, Operation.WRITE, source)
@@ -496,10 +494,7 @@ class Memory:
     ) -> MemoryLink:
         """Authorize, hook, and persist one link mutation."""
 
-        with self.hooks.operation(
-            hook_operation,
-            principal_id=self.principal.id,
-        ) as context:
+        with self._operation(hook_operation) as context:
             source_block = self._require_raw(_block_id(source))
             target_block = self._require_raw(_block_id(target))
             self._require_access(context, Operation.WRITE, source_block)
@@ -737,10 +732,7 @@ class Memory:
                 non-global scope has no root.
         """
 
-        with self.hooks.operation(
-            HookOperation.SEARCH,
-            principal_id=self.principal.id,
-        ) as context:
+        with self._operation(HookOperation.SEARCH) as context:
             memory_query = self._coerce_query(
                 query,
                 text=text,
@@ -971,6 +963,33 @@ class Memory:
         elif query.scope == Scope.LINKS:
             self._require_access(context, Operation.READ, root)
 
+    def _operation(
+        self,
+        operation: HookOperation,
+        *,
+        principal: Principal | None = None,
+    ) -> AbstractContextManager[HookContext]:
+        """Open causal context for one operation performed by this memory.
+
+        Every operation reports the acting principal and this memory's
+        attributes, so a handle-derived memory is distinguishable in the trail
+        from the trusted memory it shares state with.
+
+        Args:
+            operation: Logical operation being performed.
+            principal: Acting principal. Defaults to this memory's principal.
+
+        Returns:
+            Context manager yielding the operation's `HookContext`.
+        """
+
+        acting = self.principal if principal is None else principal
+        return self.hooks.operation(
+            operation,
+            principal_id=acting.id,
+            attributes=self.attributes,
+        )
+
     def _require_access(
         self,
         context: HookContext,
@@ -1029,7 +1048,7 @@ class Memory:
             self.policy_engine.require(operation, block, acting)
         except AccessDenied as denied:
             try:
-                with self.hooks.operation(hook_operation, principal_id=acting.id) as context:
+                with self._operation(hook_operation, principal=acting) as context:
                     self.hooks.on_denied(context, operation, block.id, str(denied), error=denied)
                     raise
             except HookRecursionError as unreportable:

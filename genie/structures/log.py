@@ -9,7 +9,14 @@ from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureC
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryNotFound, UnsupportedOperation
 from genie.policy.engine import AccessDenied
-from genie.structures._hooks import after_change, before_change, hook_operation, principal_id, resolve_hooks
+from genie.structures._hooks import (
+    after_change,
+    before_change,
+    context_attributes,
+    hook_operation,
+    principal_id,
+    resolve_hooks,
+)
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.records import LogEntry, LogItem
 
@@ -27,7 +34,14 @@ class EventLog:
     log or structure.
     """
 
-    __slots__ = ("_access", "_hooks", "_principal_id", "_store", "log_id")
+    __slots__ = (
+        "_access",
+        "_attributes",
+        "_hooks",
+        "_principal_id",
+        "_store",
+        "log_id",
+    )
 
     def __init__(
         self,
@@ -60,6 +74,7 @@ class EventLog:
         self._store = store
         self._hooks = resolve_hooks(access, hooks)
         self._principal_id = principal_id(access)
+        self._attributes = context_attributes(access)
         self.log_id = stored_log.id
 
     @property
@@ -82,6 +97,7 @@ class EventLog:
             self._hooks,
             HookOperation.LOG_APPEND,
             principal=self._principal_id,
+            attributes=self._attributes,
         ) as context:
             self._require_log()
             stored_block = self._require_block(block)
