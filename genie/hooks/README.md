@@ -17,16 +17,20 @@ maintenance.
 | `before_update_link` | `after_update_link` | Link metadata update |
 | `before_structure_change` | `after_structure_change` | Keys, log appends, and temporal membership |
 
+Two unpaired callbacks cover every operation: `on_denied` reports refusals and
+`on_operation_end` reports outcomes.
+
 Structure events use immutable `StructureChange` values. `kind` distinguishes
 keyed collections, event logs, and temporal collections; `action` identifies
 the specific mutation. Versioned records reuse key and log events rather than
 emitting duplicates.
 
 Traversal, link listing, facade reads, handle creation, and direct backend
-calls do not have separate hooks. Facades may perform ordinary `get` calls
-while resolving blocks, so applications should treat `get` hooks as block
-lookups rather than one event per high-level facade read. Backend access is a
-trusted boundary and intentionally bypasses hooks and policy.
+calls have no paired callbacks. Traversal, listing, and handle creation still
+report refusals; see below. Facades may perform ordinary `get` calls while
+resolving blocks, so applications should treat `get` hooks as block lookups
+rather than one event per high-level facade read. Backend access is a trusted
+boundary and intentionally bypasses hooks and policy.
 
 ## Terminal events
 
@@ -56,16 +60,54 @@ class MetricsHook(MemoryHook):
         record(context.operation, outcome, started)
 ```
 
-Refusals are reported for the operations in the table above, which covers
-`get`, `put`, `set`, `update`, `delete`, `search`, and link mutations. Calls
-that never start an operation still report nothing: `children`, `ancestors`,
-`list_links`, `contains`, mount listing, and `MemoryHandle` boundary checks
-reject before dispatch begins. A terminal event identifies the operation and
-principal rather than the target block, so records that need a subject id
-should read it from the paired callbacks.
+A terminal event identifies the operation and principal rather than the target
+block. Use `on_denied` for the subject of a refusal, and the paired callbacks
+for the subject of successful work.
 
 An operation rejected before it starts has no terminal event, so exceeding
 `max_depth` raises `HookRecursionError` without one.
+
+## Refusals
+
+`on_denied` reports every refusal Genie raises, with the block it applies to
+and the check that produced it. It is an observation: the refusal stands, and
+a hook cannot reverse it.
+
+```python
+class SecurityHook(MemoryHook):
+    def on_denied(self, context, operation, subject_id, reason):
+        alert(context.principal_id, context.operation, operation, subject_id)
+```
+
+The `operation` argument names what refused. Policy operations are bare `read`,
+`write`, `search`, `traverse_up`, and `traverse_down` values. `MemoryHandle`
+boundaries are namespaced `HandleCapability` values, so the two never collide
+and an attempt to leave a sandbox is never confused with an ordinary
+permission failure.
+
+| Capability | Refused because |
+| --- | --- |
+| `handle.subtree` | The block is outside the handle root. |
+| `handle.ancestors` | Ancestor traversal or search is disabled. |
+| `handle.global_search` | Global search is disabled. |
+| `handle.mounts` | Mount access is disabled. |
+| `handle.policy_override` | An explicit block policy was passed. |
+| `handle.root_required` | An unbounded handle has no root to infer. |
+| `handle.principal` | A child handle tried to change principal. |
+
+Coverage is complete for the security boundary. Policy refusals are reported
+for block operations, search, links, mounts, traversal, listing, `contains`,
+and handle creation. Handle refusals are reported for every boundary and
+capability check, including child handles that try to widen access. Each
+refusal is paired with a `denied` terminal event that shares its operation id.
+
+Ordinary visibility filtering is not a refusal. Search results and traversal
+results that a principal cannot read are omitted without reporting anything,
+so `on_denied` stays a signal rather than a stream.
+
+Refusals raised inside an `OwnershipTree` facade root are not reported. That
+bound is a view over an access object the caller already holds, so leaving it
+cannot widen access; the underlying handle and policy still refuse.
 
 ## Writing a hook
 
@@ -144,11 +186,13 @@ or include external effects in backend transactions. A before-hook failure
 prevents its mutation; an after-hook failure occurs after commit. Keep hooks
 fast, repeat-safe, and reliable.
 
-Terminal callbacks are dispatched to every hook even when one of them raises,
-so an unreliable observer cannot cost another hook its cleanup. A terminal
-failure never replaces the exception leaving the operation; it is attached to
-that exception as a note, and is raised only when the operation itself
-succeeded.
+Terminal and denial callbacks are dispatched to every hook even when one of
+them raises, so an unreliable observer cannot cost another hook its cleanup or
+its audit record. Their failures never replace the exception the caller
+receives: a failing `on_denied` still lets the `AccessDenied` through, and a
+failing `on_operation_end` still lets the operation's own error through. Those
+failures are attached to that exception as notes, and are raised only when
+there is no caller-visible error to preserve.
 
 Recursive deletion calls `before_delete` for every block in the authorized
 snapshot. A concurrent change raises `MemoryConflict`; before hooks may already

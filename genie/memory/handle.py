@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, overload
 
+from genie.hooks import HandleCapability, HookOperation, HookRegistry
 from genie.memory.block import MemoryBlock
+from genie.memory.errors import HookRecursionError
 from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import AccessDenied
 from genie.policy.policy import MemoryPolicy
@@ -111,9 +113,14 @@ class MemoryHandle:
 
         parent_id = _block_id(parent) if parent is not None else self.root_id
         if parent_id is not None:
-            self._require_in_subtree(parent_id)
+            self._require_in_subtree(HookOperation.PUT, parent_id)
         if policy is not None and not self.allow_policy_override:
-            raise AccessDenied("This memory handle does not allow explicit block policies.")
+            self._deny(
+                HookOperation.PUT,
+                HandleCapability.POLICY_OVERRIDE,
+                parent_id,
+                "This memory handle does not allow explicit block policies.",
+            )
         return self._as_principal().put(
             type=type,
             value=value,
@@ -142,7 +149,7 @@ class MemoryHandle:
         """
 
         actual_id = _block_id(block_id)
-        self._require_in_subtree(actual_id)
+        self._require_in_subtree(HookOperation.GET, actual_id)
         return self._as_principal().get(actual_id)
 
     def set(
@@ -173,7 +180,7 @@ class MemoryHandle:
         """
 
         actual_id = _block_id(block_id)
-        self._require_in_subtree(actual_id)
+        self._require_in_subtree(HookOperation.SET, actual_id)
         return self._as_principal().set(actual_id, value, content_type=content_type)
 
     def update(
@@ -205,7 +212,7 @@ class MemoryHandle:
         """
 
         actual_id = _block_id(block_id)
-        self._require_in_subtree(actual_id)
+        self._require_in_subtree(HookOperation.UPDATE, actual_id)
         return self._as_principal().update(actual_id, value=value, metadata=metadata)
 
     def delete(self, block_id: str | MemoryBlock) -> None:
@@ -225,7 +232,7 @@ class MemoryHandle:
         """
 
         actual_id = _block_id(block_id)
-        self._require_in_subtree(actual_id)
+        self._require_in_subtree(HookOperation.DELETE, actual_id)
         return self._as_principal().delete(actual_id)
 
     def children(self, block_id: str | MemoryBlock | None = None) -> list[MemoryBlock]:
@@ -247,8 +254,13 @@ class MemoryHandle:
 
         actual_id = _block_id(block_id) if block_id is not None else self.root_id
         if actual_id is None:
-            raise AccessDenied("An unbounded memory handle cannot infer which children to fetch.")
-        self._require_in_subtree(actual_id)
+            self._deny(
+                HookOperation.CHILDREN,
+                HandleCapability.ROOT_REQUIRED,
+                None,
+                "An unbounded memory handle cannot infer which children to fetch.",
+            )
+        self._require_in_subtree(HookOperation.CHILDREN, actual_id)
         return self._as_principal().children(actual_id)
 
     def ancestors(self, block_id: str | MemoryBlock | None = None) -> list[MemoryBlock]:
@@ -270,11 +282,21 @@ class MemoryHandle:
         """
 
         if not self.allow_up:
-            raise AccessDenied("This memory handle does not allow ancestor traversal.")
+            self._deny(
+                HookOperation.ANCESTORS,
+                HandleCapability.ANCESTORS,
+                self.root_id,
+                "This memory handle does not allow ancestor traversal.",
+            )
         actual_id = _block_id(block_id) if block_id is not None else self.root_id
         if actual_id is None:
-            raise AccessDenied("An unbounded memory handle cannot infer which ancestors to fetch.")
-        self._require_in_subtree(actual_id)
+            self._deny(
+                HookOperation.ANCESTORS,
+                HandleCapability.ROOT_REQUIRED,
+                None,
+                "An unbounded memory handle cannot infer which ancestors to fetch.",
+            )
+        self._require_in_subtree(HookOperation.ANCESTORS, actual_id)
         return self._as_principal().ancestors(actual_id)
 
     def add_link(
@@ -303,8 +325,8 @@ class MemoryHandle:
                 endpoint.
         """
 
-        self._require_in_subtree(_block_id(source))
-        self._require_in_subtree(_block_id(target))
+        self._require_in_subtree(HookOperation.ADD_LINK, _block_id(source))
+        self._require_in_subtree(HookOperation.ADD_LINK, _block_id(target))
         return self._as_principal().add_link(source, target, relation, metadata=metadata)
 
     def update_link(
@@ -332,11 +354,11 @@ class MemoryHandle:
         """
 
         stored = self._memory._require_stored_link(link)
-        self._require_in_subtree(stored.source_id)
+        self._require_in_subtree(HookOperation.UPDATE_LINK, stored.source_id)
         if stored.relation == LinkRelations.MOUNT:
-            self._require_mounts_allowed()
+            self._require_mounts_allowed(HookOperation.UPDATE_LINK)
         else:
-            self._require_in_subtree(stored.target_id)
+            self._require_in_subtree(HookOperation.UPDATE_LINK, stored.target_id)
         return self._as_principal().update_link(stored, metadata=metadata)
 
     def add_acyclic_link(
@@ -366,8 +388,8 @@ class MemoryHandle:
             UnsupportedOperation: If the backend lacks atomic DAG insertion.
         """
 
-        self._require_in_subtree(_block_id(source))
-        self._require_in_subtree(_block_id(target))
+        self._require_in_subtree(HookOperation.ADD_ACYCLIC_LINK, _block_id(source))
+        self._require_in_subtree(HookOperation.ADD_ACYCLIC_LINK, _block_id(target))
         return self._as_principal().add_acyclic_link(
             source,
             target,
@@ -405,7 +427,7 @@ class MemoryHandle:
         """
 
         actual_id = _block_id(block_id)
-        self._require_in_subtree(actual_id)
+        self._require_in_subtree(HookOperation.LIST_LINKS, actual_id)
         links = self._as_principal().list_links(actual_id, relation=relation, direction=direction)
         if self.root_id is None:
             return links
@@ -444,8 +466,8 @@ class MemoryHandle:
                 endpoint.
         """
 
-        self._require_mounts_allowed()
-        self._require_in_subtree(_block_id(source))
+        self._require_mounts_allowed(HookOperation.ADD_MOUNT)
+        self._require_in_subtree(HookOperation.ADD_MOUNT, _block_id(source))
         return self._as_principal().add_mount(source, target, metadata=metadata)
 
     def list_mounts(self, source: str | MemoryBlock) -> list[MemoryLink]:
@@ -466,9 +488,9 @@ class MemoryHandle:
                 source block.
         """
 
-        self._require_mounts_allowed()
+        self._require_mounts_allowed(HookOperation.LIST_MOUNTS)
         actual_id = _block_id(source)
-        self._require_in_subtree(actual_id)
+        self._require_in_subtree(HookOperation.LIST_MOUNTS, actual_id)
         return self._as_principal().list_mounts(actual_id)
 
     def discover_mounts(
@@ -500,11 +522,16 @@ class MemoryHandle:
                 scan root.
         """
 
-        self._require_mounts_allowed()
+        self._require_mounts_allowed(HookOperation.DISCOVER_MOUNTS)
         actual_id = _block_id(root) if root is not None else self.root_id
         if actual_id is None:
-            raise AccessDenied("An unbounded memory handle cannot infer which subtree to scan.")
-        self._require_in_subtree(actual_id)
+            self._deny(
+                HookOperation.DISCOVER_MOUNTS,
+                HandleCapability.ROOT_REQUIRED,
+                None,
+                "An unbounded memory handle cannot infer which subtree to scan.",
+            )
+        self._require_in_subtree(HookOperation.DISCOVER_MOUNTS, actual_id)
         return self._as_principal().discover_mounts(actual_id, include_self=include_self)
 
     def resolve_mount(self, mount: MemoryLink) -> MemoryBlock | None:
@@ -529,8 +556,8 @@ class MemoryHandle:
             MemoryNotFound: If the source block no longer exists.
         """
 
-        self._require_mounts_allowed()
-        self._require_in_subtree(mount.source_id)
+        self._require_mounts_allowed(HookOperation.RESOLVE_MOUNT)
+        self._require_in_subtree(HookOperation.RESOLVE_MOUNT, mount.source_id)
         return self._as_principal().resolve_mount(mount)
 
     def search(
@@ -574,13 +601,28 @@ class MemoryHandle:
             selected_scope = Scope(scope or self.default_scope)
             root_id = _block_id(root) if root is not None else self.root_id
         if selected_scope == Scope.GLOBAL and not self.allow_global:
-            raise AccessDenied("This memory handle does not allow global search.")
+            self._deny(
+                HookOperation.SEARCH,
+                HandleCapability.GLOBAL_SEARCH,
+                self.root_id,
+                "This memory handle does not allow global search.",
+            )
         if selected_scope == Scope.ANCESTORS and not self.allow_up:
-            raise AccessDenied("This memory handle does not allow ancestor search.")
+            self._deny(
+                HookOperation.SEARCH,
+                HandleCapability.ANCESTORS,
+                self.root_id,
+                "This memory handle does not allow ancestor search.",
+            )
         if root_id is None and selected_scope != Scope.GLOBAL:
-            raise AccessDenied("An unbounded memory handle cannot infer which subtree to search.")
+            self._deny(
+                HookOperation.SEARCH,
+                HandleCapability.ROOT_REQUIRED,
+                None,
+                "An unbounded memory handle cannot infer which subtree to search.",
+            )
         if root_id is not None and selected_scope != Scope.GLOBAL:
-            self._require_in_subtree(root_id)
+            self._require_in_subtree(HookOperation.SEARCH, root_id)
         # Rebuild query objects with the selected scope/root so a caller cannot
         # pass a wider root or global scope through a prebuilt MemoryQuery.
         results = self._as_principal().search(
@@ -638,18 +680,43 @@ class MemoryHandle:
         """
 
         if principal is not None and Principal.coerce(principal) != self.principal:
-            raise AccessDenied("A child memory handle cannot change principal.")
+            self._deny(
+                HookOperation.CREATE_HANDLE,
+                HandleCapability.PRINCIPAL,
+                self.root_id,
+                "A child memory handle cannot change principal.",
+            )
         if allow_up and not self.allow_up:
-            raise AccessDenied("A child memory handle cannot add ancestor access.")
+            self._deny(
+                HookOperation.CREATE_HANDLE,
+                HandleCapability.ANCESTORS,
+                self.root_id,
+                "A child memory handle cannot add ancestor access.",
+            )
         if allow_global and not self.allow_global:
-            raise AccessDenied("A child memory handle cannot add global access.")
+            self._deny(
+                HookOperation.CREATE_HANDLE,
+                HandleCapability.GLOBAL_SEARCH,
+                self.root_id,
+                "A child memory handle cannot add global access.",
+            )
         if allow_mounts and not self.allow_mounts:
-            raise AccessDenied("A child memory handle cannot add mount access.")
+            self._deny(
+                HookOperation.CREATE_HANDLE,
+                HandleCapability.MOUNTS,
+                self.root_id,
+                "A child memory handle cannot add mount access.",
+            )
         if allow_policy_override and not self.allow_policy_override:
-            raise AccessDenied("A child memory handle cannot add policy override access.")
+            self._deny(
+                HookOperation.CREATE_HANDLE,
+                HandleCapability.POLICY_OVERRIDE,
+                self.root_id,
+                "A child memory handle cannot add policy override access.",
+            )
         root_id = _block_id(root) if root is not None else self.root_id
         if root_id is not None:
-            self._require_in_subtree(root_id)
+            self._require_in_subtree(HookOperation.CREATE_HANDLE, root_id)
         if root_id is None:
             return self._as_principal().get_unbounded_handle(
                 principal=principal,
@@ -681,20 +748,67 @@ class MemoryHandle:
             default_policy=self._memory.default_policy,
         )
 
-    def _require_mounts_allowed(self) -> None:
+    @property
+    def _hooks(self) -> HookRegistry:
+        """Return the hook registry currently configured on the memory."""
+
+        return self._memory.hooks
+
+    def _deny(
+        self,
+        hook_operation: HookOperation,
+        capability: HandleCapability,
+        subject_id: str | None,
+        message: str,
+    ) -> NoReturn:
+        """Report a handle boundary refusal to hooks and raise it.
+
+        Handle checks run before the underlying `Memory` operation starts, so
+        this opens one operation context to carry the denial and its terminal
+        event.
+
+        Args:
+            hook_operation: Operation the caller attempted.
+            capability: Handle boundary or capability that refused.
+            subject_id: Block the refusal applies to, when one is known.
+            message: Message describing the refusal.
+
+        Raises:
+            AccessDenied: Always, carrying ``message``. A registry that cannot
+                report the refusal does not change what the caller receives.
+        """
+
+        denied = AccessDenied(message)
+        try:
+            with self._hooks.operation(hook_operation, principal_id=self.principal.id) as context:
+                self._hooks.on_denied(context, capability, subject_id, message, error=denied)
+                raise denied
+        except HookRecursionError as unreportable:
+            denied.add_note(f"Refusal could not be reported: {unreportable!r}")
+            raise denied
+
+    def _require_mounts_allowed(self, hook_operation: HookOperation) -> None:
         """Raise when symbolic mount operations are disabled for this handle."""
 
         if not self.allow_mounts:
-            raise AccessDenied("This memory handle does not allow mount access.")
+            self._deny(
+                hook_operation,
+                HandleCapability.MOUNTS,
+                self.root_id,
+                "This memory handle does not allow mount access.",
+            )
 
-    def _require_in_subtree(self, block_id: str | None) -> None:
+    def _require_in_subtree(self, hook_operation: HookOperation, block_id: str | None) -> None:
         """Raise when a block id is outside the handle root."""
 
         if self.root_id is None or block_id is None:
             return
         if not self._memory._contains_raw(self.root_id, block_id):
-            raise AccessDenied(
-                f"Memory block {block_id!r} is outside memory handle root {self.root_id!r}."
+            self._deny(
+                hook_operation,
+                HandleCapability.SUBTREE,
+                block_id,
+                f"Memory block {block_id!r} is outside memory handle root {self.root_id!r}.",
             )
 
 

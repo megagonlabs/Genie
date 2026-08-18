@@ -30,6 +30,7 @@ from genie.backend import (
 )
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec, MemoryCodec
 from genie.hooks import (
+    HandleCapability,
     HookContext,
     HookOperation,
     HookOrigin,
@@ -75,6 +76,7 @@ __all__ = [
     "CodecRegistry",
     "EncodedValue",
     "GenieError",
+    "HandleCapability",
     "HookContext",
     "HookOperation",
     "HookOrigin",

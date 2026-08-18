@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from genie.hooks.events import HookContext, HookOutcome, StructureChange
+from genie.hooks.events import HandleCapability, HookContext, HookOutcome, StructureChange
 from genie.memory.block import MemoryBlock
 from genie.memory.links import MemoryLink
+from genie.policy.engine import Operation
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
 
@@ -245,6 +246,32 @@ class MemoryHook:
         Args:
             context: Operation context shared with the matching before callback.
             block: Deleted block.
+        """
+
+        return None
+
+    def on_denied(
+        self,
+        context: HookContext,
+        operation: Operation | HandleCapability | str,
+        subject_id: str | None,
+        reason: str,
+    ) -> None:
+        """Run when a policy or handle boundary refuses an operation.
+
+        This is an observation, not a decision: the refusal stands and hooks
+        cannot reverse it. Exceptions raised here never replace the
+        `AccessDenied` the caller receives.
+
+        Args:
+            context: Context shared with the operation's other callbacks.
+            operation: Policy operation that was checked, or the
+                `HandleCapability` boundary that refused. Policy names are
+                bare and handle names are namespaced, so the two never collide.
+            subject_id: Block the refusal applies to. This is the handle root
+                for capability refusals that name no block, and `None` when an
+                unbounded handle has no root.
+            reason: Message describing the refusal.
         """
 
         return None

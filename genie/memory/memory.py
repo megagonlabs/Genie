@@ -10,11 +10,11 @@ from genie.backend.base import MemoryBackend
 from genie.backend.in_memory import InMemoryBackend
 from genie.backend.structure_capabilities import AcyclicLinkStore
 from genie.codecs import CodecRegistry, EncodedValue, JsonCodec
-from genie.hooks import HookOperation, HookRegistry, MemoryHook
+from genie.hooks import HookContext, HookOperation, HookRegistry, MemoryHook
 from genie.memory.block import MemoryBlock, new_memory_id, utc_now
-from genie.memory.errors import MemoryNotFound, UnsupportedOperation
+from genie.memory.errors import HookRecursionError, MemoryNotFound, UnsupportedOperation
 from genie.memory.links import LinkRelations, MemoryLink
-from genie.policy.engine import Operation, PolicyEngine
+from genie.policy.engine import AccessDenied, Operation, PolicyEngine
 from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
 from genie.query import MemoryQuery, Scope, SearchResult
@@ -125,8 +125,8 @@ class Memory:
             parent_id = _block_id(parent)
             if parent_id is not None:
                 parent_block = self._require_raw(parent_id)
-                self.policy_engine.require(Operation.WRITE, parent_block, self.principal)
-                self.policy_engine.require(Operation.TRAVERSE_DOWN, parent_block, self.principal)
+                self._require_access(context, Operation.WRITE, parent_block)
+                self._require_access(context, Operation.TRAVERSE_DOWN, parent_block)
             encoded = self.codecs.encode(value, content_type)
             block = MemoryBlock(
                 id=id or new_memory_id(),
@@ -170,7 +170,7 @@ class Memory:
             if block is None:
                 self.hooks.after_get(context, None)
                 return None
-            self.policy_engine.require(Operation.READ, block, self.principal)
+            self._require_access(context, Operation.READ, block)
             decoded = self._decode_block(block)
             self.hooks.after_get(context, decoded)
             return decoded
@@ -204,7 +204,7 @@ class Memory:
             principal_id=self.principal.id,
         ) as context:
             block = self._require_raw(_block_id(block_id))
-            self.policy_engine.require(Operation.WRITE, block, self.principal)
+            self._require_access(context, Operation.WRITE, block)
             encoded = self.codecs.encode(value, content_type)
             proposed = block.with_updates(
                 value=encoded.data,
@@ -250,7 +250,7 @@ class Memory:
             principal_id=self.principal.id,
         ) as context:
             block = self._require_raw(_block_id(block_id))
-            self.policy_engine.require(Operation.WRITE, block, self.principal)
+            self._require_access(context, Operation.WRITE, block)
             decoded_value = self.codecs.decode(EncodedValue(block.content_type, block.value))
             if value is not None:
                 if not isinstance(decoded_value, dict):
@@ -295,7 +295,7 @@ class Memory:
             block = self._require_raw(_block_id(block_id))
             blocks_to_delete = self.backend.descendants(block.id, include_self=True)
             for candidate in blocks_to_delete:
-                self.policy_engine.require(Operation.WRITE, candidate, self.principal)
+                self._require_access(context, Operation.WRITE, candidate)
             decoded_blocks = [self._decode_block(candidate) for candidate in blocks_to_delete]
             for decoded_block in decoded_blocks:
                 self.hooks.before_delete(context, decoded_block)
@@ -322,7 +322,7 @@ class Memory:
         """
 
         block = self._require_raw(_block_id(block_id))
-        self.policy_engine.require(Operation.TRAVERSE_DOWN, block, self.principal)
+        self._require_access_outside_operation(HookOperation.CHILDREN, Operation.TRAVERSE_DOWN, block)
         return [
             self._decode_block(child)
             for child in self.backend.children(block.id)
@@ -345,7 +345,7 @@ class Memory:
         """
 
         block = self._require_raw(_block_id(block_id))
-        self.policy_engine.require(Operation.TRAVERSE_UP, block, self.principal)
+        self._require_access_outside_operation(HookOperation.ANCESTORS, Operation.TRAVERSE_UP, block)
         return [
             self._decode_block(ancestor)
             for ancestor in self.backend.ancestors(block.id)
@@ -419,7 +419,7 @@ class Memory:
         ) as context:
             stored = self._require_stored_link(link)
             source = self._require_raw(stored.source_id)
-            self.policy_engine.require(Operation.WRITE, source, self.principal)
+            self._require_access(context, Operation.WRITE, source)
             target = self.backend.get_block(stored.target_id)
             if target is None:
                 if stored.relation != LinkRelations.MOUNT:
@@ -427,7 +427,7 @@ class Memory:
                         f"Target memory block {stored.target_id!r} does not exist."
                     )
             else:
-                self.policy_engine.require(Operation.READ, target, self.principal)
+                self._require_access(context, Operation.READ, target)
             updated = replace(
                 stored,
                 metadata=_copy_metadata(
@@ -502,8 +502,8 @@ class Memory:
         ) as context:
             source_block = self._require_raw(_block_id(source))
             target_block = self._require_raw(_block_id(target))
-            self.policy_engine.require(Operation.WRITE, source_block, self.principal)
-            self.policy_engine.require(Operation.READ, target_block, self.principal)
+            self._require_access(context, Operation.WRITE, source_block)
+            self._require_access(context, Operation.READ, target_block)
             acyclic_backend: AcyclicLinkStore | None = None
             if acyclic:
                 if not isinstance(self.backend, AcyclicLinkStore):
@@ -553,7 +553,7 @@ class Memory:
         """
 
         block = self._require_raw(_block_id(block_id))
-        self.policy_engine.require(Operation.READ, block, self.principal)
+        self._require_access_outside_operation(HookOperation.LIST_LINKS, Operation.READ, block)
         return [
             link
             for link in self.backend.list_links(block.id, relation=relation, direction=direction)
@@ -611,7 +611,7 @@ class Memory:
         """
 
         source_block = self._require_raw(_block_id(source))
-        self.policy_engine.require(Operation.READ, source_block, self.principal)
+        self._require_access_outside_operation(HookOperation.LIST_MOUNTS, Operation.READ, source_block)
         return [
             link
             for link in self.backend.list_links(
@@ -650,8 +650,8 @@ class Memory:
 
         root_id = _block_id(root)
         root_block = self._require_raw(root_id)
-        self.policy_engine.require(Operation.SEARCH, root_block, self.principal)
-        self.policy_engine.require(Operation.TRAVERSE_DOWN, root_block, self.principal)
+        self._require_access_outside_operation(HookOperation.DISCOVER_MOUNTS, Operation.SEARCH, root_block)
+        self._require_access_outside_operation(HookOperation.DISCOVER_MOUNTS, Operation.TRAVERSE_DOWN, root_block)
 
         mounts: list[MemoryLink] = []
         for candidate in self.backend.descendants(root_id, include_self=include_self):
@@ -687,7 +687,7 @@ class Memory:
         if mount.relation != LinkRelations.MOUNT:
             raise ValueError(f"Expected mount relation {LinkRelations.MOUNT!r}.")
         source = self._require_raw(mount.source_id)
-        self.policy_engine.require(Operation.READ, source, self.principal)
+        self._require_access_outside_operation(HookOperation.RESOLVE_MOUNT, Operation.READ, source)
         stored_mount = next(
             (
                 candidate
@@ -750,13 +750,13 @@ class Memory:
                 filters=filters,
                 limit=limit,
             )
-            self._authorize_query(memory_query)
+            self._authorize_query(context, memory_query)
             memory_query = self.hooks.before_search(context, memory_query)
             # Hooks may return a freshly constructed query. Normalize once more so
             # backends receive canonical filter operators, then check access again
             # so hooks cannot pass through a wider query root or scope.
             memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
-            self._authorize_query(memory_query)
+            self._authorize_query(context, memory_query)
             raw_results = self.backend.search(memory_query)
             decoded_results = [
                 replace(result, block=self._decode_block(result.block))
@@ -812,7 +812,12 @@ class Memory:
             )
         root_block = self._require_raw(root_id)
         handle_principal = Principal.coerce(principal) if principal is not None else self.principal
-        self.policy_engine.require(Operation.READ, root_block, handle_principal)
+        self._require_access_outside_operation(
+            HookOperation.CREATE_HANDLE,
+            Operation.READ,
+            root_block,
+            principal=handle_principal,
+        )
         return self._new_handle(
             root_id=root_id,
             principal=handle_principal,
@@ -885,7 +890,7 @@ class Memory:
         root_id = _block_id(root)
         candidate_id = _block_id(block_id)
         root_block = self._require_raw(root_id)
-        self.policy_engine.require(Operation.TRAVERSE_DOWN, root_block, self.principal)
+        self._require_access_outside_operation(HookOperation.CONTAINS, Operation.TRAVERSE_DOWN, root_block)
         candidate = self.backend.get_block(candidate_id)
         if candidate is None or not self._contains_raw(root_id, candidate_id):
             return False
@@ -948,7 +953,7 @@ class Memory:
             limit=limit,
         )
 
-    def _authorize_query(self, query: MemoryQuery) -> None:
+    def _authorize_query(self, context: HookContext, query: MemoryQuery) -> None:
         """Check access required by a query root and scope."""
 
         if query.root_id is None:
@@ -958,13 +963,78 @@ class Memory:
                 )
             return
         root = self._require_raw(query.root_id)
-        self.policy_engine.require(Operation.SEARCH, root, self.principal)
+        self._require_access(context, Operation.SEARCH, root)
         if query.scope == Scope.SUBTREE:
-            self.policy_engine.require(Operation.TRAVERSE_DOWN, root, self.principal)
+            self._require_access(context, Operation.TRAVERSE_DOWN, root)
         elif query.scope == Scope.ANCESTORS:
-            self.policy_engine.require(Operation.TRAVERSE_UP, root, self.principal)
+            self._require_access(context, Operation.TRAVERSE_UP, root)
         elif query.scope == Scope.LINKS:
-            self.policy_engine.require(Operation.READ, root, self.principal)
+            self._require_access(context, Operation.READ, root)
+
+    def _require_access(
+        self,
+        context: HookContext,
+        operation: Operation | str,
+        block: MemoryBlock,
+        *,
+        principal: Principal | None = None,
+    ) -> None:
+        """Require policy access inside an operation and report refusals.
+
+        Args:
+            context: Active operation context.
+            operation: Policy operation to check.
+            block: Block carrying the policy.
+            principal: Principal to check. Defaults to this memory's principal.
+
+        Raises:
+            AccessDenied: If the block policy does not allow the operation.
+        """
+
+        acting = self.principal if principal is None else principal
+        try:
+            self.policy_engine.require(operation, block, acting)
+        except AccessDenied as denied:
+            self.hooks.on_denied(context, operation, block.id, str(denied), error=denied)
+            raise
+
+    def _require_access_outside_operation(
+        self,
+        hook_operation: HookOperation,
+        operation: Operation | str,
+        block: MemoryBlock,
+        *,
+        principal: Principal | None = None,
+    ) -> None:
+        """Require policy access for a call that starts no operation.
+
+        Traversal, listing, and handle creation have no paired callbacks, so a
+        refusal opens one operation context to carry the denial and its
+        terminal event. Allowed calls stay unobserved.
+
+        Args:
+            hook_operation: Logical operation to report the refusal under.
+            operation: Policy operation to check.
+            block: Block carrying the policy.
+            principal: Principal to check. Defaults to this memory's principal.
+
+        Raises:
+            AccessDenied: If the block policy does not allow the operation. A
+                registry that cannot report the refusal does not change what
+                the caller receives.
+        """
+
+        acting = self.principal if principal is None else principal
+        try:
+            self.policy_engine.require(operation, block, acting)
+        except AccessDenied as denied:
+            try:
+                with self.hooks.operation(hook_operation, principal_id=acting.id) as context:
+                    self.hooks.on_denied(context, operation, block.id, str(denied), error=denied)
+                    raise
+            except HookRecursionError as unreportable:
+                denied.add_note(f"Refusal could not be reported: {unreportable!r}")
+                raise denied
 
     def _require_raw(self, block_id: str) -> MemoryBlock:
         """Fetch an encoded block or raise `MemoryNotFound`."""

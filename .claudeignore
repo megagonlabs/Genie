@@ -1,0 +1,36 @@
+# Virtual Environments (Crucial: prevents indexing thousands of installed dependencies)
+.venv/
+venv/
+env/
+.env/
+
+# Bytecode & Tool Caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Build & Packaging Output
+build/
+dist/
+*.egg-info/
+.eggs/
+*.whl
+
+# Documentation Builds & Lock Files
+docs/_build/
+site/
+poetry.lock
+pdm.lock
+
+# Git & IDE Overhead
+.git/
+.idea/
+.vscode/

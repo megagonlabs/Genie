@@ -12,6 +12,7 @@ import pytest
 from genie import (
     AccessDenied,
     AccessRule,
+    HandleCapability,
     HookContext,
     HookOperation,
     HookOrigin,
@@ -26,6 +27,7 @@ from genie import (
     MemoryNotFound,
     MemoryPolicy,
     MemoryQuery,
+    Operation,
     Scope,
     SearchResult,
     StructureAction,
@@ -1330,3 +1332,422 @@ def test_no_terminal_event_when_an_operation_never_starts() -> None:
         Memory(hooks=registry).put(type="note", value="too deep")
 
     assert hook.terminal == [HookOperation.PUT]
+
+
+class RecordingDenialHook(MemoryHook):
+    """Hook that records every refusal reported to it."""
+
+    def __init__(self) -> None:
+        self.denials: list[tuple[HookOperation, str, str | None]] = []
+        self.reasons: list[str] = []
+        self.contexts: list[HookContext] = []
+
+    def on_denied(
+        self,
+        context: HookContext,
+        operation: Operation | HandleCapability | str,
+        subject_id: str | None,
+        reason: str,
+    ) -> None:
+        """Record the attempted operation, the refusing check, and the subject."""
+
+        self.denials.append((context.operation, str(operation), subject_id))
+        self.reasons.append(reason)
+        self.contexts.append(context)
+
+
+def _private_memory(hook: MemoryHook) -> tuple[Memory, Memory, MemoryBlock, MemoryBlock]:
+    """Return an owner memory, a denied memory, and two owner-private blocks."""
+
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root")
+    child = owner.put(parent=root, type="note", value="secret")
+    attacker = Memory(
+        backend=owner.backend,
+        principal="attacker",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+    )
+    return owner, attacker, root, child
+
+
+def test_on_denied_reports_the_checked_policy_operation_and_subject() -> None:
+    """Policy refusals name the operation that was checked and the block."""
+
+    hook = RecordingDenialHook()
+    _owner, attacker, root, child = _private_memory(hook)
+
+    attempts = {
+        "get": lambda: attacker.get(child),
+        "set": lambda: attacker.set(child, "overwritten"),
+        "update": lambda: attacker.update(child, metadata={"tampered": True}),
+        "delete": lambda: attacker.delete(child),
+        "put": lambda: attacker.put(parent=root, type="note", value="injected"),
+        "search": lambda: attacker.search("secret", root=root, scope="subtree"),
+        "add_link": lambda: attacker.add_link(child, root, "related"),
+    }
+    denied: list[str] = []
+    for label, attempt in attempts.items():
+        try:
+            attempt()
+        except AccessDenied:
+            denied.append(label)
+
+    assert denied == list(attempts)
+    assert hook.denials == [
+        (HookOperation.GET, Operation.READ, child.id),
+        (HookOperation.SET, Operation.WRITE, child.id),
+        (HookOperation.UPDATE, Operation.WRITE, child.id),
+        (HookOperation.DELETE, Operation.WRITE, child.id),
+        (HookOperation.PUT, Operation.WRITE, root.id),
+        (HookOperation.SEARCH, Operation.SEARCH, root.id),
+        (HookOperation.ADD_LINK, Operation.WRITE, child.id),
+    ]
+    assert all("cannot" in reason for reason in hook.reasons)
+
+
+def test_on_denied_covers_calls_without_paired_callbacks() -> None:
+    """Traversal, listing, and handle creation report refusals."""
+
+    hook = RecordingDenialHook()
+    owner, attacker, root, child = _private_memory(hook)
+    mount = owner.add_mount(root, child)
+
+    attempts = {
+        "children": lambda: attacker.children(root),
+        "ancestors": lambda: attacker.ancestors(child),
+        "list_links": lambda: attacker.list_links(root),
+        "contains": lambda: attacker.contains(root, child),
+        "list_mounts": lambda: attacker.list_mounts(root),
+        "discover_mounts": lambda: attacker.discover_mounts(root),
+        "resolve_mount": lambda: attacker.resolve_mount(mount),
+        "get_handle": lambda: attacker.get_handle(root=root),
+    }
+    denied: list[str] = []
+    for label, attempt in attempts.items():
+        try:
+            attempt()
+        except AccessDenied:
+            denied.append(label)
+
+    assert denied == list(attempts)
+    assert hook.denials == [
+        (HookOperation.CHILDREN, Operation.TRAVERSE_DOWN, root.id),
+        (HookOperation.ANCESTORS, Operation.TRAVERSE_UP, child.id),
+        (HookOperation.LIST_LINKS, Operation.READ, root.id),
+        (HookOperation.CONTAINS, Operation.TRAVERSE_DOWN, root.id),
+        (HookOperation.LIST_MOUNTS, Operation.READ, root.id),
+        (HookOperation.DISCOVER_MOUNTS, Operation.SEARCH, root.id),
+        (HookOperation.RESOLVE_MOUNT, Operation.READ, root.id),
+        (HookOperation.CREATE_HANDLE, Operation.READ, root.id),
+    ]
+
+
+def test_on_denied_reports_handle_boundary_escapes() -> None:
+    """Blocks outside a handle root report the subtree boundary and the target."""
+
+    hook = RecordingDenialHook()
+    memory = Memory(principal="owner", hooks=[hook])
+    root = memory.put(type="root", value="root")
+    inside = memory.put(parent=root, type="note", value="inside")
+    outside = memory.put(type="other-tenant", value="outside")
+    handle = memory.get_handle(root=inside, allow_mounts=True)
+
+    attempts = {
+        "get": lambda: handle.get(outside),
+        "set": lambda: handle.set(outside, "x"),
+        "update": lambda: handle.update(outside, metadata={"x": 1}),
+        "delete": lambda: handle.delete(outside),
+        "put": lambda: handle.put(parent=outside, type="note", value="x"),
+        "children": lambda: handle.children(outside),
+        "list_links": lambda: handle.list_links(outside),
+        "add_link": lambda: handle.add_link(outside, inside, "related"),
+        "add_mount": lambda: handle.add_mount(outside, inside),
+        "search": lambda: handle.search("x", root=outside),
+    }
+    denied: list[str] = []
+    for label, attempt in attempts.items():
+        try:
+            attempt()
+        except AccessDenied:
+            denied.append(label)
+
+    assert denied == list(attempts)
+    assert [operation for operation, _, _ in hook.denials] == [
+        HookOperation.GET,
+        HookOperation.SET,
+        HookOperation.UPDATE,
+        HookOperation.DELETE,
+        HookOperation.PUT,
+        HookOperation.CHILDREN,
+        HookOperation.LIST_LINKS,
+        HookOperation.ADD_LINK,
+        HookOperation.ADD_MOUNT,
+        HookOperation.SEARCH,
+    ]
+    assert {check for _, check, _ in hook.denials} == {HandleCapability.SUBTREE}
+    assert {subject for _, _, subject in hook.denials} == {outside.id}
+
+
+def test_on_denied_reports_handle_capability_refusals() -> None:
+    """Disabled handle capabilities report the capability rather than a policy."""
+
+    hook = RecordingDenialHook()
+    memory = Memory(principal="owner", hooks=[hook])
+    root = memory.put(type="root", value="root")
+    handle = memory.get_handle(root=root)
+    unbounded = memory.get_unbounded_handle()
+
+    attempts = {
+        "global_search": lambda: handle.search("x", scope="global"),
+        "ancestor_search": lambda: handle.search("x", scope="ancestors"),
+        "ancestors": lambda: handle.ancestors(),
+        "mounts": lambda: handle.add_mount(root, root),
+        "policy_override": lambda: handle.put(type="note", value="x", policy=MemoryPolicy.public()),
+        "unbounded_children": lambda: unbounded.children(),
+        "unbounded_search": lambda: unbounded.search("x", scope="subtree"),
+    }
+    denied: list[str] = []
+    for label, attempt in attempts.items():
+        try:
+            attempt()
+        except AccessDenied:
+            denied.append(label)
+
+    assert denied == list(attempts)
+    assert hook.denials == [
+        (HookOperation.SEARCH, HandleCapability.GLOBAL_SEARCH, root.id),
+        (HookOperation.SEARCH, HandleCapability.ANCESTORS, root.id),
+        (HookOperation.ANCESTORS, HandleCapability.ANCESTORS, root.id),
+        (HookOperation.ADD_MOUNT, HandleCapability.MOUNTS, root.id),
+        (HookOperation.PUT, HandleCapability.POLICY_OVERRIDE, root.id),
+        (HookOperation.CHILDREN, HandleCapability.ROOT_REQUIRED, None),
+        (HookOperation.SEARCH, HandleCapability.ROOT_REQUIRED, None),
+    ]
+
+
+def test_on_denied_reports_child_handle_escalation_attempts() -> None:
+    """A child handle that tries to widen access reports the capability it wanted."""
+
+    hook = RecordingDenialHook()
+    memory = Memory(principal="owner", hooks=[hook])
+    root = memory.put(type="root", value="root")
+    handle = memory.get_handle(root=root)
+
+    attempts = {
+        "principal": lambda: handle.get_handle(principal="someone-else"),
+        "allow_up": lambda: handle.get_handle(allow_up=True),
+        "allow_global": lambda: handle.get_handle(allow_global=True),
+        "allow_mounts": lambda: handle.get_handle(allow_mounts=True),
+        "allow_policy_override": lambda: handle.get_handle(allow_policy_override=True),
+    }
+    denied: list[str] = []
+    for label, attempt in attempts.items():
+        try:
+            attempt()
+        except AccessDenied:
+            denied.append(label)
+
+    assert denied == list(attempts)
+    assert hook.denials == [
+        (HookOperation.CREATE_HANDLE, HandleCapability.PRINCIPAL, root.id),
+        (HookOperation.CREATE_HANDLE, HandleCapability.ANCESTORS, root.id),
+        (HookOperation.CREATE_HANDLE, HandleCapability.GLOBAL_SEARCH, root.id),
+        (HookOperation.CREATE_HANDLE, HandleCapability.MOUNTS, root.id),
+        (HookOperation.CREATE_HANDLE, HandleCapability.POLICY_OVERRIDE, root.id),
+    ]
+
+
+def test_on_denied_reports_the_acting_handle_principal() -> None:
+    """Refusals carry the principal that attempted the operation."""
+
+    class PrincipalHook(RecordingDenialHook):
+        """Record refusals with their principal."""
+
+    hook = PrincipalHook()
+    memory = Memory(principal="owner", hooks=[hook])
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    outside = memory.put(type="other", value="outside")
+    agent_handle = memory.get_handle(root=root, principal="agent-7")
+
+    with pytest.raises(AccessDenied):
+        agent_handle.get(outside)
+    with pytest.raises(AccessDenied):
+        memory.get_handle(root=outside, principal="agent-9")
+
+    assert [context.principal_id for context in hook.contexts] == ["agent-7", "agent-9"]
+
+
+def test_on_denied_pairs_with_a_denied_terminal_event() -> None:
+    """Each refusal shares one operation id with a denied terminal event."""
+
+    class PairedHook(MemoryHook):
+        """Record refusal and terminal ids for one operation."""
+
+        def __init__(self) -> None:
+            self.denied_ids: list[str] = []
+            self.terminal: list[tuple[str, HookOutcome]] = []
+
+        def on_denied(self, context: HookContext, operation, subject_id, reason) -> None:
+            """Record the refusal id."""
+
+            self.denied_ids.append(context.operation_id)
+
+        def on_operation_end(self, context: HookContext, outcome, error) -> None:
+            """Record the terminal id and outcome."""
+
+            self.terminal.append((context.operation_id, outcome))
+
+    hook = PairedHook()
+    memory = Memory(principal="owner", hooks=[hook])
+    root = memory.put(type="root", value="root")
+    outside = memory.put(type="other", value="outside")
+    handle = memory.get_handle(root=root)
+
+    with pytest.raises(AccessDenied):
+        handle.get(outside)
+
+    assert len(hook.denied_ids) == 1
+    assert hook.terminal[-1] == (hook.denied_ids[0], HookOutcome.DENIED)
+
+
+def test_on_denied_hook_failure_cannot_replace_the_refusal() -> None:
+    """A failing denial hook never converts a refusal into another error."""
+
+    class BrokenDenialHook(MemoryHook):
+        """Fail while reporting a refusal."""
+
+        def on_denied(self, context: HookContext, operation, subject_id, reason) -> None:
+            """Simulate an unreachable audit sink."""
+
+            raise RuntimeError("audit sink down")
+
+    recording = RecordingDenialHook()
+    memory = Memory(principal="owner", hooks=[BrokenDenialHook(), recording])
+    root = memory.put(type="root", value="root")
+    outside = memory.put(type="other", value="outside")
+    handle = memory.get_handle(root=root)
+
+    with pytest.raises(AccessDenied) as policy_refusal:
+        handle.get(outside)
+    with pytest.raises(AccessDenied) as boundary_refusal:
+        memory.get_handle(root=outside, principal="stranger")
+
+    for refusal in (policy_refusal, boundary_refusal):
+        assert any("audit sink down" in note for note in refusal.value.__notes__)
+    assert len(recording.denials) == 2
+
+
+def test_on_denied_is_not_dispatched_for_allowed_or_filtered_operations() -> None:
+    """Allowed work and ordinary search filtering report no refusal."""
+
+    hook = RecordingDenialHook()
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    owner.put(parent=root, type="note", value="needle visible", policy=MemoryPolicy.public())
+    owner.put(parent=root, type="note", value="needle hidden")
+    reader = Memory(
+        backend=owner.backend,
+        principal="reader",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+    )
+
+    results = reader.search("needle", root=root, scope="subtree")
+    reader.children(root)
+    reader.contains(root, root)
+
+    assert len(results) == 1
+    assert hook.denials == []
+
+
+def test_on_denied_respects_suppression() -> None:
+    """Suppressed hooks and registries skip refusal reporting."""
+
+    first = RecordingDenialHook()
+    second = RecordingDenialHook()
+    registry = HookRegistry([first, second])
+    memory = Memory(principal="owner", hooks=registry)
+    root = memory.put(type="root", value="root")
+    outside = memory.put(type="other", value="outside")
+    handle = memory.get_handle(root=root)
+
+    with registry.suppress(first), pytest.raises(AccessDenied):
+        handle.get(outside)
+    with registry.suppress(), pytest.raises(AccessDenied):
+        handle.get(outside)
+    with pytest.raises(AccessDenied):
+        handle.get(outside)
+
+    assert len(first.denials) == 1
+    assert len(second.denials) == 2
+
+
+def test_recursive_delete_reports_the_first_refused_block() -> None:
+    """A denied subtree delete names the block that refused it."""
+
+    hook = RecordingDenialHook()
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    owner.put(parent=root, type="note", value="unwritable")
+    deleter = Memory(
+        backend=owner.backend,
+        principal="deleter",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+    )
+
+    with pytest.raises(AccessDenied):
+        deleter.delete(root)
+
+    assert [operation for operation, _, _ in hook.denials] == [HookOperation.DELETE]
+    assert owner.get(root) is not None
+
+
+def test_unreportable_refusals_still_reach_the_caller_as_access_denied() -> None:
+    """A registry that cannot report a refusal never changes the caller's error."""
+
+    class DeepHook(MemoryHook):
+        """Attempt refused operations from beyond the depth limit."""
+
+        def __init__(self) -> None:
+            self.attempts: list[Any] = []
+            self.errors: list[str] = []
+            self.notes: list[str] = []
+
+        def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+            """Trigger the handle and policy refusal paths from inside a callback."""
+
+            for attempt in self.attempts:
+                try:
+                    attempt()
+                except BaseException as raised:
+                    self.errors.append(type(raised).__name__)
+                    self.notes.extend(getattr(raised, "__notes__", []))
+
+    hook = DeepHook()
+    registry = HookRegistry([hook], max_depth=0)
+    owner = Memory(principal="owner", hooks=registry)
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    outside = owner.put(type="other", value="outside")
+    agent = Memory(
+        backend=owner.backend,
+        principal="agent",
+        policy_engine=owner.policy_engine,
+        hooks=registry,
+        codecs=owner.codecs,
+    )
+    agent_handle = agent.get_handle(root=root)
+    hook.attempts = [
+        lambda: agent_handle.get(outside.id),
+        lambda: agent.children(outside.id),
+    ]
+
+    agent.put(parent=root, type="note", value="triggers the callback")
+
+    assert hook.errors == ["AccessDenied", "AccessDenied"]
+    assert [note for note in hook.notes if "could not be reported" in note] == hook.notes
+    assert len(hook.notes) == 2

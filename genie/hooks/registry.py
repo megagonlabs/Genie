@@ -9,11 +9,11 @@ from typing import Any
 from uuid import uuid4
 
 from genie.hooks.base import MemoryHook
-from genie.hooks.events import HookContext, HookOperation, HookOrigin, HookOutcome, StructureChange
+from genie.hooks.events import HandleCapability, HookContext, HookOperation, HookOrigin, HookOutcome, StructureChange
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import HookRecursionError
 from genie.memory.links import MemoryLink
-from genie.policy.engine import AccessDenied
+from genie.policy.engine import AccessDenied, Operation
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
 
@@ -326,6 +326,46 @@ class HookRegistry:
 
         for hook in self._hooks_for(context):
             self._invoke(context, hook, "after_delete", block)
+
+    def on_denied(
+        self,
+        context: HookContext,
+        operation: Operation | HandleCapability | str,
+        subject_id: str | None,
+        reason: str,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        """Dispatch ``on_denied`` in registration order.
+
+        A refusal must reach the caller unchanged, so every hook is called even
+        when one raises. Failures are attached to ``error`` as notes when it is
+        provided and raised only when the caller has no refusal to receive.
+
+        Args:
+            context: Active operation context.
+            operation: Policy operation or handle capability that refused.
+            subject_id: Block the refusal applies to, when one is known.
+            reason: Message describing the refusal.
+            error: Refusal being raised, so hook failures cannot replace it.
+        """
+
+        failures: list[Exception] = []
+        for hook in self._hooks_for(context):
+            try:
+                self._invoke(context, hook, "on_denied", operation, subject_id, reason)
+            except Exception as raised:
+                failures.append(raised)
+        if not failures:
+            return
+        if error is not None:
+            for failure in failures:
+                error.add_note(f"on_denied hook failed: {failure!r}")
+            return
+        first, *rest = failures
+        for failure in rest:
+            first.add_note(f"Another on_denied hook failed: {failure!r}")
+        raise first
 
     def _dispatch_operation_end(
         self,

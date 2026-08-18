@@ -8,7 +8,13 @@ from typing import Generic, Literal, TypeVar
 
 
 class HookOperation(StrEnum):
-    """Logical operations that can dispatch hooks."""
+    """Logical operations that can dispatch hooks.
+
+    Traversal, link listing, mount listing, and handle creation appear here so
+    refusals can be reported. They do not have paired before and after
+    callbacks, so they reach hooks only through ``on_denied`` and the matching
+    terminal event.
+    """
 
     PUT = "put"
     GET = "get"
@@ -16,10 +22,18 @@ class HookOperation(StrEnum):
     UPDATE = "update"
     DELETE = "delete"
     SEARCH = "search"
+    CHILDREN = "children"
+    ANCESTORS = "ancestors"
+    CONTAINS = "contains"
     ADD_LINK = "link.add"
     ADD_ACYCLIC_LINK = "link.add_acyclic"
     ADD_MOUNT = "mount.add"
     UPDATE_LINK = "link.update"
+    LIST_LINKS = "link.list"
+    LIST_MOUNTS = "mount.list"
+    DISCOVER_MOUNTS = "mount.discover"
+    RESOLVE_MOUNT = "mount.resolve"
+    CREATE_HANDLE = "handle.create"
     KEY_BIND = "key.bind"
     KEY_REBIND = "key.rebind"
     KEY_UNBIND = "key.unbind"
@@ -30,6 +44,24 @@ class HookOperation(StrEnum):
 
 
 HookOrigin = Literal["caller", "hook"]
+
+
+class HandleCapability(StrEnum):
+    """Handle boundaries and capabilities that can refuse an operation.
+
+    A refusal reported with one of these names came from a `MemoryHandle`
+    boundary rather than from a block policy, which distinguishes an attempt to
+    leave a sandbox from an ordinary permission failure. Namespaced values
+    never collide with the policy `Operation` names that share the parameter.
+    """
+
+    SUBTREE = "handle.subtree"
+    ANCESTORS = "handle.ancestors"
+    GLOBAL_SEARCH = "handle.global_search"
+    MOUNTS = "handle.mounts"
+    POLICY_OVERRIDE = "handle.policy_override"
+    ROOT_REQUIRED = "handle.root_required"
+    PRINCIPAL = "handle.principal"
 
 
 class HookOutcome(StrEnum):
