@@ -192,10 +192,16 @@ derived write a hook performs inside a handle operation inherits that handle's
 labels. Use `origin` and `depth` to tell caller-initiated work from work a hook
 caused.
 
-Scope contexts stay outside the callback contract. Hooks never receive one, so
-`context.operation` is always a `HookOperation` inside a callback; the free-form
-name belongs to the context the caller holds, which reports `is_scope`.
-Dispatching a callback with a scope context raises `ValueError`.
+Scope contexts stay outside the callback contract. A scope reports the
+`HookOperation.SCOPE` operation and carries its free-form name in `scope_name`;
+every operation Genie performs reports its own `HookOperation` and a
+`scope_name` of `None`. So `context.operation` is always a strongly typed
+`HookOperation`, and a context is either a named span or performed work, never
+both.
+
+Hooks never receive a scope context. `HookRegistry.operation()` refuses
+`HookOperation.SCOPE`, and dispatching a callback with a scope context raises
+`ValueError`.
 
 ## Nested operations and recursion
 

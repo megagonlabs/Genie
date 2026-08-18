@@ -472,7 +472,7 @@ def test_alternating_put_update_recursion_stops_at_active_callback() -> None:
             self.enabled = False
             self.memory: Memory | None = None
             self.target: MemoryBlock | None = None
-            self.calls: list[tuple[HookOperation | str, int]] = []
+            self.calls: list[tuple[HookOperation, int]] = []
 
         def after_put(self, context: HookContext, block: MemoryBlock) -> None:
             """Turn every observed PUT into an UPDATE while enabled."""
@@ -989,7 +989,7 @@ class RecordingTerminalHook(MemoryHook):
     """Hook that records the terminal event of every operation it observes."""
 
     def __init__(self) -> None:
-        self.events: list[tuple[HookOperation | str, HookOutcome, str | None]] = []
+        self.events: list[tuple[HookOperation, HookOutcome, str | None]] = []
         self.contexts: list[HookContext] = []
 
     def on_operation_end(
@@ -1139,7 +1139,7 @@ def test_operation_end_always_releases_state_stashed_by_a_before_callback() -> N
         """Track in-flight operations between the before and terminal callbacks."""
 
         def __init__(self) -> None:
-            self.in_flight: dict[str, HookOperation | str] = {}
+            self.in_flight: dict[str, HookOperation] = {}
             self.completed = 0
 
         def before_put(self, context: HookContext, block):
@@ -1265,7 +1265,7 @@ def test_operation_end_can_write_derived_records_without_recursing() -> None:
 
         def __init__(self) -> None:
             self.memory: Memory | None = None
-            self.observed: list[tuple[HookOperation | str, HookOrigin, int]] = []
+            self.observed: list[tuple[HookOperation, HookOrigin, int]] = []
 
         def on_operation_end(self, context: HookContext, outcome, error) -> None:
             """Record the event and persist it through memory."""
@@ -1311,7 +1311,7 @@ def test_no_terminal_event_when_an_operation_never_starts() -> None:
 
         def __init__(self, registry: HookRegistry) -> None:
             self.registry = registry
-            self.terminal: list[HookOperation | str] = []
+            self.terminal: list[HookOperation] = []
 
         def after_put(self, context: HookContext, block) -> None:
             """Exceed the depth limit from inside a callback."""
@@ -1338,7 +1338,7 @@ class RecordingDenialHook(MemoryHook):
     """Hook that records every refusal reported to it."""
 
     def __init__(self) -> None:
-        self.denials: list[tuple[HookOperation | str, str, str | None]] = []
+        self.denials: list[tuple[HookOperation, str, str | None]] = []
         self.reasons: list[str] = []
         self.contexts: list[HookContext] = []
 
@@ -1868,7 +1868,12 @@ def test_scope_groups_the_operations_of_one_caller_defined_span() -> None:
     memory.get(note)
 
     inside, outside = hook.contexts[:2], hook.contexts[2:]
-    assert span.is_scope and span.operation == "agent.turn"
+    assert (span.is_scope, span.operation, span.scope_name) == (
+        True,
+        HookOperation.SCOPE,
+        "agent.turn",
+    )
+    assert {context.scope_name for context in inside} == {None}
     assert {context.parent_operation_id for context in inside} == {span.operation_id}
     assert {context.depth for context in inside} == {1}
     assert {context.origin for context in inside} == {"caller"}
@@ -1989,6 +1994,41 @@ def test_operation_attributes_extend_the_ones_a_scope_provides() -> None:
     assert dict(inherited.attributes) == {"run_id": "r1", "turn": "8", "tool": "search"}
     assert inherited.principal_id == "agent"
     assert replaced.principal_id == "auditor"
+
+
+def test_operations_cannot_be_opened_as_spans() -> None:
+    """`HookOperation.SCOPE` belongs to `scope`, which dispatches nothing."""
+
+    registry = HookRegistry()
+    for operation in (HookOperation.SCOPE, "scope"):
+        with pytest.raises(ValueError, match="Open it with HookRegistry.scope"):
+            with registry.operation(operation):
+                pytest.fail("A span must not start as a dispatched operation.")
+
+
+@pytest.mark.parametrize(
+    ("operation", "scope_name", "message"),
+    [
+        (HookOperation.SCOPE, None, "requires a scope_name"),
+        (HookOperation.PUT, "agent.turn", "can carry a scope_name"),
+    ],
+)
+def test_context_pairs_the_scope_name_with_the_scope_operation(
+    operation: HookOperation,
+    scope_name: str | None,
+    message: str,
+) -> None:
+    """A context is either a named span or a performed operation, never both."""
+
+    with pytest.raises(ValueError, match=message):
+        HookContext(
+            operation_id="hookop_test",
+            parent_operation_id=None,
+            operation=operation,
+            origin="caller",
+            depth=0,
+            scope_name=scope_name,
+        )
 
 
 def test_scope_context_cannot_dispatch_hook_callbacks() -> None:

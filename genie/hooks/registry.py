@@ -114,11 +114,17 @@ class HookRegistry:
             HookRecursionError: If nested operations exceed ``max_depth``. The
                 operation does not start, so no terminal event is dispatched.
             TypeError: If the attributes are not strings.
-            ValueError: If ``operation`` is not a recognized hook operation.
+            ValueError: If ``operation`` is not a recognized hook operation, or
+                is ``HookOperation.SCOPE``, which ``scope`` opens instead.
         """
 
         if not isinstance(operation, HookOperation):
             operation = HookOperation(operation)
+        if operation is HookOperation.SCOPE:
+            raise ValueError(
+                "HookOperation.SCOPE names a caller-defined span. Open it with "
+                "HookRegistry.scope() so no callback is dispatched for it."
+            )
         context = self._new_context(operation, principal_id, attributes)
         token = _CURRENT_OPERATION.set(context)
         outcome = HookOutcome.SUCCESS
@@ -154,8 +160,8 @@ class HookRegistry:
 
         Args:
             name: Caller-defined span name, such as ``"agent.turn"``. Scope
-                names are free-form and are never coerced to a
-                ``HookOperation``.
+                names are free-form; the context reports it as ``scope_name``
+                under the ``HookOperation.SCOPE`` operation.
             principal_id: Acting principal when available. Defaults to the
                 principal of the enclosing operation or scope.
             attributes: Attributes inherited by everything inside the scope,
@@ -179,7 +185,12 @@ class HookRegistry:
             raise TypeError("Scope name must be a string.")
         if not name.strip():
             raise ValueError("Scope name must not be empty.")
-        context = self._new_context(name, principal_id, attributes)
+        context = self._new_context(
+            HookOperation.SCOPE,
+            principal_id,
+            attributes,
+            scope_name=name,
+        )
         token = _CURRENT_OPERATION.set(context)
         try:
             yield context
@@ -419,16 +430,19 @@ class HookRegistry:
 
     def _new_context(
         self,
-        operation: HookOperation | str,
+        operation: HookOperation,
         principal_id: str | None,
         attributes: Mapping[str, str] | None,
+        *,
+        scope_name: str | None = None,
     ) -> HookContext:
         """Create context nested under the active operation or scope.
 
         Args:
-            operation: Logical operation, or a scope name.
+            operation: Logical operation, or ``HookOperation.SCOPE``.
             principal_id: Acting principal, or `None` to inherit one.
             attributes: Attributes to add to the inherited ones.
+            scope_name: Caller-defined span name for a scope.
 
         Returns:
             Context describing the new operation or scope.
@@ -459,6 +473,7 @@ class HookRegistry:
             depth=depth,
             principal_id=acting,
             attributes=added if parent is None else {**parent.attributes, **added},
+            scope_name=scope_name,
         )
 
     def _dispatch_operation_end(

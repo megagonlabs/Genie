@@ -15,12 +15,18 @@ _EMPTY_ATTRIBUTES: Mapping[str, str] = MappingProxyType({})
 
 
 class HookOperation(StrEnum):
-    """Logical operations that can dispatch hooks.
+    """Logical operations and spans that appear in a hook context.
 
     Traversal, link listing, mount listing, and handle creation appear here so
     refusals can be reported. They do not have paired before and after
     callbacks, so they reach hooks only through ``on_denied`` and the matching
     terminal event.
+
+    ``SCOPE`` is the one member that dispatches nothing. It marks a
+    caller-defined span opened with ``HookRegistry.scope``, which names work
+    Genie does not model and carries that name in ``HookContext.scope_name``.
+    Hooks never receive a scope context, so every ``operation`` they observe is
+    one Genie performed.
     """
 
     PUT = "put"
@@ -48,6 +54,7 @@ class HookOperation(StrEnum):
     TEMPORAL_ADD = "temporal.add"
     TEMPORAL_REPLACE = "temporal.replace"
     TEMPORAL_REMOVE = "temporal.remove"
+    SCOPE = "scope"
 
 
 HookOrigin = Literal["caller", "hook"]
@@ -123,8 +130,8 @@ class HookContext:
             callbacks.
         parent_operation_id: Id of the operation or scope active when this one
             began.
-        operation: Logical operation being performed, or the caller-defined
-            name of a scope.
+        operation: Logical operation being performed. A caller-defined span
+            reports `HookOperation.SCOPE`.
         origin: Whether the operation began in caller code or inside a hook.
         depth: Zero-based nesting depth.
         principal_id: Acting principal when one is available.
@@ -134,37 +141,47 @@ class HookContext:
             related work without knowing how calls nest.
         started_at: Timezone-aware UTC timestamp taken when the operation
             began. With the terminal event it gives the operation's duration.
+        scope_name: Caller-defined span name. Set for `HookOperation.SCOPE`
+            contexts and `None` for every operation Genie performs.
     """
 
     operation_id: str
     parent_operation_id: str | None
-    operation: HookOperation | str
+    operation: HookOperation
     origin: HookOrigin
     depth: int
     principal_id: str | None = None
     attributes: Mapping[str, str] = _EMPTY_ATTRIBUTES
     started_at: datetime = field(default_factory=utc_now)
+    scope_name: str | None = None
 
     def __post_init__(self) -> None:
-        """Validate attributes and freeze them against hook mutation.
+        """Freeze attributes against hook mutation and pair the scope name.
 
         Raises:
             TypeError: If the attributes are not a mapping of strings to
                 strings.
+            ValueError: If a scope has no name or a performed operation has
+                one.
         """
 
         object.__setattr__(self, "attributes", freeze_attributes(self.attributes))
+        if self.is_scope and not self.scope_name:
+            raise ValueError("A scope context requires a scope_name.")
+        if not self.is_scope and self.scope_name is not None:
+            raise ValueError(
+                "Only a HookOperation.SCOPE context can carry a scope_name."
+            )
 
     @property
     def is_scope(self) -> bool:
         """Return whether this context names a caller-defined scope.
 
-        Scope contexts carry a free-form name rather than a `HookOperation` and
-        dispatch no callbacks, so hooks see them only as the parent id and
-        inherited attributes of the operations inside them.
+        Scope contexts dispatch no callbacks, so hooks see them only as the
+        parent id and inherited attributes of the operations inside them.
         """
 
-        return not isinstance(self.operation, HookOperation)
+        return self.operation is HookOperation.SCOPE
 
 
 class StructureKind(StrEnum):
