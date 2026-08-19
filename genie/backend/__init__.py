@@ -4,10 +4,10 @@ from genie.backend.base import MemoryBackend
 from genie.backend.capabilities import BlockStore, LinkStore, SearchIndex, TraversalIndex
 from genie.backend.composite import (
     InMemoryLinkStore,
+    RoutedBackend,
     RouteInfo,
     RouteKey,
     RouteSelector,
-    RoutedBackend,
 )
 from genie.backend.graph import Neo4jBackend
 from genie.backend.in_memory import InMemoryBackend

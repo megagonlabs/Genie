@@ -2,10 +2,10 @@
 
 from genie.backend.composite.routed import (
     InMemoryLinkStore,
+    RoutedBackend,
     RouteInfo,
     RouteKey,
     RouteSelector,
-    RoutedBackend,
 )
 
 __all__ = [

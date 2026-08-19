@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Iterable
-from copy import deepcopy
 import dataclasses
 import datetime as _dt
 import decimal
 import enum
 import math
-from typing import Any
 import uuid
+from collections.abc import Iterable
+from copy import deepcopy
+from typing import Any
 
 from genie.codecs.base import EncodedValue
 

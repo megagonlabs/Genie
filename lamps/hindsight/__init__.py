@@ -12,7 +12,6 @@ from lamps.hindsight.agent import (
 from lamps.hindsight.memory_bank import (
     CAUSAL_RELATION,
     GRAPH_RELATIONS,
-    HindsightStructures,
     MEMORY_UNIT_TYPE,
     MENTAL_MODEL_TYPE,
     OCCURRENCE_OF_RELATION,
@@ -21,6 +20,7 @@ from lamps.hindsight.memory_bank import (
     TEMPORAL_RELATION,
     GraphRecallResult,
     HindsightMemoryBank,
+    HindsightStructures,
     MemoryUnit,
     MentalModel,
     RecallResult,

@@ -8,8 +8,8 @@ Run from the repository root:
 from __future__ import annotations
 
 if __package__ in {None, ""}:
-    from pathlib import Path
     import sys
+    from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path

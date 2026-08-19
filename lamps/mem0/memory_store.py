@@ -7,12 +7,12 @@ adopting these application-specific conventions.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import hashlib
-import re
 from typing import Any, Callable, Literal, Protocol, Sequence, cast
 from uuid import uuid4
 

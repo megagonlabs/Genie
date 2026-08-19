@@ -7,8 +7,8 @@ to the application adapter.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
 from collections import Counter
+from collections.abc import Iterable, Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime

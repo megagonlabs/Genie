@@ -19,10 +19,10 @@ from genie.backend import (
     KeyedStore,
     MemoryBackend,
     Neo4jBackend,
+    RoutedBackend,
     RouteInfo,
     RouteKey,
     RouteSelector,
-    RoutedBackend,
     SequenceStore,
     SQLiteBackend,
     TemporalIndex,
@@ -59,9 +59,9 @@ from genie.memory.errors import (
     MemoryNotFound,
     UnsupportedOperation,
 )
+from genie.memory.handle import MemoryHandle
 from genie.memory.links import LinkRelations, MemoryLink
 from genie.memory.memory import Memory
-from genie.memory.handle import MemoryHandle
 from genie.policy.engine import AccessDenied, Operation, PolicyEngine
 from genie.policy.policy import AccessRule, MemoryPolicy
 from genie.policy.principal import Principal

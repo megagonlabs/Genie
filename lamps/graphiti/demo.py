@@ -11,10 +11,10 @@ from genie import InMemoryBackend, Memory
 from lamps.demo_output import print_agent_demo
 from lamps.graphiti import (
     FactCandidate,
+    GraphitiStructures,
     Observation,
     TemporalGraphAgent,
     TemporalGraphTools,
-    GraphitiStructures,
     TemporalKnowledgeGraph,
 )
 

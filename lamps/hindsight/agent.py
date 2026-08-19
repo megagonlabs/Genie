@@ -16,8 +16,8 @@ from typing import Any, Callable
 from lamps.hindsight.memory_bank import (
     FactType,
     HindsightMemoryBank,
-    MemoryUnit,
     MemoryState,
+    MemoryUnit,
     MentalModel,
 )
 

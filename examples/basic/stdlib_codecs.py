@@ -7,15 +7,15 @@ Run from the repository root:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import datetime as dt
-from decimal import Decimal
 import enum
 import uuid
+from dataclasses import dataclass
+from decimal import Decimal
 
 if __package__ in {None, ""}:
-    from pathlib import Path
     import sys
+    from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from _bootstrap import ensure_repo_on_path

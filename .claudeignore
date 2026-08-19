@@ -34,3 +34,4 @@ pdm.lock
 .git/
 .idea/
 .vscode/
+ruff_report.txt

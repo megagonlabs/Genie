@@ -21,6 +21,7 @@ from genie import (
     HookRecursionError,
     HookRegistry,
     InMemoryBackend,
+    KeyedStore,
     LinkRelations,
     Memory,
     MemoryBlock,
@@ -38,7 +39,6 @@ from genie import (
     SuppressionScope,
     Traversal,
     TraversalKind,
-    KeyedStore,
 )
 from genie.structures import (
     EventLog,

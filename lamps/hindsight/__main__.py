@@ -2,6 +2,5 @@
 
 from lamps.hindsight.demo import main
 
-
 main()
 

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from pathlib import Path
 import subprocess
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -15,12 +15,12 @@ from lamps.hindsight import (
     CAUSAL_RELATION,
     MEMORY_UNIT_TYPE,
     MENTAL_MODEL_TYPE,
+    OCCURRENCE_OF_RELATION,
+    OCCURRENCE_TYPE,
     SEMANTIC_RELATION,
     TEMPORAL_RELATION,
     HindsightMemoryBank,
     HindsightStructures,
-    OCCURRENCE_OF_RELATION,
-    OCCURRENCE_TYPE,
 )
 from lamps.hindsight.demo import (
     answer_demo_question,

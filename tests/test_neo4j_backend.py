@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Condition, Event, RLock
-from typing import Any, Self, cast, Literal
+from typing import Any, Literal, Self, cast
 
 import pytest
 

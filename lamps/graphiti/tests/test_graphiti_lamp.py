@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from pathlib import Path
 import subprocess
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +19,6 @@ from lamps.graphiti import (
     TemporalKnowledgeGraph,
 )
 from lamps.graphiti.temporal_graph import SUPERSEDED_BY_RELATION
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 

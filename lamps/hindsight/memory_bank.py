@@ -6,11 +6,11 @@ lamp. Genie provides blocks, links, scoped access, and portable search storage.
 
 from __future__ import annotations
 
+import re
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import re
 from typing import Any, Literal, Protocol, Sequence, cast
 
 from genie import MemoryBlock, MemoryHandle, MemoryLink

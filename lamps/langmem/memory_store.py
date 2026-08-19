@@ -7,13 +7,13 @@ typed links.
 
 from __future__ import annotations
 
+import json
+import re
 from collections import deque
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import json
-import re
 from typing import Any, Literal, Protocol, cast
 
 from genie import MemoryBlock, MemoryHandle, MemoryLink

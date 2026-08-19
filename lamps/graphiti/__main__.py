@@ -2,5 +2,4 @@
 
 from lamps.graphiti.demo import main
 
-
 main()

@@ -224,3 +224,4 @@ __marimo__/
 .vscode
 *.env
 .DS_Store
+ruff_report.txt

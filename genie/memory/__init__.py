@@ -19,8 +19,8 @@ from genie.memory.errors import (
 from genie.memory.links import LinkRelations, MemoryLink
 
 if TYPE_CHECKING:
-    from genie.memory.memory import Memory
     from genie.memory.handle import MemoryHandle
+    from genie.memory.memory import Memory
 
 __all__ = [
     "BackendBusy",
