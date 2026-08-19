@@ -7,10 +7,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from genie.memory.block import MemoryBlock, utc_now
 from genie.memory.links import MemoryLink
+
+if TYPE_CHECKING:
+    from genie.hooks.base import MemoryHook
 
 _EMPTY_ATTRIBUTES: Mapping[str, str] = MappingProxyType({})
 
@@ -21,6 +24,11 @@ class HookOperation(StrEnum):
     Mount resolution and handle creation appear here so refusals can be
     reported. They do not have paired before and after callbacks, so they reach
     hooks only through ``on_denied`` and the matching terminal event.
+
+    ``SUPPRESS`` is the registry disabling its own dispatch. It is an operation
+    like any other, so a suppression window is announced by ``on_suppressed``,
+    bounded by a terminal event, and named as the parent of everything done
+    inside it.
 
     ``SCOPE`` is the one member that dispatches nothing. It marks a
     caller-defined span opened with ``HookRegistry.scope``, which names work
@@ -54,6 +62,7 @@ class HookOperation(StrEnum):
     TEMPORAL_ADD = "temporal.add"
     TEMPORAL_REPLACE = "temporal.replace"
     TEMPORAL_REMOVE = "temporal.remove"
+    SUPPRESS = "hooks.suppress"
     SCOPE = "scope"
 
 
@@ -292,3 +301,41 @@ class Traversal:
     blocks: tuple[MemoryBlock, ...] = ()
     links: tuple[MemoryLink, ...] = ()
     contained: bool | None = None
+
+
+class SuppressionScope(StrEnum):
+    """Reach of one suppression window.
+
+    ``SELECTED`` names the hooks it silences and leaves the rest reporting.
+    ``REGISTRY`` silences every hook that is not mandatory, including hooks
+    registered after the window opens, so the two are not interchangeable even
+    when they silence the same hooks today.
+    """
+
+    SELECTED = "selected"
+    REGISTRY = "registry"
+
+
+@dataclass(frozen=True, slots=True)
+class Suppression:
+    """One window in which hook dispatch is deliberately disabled.
+
+    Suppression is a trusted escape hatch, so the escape is itself an event: a
+    hook learns that it is about to stop reporting before it does. The window
+    is announced by ``on_suppressed``, closed by the terminal event of the same
+    ``HookOperation.SUPPRESS`` operation, and named as the parent of every
+    operation performed inside it.
+
+    Attributes:
+        scope: Whether the window names its hooks or covers the registry.
+        hooks: Hooks that stop reporting, in dispatch order. A registry-wide
+            window lists the hooks registered when it opened; hooks registered
+            while it is open are suppressed too without appearing here.
+        mandatory: Registered hooks that keep reporting because they were
+            registered as mandatory, in dispatch order. These are the hooks
+            that can still witness what happens inside the window.
+    """
+
+    scope: SuppressionScope
+    hooks: tuple[MemoryHook, ...] = ()
+    mandatory: tuple[MemoryHook, ...] = ()

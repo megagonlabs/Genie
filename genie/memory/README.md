@@ -38,7 +38,9 @@ references, provenance, and cross-cutting relationships.
 `Memory` configures one backend, principal, policy engine, default policy,
 codecs, hooks, and the `attributes` reported to hooks. It provides block CRUD,
 traversal, links, mounts, search, and handle creation. Keep it in trusted
-application code.
+application code. `hooks` is read-only: which hooks run is changed on that
+registry rather than by replacing it, so a mandatory hook cannot be detached.
+See [hooks](../hooks/README.md#the-registry).
 
 ```python
 from genie import InMemoryBackend, Memory

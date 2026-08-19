@@ -17,6 +17,8 @@ from genie.hooks.events import (
     HookOrigin,
     HookOutcome,
     StructureChange,
+    Suppression,
+    SuppressionScope,
     Traversal,
     freeze_attributes,
 )
@@ -67,6 +69,16 @@ class HookRegistry:
     Callbacks that can still change what the caller stores or receives, meaning
     every ``before_`` callback and ``after_search``, fail fast and ignore
     ``fail_open``.
+
+    Which hooks are installed is itself auditable. Registration is by object
+    identity and rejects a repeat, so a hook cannot be dispatched twice and
+    report one operation as two. ``hooks`` lists what is installed, so startup
+    can assert that an audit hook is present. A hook registered as mandatory
+    can be neither unregistered nor suppressed.
+
+    Suppressing anything is an operation. ``on_suppressed`` is isolated like the
+    other observing callbacks, but it reports work that has not happened yet, so
+    a failure there refuses the window rather than being reported after it.
     """
 
     def __init__(
@@ -78,30 +90,102 @@ class HookRegistry:
         """Create a registry.
 
         Args:
-            hooks: Initial hooks in dispatch order.
+            hooks: Initial hooks in dispatch order. Register mandatory hooks
+                with ``register`` instead, which takes the flag.
             max_depth: Maximum zero-based depth for operations started inside
                 hooks. Top-level operations have depth zero.
 
         Raises:
-            TypeError: If ``max_depth`` is not an integer.
-            ValueError: If ``max_depth`` is negative.
+            TypeError: If ``max_depth`` is not an integer or an initial hook is
+                not a ``MemoryHook``.
+            ValueError: If ``max_depth`` is negative or a hook appears twice.
         """
 
         if isinstance(max_depth, bool) or not isinstance(max_depth, int):
             raise TypeError("max_depth must be an integer.")
         if max_depth < 0:
             raise ValueError("max_depth must be non-negative.")
-        self._hooks = list(hooks or ())
+        self._hooks: list[MemoryHook] = []
+        self._mandatory: set[int] = set()
         self.max_depth = max_depth
+        for hook in hooks or ():
+            self.register(hook)
 
-    def register(self, hook: MemoryHook) -> None:
+    @property
+    def hooks(self) -> tuple[MemoryHook, ...]:
+        """Registered hooks in dispatch order.
+
+        The tuple is a snapshot, so registering or unregistering does not
+        change one already taken and a hook cannot reach the dispatch order
+        through it.
+        """
+
+        return tuple(self._hooks)
+
+    @property
+    def mandatory(self) -> tuple[MemoryHook, ...]:
+        """Registered mandatory hooks in dispatch order.
+
+        These are the hooks that keep reporting through any suppression window
+        and cannot be unregistered, so this is the set a startup check asserts
+        when an audit trail has to survive the code that runs after it.
+        """
+
+        return tuple(hook for hook in self._hooks if id(hook) in self._mandatory)
+
+    def register(self, hook: MemoryHook, *, mandatory: bool = False) -> None:
         """Append a hook to the dispatch order.
+
+        Hooks are identified by object identity, so two instances of the same
+        class are two hooks and registering one instance twice is refused
+        rather than silently doubling what it reports.
 
         Args:
             hook: Hook to register.
+            mandatory: Whether the hook must keep running. A mandatory hook
+                cannot be unregistered or suppressed, which makes it the way to
+                install an audit hook that the rest of the process cannot
+                detach. Pass it on the initial registration; a registered hook
+                cannot be re-registered to change the flag.
+
+        Raises:
+            TypeError: If ``hook`` is not a ``MemoryHook``.
+            ValueError: If the hook is already registered.
         """
 
+        if not isinstance(hook, MemoryHook):
+            raise TypeError("hook must be a MemoryHook.")
+        if self._index_of(hook) is not None:
+            raise ValueError(
+                f"{type(hook).__name__} is already registered. Registering it "
+                "again would report every operation twice."
+            )
         self._hooks.append(hook)
+        if mandatory:
+            self._mandatory.add(id(hook))
+
+    def unregister(self, hook: MemoryHook) -> None:
+        """Remove a hook from the dispatch order.
+
+        A hook registered again later is appended, so removal and reregistration
+        change dispatch order.
+
+        Args:
+            hook: Hook to remove.
+
+        Raises:
+            ValueError: If the hook is not registered or is mandatory.
+        """
+
+        index = self._index_of(hook)
+        if index is None:
+            raise ValueError(f"{type(hook).__name__} is not registered.")
+        if id(hook) in self._mandatory:
+            raise ValueError(
+                f"{type(hook).__name__} was registered as mandatory and cannot "
+                "be unregistered."
+            )
+        del self._hooks[index]
 
     @contextmanager
     def operation(
@@ -133,7 +217,8 @@ class HookRegistry:
                 operation does not start, so no terminal event is dispatched.
             TypeError: If the attributes are not strings.
             ValueError: If ``operation`` is not a recognized hook operation, or
-                is ``HookOperation.SCOPE``, which ``scope`` opens instead.
+                is ``HookOperation.SCOPE`` or ``HookOperation.SUPPRESS``, which
+                ``scope`` and ``suppress`` open instead.
         """
 
         if not isinstance(operation, HookOperation):
@@ -143,6 +228,23 @@ class HookRegistry:
                 "HookOperation.SCOPE names a caller-defined span. Open it with "
                 "HookRegistry.scope() so no callback is dispatched for it."
             )
+        if operation is HookOperation.SUPPRESS:
+            raise ValueError(
+                "HookOperation.SUPPRESS reports disabled dispatch. Open it with "
+                "HookRegistry.suppress() so the window is announced to hooks."
+            )
+        with self._operation(operation, principal_id, attributes) as context:
+            yield context
+
+    @contextmanager
+    def _operation(
+        self,
+        operation: HookOperation,
+        principal_id: str | None,
+        attributes: Mapping[str, str] | None,
+    ) -> Generator[HookContext, None, None]:
+        """Open causal context and dispatch the terminal event on the way out."""
+
         context = self._new_context(operation, principal_id, attributes)
         token = _CURRENT_OPERATION.set(context)
         outcome = HookOutcome.SUCCESS
@@ -216,38 +318,131 @@ class HookRegistry:
             _CURRENT_OPERATION.reset(token)
 
     @contextmanager
-    def suppress(self, *hooks: MemoryHook) -> Generator[None, None, None]:
+    def suppress(
+        self,
+        *hooks: MemoryHook,
+        principal_id: str | None = None,
+        attributes: Mapping[str, str] | None = None,
+    ) -> Generator[HookContext, None, None]:
         """Temporarily suppress this registry or selected hooks.
 
         This trusted escape hatch is intended for migrations and carefully
         controlled hook-internal writes. Normal recursive callbacks are
         handled automatically and do not require suppression.
 
+        Turning hooks off is the one thing a trail cannot afford to lose, so a
+        window is an operation rather than a silent gap. Every hook receives
+        ``on_suppressed`` before dispatch stops, including the hooks being
+        suppressed; the operations performed inside report the window as their
+        parent; and every hook receives the window's terminal event once
+        dispatch is restored. A mandatory hook keeps reporting throughout, so
+        it witnesses the window and its contents rather than only its edges.
+
         Args:
             *hooks: Specific hooks to suppress. Omit to suppress the complete
-                registry in the current context.
+                registry in the current context, including hooks registered
+                while the window is open. Mandatory hooks are never suppressed.
+            principal_id: Principal opening the window. Defaults to the
+                principal of the enclosing operation or scope.
+            attributes: Attributes to add to the ones inherited from the
+                enclosing operation or scope, such as the migration or ticket
+                the window is for. Operations inside inherit them.
 
         Yields:
-            ``None`` while suppression is active.
+            Context of the window, shared with its terminal event and inherited
+            by the operations inside it.
+
+        Raises:
+            Exception: The first failure raised by ``on_suppressed``, once every
+                hook has been told. Dispatch stays enabled and the suppressed
+                body does not run, because a suppression no hook could record is
+                the one this callback exists to prevent.
+            HookRecursionError: If windows opened inside hooks exceed
+                ``max_depth``.
+            TypeError: If the attributes are not strings.
+            ValueError: If a named hook is not registered or is mandatory.
         """
 
-        if hooks:
-            current = _SUPPRESSED_HOOKS.get()
-            selected = frozenset((id(self), id(hook)) for hook in hooks)
-            hooks_token = _SUPPRESSED_HOOKS.set(current | selected)
+        suppression = self._plan_suppression(hooks)
+        with self._operation(HookOperation.SUPPRESS, principal_id, attributes) as context:
+            _report_failures(
+                self._collect(context, "on_suppressed", suppression),
+                "on_suppressed",
+            )
+            with self._suppressed(suppression):
+                yield context
+
+    @contextmanager
+    def _suppressed(self, suppression: Suppression) -> Generator[None, None, None]:
+        """Disable the suppression's dispatch for the current context only."""
+
+        if suppression.scope is SuppressionScope.REGISTRY:
+            registries_token = _SUPPRESSED_REGISTRIES.set(
+                _SUPPRESSED_REGISTRIES.get() | {id(self)}
+            )
             try:
                 yield
             finally:
-                _SUPPRESSED_HOOKS.reset(hooks_token)
+                _SUPPRESSED_REGISTRIES.reset(registries_token)
             return
 
-        registries_token = _SUPPRESSED_REGISTRIES.set(
-            _SUPPRESSED_REGISTRIES.get() | {id(self)}
-        )
+        selected = frozenset((id(self), id(hook)) for hook in suppression.hooks)
+        hooks_token = _SUPPRESSED_HOOKS.set(_SUPPRESSED_HOOKS.get() | selected)
         try:
             yield
         finally:
-            _SUPPRESSED_REGISTRIES.reset(registries_token)
+            _SUPPRESSED_HOOKS.reset(hooks_token)
+
+    def _plan_suppression(self, hooks: tuple[MemoryHook, ...]) -> Suppression:
+        """Describe the window a ``suppress`` call opens.
+
+        Args:
+            hooks: Hooks named by the caller, or empty for the whole registry.
+
+        Returns:
+            The window, naming the hooks that stop reporting in dispatch order
+            and the mandatory hooks that keep reporting through it.
+
+        Raises:
+            ValueError: If a named hook is not registered or is mandatory.
+        """
+
+        if not hooks:
+            return Suppression(
+                scope=SuppressionScope.REGISTRY,
+                hooks=tuple(
+                    hook for hook in self._hooks if id(hook) not in self._mandatory
+                ),
+                mandatory=self.mandatory,
+            )
+        for hook in hooks:
+            if self._index_of(hook) is None:
+                raise ValueError(
+                    f"{type(hook).__name__} is not registered by this registry, "
+                    "so suppressing it would silence nothing."
+                )
+            if id(hook) in self._mandatory:
+                raise ValueError(
+                    f"{type(hook).__name__} was registered as mandatory and "
+                    "cannot be suppressed."
+                )
+        return Suppression(
+            scope=SuppressionScope.SELECTED,
+            hooks=tuple(
+                hook
+                for hook in self._hooks
+                if any(hook is selected for selected in hooks)
+            ),
+            mandatory=self.mandatory,
+        )
+
+    def _index_of(self, hook: MemoryHook) -> int | None:
+        """Return a hook's position in the dispatch order, by identity."""
+
+        for index, registered in enumerate(self._hooks):
+            if registered is hook:
+                return index
+        return None
 
     def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
         """Dispatch ``before_put`` in registration order."""
@@ -517,8 +712,13 @@ class HookRegistry:
         failures = self._collect(context, "on_operation_end", outcome, error)
         _report_failures(failures, "on_operation_end", error)
 
-    def _hooks_for(self, context: HookContext) -> list[MemoryHook]:
-        """Return registered hooks after validating the dispatch context."""
+    def _hooks_for(self, context: HookContext) -> tuple[MemoryHook, ...]:
+        """Return registered hooks after validating the dispatch context.
+
+        The dispatch order is snapshotted, so a callback that registers or
+        unregisters a hook changes what the next event reaches rather than
+        skipping a hook that is owed this one.
+        """
 
         if _CURRENT_OPERATION.get() is not context:
             raise ValueError(
@@ -530,7 +730,7 @@ class HookRegistry:
                 "Hook callbacks cannot be dispatched with a scope context. A "
                 "scope groups the operations inside it and dispatches nothing."
             )
-        return self._hooks
+        return tuple(self._hooks)
 
     def _dispatch_observers(
         self,
@@ -599,10 +799,11 @@ class HookRegistry:
     ) -> object:
         """Invoke one callback unless it is suppressed or already active."""
 
-        if id(self) in _SUPPRESSED_REGISTRIES.get():
-            return _SKIPPED
-        if (id(self), id(hook)) in _SUPPRESSED_HOOKS.get():
-            return _SKIPPED
+        if id(hook) not in self._mandatory:
+            if id(self) in _SUPPRESSED_REGISTRIES.get():
+                return _SKIPPED
+            if (id(self), id(hook)) in _SUPPRESSED_HOOKS.get():
+                return _SKIPPED
         callback_key = (id(hook), callback_name)
         active = _ACTIVE_CALLBACKS.get()
         if callback_key in active:

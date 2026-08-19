@@ -40,6 +40,8 @@ from genie.hooks import (
     StructureAction,
     StructureChange,
     StructureKind,
+    Suppression,
+    SuppressionScope,
     Traversal,
     TraversalKind,
 )
@@ -116,6 +118,8 @@ __all__ = [
     "StructureAction",
     "StructureChange",
     "StructureKind",
+    "Suppression",
+    "SuppressionScope",
     "TemporalIndex",
     "TemporalStore",
     "Traversal",

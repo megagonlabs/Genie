@@ -9,6 +9,7 @@ from genie.hooks.events import (
     HookContext,
     HookOutcome,
     StructureChange,
+    Suppression,
     Traversal,
 )
 from genie.memory.block import MemoryBlock
@@ -32,13 +33,14 @@ class MemoryHook:
     Attributes:
         fail_open: Whether failures of this hook's observing callbacks are
             contained and logged instead of raised. Observing callbacks are the
-            `after_*` callbacks that return `None`, `on_denied`, and
-            `on_operation_end`; what they report is already decided when they
-            run, so a best-effort audit sink can declare that its own outages
-            must not break callers. This never applies to `before_*` callbacks
-            or to `after_search`, which still shape what gets stored or
-            returned: a redaction hook whose failure was contained there would
-            silently pass through the value it existed to change.
+            `after_*` callbacks that return `None`, `on_denied`,
+            `on_suppressed`, and `on_operation_end`; what they report is
+            already decided when they run, or in the case of `on_suppressed`
+            about to be, so a best-effort audit sink can declare that its own
+            outages must not break callers. This never applies to `before_*`
+            callbacks or to `after_search`, which still shape what gets stored
+            or returned: a redaction hook whose failure was contained there
+            would silently pass through the value it existed to change.
     """
 
     fail_open: bool = False
@@ -329,6 +331,31 @@ class MemoryHook:
                 for capability refusals that name no block, and `None` when an
                 unbounded handle has no root.
             reason: Message describing the refusal.
+        """
+
+        return None
+
+    def on_suppressed(self, context: HookContext, suppression: Suppression) -> None:
+        """Run when trusted code disables hook dispatch.
+
+        Every registered hook is told, whatever the window's reach, including
+        the hooks it is about to silence: a hook learns that it is going to
+        stop reporting before it does. The window is bounded by the terminal
+        event of the same operation, which every hook receives once dispatch is
+        restored, and operations performed inside it report the suppression as
+        their parent operation. A mandatory hook therefore records the window,
+        what happened during it, and its end.
+
+        Unlike the other observing callbacks, this one reports work that is not
+        decided yet. A failure here leaves dispatch enabled and the suppressed
+        body unrun, because the record of a suppression is the reason the
+        suppression is allowed at all.
+
+        Args:
+            context: Context of the suppression window, shared with its
+                terminal event and inherited by the operations inside it.
+            suppression: Reach of the window, the hooks it silences, and the
+                mandatory hooks that keep reporting through it.
         """
 
         return None

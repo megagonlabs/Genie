@@ -18,8 +18,9 @@ maintenance.
 | `before_update_link` | `after_update_link` | Link metadata update |
 | `before_structure_change` | `after_structure_change` | Keys, log appends, and temporal membership |
 
-Two unpaired callbacks cover every operation: `on_denied` reports refusals and
-`on_operation_end` reports outcomes.
+Three unpaired callbacks cover every operation: `on_denied` reports refusals,
+`on_suppressed` reports dispatch being turned off, and `on_operation_end`
+reports outcomes.
 
 Structure events use immutable `StructureChange` values. `kind` distinguishes
 keyed collections, event logs, and temporal collections; `action` identifies
@@ -191,6 +192,41 @@ hooks may transform only metadata. Genie checks protected identity, ownership,
 topology, policy, timestamp, and version fields before persistence. Structural
 hooks observe immutable backend-owned records rather than rewriting them.
 
+## The registry
+
+`HookRegistry` owns the dispatch order, and which hooks are installed is itself
+auditable. `hooks` lists them, so startup can assert that the trail is wired up:
+
+```python
+registry = HookRegistry()
+registry.register(audit_hook, mandatory=True)
+memory = Memory(hooks=registry, attributes={"service": "memory"})
+
+assert audit_hook in memory.hooks.hooks
+assert memory.hooks.mandatory == (audit_hook,)
+```
+
+Hooks are identified by object identity. Two instances of the same class are two
+hooks, and registering one instance twice raises `ValueError` rather than
+silently reporting every operation twice. `unregister` removes a hook by the
+same identity and raises if it is not installed; a hook registered again later
+is appended, so removal and reregistration change dispatch order.
+
+A hook registered as `mandatory=True` can be neither unregistered nor
+suppressed. That is how an audit hook survives the code that runs after it:
+
+| Attempt | Ordinary hook | Mandatory hook |
+| --- | --- | --- |
+| `unregister(hook)` | Removed | `ValueError` |
+| `suppress(hook)` | Silenced for the window | `ValueError` |
+| `suppress()` | Silenced for the window | Keeps reporting |
+| `memory.hooks = other` | `AttributeError` | `AttributeError` |
+
+`Memory.hooks` is read-only, so the registry a memory dispatches through is
+fixed for its lifetime. Changing which hooks run means registering or
+unregistering on that registry, which a mandatory hook survives; replacing the
+registry wholesale is not a way around it.
+
 ## Scopes and attributes
 
 Genie names the operations it performs. Applications name the work that causes
@@ -281,16 +317,53 @@ A hook that wants only caller-initiated events can return early when
 `context.origin == "hook"`. This also prevents different hooks that create
 derived records from amplifying one another.
 
+## Suppression
+
 Trusted migrations or hook-internal code may suppress selected hooks or the
 whole registry in the current context:
 
 ```python
-with memory.hooks.suppress(audit_hook):
+with memory.hooks.suppress(audit_hook, attributes={"migration": "m1"}):
     memory.put(type="audit", value={"event": "bootstrap"})
 
-with memory.hooks.suppress():
+with memory.hooks.suppress(principal_id="ops:migrator"):
     memory.put(type="internal", value="no hooks")
 ```
+
+Turning hooks off is the one thing a trail cannot afford to lose, so a window is
+an operation rather than a silent gap. `suppress()` opens a
+`HookOperation.SUPPRESS` context and yields it:
+
+| Moment | What hooks receive |
+| --- | --- |
+| The window opens | `on_suppressed`, sent to every registered hook, including the ones about to go quiet. |
+| Inside the window | Nothing, except for mandatory hooks, whose events report the window as their `parent_operation_id`. |
+| The window closes | The terminal event of the suppression operation, sent to every registered hook. |
+
+So a suppressed hook records that it was suppressed, by whom, for what, and
+when it started reporting again, even though it recorded nothing in between. A
+mandatory hook additionally records what happened inside.
+
+The `Suppression` value names the window's reach. `selected` silences the hooks
+it lists; `registry` silences every hook that is not mandatory, including hooks
+registered while the window is open. `hooks` lists the hooks that stop
+reporting and `mandatory` lists the ones that do not, both in dispatch order.
+
+```python
+class AuditHook(MemoryHook):
+    def on_suppressed(self, context, suppression):
+        alert(
+            principal=context.principal_id,
+            scope=suppression.scope,
+            silenced=[type(hook).__name__ for hook in suppression.hooks],
+            window=context.operation_id,
+        )
+```
+
+Only registered, non-mandatory hooks can be suppressed; anything else raises
+`ValueError` before the window opens. `HookRegistry.operation()` refuses
+`HookOperation.SUPPRESS` for the same reason it refuses `HookOperation.SCOPE`,
+so a suppression window cannot be forged through the generic context.
 
 Suppression is intentionally available on the trusted registry, not on
 `MemoryHandle` operations.
@@ -309,6 +382,7 @@ What a failing hook costs depends on whether it can still change the outcome.
 | --- | --- |
 | `before_*` and `after_search` | Stops dispatch and fails the operation. |
 | `after_*` returning `None`, `on_denied`, `on_operation_end` | Is collected; every hook still runs. |
+| `on_suppressed` | Is collected; every hook still runs, then the window is refused. |
 
 A failure before the commit point is a veto and has to stop everything: an
 aborted `put` stores nothing, and a failed `after_search` returns no results
@@ -320,6 +394,12 @@ notes to an exception the caller is already receiving, and raised otherwise,
 first failure first, with the rest as notes on it so none hides another. A
 failing `on_denied` therefore still lets the `AccessDenied` through, and a
 failing `on_operation_end` still lets the operation's own error through.
+
+`on_suppressed` is the exception that proves the rule. It is isolated like the
+others, so every hook is told before anything is reported, but what it reports
+has not happened yet: a failure leaves dispatch enabled and the suppressed body
+unrun. A suppression no hook could record is exactly what the callback exists to
+prevent.
 
 A best-effort sink can declare that its own outages must not reach callers:
 
@@ -335,7 +415,10 @@ class AuditHook(MemoryHook):
 isolated. `before_*` and `after_search` ignore it, because containing a failure
 there would silently store or return the value the hook existed to change.
 Contained failures are logged with their traceback to the
-`genie.hooks.registry` logger, so a sink that is failing stays visible.
+`genie.hooks.registry` logger, so a sink that is failing stays visible. It also
+covers `on_suppressed`, so a sink that declared its outages harmless cannot
+block a window either; a hook that needs the window recorded to allow it should
+not declare `fail_open`.
 
 Recursive deletion calls `before_delete` for every block in the authorized
 snapshot. A concurrent change raises `MemoryConflict`; before hooks may already

@@ -63,7 +63,9 @@ class Memory:
             backend: Backend adapter. Defaults to `InMemoryBackend`.
             principal: Acting principal for operations through this memory.
             policy_engine: Policy evaluator. Defaults to `PolicyEngine`.
-            hooks: Hook list or registry.
+            hooks: Hook list or registry. `Memory.hooks` is read-only
+                afterwards, so pass a registry when it has to carry mandatory
+                hooks the rest of the process cannot detach.
             codecs: Codec registry. Defaults to a registry containing
                 `JsonCodec`.
             default_policy: Policy attached to new blocks when
@@ -91,15 +93,24 @@ class Memory:
         self.backend: MemoryBackend = InMemoryBackend() if backend is None else backend
         self.principal = Principal.coerce(principal)
         self.policy_engine = PolicyEngine() if policy_engine is None else policy_engine
-        if isinstance(hooks, HookRegistry):
-            self.hooks = hooks
-        else:
-            self.hooks = HookRegistry(hooks)
+        self._hooks = hooks if isinstance(hooks, HookRegistry) else HookRegistry(hooks)
         self.codecs = CodecRegistry([JsonCodec()]) if codecs is None else codecs
         self.default_policy = (
             MemoryPolicy.owner_private() if default_policy is None else default_policy
         )
         self.attributes = freeze_attributes(attributes)
+
+    @property
+    def hooks(self) -> HookRegistry:
+        """Registry every operation of this memory dispatches through.
+
+        The registry is fixed for the life of the memory. Its contents are not:
+        use `HookRegistry.register` and `HookRegistry.unregister` to change
+        which hooks run, so a hook installed as mandatory cannot be detached by
+        replacing the registry that dispatches it.
+        """
+
+        return self._hooks
 
     def put(
         self,

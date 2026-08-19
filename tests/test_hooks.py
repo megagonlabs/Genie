@@ -34,6 +34,8 @@ from genie import (
     SearchResult,
     StructureAction,
     StructureChange,
+    Suppression,
+    SuppressionScope,
     Traversal,
     TraversalKind,
     KeyedStore,
@@ -555,6 +557,304 @@ def test_hook_suppression_is_scoped_and_resets_after_exit() -> None:
 
     assert first.calls == 1
     assert second.calls == 2
+
+
+class RecordingRegistryHook(MemoryHook):
+    """Hook that records suppression windows and the operations it observes."""
+
+    def __init__(self) -> None:
+        self.windows: list[tuple[HookContext, Suppression]] = []
+        self.events: list[tuple[HookOperation, HookOutcome]] = []
+        self.contexts: list[HookContext] = []
+
+    def on_suppressed(self, context: HookContext, suppression: Suppression) -> None:
+        """Record a window this hook was told about."""
+
+        self.windows.append((context, suppression))
+
+    def on_operation_end(
+        self,
+        context: HookContext,
+        outcome: HookOutcome,
+        error: BaseException | None,
+    ) -> None:
+        """Record the terminal event of an observed operation."""
+
+        self.events.append((context.operation, outcome))
+        self.contexts.append(context)
+
+
+def test_registry_lists_its_hooks_and_registers_each_one_once() -> None:
+    """Registration is by identity, so one hook cannot report an operation twice."""
+
+    first = RecordingRegistryHook()
+    second = RecordingRegistryHook()
+    registry = HookRegistry([first])
+    registry.register(second)
+
+    assert registry.hooks == (first, second)
+    assert registry.mandatory == ()
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(first)
+    with pytest.raises(ValueError, match="already registered"):
+        HookRegistry([first, first])
+    with pytest.raises(TypeError, match="MemoryHook"):
+        registry.register(cast(MemoryHook, object()))
+
+    Memory(hooks=registry).put(type="note", value="once")
+
+    assert registry.hooks == (first, second)
+    assert [len(first.events), len(second.events)] == [1, 1]
+
+
+def test_unregistering_a_hook_stops_its_dispatch() -> None:
+    """A removed hook observes nothing further and cannot be removed twice."""
+
+    first = RecordingRegistryHook()
+    second = RecordingRegistryHook()
+    registry = HookRegistry([first, second])
+    memory = Memory(hooks=registry)
+
+    memory.put(type="note", value="observed by both")
+    registry.unregister(first)
+    memory.put(type="note", value="observed by one")
+
+    assert registry.hooks == (second,)
+    assert [len(first.events), len(second.events)] == [1, 2]
+    with pytest.raises(ValueError, match="not registered"):
+        registry.unregister(first)
+
+
+def test_registry_changes_take_effect_on_the_next_event() -> None:
+    """A callback that reshapes the registry cannot cut short the event it is in."""
+
+    class CountingPutHook(MemoryHook):
+        """Count the stored blocks this hook is told about."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+            """Count one reported block."""
+
+            self.calls += 1
+
+    class DetachingHook(MemoryHook):
+        """Unregister another hook from inside a dispatching callback."""
+
+        def __init__(self, registry: HookRegistry, target: MemoryHook) -> None:
+            self.registry = registry
+            self.target = target
+
+        def after_put(self, context: HookContext, block: MemoryBlock) -> None:
+            """Remove the target hook while the event is still dispatching."""
+
+            if self.target in self.registry.hooks:
+                self.registry.unregister(self.target)
+
+    counting = CountingPutHook()
+    registry = HookRegistry()
+    registry.register(DetachingHook(registry, counting))
+    registry.register(counting)
+    memory = Memory(hooks=registry)
+
+    memory.put(type="note", value="detaches mid-dispatch")
+    memory.put(type="note", value="after detachment")
+
+    assert counting.calls == 1
+    assert counting not in registry.hooks
+
+
+def test_a_mandatory_hook_cannot_be_detached_or_suppressed() -> None:
+    """A mandatory hook survives unregistration and every suppression window."""
+
+    audit = RecordingRegistryHook()
+    ordinary = RecordingRegistryHook()
+    registry = HookRegistry([ordinary])
+    registry.register(audit, mandatory=True)
+    memory = Memory(hooks=registry)
+
+    assert registry.mandatory == (audit,)
+    with pytest.raises(ValueError, match="mandatory"):
+        registry.unregister(audit)
+    with pytest.raises(ValueError, match="mandatory"), registry.suppress(audit):
+        pytest.fail("A mandatory hook must not open a suppression window.")
+
+    assert audit.windows == []
+    assert audit.events == []
+
+    with registry.suppress():
+        memory.put(type="note", value="migration")
+
+    assert [operation for operation, _ in ordinary.events] == [HookOperation.SUPPRESS]
+    assert [operation for operation, _ in audit.events] == [
+        HookOperation.PUT,
+        HookOperation.SUPPRESS,
+    ]
+
+
+def test_a_memory_keeps_the_registry_it_dispatches_through() -> None:
+    """Auditing cannot be detached by replacing the registry that reports it."""
+
+    audit = RecordingRegistryHook()
+    registry = HookRegistry()
+    registry.register(audit, mandatory=True)
+    memory = Memory(hooks=registry)
+
+    with pytest.raises(AttributeError):
+        memory.hooks = HookRegistry()  # type: ignore[misc]
+
+    added = RecordingRegistryHook()
+    memory.hooks.register(added)
+    memory.put(type="note", value="still audited")
+
+    assert memory.hooks is registry
+    assert registry.hooks == (audit, added)
+    assert [len(audit.events), len(added.events)] == [1, 1]
+
+
+def test_suppressing_selected_hooks_announces_a_bounded_window() -> None:
+    """A suppressed hook is told the window opens and observes it close."""
+
+    silenced = RecordingRegistryHook()
+    observer = RecordingRegistryHook()
+    registry = HookRegistry([silenced, observer])
+    memory = Memory(hooks=registry)
+
+    with registry.suppress(silenced, attributes={"migration": "m1"}) as window:
+        memory.put(type="note", value="unreported")
+
+    assert window.operation is HookOperation.SUPPRESS
+    for hook in (silenced, observer):
+        opened, suppression = hook.windows[0]
+        assert opened.operation_id == window.operation_id
+        assert opened.attributes == {"migration": "m1"}
+        assert suppression == Suppression(
+            scope=SuppressionScope.SELECTED,
+            hooks=(silenced,),
+            mandatory=(),
+        )
+    assert [operation for operation, _ in silenced.events] == [HookOperation.SUPPRESS]
+    assert silenced.contexts[0].operation_id == window.operation_id
+    assert [operation for operation, _ in observer.events] == [
+        HookOperation.PUT,
+        HookOperation.SUPPRESS,
+    ]
+
+
+def test_suppressing_the_registry_names_what_goes_quiet() -> None:
+    """A registry-wide window names the silenced hooks and the ones left."""
+
+    audit = RecordingRegistryHook()
+    first = RecordingRegistryHook()
+    second = RecordingRegistryHook()
+    registry = HookRegistry([first, second])
+    registry.register(audit, mandatory=True)
+    memory = Memory(hooks=registry)
+
+    with registry.suppress(principal_id="ops:migrator") as window:
+        note = memory.put(type="note", value="bulk import")
+
+    _, suppression = audit.windows[0]
+    assert suppression == Suppression(
+        scope=SuppressionScope.REGISTRY,
+        hooks=(first, second),
+        mandatory=(audit,),
+    )
+    assert [len(first.windows), len(second.windows)] == [1, 1]
+    put_context = audit.contexts[0]
+    assert put_context.operation is HookOperation.PUT
+    assert put_context.parent_operation_id == window.operation_id
+    assert window.principal_id == "ops:migrator"
+    assert memory.get(note) is not None
+
+
+def test_a_suppression_no_hook_can_record_does_not_happen() -> None:
+    """A failing announcement leaves dispatch enabled and the window unopened."""
+
+    class FailingSuppressionHook(MemoryHook):
+        """Sink that cannot record the one event it exists to record."""
+
+        def on_suppressed(
+            self,
+            context: HookContext,
+            suppression: Suppression,
+        ) -> None:
+            """Fail while the window is being announced."""
+
+            raise RuntimeError("audit sink down")
+
+    observer = RecordingRegistryHook()
+    registry = HookRegistry([FailingSuppressionHook(), observer])
+    memory = Memory(hooks=registry)
+    entered = False
+
+    with pytest.raises(RuntimeError, match="audit sink down"), registry.suppress():
+        entered = True
+
+    memory.put(type="note", value="still reported")
+
+    assert entered is False
+    assert len(observer.windows) == 1
+    assert [event for event in observer.events] == [
+        (HookOperation.SUPPRESS, HookOutcome.ERROR),
+        (HookOperation.PUT, HookOutcome.SUCCESS),
+    ]
+
+
+def test_a_fail_open_sink_cannot_block_a_suppression(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A best-effort sink's outage is contained when a window opens."""
+
+    class FlakySuppressionHook(MemoryHook):
+        """Best-effort sink that must not break callers when it fails."""
+
+        fail_open = True
+
+        def on_suppressed(
+            self,
+            context: HookContext,
+            suppression: Suppression,
+        ) -> None:
+            """Fail without blocking the window."""
+
+            raise RuntimeError("audit sink down")
+
+    observer = RecordingRegistryHook()
+    registry = HookRegistry([FlakySuppressionHook(), observer])
+    memory = Memory(hooks=registry)
+
+    with caplog.at_level(logging.ERROR), registry.suppress():
+        memory.put(type="note", value="unreported")
+
+    assert observer.events == [(HookOperation.SUPPRESS, HookOutcome.SUCCESS)]
+    reported = [record.getMessage() for record in caplog.records]
+    assert sum("on_suppressed" in message for message in reported) == 1
+    assert all("FlakySuppressionHook" in message for message in reported)
+
+
+def test_only_registered_hooks_can_be_suppressed() -> None:
+    """Suppressing a hook the registry never dispatches is refused."""
+
+    registered = RecordingRegistryHook()
+    stranger = RecordingRegistryHook()
+    registry = HookRegistry([registered])
+
+    with pytest.raises(ValueError, match="not registered"), registry.suppress(stranger):
+        pytest.fail("An unregistered hook must not open a suppression window.")
+
+    assert registered.windows == []
+
+
+def test_suppression_windows_are_opened_only_by_suppress() -> None:
+    """The suppression operation cannot be forged through the generic context."""
+
+    registry = HookRegistry([RecordingRegistryHook()])
+
+    for operation in (HookOperation.SUPPRESS, "hooks.suppress"):
+        with pytest.raises(ValueError, match="suppress"), registry.operation(operation):
+            pytest.fail("A suppression window must come from suppress().")
 
 
 def test_hook_depth_limit_and_exception_cleanup() -> None:
@@ -1804,7 +2104,7 @@ def test_fail_open_contains_terminal_and_denial_failures(
 
 
 def test_operation_end_respects_suppression() -> None:
-    """Suppressed hooks and registries skip the terminal callback."""
+    """Suppressed hooks skip the operations inside a window, not the window."""
 
     first = RecordingTerminalHook()
     second = RecordingTerminalHook()
@@ -1817,8 +2117,18 @@ def test_operation_end_respects_suppression() -> None:
         memory.put(type="note", value="second")
     memory.put(type="note", value="third")
 
-    assert len(first.events) == 1
-    assert len(second.events) == 2
+    suppress = HookOperation.SUPPRESS
+    assert [operation for operation, _, _ in first.events] == [
+        suppress,
+        suppress,
+        HookOperation.PUT,
+    ]
+    assert [operation for operation, _, _ in second.events] == [
+        HookOperation.PUT,
+        suppress,
+        suppress,
+        HookOperation.PUT,
+    ]
 
 
 def test_operation_end_can_write_derived_records_without_recursing() -> None:
