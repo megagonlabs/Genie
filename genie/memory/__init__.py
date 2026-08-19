@@ -35,9 +35,9 @@ __all__ = [
     "Memory",
     "MemoryBlock",
     "MemoryConflict",
+    "MemoryHandle",
     "MemoryLink",
     "MemoryNotFound",
-    "MemoryHandle",
     "UnsupportedOperation",
 ]
 

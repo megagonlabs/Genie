@@ -253,9 +253,7 @@ class SQLiteBackend:
                     _block_values(block),
                 )
             except sqlite3.IntegrityError as error:
-                raise MemoryConflict(
-                    f"Memory block {block.id!r} could not be created."
-                ) from error
+                raise MemoryConflict(f"Memory block {block.id!r} could not be created.") from error
             row = self._block_row(connection, block.id)
             assert row is not None
             return _block_from_row(row)
@@ -308,9 +306,7 @@ class SQLiteBackend:
                     block.id,
                     block.parent_id,
                 ):
-                    raise MemoryConflict(
-                        "A memory block cannot be moved under one of its descendants."
-                    )
+                    raise MemoryConflict("A memory block cannot be moved under one of its descendants.")
             try:
                 parameters: tuple[Any, ...] = (
                     block.parent_id,
@@ -336,18 +332,13 @@ class SQLiteBackend:
                         metadata_json = ?, policy_json = ?, created_at = ?,
                         updated_at = ?, created_by = ?, version = ?
                     WHERE id = ?
-                    """
-                    + version_clause,
+                    """ + version_clause,
                     parameters,
                 )
                 if cursor.rowcount != 1:
-                    raise MemoryConflict(
-                        f"Memory block {block.id!r} changed before it could be updated."
-                    )
+                    raise MemoryConflict(f"Memory block {block.id!r} changed before it could be updated.")
             except sqlite3.IntegrityError as error:
-                raise MemoryConflict(
-                    f"Memory block {block.id!r} could not be updated."
-                ) from error
+                raise MemoryConflict(f"Memory block {block.id!r} could not be updated.") from error
             row = self._block_row(connection, block.id)
             assert row is not None
             return _block_from_row(row)
@@ -374,9 +365,7 @@ class SQLiteBackend:
             if expected_versions is not None:
                 current = {str(row["id"]): int(row["version"]) for row in rows}
                 if current != dict(expected_versions):
-                    raise MemoryConflict(
-                        f"Memory subtree {block_id!r} changed before it could be deleted."
-                    )
+                    raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
             self._delete_rows_leaf_first(connection, rows)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
@@ -463,10 +452,7 @@ class SQLiteBackend:
                     _binding_values(binding),
                 )
             except sqlite3.IntegrityError as error:
-                raise MemoryConflict(
-                    f"Key address {binding.address!r} is already bound in "
-                    f"collection {binding.collection_id!r}."
-                ) from error
+                raise MemoryConflict(f"Key address {binding.address!r} is already bound in " f"collection {binding.collection_id!r}.") from error
             return binding
 
     def rebind_key(
@@ -500,11 +486,7 @@ class SQLiteBackend:
                 ),
             )
             if cursor.rowcount != 1:
-                raise MemoryConflict(
-                    f"Key address {binding.address!r} in collection "
-                    f"{binding.collection_id!r} no longer points to expected "
-                    f"block {expected_block_id!r}."
-                )
+                raise MemoryConflict(f"Key address {binding.address!r} in collection " f"{binding.collection_id!r} no longer points to expected " f"block {expected_block_id!r}.")
             return binding
 
     def get_key(
@@ -557,16 +539,10 @@ class SQLiteBackend:
                 recursive=recursive,
             )
         ]
-        bindings.sort(
-            key=lambda binding: (binding.address.namespace, binding.address.key)
-        )
+        bindings.sort(key=lambda binding: (binding.address.namespace, binding.address.key))
         if after is not None:
             after_key = (after.namespace, after.key)
-            bindings = [
-                binding
-                for binding in bindings
-                if (binding.address.namespace, binding.address.key) > after_key
-            ]
+            bindings = [binding for binding in bindings if (binding.address.namespace, binding.address.key) > after_key]
         return bindings[:limit]
 
     def unbind_key(
@@ -593,10 +569,7 @@ class SQLiteBackend:
                 ),
             )
             if cursor.rowcount != 1:
-                raise MemoryConflict(
-                    f"Key address {address!r} in collection {collection_id!r} "
-                    f"no longer points to expected block {expected_block_id!r}."
-                )
+                raise MemoryConflict(f"Key address {address!r} in collection {collection_id!r} " f"no longer points to expected block {expected_block_id!r}.")
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
         """Remove bindings owned by or pointing to one block."""
@@ -658,9 +631,7 @@ class SQLiteBackend:
                     (log_id, sequence, block_id),
                 )
             except sqlite3.IntegrityError as error:
-                raise MemoryConflict(
-                    f"Event log {log_id!r} could not allocate sequence {sequence}."
-                ) from error
+                raise MemoryConflict(f"Event log {log_id!r} could not allocate sequence {sequence}.") from error
             return LogEntry(log_id=log_id, sequence=sequence, block_id=block_id)
 
     def get_log_entry(self, log_id: str, sequence: int) -> LogEntry | None:
@@ -757,10 +728,7 @@ class SQLiteBackend:
                     _temporal_values(entry),
                 )
             except sqlite3.IntegrityError as error:
-                raise MemoryConflict(
-                    f"Memory block {entry.block_id!r} is already in temporal "
-                    f"collection {entry.collection_id!r}."
-                ) from error
+                raise MemoryConflict(f"Memory block {entry.block_id!r} is already in temporal " f"collection {entry.collection_id!r}.") from error
             return entry
 
     def replace_temporal_entry(self, entry: TemporalEntry) -> TemporalEntry:
@@ -783,10 +751,7 @@ class SQLiteBackend:
                 (values[2], values[3], values[4], values[0], values[1]),
             )
             if cursor.rowcount != 1:
-                raise MemoryConflict(
-                    f"Memory block {entry.block_id!r} is not in temporal "
-                    f"collection {entry.collection_id!r}."
-                )
+                raise MemoryConflict(f"Memory block {entry.block_id!r} is not in temporal " f"collection {entry.collection_id!r}.")
             return entry
 
     def get_temporal_entry(
@@ -848,10 +813,7 @@ class SQLiteBackend:
                 (collection_id, block_id),
             )
             if cursor.rowcount != 1:
-                raise MemoryConflict(
-                    f"Memory block {block_id!r} is not in temporal collection "
-                    f"{collection_id!r}."
-                )
+                raise MemoryConflict(f"Memory block {block_id!r} is not in temporal collection " f"{collection_id!r}.")
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
         """Remove temporal entries owned by or pointing to one block."""
@@ -893,10 +855,8 @@ class SQLiteBackend:
         )
         valid_at = _normalize_optional_time(valid_at, name="valid_at")
         if occurred_start is not None and occurred_stop is not None:
-            if occurred_stop < occurred_start:
-                raise ValueError(
-                    "occurred_stop must be greater than or equal to occurred_start."
-                )
+            if occurred_stop < occurred_start:  # noqa: SIM102
+                raise ValueError("occurred_stop must be greater than or equal to occurred_start.")
         if overlaps is not None and not isinstance(overlaps, ValidityInterval):
             raise TypeError("overlaps must be a ValidityInterval.")
         _validate_limit(limit)
@@ -931,9 +891,7 @@ class SQLiteBackend:
                     "(invalid_at IS NULL OR invalid_at > ?)",
                 ]
             )
-            parameters.append(
-                _encode_datetime(overlaps.valid_at, field_name="overlaps.valid_at")
-            )
+            parameters.append(_encode_datetime(overlaps.valid_at, field_name="overlaps.valid_at"))
             if overlaps.invalid_at is not None:
                 clauses.append("valid_at < ?")
                 parameters.append(
@@ -961,10 +919,7 @@ class SQLiteBackend:
 
         with self._write_transaction() as connection:
             if self._relation_is_protected(connection, link.relation):
-                raise MemoryConflict(
-                    f"Link relation {link.relation!r} is protected as an acyclic "
-                    "graph; use atomic acyclic insertion."
-                )
+                raise MemoryConflict(f"Link relation {link.relation!r} is protected as an acyclic " "graph; use atomic acyclic insertion.")
             self._validate_new_link(connection, link)
             return self._insert_link(connection, link)
 
@@ -977,19 +932,14 @@ class SQLiteBackend:
                 connection,
                 link.relation,
             ) and self._relation_has_cycle(connection, link.relation):
-                raise MemoryConflict(
-                    f"Link relation {link.relation!r} already contains a cycle."
-                )
+                raise MemoryConflict(f"Link relation {link.relation!r} already contains a cycle.")
             if link.source_id == link.target_id or self._link_path_exists(
                 connection,
                 link.target_id,
                 link.source_id,
                 relation=link.relation,
             ):
-                raise MemoryConflict(
-                    f"Link {link.source_id!r} -> {link.target_id!r} would create "
-                    f"a cycle in relation {link.relation!r}."
-                )
+                raise MemoryConflict(f"Link {link.source_id!r} -> {link.target_id!r} would create " f"a cycle in relation {link.relation!r}.")
             connection.execute(
                 """
                 INSERT INTO acyclic_relations (relation)
@@ -1077,10 +1027,7 @@ class SQLiteBackend:
         """Search blocks using the portable in-memory matching behavior."""
 
         with self._read_connection() as connection:
-            candidates = [
-                _block_from_row(row)
-                for row in self._scope_candidate_rows(connection, query)
-            ]
+            candidates = [_block_from_row(row) for row in self._scope_candidate_rows(connection, query)]
         results: list[SearchResult] = []
         text = query.text.casefold() if query.text else None
         for block in candidates:
@@ -1114,17 +1061,13 @@ class SQLiteBackend:
             journal_row = connection.execute("PRAGMA journal_mode = WAL").fetchone()
             journal_mode = str(journal_row[0]).casefold() if journal_row else ""
             if journal_mode != "wal":
-                raise BackendUnavailable(
-                    f"SQLite WAL mode could not be enabled; active mode is {journal_mode!r}."
-                )
+                raise BackendUnavailable(f"SQLite WAL mode could not be enabled; active mode is {journal_mode!r}.")
         synchronous = "FULL" if self.durability == "full" else "NORMAL"
         expected_synchronous = 2 if self.durability == "full" else 1
         connection.execute(f"PRAGMA synchronous = {synchronous}")
         synchronous_row = connection.execute("PRAGMA synchronous").fetchone()
         if synchronous_row is None or int(synchronous_row[0]) != expected_synchronous:
-            raise BackendUnavailable(
-                f"SQLite synchronous={synchronous} could not be enabled."
-            )
+            raise BackendUnavailable(f"SQLite synchronous={synchronous} could not be enabled.")
 
     def _initialize_schema(self) -> None:
         """Identify, migrate, and validate the Genie SQLite schema."""
@@ -1135,29 +1078,18 @@ class SQLiteBackend:
         application_row = connection.execute("PRAGMA application_id").fetchone()
         application_id = int(application_row[0]) if application_row is not None else 0
         if version > _SCHEMA_VERSION:
-            raise UnsupportedOperation(
-                f"SQLite schema version {version} is newer than supported "
-                f"version {_SCHEMA_VERSION}."
-            )
+            raise UnsupportedOperation(f"SQLite schema version {version} is newer than supported " f"version {_SCHEMA_VERSION}.")
         if application_id not in {0, _APPLICATION_ID}:
-            raise UnsupportedOperation(
-                "The SQLite database belongs to another application "
-                f"(application_id={application_id})."
-            )
+            raise UnsupportedOperation("The SQLite database belongs to another application " f"(application_id={application_id}).")
         user_objects = _user_schema_objects(connection)
         legacy_schema = False
         if application_id == 0 and user_objects:
             if version == _SCHEMA_VERSION:
                 legacy_schema = True
             else:
-                raise UnsupportedOperation(
-                    "The SQLite database contains an incompatible or unowned schema; "
-                    "use an empty database or a validated Genie database."
-                )
+                raise UnsupportedOperation("The SQLite database contains an incompatible or unowned schema; " "use an empty database or a validated Genie database.")
         if application_id == _APPLICATION_ID and version == 0 and user_objects:
-            raise UnsupportedOperation(
-                "The Genie SQLite database has a partial version-0 schema."
-            )
+            raise UnsupportedOperation("The Genie SQLite database has a partial version-0 schema.")
         statements = (
             """
             CREATE TABLE IF NOT EXISTS blocks (
@@ -1258,9 +1190,7 @@ class SQLiteBackend:
             for target_version in range(version + 1, _SCHEMA_VERSION + 1):
                 migration = migrations.get(target_version)
                 if migration is None:
-                    raise UnsupportedOperation(
-                        f"No SQLite migration is available for version {target_version}."
-                    )
+                    raise UnsupportedOperation(f"No SQLite migration is available for version {target_version}.")
                 for statement in migration:
                     transaction.execute(statement)
                 transaction.execute(f"PRAGMA user_version = {target_version}")
@@ -1441,9 +1371,7 @@ class SQLiteBackend:
         """Require a structure container and referenced block to exist."""
 
         if self._block_row(connection, container_id) is None:
-            raise MemoryConflict(
-                f"{container_name} block {container_id!r} does not exist."
-            )
+            raise MemoryConflict(f"{container_name} block {container_id!r} does not exist.")
         if self._block_row(connection, block_id) is None:
             raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
 
@@ -1457,13 +1385,9 @@ class SQLiteBackend:
         if self._link_row(connection, link.id) is not None:
             raise MemoryConflict(f"Memory link {link.id!r} already exists.")
         if self._block_row(connection, link.source_id) is None:
-            raise MemoryConflict(
-                f"Source memory block {link.source_id!r} does not exist."
-            )
+            raise MemoryConflict(f"Source memory block {link.source_id!r} does not exist.")
         if self._block_row(connection, link.target_id) is None:
-            raise MemoryConflict(
-                f"Target memory block {link.target_id!r} does not exist."
-            )
+            raise MemoryConflict(f"Target memory block {link.target_id!r} does not exist.")
 
     def _insert_link(
         self,
@@ -1582,9 +1506,7 @@ class SQLiteBackend:
         """Return raw candidate rows for one normalized search scope."""
 
         if query.scope == Scope.GLOBAL or query.root_id is None:
-            return connection.execute(
-                f"SELECT {_BLOCK_COLUMNS} FROM blocks ORDER BY storage_order"
-            ).fetchall()
+            return connection.execute(f"SELECT {_BLOCK_COLUMNS} FROM blocks ORDER BY storage_order").fetchall()
         if self._block_row(connection, query.root_id) is None:
             return []
         if query.scope == Scope.SELF:
@@ -1636,19 +1558,13 @@ class SQLiteBackend:
                 """,
                 (query.root_id, query.root_id, query.root_id, query.root_id),
             ).fetchall()
-        return connection.execute(
-            f"SELECT {_BLOCK_COLUMNS} FROM blocks ORDER BY storage_order"
-        ).fetchall()
+        return connection.execute(f"SELECT {_BLOCK_COLUMNS} FROM blocks ORDER BY storage_order").fetchall()
 
 
 def _qualified_columns(table: str, columns: str) -> str:
     """Qualify a comma-separated constant column list for joined queries."""
 
-    return ", ".join(
-        f"{table}.{column.strip()}"
-        for column in columns.replace("\n", " ").split(",")
-        if column.strip()
-    )
+    return ", ".join(f"{table}.{column.strip()}" for column in columns.replace("\n", " ").split(",") if column.strip())
 
 
 def _block_values(block: MemoryBlock) -> tuple[Any, ...]:
@@ -1713,13 +1629,7 @@ def _link_from_row(row: sqlite3.Row) -> MemoryLink:
 def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
     """Return whether two links identify the same stored relationship."""
 
-    return (
-        left.id == right.id
-        and left.source_id == right.source_id
-        and left.target_id == right.target_id
-        and left.relation == right.relation
-        and left.created_at == right.created_at
-    )
+    return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
 
 
 def _validate_expected_version(
@@ -1732,14 +1642,9 @@ def _validate_expected_version(
     if expected_version is None:
         return
     if previous.version != expected_version:
-        raise MemoryConflict(
-            f"Memory block {previous.id!r} changed from expected version "
-            f"{expected_version}."
-        )
+        raise MemoryConflict(f"Memory block {previous.id!r} changed from expected version " f"{expected_version}.")
     if replacement.version != expected_version + 1:
-        raise MemoryConflict(
-            "A conditional block replacement must increment its version by one."
-        )
+        raise MemoryConflict("A conditional block replacement must increment its version by one.")
 
 
 def _binding_values(binding: KeyBinding) -> tuple[str, str, str, str]:
@@ -1791,21 +1696,9 @@ def _log_entry_from_row(row: sqlite3.Row) -> LogEntry:
 def _temporal_values(entry: TemporalEntry) -> tuple[str, str, str | None, str | None, str | None]:
     """Serialize one temporal entry into SQLite values."""
 
-    occurred_at = (
-        _encode_datetime(entry.occurred_at, field_name="occurred_at")
-        if entry.occurred_at is not None
-        else None
-    )
-    valid_at = (
-        _encode_datetime(entry.validity.valid_at, field_name="valid_at")
-        if entry.validity is not None
-        else None
-    )
-    invalid_at = (
-        _encode_datetime(entry.validity.invalid_at, field_name="invalid_at")
-        if entry.validity is not None and entry.validity.invalid_at is not None
-        else None
-    )
+    occurred_at = _encode_datetime(entry.occurred_at, field_name="occurred_at") if entry.occurred_at is not None else None
+    valid_at = _encode_datetime(entry.validity.valid_at, field_name="valid_at") if entry.validity is not None else None
+    invalid_at = _encode_datetime(entry.validity.invalid_at, field_name="invalid_at") if entry.validity is not None and entry.validity.invalid_at is not None else None
     return entry.collection_id, entry.block_id, occurred_at, valid_at, invalid_at
 
 
@@ -1819,20 +1712,12 @@ def _temporal_from_row(row: sqlite3.Row) -> TemporalEntry:
         if row["valid_at"] is not None:
             validity = ValidityInterval(
                 valid_at=_decode_datetime(row["valid_at"]),
-                invalid_at=(
-                    _decode_datetime(row["invalid_at"])
-                    if row["invalid_at"] is not None
-                    else None
-                ),
+                invalid_at=(_decode_datetime(row["invalid_at"]) if row["invalid_at"] is not None else None),
             )
         return TemporalEntry(
             collection_id=str(row["collection_id"]),
             block_id=str(row["block_id"]),
-            occurred_at=(
-                _decode_datetime(row["occurred_at"])
-                if row["occurred_at"] is not None
-                else None
-            ),
+            occurred_at=(_decode_datetime(row["occurred_at"]) if row["occurred_at"] is not None else None),
             validity=validity,
         )
     except BackendCorruption:
@@ -1852,10 +1737,7 @@ def _encode_policy(policy: MemoryPolicy | None) -> str | None:
         "search": _encode_rule(policy.search),
         "traverse_up": _encode_rule(policy.traverse_up),
         "traverse_down": _encode_rule(policy.traverse_down),
-        "operations": {
-            name: _encode_rule(rule)
-            for name, rule in sorted(policy.operations.items())
-        },
+        "operations": {name: _encode_rule(rule) for name, rule in sorted(policy.operations.items())},
     }
     return _dump_json(payload, field_name="memory policy")
 
@@ -1872,10 +1754,7 @@ def _decode_policy(value: object) -> MemoryPolicy | None:
         search=_decode_rule(payload["search"]),
         traverse_up=_decode_rule(payload["traverse_up"]),
         traverse_down=_decode_rule(payload["traverse_down"]),
-        operations={
-            name: _decode_rule(rule)
-            for name, rule in payload["operations"].items()
-        },
+        operations={name: _decode_rule(rule) for name, rule in payload["operations"].items()},
     )
 
 
@@ -1939,10 +1818,7 @@ def _is_strict_json(value: Any) -> bool:
     if isinstance(value, list):
         return all(_is_strict_json(item) for item in value)
     if isinstance(value, dict):
-        return all(
-            isinstance(key, str) and _is_strict_json(item)
-            for key, item in value.items()
-        )
+        return all(isinstance(key, str) and _is_strict_json(item) for key, item in value.items())
     return False
 
 
@@ -1980,9 +1856,7 @@ def _decode_namespace(value: object) -> tuple[str, ...]:
     """Decode one stored namespace tuple."""
 
     decoded = _load_json(value)
-    if not isinstance(decoded, list) or not all(
-        isinstance(segment, str) for segment in decoded
-    ):
+    if not isinstance(decoded, list) or not all(isinstance(segment, str) for segment in decoded):
         raise BackendCorruption("Stored SQLite key namespaces must be string lists.")
     return tuple(decoded)
 
@@ -2023,14 +1897,12 @@ def _validate_limit(value: object) -> None:
 def _user_schema_objects(connection: sqlite3.Connection) -> set[str]:
     """Return application-owned SQLite schema object names."""
 
-    rows = connection.execute(
-        """
+    rows = connection.execute("""
         SELECT name
         FROM sqlite_master
         WHERE type IN ('table', 'index', 'view', 'trigger')
             AND name NOT LIKE 'sqlite_%'
-        """
-    ).fetchall()
+        """).fetchall()
     return {str(row["name"]) for row in rows}
 
 
@@ -2041,43 +1913,30 @@ def _validate_schema(
 ) -> None:
     """Require the exact tables, columns, indexes, and foreign keys Genie owns."""
 
-    table_rows = connection.execute(
-        """
+    table_rows = connection.execute("""
         SELECT name
         FROM sqlite_master
         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-        """
-    ).fetchall()
+        """).fetchall()
     actual_tables = {str(row["name"]) for row in table_rows}
     expected_tables = set(_EXPECTED_TABLE_COLUMNS)
     if actual_tables != expected_tables:
-        raise UnsupportedOperation(
-            "The Genie SQLite schema has unexpected tables: "
-            f"expected {sorted(expected_tables)!r}, found {sorted(actual_tables)!r}."
-        )
+        raise UnsupportedOperation("The Genie SQLite schema has unexpected tables: " f"expected {sorted(expected_tables)!r}, found {sorted(actual_tables)!r}.")
 
     for table, expected_columns in _EXPECTED_TABLE_COLUMNS.items():
         rows = connection.execute(f'PRAGMA table_info("{table}")').fetchall()
         actual_columns = tuple(str(row["name"]) for row in rows)
         if actual_columns != expected_columns:
-            raise UnsupportedOperation(
-                f"The Genie SQLite table {table!r} has incompatible columns: "
-                f"expected {expected_columns!r}, found {actual_columns!r}."
-            )
+            raise UnsupportedOperation(f"The Genie SQLite table {table!r} has incompatible columns: " f"expected {expected_columns!r}, found {actual_columns!r}.")
 
-    index_rows = connection.execute(
-        """
+    index_rows = connection.execute("""
         SELECT name
         FROM sqlite_master
         WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
-        """
-    ).fetchall()
+        """).fetchall()
     actual_indexes = {str(row["name"]) for row in index_rows}
     if actual_indexes != _EXPECTED_INDEXES:
-        raise UnsupportedOperation(
-            "The Genie SQLite schema has incompatible indexes: "
-            f"expected {sorted(_EXPECTED_INDEXES)!r}, found {sorted(actual_indexes)!r}."
-        )
+        raise UnsupportedOperation("The Genie SQLite schema has incompatible indexes: " f"expected {sorted(_EXPECTED_INDEXES)!r}, found {sorted(actual_indexes)!r}.")
 
     for table in _EXPECTED_TABLE_COLUMNS:
         rows = connection.execute(f'PRAGMA foreign_key_list("{table}")').fetchall()
@@ -2092,25 +1951,19 @@ def _validate_schema(
         }
         expected_foreign_keys = _EXPECTED_FOREIGN_KEYS.get(table, set())
         if actual_foreign_keys != expected_foreign_keys:
-            raise UnsupportedOperation(
-                f"The Genie SQLite table {table!r} has incompatible foreign keys."
-            )
+            raise UnsupportedOperation(f"The Genie SQLite table {table!r} has incompatible foreign keys.")
 
-    sql_rows = connection.execute(
-        """
+    sql_rows = connection.execute("""
         SELECT sql
         FROM sqlite_master
         WHERE type IN ('table', 'index')
             AND name NOT LIKE 'sqlite_%'
             AND sql IS NOT NULL
-        """
-    ).fetchall()
+        """).fetchall()
     actual_sql = {_normalize_schema_sql(str(row["sql"])) for row in sql_rows}
     expected_sql = {_normalize_schema_sql(statement) for statement in expected_statements}
     if actual_sql != expected_sql:
-        raise UnsupportedOperation(
-            "The Genie SQLite schema definitions do not match the supported version."
-        )
+        raise UnsupportedOperation("The Genie SQLite schema definitions do not match the supported version.")
 
 
 def _normalize_schema_sql(statement: str) -> str:
@@ -2139,28 +1992,20 @@ def _translate_sqlite_error(error: sqlite3.Error) -> BackendError:
     message = str(error) or error.__class__.__name__
     normalized = message.casefold()
 
-    if primary_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED} or any(
-        text in normalized for text in ("database is locked", "database table is locked")
-    ):
+    if primary_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED} or any(text in normalized for text in ("database is locked", "database table is locked")):
         return BackendBusy(f"SQLite remained busy past the configured timeout: {message}")
     if primary_code in {sqlite3.SQLITE_READONLY, sqlite3.SQLITE_PERM} or "readonly" in normalized:
         return BackendReadOnly(f"SQLite storage is read-only: {message}")
-    if primary_code in {sqlite3.SQLITE_FULL, sqlite3.SQLITE_NOMEM, sqlite3.SQLITE_TOOBIG} or any(
-        text in normalized for text in ("database or disk is full", "out of memory", "too big")
-    ):
+    if primary_code in {sqlite3.SQLITE_FULL, sqlite3.SQLITE_NOMEM, sqlite3.SQLITE_TOOBIG} or any(text in normalized for text in ("database or disk is full", "out of memory", "too big")):
         return BackendCapacityExceeded(f"SQLite storage capacity was exceeded: {message}")
-    if primary_code in {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB} or any(
-        text in normalized for text in ("database disk image is malformed", "not a database")
-    ):
+    if primary_code in {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB} or any(text in normalized for text in ("database disk image is malformed", "not a database")):
         return BackendCorruption(f"SQLite storage is corrupt or invalid: {message}")
     unavailable_codes = {
         sqlite3.SQLITE_CANTOPEN,
         sqlite3.SQLITE_IOERR,
         sqlite3.SQLITE_PROTOCOL,
     }
-    if primary_code in unavailable_codes or any(
-        text in normalized for text in ("unable to open database", "disk i/o error")
-    ):
+    if primary_code in unavailable_codes or any(text in normalized for text in ("unable to open database", "disk i/o error")):
         return BackendUnavailable(f"SQLite storage is unavailable: {message}")
     return BackendError(f"SQLite backend operation failed: {message}")
 

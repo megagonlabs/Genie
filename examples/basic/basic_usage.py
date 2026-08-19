@@ -176,7 +176,7 @@ def main() -> None:
     due_at = memory.put(
         parent=project,
         type="deadline",
-        value=dt.datetime(2026, 7, 3, 17, 0, tzinfo=dt.timezone.utc),
+        value=dt.datetime(2026, 7, 3, 17, 0, tzinfo=dt.UTC),
         policy=team_policy,
     )
     budget = memory.put(parent=project, type="budget", value=Decimal("1250.75"), policy=team_policy)
@@ -286,7 +286,7 @@ def main() -> None:
         3,
         17,
         0,
-        tzinfo=dt.timezone.utc,
+        tzinfo=dt.UTC,
     )
     assert decoded_budget.value == Decimal("1250.75")
 

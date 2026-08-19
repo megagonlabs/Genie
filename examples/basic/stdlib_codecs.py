@@ -83,7 +83,7 @@ def main() -> None:
     binary = memory.put(type="artifact", value=b"release-notes")
     timestamp = memory.put(
         type="timestamp",
-        value=dt.datetime(2026, 6, 30, 12, 15, tzinfo=dt.timezone.utc),
+        value=dt.datetime(2026, 6, 30, 12, 15, tzinfo=dt.UTC),
     )
     amount = memory.put(type="amount", value=Decimal("0.1000000000000000001"))
     identifier = memory.put(

@@ -137,7 +137,7 @@ def main() -> None:
     preference = memory.put(type="preference", value=Preference("tone", "warm"))
     created_at = memory.put(
         type="timestamp",
-        value=dt.datetime(2026, 6, 30, 12, 15, tzinfo=dt.timezone.utc),
+        value=dt.datetime(2026, 6, 30, 12, 15, tzinfo=dt.UTC),
     )
     budget = memory.put(type="amount", value=Decimal("19.99"))
     correlation_id = memory.put(
@@ -169,7 +169,7 @@ def main() -> None:
         30,
         12,
         15,
-        tzinfo=dt.timezone.utc,
+        tzinfo=dt.UTC,
     )
     assert retrieved_budget.value == Decimal("19.99")
     assert retrieved_correlation_id.value == uuid.UUID(

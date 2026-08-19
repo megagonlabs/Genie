@@ -69,7 +69,7 @@ class MemoryHook:
             block: Stored block.
         """
 
-        return None
+        return
 
     def before_update(
         self,
@@ -109,7 +109,7 @@ class MemoryHook:
             stored: Persisted replacement block.
         """
 
-        return None
+        return
 
     def before_get(self, context: HookContext, block_id: str) -> None:
         """Run before a block lookup.
@@ -119,7 +119,7 @@ class MemoryHook:
             block_id: Id being fetched.
         """
 
-        return None
+        return
 
     def after_get(self, context: HookContext, block: MemoryBlock | None) -> None:
         """Run after a block lookup.
@@ -129,7 +129,7 @@ class MemoryHook:
             block: Fetched block, or `None` when missing.
         """
 
-        return None
+        return
 
     def before_search(self, context: HookContext, query: MemoryQuery) -> MemoryQuery:
         """Run before search is sent to the backend.
@@ -177,7 +177,7 @@ class MemoryHook:
             traversal: Read about to run, with nothing disclosed yet.
         """
 
-        return None
+        return
 
     def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
         """Run after a structural read discloses blocks, links, or membership.
@@ -191,7 +191,7 @@ class MemoryHook:
             traversal: Completed read, carrying what it disclosed.
         """
 
-        return None
+        return
 
     def before_add_link(self, context: HookContext, link: MemoryLink) -> MemoryLink:
         """Run before a regular, acyclic, or mount link is stored.
@@ -217,7 +217,7 @@ class MemoryHook:
             link: Persisted link.
         """
 
-        return None
+        return
 
     def before_update_link(
         self,
@@ -252,7 +252,7 @@ class MemoryHook:
             stored: Persisted replacement link.
         """
 
-        return None
+        return
 
     def before_structure_change(
         self,
@@ -269,7 +269,7 @@ class MemoryHook:
             change: Proposed structural change.
         """
 
-        return None
+        return
 
     def after_structure_change(
         self,
@@ -283,7 +283,7 @@ class MemoryHook:
             change: Persisted structural change.
         """
 
-        return None
+        return
 
     def before_delete(self, context: HookContext, block: MemoryBlock) -> None:
         """Run before a block is deleted.
@@ -293,7 +293,7 @@ class MemoryHook:
             block: Block about to be deleted.
         """
 
-        return None
+        return
 
     def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
         """Run after a block is deleted.
@@ -307,7 +307,7 @@ class MemoryHook:
             block: Deleted block.
         """
 
-        return None
+        return
 
     def on_denied(
         self,
@@ -333,7 +333,7 @@ class MemoryHook:
             reason: Message describing the refusal.
         """
 
-        return None
+        return
 
     def on_suppressed(self, context: HookContext, suppression: Suppression) -> None:
         """Run when trusted code disables hook dispatch.
@@ -358,7 +358,7 @@ class MemoryHook:
                 mandatory hooks that keep reporting through it.
         """
 
-        return None
+        return
 
     def on_operation_end(
         self,
@@ -383,4 +383,4 @@ class MemoryHook:
             error: Exception ending the operation, or `None` after success.
         """
 
-        return None
+        return
