@@ -102,8 +102,8 @@ for deployment, backup, monitoring, and performance requirements.
 
 [Memory](../genie/memory/README.md) covers blocks and handles;
 [structures](../genie/structures/README.md) covers composition; and
-[backends](../genie/backend/README.md) defines adapter contracts. See also
-[queries](../genie/query/README.md), [policies](../genie/policy/README.md),
-[hooks](../genie/hooks/README.md), and [codecs](../genie/codecs/README.md).
-Runnable patterns live in [examples](../examples/README.md) and
-[lamps](../lamps/README.md).
+[Backends](../genie/backend/README.md) defines adapter contracts. See also
+[Queries](../genie/query/README.md), [Policies](../genie/policy/README.md),
+[Hooks](../genie/hooks/README.md), and [Codecs](../genie/codecs/README.md).
+Runnable patterns live in [Examples](../examples/README.md) and
+[Lamps](../lamps/README.md).

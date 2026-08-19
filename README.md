@@ -130,7 +130,7 @@ Application storage     SQL, document, graph, vector, or hybrid
 - [Policies](genie/policy/README.md)
 - [Hooks](genie/hooks/README.md)
 - [Codecs](genie/codecs/README.md)
-- [Examples](examples/README.md) and [lamps](lamps/README.md)
+- [Examples](examples/README.md) and [Lamps](lamps/README.md)
 
 ## Develop
 
