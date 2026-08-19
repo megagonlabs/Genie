@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import math
 from collections import defaultdict, deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from threading import Condition, RLock
@@ -1212,7 +1212,7 @@ class Neo4jBackend:
             return self._driver
 
     @contextmanager
-    def _operation_driver(self) -> Iterator[Any]:
+    def _operation_driver(self) -> Generator[Any, None, None]:
         """Lease the driver so ``close`` cannot race an active session."""
 
         with self._lifecycle:

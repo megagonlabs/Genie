@@ -6,7 +6,7 @@ import json
 import math
 import sqlite3
 from collections import defaultdict, deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1268,7 +1268,7 @@ class SQLiteBackend:
         _validate_schema(connection, expected_statements=statements)
 
     @contextmanager
-    def _read_connection(self) -> Iterator[sqlite3.Connection]:
+    def _read_connection(self) -> Generator[sqlite3.Connection, None, None]:
         """Yield one consistent read transaction under the instance lock."""
 
         with self._lock:
@@ -1285,7 +1285,7 @@ class SQLiteBackend:
                 raise
 
     @contextmanager
-    def _write_transaction(self) -> Iterator[sqlite3.Connection]:
+    def _write_transaction(self) -> Generator[sqlite3.Connection, None, None]:
         """Yield one serialized immediate transaction and commit it atomically."""
 
         with self._lock:

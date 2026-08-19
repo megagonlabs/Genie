@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -110,7 +110,7 @@ class HookRegistry:
         *,
         principal_id: str | None = None,
         attributes: Mapping[str, str] | None = None,
-    ) -> Iterator[HookContext]:
+    ) -> Generator[HookContext, None, None]:
         """Create causal context around one logical operation.
 
         Leaving the context dispatches ``on_operation_end`` exactly once for
@@ -166,7 +166,7 @@ class HookRegistry:
         *,
         principal_id: str | None = None,
         attributes: Mapping[str, str] | None = None,
-    ) -> Iterator[HookContext]:
+    ) -> Generator[HookContext, None, None]:
         """Group the memory operations of one caller-defined logical span.
 
         A scope names work Genie does not model, such as an agent run, a turn,
@@ -216,7 +216,7 @@ class HookRegistry:
             _CURRENT_OPERATION.reset(token)
 
     @contextmanager
-    def suppress(self, *hooks: MemoryHook) -> Iterator[None]:
+    def suppress(self, *hooks: MemoryHook) -> Generator[None, None, None]:
         """Temporarily suppress this registry or selected hooks.
 
         This trusted escape hatch is intended for migrations and carefully
