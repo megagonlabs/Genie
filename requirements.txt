@@ -1,0 +1,5 @@
+# Genie has no third-party runtime dependencies.
+#
+# Development and test dependencies are declared in pyproject.toml under:
+#   [project.optional-dependencies]
+#   dev = ["pytest>=8"]
