@@ -854,9 +854,8 @@ class SQLiteBackend:
             name="occurred_stop",
         )
         valid_at = _normalize_optional_time(valid_at, name="valid_at")
-        if occurred_start is not None and occurred_stop is not None:
-            if occurred_stop < occurred_start:  # noqa: SIM102
-                raise ValueError("occurred_stop must be greater than or equal to occurred_start.")
+        if (occurred_start is not None and occurred_stop is not None) and occurred_stop < occurred_start:
+            raise ValueError("occurred_stop must be greater than or equal to occurred_start.")
         if overlaps is not None and not isinstance(overlaps, ValidityInterval):
             raise TypeError("overlaps must be a ValidityInterval.")
         _validate_limit(limit)

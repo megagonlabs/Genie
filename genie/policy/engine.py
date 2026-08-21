@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Mapping
 
 from genie.memory.block import MemoryBlock
 from genie.policy.policy import (

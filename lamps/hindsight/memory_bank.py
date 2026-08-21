@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Protocol, Sequence, cast
+from typing import Any, Literal, Protocol, cast
 
 from genie import MemoryBlock, MemoryHandle, MemoryLink
 from genie.backend import KeyedStore, SequenceStore, TemporalStore

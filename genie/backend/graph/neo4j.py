@@ -52,9 +52,7 @@ _SCHEMA_VERSION = 1
 _APPLICATION_ID = "genie"
 _MUTATION_GUARD = "genie.mutations"
 _SCHEMA_INDEX_TIMEOUT_SECONDS = 300
-_UNIQUENESS_CONSTRAINT_TYPES = frozenset(
-    {"UNIQUENESS", "NODE_PROPERTY_UNIQUENESS"}
-)
+_UNIQUENESS_CONSTRAINT_TYPES = frozenset({"UNIQUENESS", "NODE_PROPERTY_UNIQUENESS"})
 
 _CONSTRAINTS: dict[str, tuple[str, str]] = {
     "genie_schema_name_unique": ("GenieSchema", "name"),
@@ -128,9 +126,8 @@ class Neo4jBackend:
         _validate_nonempty_string(database, name="database")
         _validate_timeout(connection_timeout, name="connection_timeout")
         _validate_timeout(max_transaction_retry_time, name="max_transaction_retry_time")
-        if auth is not None:
-            if not isinstance(auth, tuple) or len(auth) != 2 or not all(isinstance(item, str) for item in auth):
-                raise TypeError("auth must be a (username, password) tuple of strings.")
+        if auth is not None and (not isinstance(auth, tuple) or len(auth) != 2 or not all(isinstance(item, str) for item in auth)):
+            raise TypeError("auth must be a (username, password) tuple of strings.")
         if encrypted is not None and not isinstance(encrypted, bool):
             raise TypeError("encrypted must be a boolean or None.")
         if not isinstance(verify_connectivity, bool):
@@ -315,10 +312,7 @@ class Neo4jBackend:
 
         def operation(tx: Any) -> None:
             records = self._descendant_records(tx, block_id, include_self=True)
-            current = {
-                str(record["block"]["id"]): int(record["block"]["version"])
-                for record in records
-            }
+            current = {str(record["block"]["id"]): int(record["block"]["version"]) for record in records}
             if expected_versions is not None and current != dict(expected_versions):
                 raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
             block_ids = list(current)
@@ -382,12 +376,7 @@ class Neo4jBackend:
     def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
         """Return descendants in deterministic depth-first creation order."""
 
-        return self._read(
-            lambda tx: [
-                _block_from_record(record)
-                for record in self._descendant_records(tx, block_id, include_self=include_self)
-            ]
-        )
+        return self._read(lambda tx: [_block_from_record(record) for record in self._descendant_records(tx, block_id, include_self=include_self)])
 
     def contains(self, root_id: str, block_id: str) -> bool:
         """Return whether ``block_id`` is equal to or below ``root_id``."""
@@ -445,9 +434,7 @@ class Neo4jBackend:
                 block_id=binding.block_id,
             )
             if record is None:
-                raise MemoryConflict(
-                    f"Key address {binding.address!r} in collection {binding.collection_id!r} no longer points to expected block {expected_block_id!r}."
-                )
+                raise MemoryConflict(f"Key address {binding.address!r} in collection {binding.collection_id!r} no longer points to expected block {expected_block_id!r}.")
             return binding
 
         return self._write(operation)
@@ -458,9 +445,11 @@ class Neo4jBackend:
         namespace_json = _encode_namespace(address.namespace)
         identity = _identity(collection_id, namespace_json, address.key)
         return self._read(
-            lambda tx: _binding_from_record(record)
-            if (record := _single(tx, "MATCH (n:GenieKeyBinding {identity: $identity}) RETURN properties(n) AS binding", identity=identity)) is not None
-            else None
+            lambda tx: (
+                _binding_from_record(record)
+                if (record := _single(tx, "MATCH (n:GenieKeyBinding {identity: $identity}) RETURN properties(n) AS binding", identity=identity)) is not None
+                else None
+            )
         )
 
     def list_keys(
@@ -484,11 +473,7 @@ class Neo4jBackend:
                 collection_id=collection_id,
             )
         )
-        bindings = [
-            _binding_from_record(record)
-            for record in records
-            if _namespace_matches(_decode_namespace(record["binding"]["namespace_json"]), namespace, recursive=recursive)
-        ]
+        bindings = [_binding_from_record(record) for record in records if _namespace_matches(_decode_namespace(record["binding"]["namespace_json"]), namespace, recursive=recursive)]
         bindings.sort(key=lambda item: (item.address.namespace, item.address.key))
         if after is not None:
             after_key = (after.namespace, after.key)
@@ -514,9 +499,7 @@ class Neo4jBackend:
                 expected_block_id=expected_block_id,
             )
             if record is None:
-                raise MemoryConflict(
-                    f"Key address {address!r} in collection {collection_id!r} no longer points to expected block {expected_block_id!r}."
-                )
+                raise MemoryConflict(f"Key address {address!r} in collection {collection_id!r} no longer points to expected block {expected_block_id!r}.")
 
         self._write(operation)
 
@@ -570,16 +553,18 @@ class Neo4jBackend:
 
         _validate_sequence(sequence, name="sequence")
         return self._read(
-            lambda tx: _log_entry_from_record(record)
-            if (
-                record := _single(
-                    tx,
-                    "MATCH (n:GenieLogEntry {identity: $identity}) RETURN properties(n) AS entry",
-                    identity=_identity(log_id, sequence),
+            lambda tx: (
+                _log_entry_from_record(record)
+                if (
+                    record := _single(
+                        tx,
+                        "MATCH (n:GenieLogEntry {identity: $identity}) RETURN properties(n) AS entry",
+                        identity=_identity(log_id, sequence),
+                    )
                 )
+                is not None
+                else None
             )
-            is not None
-            else None
         )
 
     def list_log_entries(
@@ -646,9 +631,7 @@ class Neo4jBackend:
         def operation(tx: Any) -> TemporalEntry:
             self._require_structure_blocks(tx, container_id=entry.collection_id, block_id=entry.block_id, container_name="Temporal collection")
             if _single(tx, "MATCH (n:GenieTemporalEntry {identity: $identity}) RETURN n.identity AS identity", identity=properties["identity"]) is not None:
-                raise MemoryConflict(
-                    f"Memory block {entry.block_id!r} is already in temporal collection {entry.collection_id!r}."
-                )
+                raise MemoryConflict(f"Memory block {entry.block_id!r} is already in temporal collection {entry.collection_id!r}.")
             _consume(tx, "CREATE (n:GenieTemporalEntry) SET n = $properties", properties=properties)
             return entry
 
@@ -668,9 +651,7 @@ class Neo4jBackend:
                 properties=properties,
             )
             if record is None:
-                raise MemoryConflict(
-                    f"Memory block {entry.block_id!r} is not in temporal collection {entry.collection_id!r}."
-                )
+                raise MemoryConflict(f"Memory block {entry.block_id!r} is not in temporal collection {entry.collection_id!r}.")
             return entry
 
         return self._write(operation)
@@ -680,16 +661,18 @@ class Neo4jBackend:
 
         identity = _identity(collection_id, block_id)
         return self._read(
-            lambda tx: _temporal_from_record(record)
-            if (
-                record := _single(
-                    tx,
-                    "MATCH (n:GenieTemporalEntry {identity: $identity}) RETURN properties(n) AS entry",
-                    identity=identity,
+            lambda tx: (
+                _temporal_from_record(record)
+                if (
+                    record := _single(
+                        tx,
+                        "MATCH (n:GenieTemporalEntry {identity: $identity}) RETURN properties(n) AS entry",
+                        identity=identity,
+                    )
                 )
+                is not None
+                else None
             )
-            is not None
-            else None
         )
 
     def list_temporal_entries(
@@ -816,9 +799,7 @@ class Neo4jBackend:
 
         def operation(tx: Any) -> MemoryLink:
             if self._relation_is_protected(tx, link.relation):
-                raise MemoryConflict(
-                    f"Link relation {link.relation!r} is protected as an acyclic graph; use atomic acyclic insertion."
-                )
+                raise MemoryConflict(f"Link relation {link.relation!r} is protected as an acyclic graph; use atomic acyclic insertion.")
             self._validate_new_link(tx, link)
             return self._insert_link(tx, link)
 
@@ -840,9 +821,7 @@ class Neo4jBackend:
             if not self._relation_is_protected(tx, link.relation) and _edges_have_cycle(edges):
                 raise MemoryConflict(f"Link relation {link.relation!r} already contains a cycle.")
             if link.source_id == link.target_id or _edge_path_exists(edges, link.target_id, link.source_id):
-                raise MemoryConflict(
-                    f"Link {link.source_id!r} -> {link.target_id!r} would create a cycle in relation {link.relation!r}."
-                )
+                raise MemoryConflict(f"Link {link.source_id!r} -> {link.target_id!r} would create a cycle in relation {link.relation!r}.")
             _consume(
                 tx,
                 "MERGE (:GenieAcyclicRelation {relation: $relation})",
@@ -996,11 +975,7 @@ class Neo4jBackend:
         """Apply resumable migrations and validate the current graph schema."""
 
         existing_state = self._read_schema_identity()
-        version = (
-            0
-            if existing_state is None
-            else self._schema_version(existing_state, allow_older=True)
-        )
+        version = 0 if existing_state is None else self._schema_version(existing_state, allow_older=True)
         for target_version in range(version + 1, _SCHEMA_VERSION + 1):
             self._apply_schema_migration(target_version)
             state = self._write_schema_identity(target_version)
@@ -1020,9 +995,7 @@ class Neo4jBackend:
         """Apply one idempotent schema migration."""
 
         if target_version != 1:
-            raise UnsupportedOperation(
-                f"No Neo4j migration is available for schema version {target_version}."
-            )
+            raise UnsupportedOperation(f"No Neo4j migration is available for schema version {target_version}.")
         self._ensure_schema_objects()
         self._await_schema_indexes()
         self._validate_schema_objects()
@@ -1031,9 +1004,7 @@ class Neo4jBackend:
         """Create every missing constraint and index owned by Genie."""
 
         for name, (label, property_name) in _CONSTRAINTS.items():
-            self._schema_statement(
-                f"CREATE CONSTRAINT {name} IF NOT EXISTS FOR (n:{label}) REQUIRE n.{property_name} IS UNIQUE"
-            )
+            self._schema_statement(f"CREATE CONSTRAINT {name} IF NOT EXISTS FOR (n:{label}) REQUIRE n.{property_name} IS UNIQUE")
         for name, (label, properties) in _INDEXES.items():
             joined = ", ".join(f"n.{property_name}" for property_name in properties)
             self._schema_statement(f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON ({joined})")
@@ -1078,9 +1049,7 @@ class Neo4jBackend:
             )
         )
         if record is None:
-            raise UnsupportedOperation(
-                "The Neo4j schema identity belongs to another application."
-            )
+            raise UnsupportedOperation("The Neo4j schema identity belongs to another application.")
         return record
 
     def _validate_schema(self) -> None:
@@ -1118,9 +1087,7 @@ class Neo4jBackend:
         if isinstance(version, bool) or not isinstance(version, int):
             raise UnsupportedOperation("The Genie Neo4j schema version is invalid.")
         if version > _SCHEMA_VERSION:
-            raise UnsupportedOperation(
-                f"Neo4j schema version {version} is newer than supported version {_SCHEMA_VERSION}."
-            )
+            raise UnsupportedOperation(f"Neo4j schema version {version} is newer than supported version {_SCHEMA_VERSION}.")
         if version < _SCHEMA_VERSION and not allow_older:
             raise UnsupportedOperation(f"No Neo4j migration is available from schema version {version}.")
         return version
@@ -1148,11 +1115,7 @@ class Neo4jBackend:
         }
         for name, (label, property_name) in _CONSTRAINTS.items():
             constraint = constraints.get(name)
-            if (
-                constraint is None
-                or constraint[0] not in _UNIQUENESS_CONSTRAINT_TYPES
-                or constraint[1:] != ("NODE", (label,), (property_name,))
-            ):
+            if constraint is None or constraint[0] not in _UNIQUENESS_CONSTRAINT_TYPES or constraint[1:] != ("NODE", (label,), (property_name,)):
                 raise UnsupportedOperation(f"The Genie Neo4j constraint {name!r} is missing or incompatible.")
 
         index_records = self._raw_read(
@@ -1346,11 +1309,14 @@ class Neo4jBackend:
         return _link_from_record(record)
 
     def _relation_is_protected(self, tx: Any, relation: str) -> bool:
-        return _single(
-            tx,
-            "MATCH (r:GenieAcyclicRelation {relation: $relation}) RETURN r.relation AS relation",
-            relation=relation,
-        ) is not None
+        return (
+            _single(
+                tx,
+                "MATCH (r:GenieAcyclicRelation {relation: $relation}) RETURN r.relation AS relation",
+                relation=relation,
+            )
+            is not None
+        )
 
     def _scope_candidate_records(self, tx: Any, query: MemoryQuery) -> list[dict[str, Any]]:
         if query.scope == Scope.GLOBAL or query.root_id is None:
@@ -1494,13 +1460,7 @@ def _link_from_record(record: Mapping[str, Any]) -> MemoryLink:
 
 
 def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
-    return (
-        left.id == right.id
-        and left.source_id == right.source_id
-        and left.target_id == right.target_id
-        and left.relation == right.relation
-        and left.created_at == right.created_at
-    )
+    return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
 
 
 def _validate_expected_version(previous: MemoryBlock, replacement: MemoryBlock, expected_version: int | None) -> None:
@@ -1545,11 +1505,7 @@ def _temporal_properties(entry: TemporalEntry) -> dict[str, Any]:
         "block_id": entry.block_id,
         "occurred_at": _encode_datetime(entry.occurred_at, field_name="occurred_at") if entry.occurred_at is not None else None,
         "valid_at": _encode_datetime(entry.validity.valid_at, field_name="valid_at") if entry.validity is not None else None,
-        "invalid_at": (
-            _encode_datetime(entry.validity.invalid_at, field_name="invalid_at")
-            if entry.validity is not None and entry.validity.invalid_at is not None
-            else None
-        ),
+        "invalid_at": (_encode_datetime(entry.validity.invalid_at, field_name="invalid_at") if entry.validity is not None and entry.validity.invalid_at is not None else None),
     }
 
 

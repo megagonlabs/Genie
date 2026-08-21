@@ -75,18 +75,12 @@ class TemporalCollection:
         """
 
         if not isinstance(store, TemporalStore):
-            raise UnsupportedOperation(
-                "The configured store does not support temporal collections."
-            )
+            raise UnsupportedOperation("The configured store does not support temporal collections.")
         if index is not None and not isinstance(index, TemporalIndex):
-            raise UnsupportedOperation(
-                "The configured index does not support temporal queries."
-            )
+            raise UnsupportedOperation("The configured index does not support temporal queries.")
         stored_collection = access.get(collection)
         if stored_collection is None:
-            raise MemoryNotFound(
-                f"Temporal collection block {_block_id(collection)!r} does not exist."
-            )
+            raise MemoryNotFound(f"Temporal collection block {_block_id(collection)!r} does not exist.")
         self._access = access
         self._store = store
         self._hooks = resolve_hooks(access, hooks)
@@ -353,11 +347,8 @@ class TemporalCollection:
             name="occurred_stop",
         )
         valid_at = _normalize_optional_time(valid_at, name="valid_at")
-        if occurred_start is not None and occurred_stop is not None:
-            if occurred_stop < occurred_start:
-                raise ValueError(
-                    "occurred_stop must be greater than or equal to occurred_start."
-                )
+        if (occurred_start is not None and occurred_stop is not None) and occurred_stop < occurred_start:
+            raise ValueError("occurred_stop must be greater than or equal to occurred_start.")
         if overlaps is not None and not isinstance(overlaps, ValidityInterval):
             raise TypeError("overlaps must be a ValidityInterval.")
         _validate_limit(limit)
@@ -416,10 +407,7 @@ class TemporalCollection:
 
         block = self._access.get(entry.block_id)
         if block is None:
-            raise MemoryNotFound(
-                f"Temporal entry in {entry.collection_id!r} references missing "
-                f"memory block {entry.block_id!r}."
-            )
+            raise MemoryNotFound(f"Temporal entry in {entry.collection_id!r} references missing " f"memory block {entry.block_id!r}.")
         return TemporalItem(entry=entry, block=block)
 
     def _require_collection(self) -> MemoryBlock:
@@ -427,9 +415,7 @@ class TemporalCollection:
 
         collection = self._access.get(self.collection_id)
         if collection is None:
-            raise MemoryNotFound(
-                f"Temporal collection block {self.collection_id!r} does not exist."
-            )
+            raise MemoryNotFound(f"Temporal collection block {self.collection_id!r} does not exist.")
         return collection
 
     def _require_block(self, block: BlockRef) -> MemoryBlock:
@@ -455,21 +441,18 @@ def _matches(
     occurred_at = entry.occurred_at
     if occurred_only and occurred_at is None:
         return False
-    if occurred_start is not None:
-        if occurred_at is None or occurred_at < occurred_start:
-            return False
-    if occurred_stop is not None:
-        if occurred_at is None or occurred_at >= occurred_stop:
-            return False
+    if occurred_start is not None and (occurred_at is None or occurred_at < occurred_start):
+        return False
+    if occurred_stop is not None and (occurred_at is None or occurred_at >= occurred_stop):
+        return False
     validity = entry.validity
     if valid_at is not None:
         if validity is None or validity.valid_at > valid_at:
             return False
         if validity.invalid_at is not None and valid_at >= validity.invalid_at:
             return False
-    if overlaps is not None:
-        if validity is None or not _intervals_overlap(validity, overlaps):
-            return False
+    if overlaps is not None and (validity is None or not _intervals_overlap(validity, overlaps)):
+        return False
     return True
 
 

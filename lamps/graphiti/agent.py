@@ -9,9 +9,10 @@ loop without changing the temporal graph model.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 
 from genie import MemoryBlock
 from lamps.graphiti.temporal_graph import ENTITY_TYPE, TemporalFact, TemporalKnowledgeGraph

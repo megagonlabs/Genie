@@ -514,9 +514,8 @@ class InMemoryBackend:
             name="occurred_stop",
         )
         valid_at = _normalize_optional_time(valid_at, name="valid_at")
-        if occurred_start is not None and occurred_stop is not None:
-            if occurred_stop < occurred_start:
-                raise ValueError("occurred_stop must be greater than or equal to occurred_start.")
+        if (occurred_start is not None and occurred_stop is not None) and occurred_stop < occurred_start:
+            raise ValueError("occurred_stop must be greater than or equal to occurred_start.")
         if overlaps is not None and not isinstance(overlaps, ValidityInterval):
             raise TypeError("overlaps must be a ValidityInterval.")
         _validate_limit(limit)
@@ -898,12 +897,10 @@ def _temporal_matches(
     occurred_at = entry.occurred_at
     if occurred_only and occurred_at is None:
         return False
-    if occurred_start is not None:
-        if occurred_at is None or occurred_at < occurred_start:
-            return False
-    if occurred_stop is not None:
-        if occurred_at is None or occurred_at >= occurred_stop:
-            return False
+    if occurred_start is not None and (occurred_at is None or occurred_at < occurred_start):
+        return False
+    if occurred_stop is not None and (occurred_at is None or occurred_at >= occurred_stop):
+        return False
     validity = entry.validity
     if valid_at is not None:
         if validity is None or validity.valid_at > valid_at:

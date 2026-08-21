@@ -8,10 +8,11 @@ be placed behind a model function-calling loop.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 
 from lamps.hindsight.memory_bank import (
     FactType,
