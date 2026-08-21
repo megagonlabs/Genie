@@ -451,19 +451,13 @@ def _matches(
             return False
         if validity.invalid_at is not None and valid_at >= validity.invalid_at:
             return False
-    if overlaps is not None and (validity is None or not _intervals_overlap(validity, overlaps)):
-        return False
-    return True
+    return not (overlaps is not None and (validity is None or not _intervals_overlap(validity, overlaps)))
 
 
 def _intervals_overlap(left: ValidityInterval, right: ValidityInterval) -> bool:
     """Return whether two half-open, optionally open-ended intervals overlap."""
 
-    if left.invalid_at is not None and left.invalid_at <= right.valid_at:
-        return False
-    if right.invalid_at is not None and right.invalid_at <= left.valid_at:
-        return False
-    return True
+    return not ((left.invalid_at is not None and left.invalid_at <= right.valid_at) or (right.invalid_at is not None and right.invalid_at <= left.valid_at))
 
 
 def _normalize_optional_time(value: object, *, name: str) -> datetime | None:

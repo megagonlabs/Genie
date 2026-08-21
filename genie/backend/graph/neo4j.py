@@ -12,7 +12,7 @@ import json
 import math
 from collections import defaultdict, deque
 from collections.abc import Callable, Generator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from threading import Condition, RLock
 from types import TracebackType
@@ -1193,10 +1193,8 @@ class Neo4jBackend:
             self._driver = None
         if driver is None:
             return
-        try:
+        with suppress(Exception):
             driver.close()
-        except BaseException:
-            pass
 
     # ------------------------------------------------------------------
     # Transaction-local data helpers

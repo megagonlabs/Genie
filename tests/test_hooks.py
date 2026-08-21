@@ -2598,7 +2598,7 @@ def test_unreportable_refusals_still_reach_the_caller_as_access_denied() -> None
             for attempt in self.attempts:
                 try:
                     attempt()
-                except BaseException as raised:
+                except AccessDenied as raised:
                     self.errors.append(type(raised).__name__)
                     self.notes.extend(getattr(raised, "__notes__", []))
 

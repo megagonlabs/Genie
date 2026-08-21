@@ -43,7 +43,7 @@ class ValueSchema:
     store any JSON-compatible value supported by Genie's configured codec.
     """
 
-    __slots__ = ("name", "_fields")
+    __slots__ = ("_fields", "name")
 
     def __init__(self, name: str, fields: Mapping[str, type]) -> None:
         """Create an exact dictionary schema.

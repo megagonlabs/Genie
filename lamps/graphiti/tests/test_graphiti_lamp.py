@@ -99,13 +99,14 @@ def test_exclusive_fact_preserves_history_and_provenance() -> None:
         "chat/1",
         "chat/2",
     ]
-    assert [episode.value["source"] for episode in graph.provenance(history[1])] == [
-        "chat/2"
-    ]
-    assert graph.memory.list_links(
-        first.block,
-        relation=SUPERSEDED_BY_RELATION,
-    )[0].target_id == second.block.id
+    assert [episode.value["source"] for episode in graph.provenance(history[1])] == ["chat/2"]
+    assert (
+        graph.memory.list_links(
+            first.block,
+            relation=SUPERSEDED_BY_RELATION,
+        )[0].target_id
+        == second.block.id
+    )
 
 
 def test_reasserting_same_fact_adds_provenance_without_duplication() -> None:
@@ -204,7 +205,7 @@ def test_temporal_validation_is_explicit() -> None:
             "lives_in",
             seattle,
             episode=episode,
-            valid_from=datetime(2025, 6, 1),
+            valid_from=datetime(2025, 6, 1),  # noqa: DTZ001
         )
     with pytest.raises(ValueError, match="later than"):
         graph.assert_fact(
@@ -311,10 +312,7 @@ def test_agent_learns_and_answers_only_through_tools() -> None:
         "query_neighborhood",
         "get_history",
     ]
-    assert agent.tool_usage() == (
-        "add_episode x2, add_fact x3, query_entity x1, "
-        "query_neighborhood x1, get_history x1"
-    )
+    assert agent.tool_usage() == ("add_episode x2, add_fact x3, query_entity x1, " "query_neighborhood x1, get_history x1")
 
 
 def test_demo_runs_as_a_module() -> None:

@@ -142,10 +142,7 @@ def test_multiple_occurred_dates_use_child_occurrences_and_deduplicate_recall() 
 
     assert len(occurrences) == 2
     assert [result.block.parent_id for result in occurrences] == [unit.id, unit.id]
-    assert all(
-        bank.structures.timeline.get(result.block) is not None
-        for result in occurrences
-    )
+    assert all(bank.structures.timeline.get(result.block) is not None for result in occurrences)
     assert all(
         bank.structures.graph.edges(
             result.block,
@@ -214,7 +211,7 @@ def test_validation_keeps_the_lamp_model_explicit() -> None:
         bank.retain(
             "bad time",
             fact_type="world",
-            occurred_dates=(datetime(2025, 1, 1),),
+            occurred_dates=(datetime(2025, 1, 1),),  # noqa: DTZ001
         )
     first = bank.retain("first", fact_type="world")
     second = bank.retain("second", fact_type="world")
@@ -265,10 +262,7 @@ def test_agent_learns_and_answers_only_through_memory_tools() -> None:
         agent.memory_id("timeout"),
         agent.memory_id("retry"),
     ]
-    assert agent.tool_usage() == (
-        "retain x5, link_memories x4, create_mental_model x1, "
-        "get_mental_model x1, recall x1, recall_temporal x1, recall_graph x1"
-    )
+    assert agent.tool_usage() == ("retain x5, link_memories x4, create_mental_model x1, " "get_mental_model x1, recall x1, recall_temporal x1, recall_graph x1")
 
 
 def test_demo_runs_as_a_module() -> None:
