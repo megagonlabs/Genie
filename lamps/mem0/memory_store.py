@@ -231,11 +231,7 @@ class Mem0Memory:
         normalized_text = _required_text(text, field="text")
         normalized_kind = _validate_kind(kind)
         normalized_entities = _normalized_strings(entities, field="entities")
-        normalized_occurred_at = (
-            _normalize_timestamp(occurred_at, field="occurred_at")
-            if occurred_at is not None
-            else None
-        )
+        normalized_occurred_at = _normalize_timestamp(occurred_at, field="occurred_at") if occurred_at is not None else None
         content_hash = _content_hash(normalized_text)
         for record in self._records(scope):
             if record.hash == content_hash and record.text == normalized_text:
@@ -250,11 +246,7 @@ class Mem0Memory:
             {
                 "kind": normalized_kind,
                 "entities": list(normalized_entities),
-                "occurred_at": (
-                    _format_timestamp(normalized_occurred_at)
-                    if normalized_occurred_at is not None
-                    else None
-                ),
+                "occurred_at": (_format_timestamp(normalized_occurred_at) if normalized_occurred_at is not None else None),
             }
         )
         now = _normalize_timestamp(self._clock(), field="clock")
@@ -463,9 +455,7 @@ class Mem0Memory:
                 relation=ENTITY_LINK_RELATION,
                 direction="both",
             )
-            connected: list[
-                tuple[ExtractedFactRecord, tuple[str, ...], GraphDirection]
-            ] = []
+            connected: list[tuple[ExtractedFactRecord, tuple[str, ...], GraphDirection]] = []
             for neighbor_record in neighbors:
                 link = neighbor_record.link
                 neighbor_id = neighbor_record.block.id
@@ -541,9 +531,7 @@ class Mem0Memory:
         """Return one named mental model from the exact scope."""
 
         normalized_name = _required_text(name, field="name")
-        block = self.structures.records.get(
-            _mental_model_address(scope, normalized_name)
-        )
+        block = self.structures.records.get(_mental_model_address(scope, normalized_name))
         return _mental_model_from_block(block) if block is not None else None
 
     def _records(self, scope: MemoryScope) -> list[ExtractedFactRecord]:
@@ -570,10 +558,7 @@ class Mem0Memory:
             if candidate.id == record.id:
                 continue
             candidate_entities = {entity.casefold(): entity for entity in candidate.entities}
-            shared = [
-                candidate_entities[key]
-                for key in sorted(record_entities.keys() & candidate_entities.keys())
-            ]
+            shared = [candidate_entities[key] for key in sorted(record_entities.keys() & candidate_entities.keys())]
             if shared:
                 self.structures.graph.add_edge(
                     candidate.block,
@@ -733,9 +718,9 @@ def _parse_timestamp(value: str, *, field: str) -> datetime:
     """Parse an ISO 8601 timestamp and normalize it to UTC."""
 
     if not isinstance(value, str):
-        raise ValueError(f"{field} must be an ISO 8601 timestamp.")
+        raise TypeError(f"{field} must be an ISO 8601 timestamp.")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"{field} must be an ISO 8601 timestamp.") from exc
     return _normalize_timestamp(parsed, field=field)

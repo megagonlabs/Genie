@@ -89,10 +89,7 @@ class TemporalGraphTools:
             ),
             ToolDefinition(
                 name="add_fact",
-                description=(
-                    "Store a temporal subject-relation-object fact and link it "
-                    "to its source episode. Entities are reused by name and type."
-                ),
+                description=("Store a temporal subject-relation-object fact and link it " "to its source episode. Entities are reused by name and type."),
                 parameters={
                     "subject": "string",
                     "subject_type": "string",
@@ -245,15 +242,8 @@ class TemporalGraphTools:
                 {
                     **_fact_result(fact),
                     "valid_from": _format_timestamp(fact.valid_from),
-                    "valid_to": (
-                        _format_timestamp(fact.valid_to)
-                        if fact.valid_to is not None
-                        else None
-                    ),
-                    "sources": [
-                        episode.value["source"]
-                        for episode in self._graph.provenance(fact)
-                    ],
+                    "valid_to": (_format_timestamp(fact.valid_to) if fact.valid_to is not None else None),
+                    "sources": [episode.value["source"] for episode in self._graph.provenance(fact)],
                 }
             )
         return {"entity": name, "relation": relation, "facts": history}
@@ -384,11 +374,7 @@ class TemporalGraphAgent:
         )
 
         current_statements = {fact["statement"] for fact in current["facts"]}
-        related_facts = [
-            fact
-            for fact in neighborhood["facts"]
-            if fact["statement"] not in current_statements
-        ]
+        related_facts = [fact for fact in neighborhood["facts"] if fact["statement"] not in current_statements]
         lines = [
             f"Question: {question}",
             f"Current facts for {subject} as of {_display_timestamp(as_of)}:",
@@ -436,17 +422,13 @@ def _history_line(fact: dict[str, Any]) -> str:
 
     valid_to = _display_timestamp(fact["valid_to"]) if fact["valid_to"] else "open"
     sources = ", ".join(fact["sources"])
-    return (
-        f"- {fact['statement']}; "
-        f"valid [{_display_timestamp(fact['valid_from'])}, {valid_to}); "
-        f"provenance: {sources}"
-    )
+    return f"- {fact['statement']}; " f"valid [{_display_timestamp(fact['valid_from'])}, {valid_to}); " f"provenance: {sources}"
 
 
 def _parse_timestamp(value: str) -> datetime:
     """Parse a timezone-aware ISO 8601 timestamp supplied to a tool."""
 
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("Tool timestamps must be timezone-aware ISO 8601 values.")
     return parsed.astimezone(UTC)

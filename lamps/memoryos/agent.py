@@ -171,13 +171,9 @@ class MemoryOSTools:
         return {
             "short_term": [_qa_result(qa) for qa in bundle.short_term],
             "mid_term": [_page_result(page) for page in bundle.mid_term],
-            "user_profile": (
-                deepcopy(bundle.user_profile.data) if bundle.user_profile is not None else None
-            ),
+            "user_profile": (deepcopy(bundle.user_profile.data) if bundle.user_profile is not None else None),
             "user_knowledge": [_knowledge_result(item) for item in bundle.user_knowledge],
-            "assistant_knowledge": [
-                _knowledge_result(item) for item in bundle.assistant_knowledge
-            ],
+            "assistant_knowledge": [_knowledge_result(item) for item in bundle.assistant_knowledge],
         }
 
     def _update_long_term(
@@ -191,19 +187,13 @@ class MemoryOSTools:
         profile, user_entries, assistant_entries = self._memory.update_long_term(
             profile_updates=profile_updates,
             profile_source_page_ids=profile_source_page_ids,
-            user_knowledge=tuple(
-                _knowledge_draft(value) for value in (user_knowledge or ())
-            ),
-            assistant_knowledge=tuple(
-                _knowledge_draft(value) for value in (assistant_knowledge or ())
-            ),
+            user_knowledge=tuple(_knowledge_draft(value) for value in (user_knowledge or ())),
+            assistant_knowledge=tuple(_knowledge_draft(value) for value in (assistant_knowledge or ())),
         )
         return {
             "user_profile": deepcopy(profile.data),
             "user_knowledge": [_knowledge_result(item) for item in user_entries],
-            "assistant_knowledge": [
-                _knowledge_result(item) for item in assistant_entries
-            ],
+            "assistant_knowledge": [_knowledge_result(item) for item in assistant_entries],
         }
 
     def _get_user_profile(self) -> dict[str, Any]:
@@ -302,17 +292,9 @@ class MemoryOSAgent:
             "update_long_term",
             {
                 "profile_updates": deepcopy(long_term.profile_updates),
-                "profile_source_page_ids": [
-                    self._required_page_id(key) for key in long_term.profile_source_keys
-                ],
-                "user_knowledge": [
-                    _knowledge_candidate_result(candidate, self._page_ids)
-                    for candidate in long_term.user_knowledge
-                ],
-                "assistant_knowledge": [
-                    _knowledge_candidate_result(candidate, self._page_ids)
-                    for candidate in long_term.assistant_knowledge
-                ],
+                "profile_source_page_ids": [self._required_page_id(key) for key in long_term.profile_source_keys],
+                "user_knowledge": [_knowledge_candidate_result(candidate, self._page_ids) for candidate in long_term.user_knowledge],
+                "assistant_knowledge": [_knowledge_candidate_result(candidate, self._page_ids) for candidate in long_term.assistant_knowledge],
             },
         )
 
@@ -348,15 +330,8 @@ class MemoryOSAgent:
             *(item["knowledge"] for item in memories["assistant_knowledge"]),
         ]
         fact_lines = "\n".join(f"- {fact}" for fact in facts) or "- No matching facts."
-        timeline_lines = "\n".join(
-            f"- {result['occurred_at'][:10]} [{result['layer']}]: {result['text']}"
-            for result in temporal
-        ) or "- No dated memories."
-        graph_lines = "\n".join(
-            f"- {result['relation']} ({result['direction']}, depth {result['distance']}): "
-            f"{result['description']}"
-            for result in graph
-        ) or "- No graph context."
+        timeline_lines = "\n".join(f"- {result['occurred_at'][:10]} [{result['layer']}]: {result['text']}" for result in temporal) or "- No dated memories."
+        graph_lines = "\n".join(f"- {result['relation']} ({result['direction']}, depth {result['distance']}): " f"{result['description']}" for result in graph) or "- No graph context."
         return (
             f"Question: {question}\n"
             f"Long-term user profile: {profile_text}\n"
@@ -459,7 +434,7 @@ def json_profile(profile: dict[str, Any] | None) -> str:
 
 def _parse_timestamp(value: str, *, field: str) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except (AttributeError, ValueError) as exc:
         raise ValueError(f"{field} must be an ISO 8601 timestamp.") from exc
     if parsed.tzinfo is None:

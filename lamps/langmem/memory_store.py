@@ -84,10 +84,7 @@ class ValueSchema:
         for field_name, expected_type in self._fields.items():
             field_value = value[field_name]
             if not isinstance(field_value, expected_type):
-                raise TypeError(
-                    f"Schema {self.name!r} field {field_name!r} must be "
-                    f"{expected_type.__name__}."
-                )
+                raise TypeError(f"Schema {self.name!r} field {field_name!r} must be " f"{expected_type.__name__}.")
         return deepcopy(value)
 
 
@@ -189,10 +186,7 @@ class LangMemStore:
 
         self.memory = memory
         self.structures = structures
-        self._schemas = {
-            _normalize_namespace(namespace): schema
-            for namespace, schema in (schemas or {}).items()
-        }
+        self._schemas = {_normalize_namespace(namespace): schema for namespace, schema in (schemas or {}).items()}
 
     def create(
         self,
@@ -214,15 +208,9 @@ class LangMemStore:
         normalized_key = _required_text(key, field="key")
         address = MemoryAddress(normalized_namespace, normalized_key)
         if self.structures.items.get(address) is not None:
-            raise ValueError(
-                f"Item {normalized_key!r} already exists in namespace {normalized_namespace!r}."
-            )
+            raise ValueError(f"Item {normalized_key!r} already exists in namespace {normalized_namespace!r}.")
         normalized_value, schema_name = self._validate_value(normalized_namespace, value)
-        normalized_occurred_at = (
-            _normalize_timestamp(occurred_at, field="occurred_at")
-            if occurred_at is not None
-            else None
-        )
+        normalized_occurred_at = _normalize_timestamp(occurred_at, field="occurred_at") if occurred_at is not None else None
         normalized_entities = _normalized_strings(entities, field="entities")
         payload = {
             "namespace": list(normalized_namespace),
@@ -267,20 +255,10 @@ class LangMemStore:
         normalized_key = _required_text(key, field="key")
         existing = self.get(normalized_namespace, normalized_key)
         if existing is None:
-            raise KeyError(
-                f"Item {normalized_key!r} was not found in namespace {normalized_namespace!r}."
-            )
+            raise KeyError(f"Item {normalized_key!r} was not found in namespace {normalized_namespace!r}.")
         normalized_value, schema_name = self._validate_value(normalized_namespace, value)
-        normalized_occurred_at = (
-            existing.occurred_at
-            if occurred_at is None
-            else _normalize_timestamp(occurred_at, field="occurred_at")
-        )
-        normalized_entities = (
-            existing.entities
-            if entities is None
-            else _normalized_strings(entities, field="entities")
-        )
+        normalized_occurred_at = existing.occurred_at if occurred_at is None else _normalize_timestamp(occurred_at, field="occurred_at")
+        normalized_entities = existing.entities if entities is None else _normalized_strings(entities, field="entities")
         block = self.memory.update(
             existing.block,
             value={"value": normalized_value},
@@ -308,9 +286,7 @@ class LangMemStore:
 
         normalized_namespace = _normalize_namespace(namespace)
         normalized_key = _required_text(key, field="key")
-        block = self.structures.items.get(
-            MemoryAddress(normalized_namespace, normalized_key)
-        )
+        block = self.structures.items.get(MemoryAddress(normalized_namespace, normalized_key))
         return _item_from_block(block) if block is not None else None
 
     def delete(self, namespace: Sequence[str], key: str) -> LangMemItem:
@@ -338,9 +314,7 @@ class LangMemStore:
 
         prefix = _normalize_namespace(namespace_prefix)
         normalized_query = _required_text(query, field="query")
-        normalized_collections = frozenset(
-            _required_text(value, field="collection") for value in collections
-        )
+        normalized_collections = frozenset(_required_text(value, field="collection") for value in collections)
         normalized_limit = _validate_limit(limit)
         query_tokens = _tokens(normalized_query)
         results: list[SearchResult] = []
@@ -384,9 +358,7 @@ class LangMemStore:
         normalized_end = _normalize_timestamp(end, field="end")
         if normalized_start > normalized_end:
             raise ValueError("start must be earlier than or equal to end.")
-        normalized_collections = frozenset(
-            _required_text(value, field="collection") for value in collections
-        )
+        normalized_collections = frozenset(_required_text(value, field="collection") for value in collections)
         normalized_limit = _validate_limit(limit)
         try:
             exclusive_end = normalized_end + timedelta(microseconds=1)
@@ -429,10 +401,7 @@ class LangMemStore:
             relation=ITEM_RELATION,
             direction="out",
         ):
-            if (
-                existing.target_id == target.block.id
-                and existing.metadata.get("relation") == normalized_relation
-            ):
+            if existing.target_id == target.block.id and existing.metadata.get("relation") == normalized_relation:
                 return existing
         return self.structures.graph.add_edge(
             source.block,
@@ -551,11 +520,7 @@ def _item_from_block(block: MemoryBlock) -> LangMemItem:
         value=deepcopy(payload["value"]),
         schema_name=cast(str | None, block.metadata.get("schema")),
         entities=tuple(cast(list[str], block.metadata.get("entities", []))),
-        occurred_at=(
-            _parse_timestamp(cast(str, occurred_at_value), field="occurred_at")
-            if occurred_at_value is not None
-            else None
-        ),
+        occurred_at=(_parse_timestamp(cast(str, occurred_at_value), field="occurred_at") if occurred_at_value is not None else None),
     )
 
 
@@ -617,9 +582,9 @@ def _normalize_timestamp(value: datetime, *, field: str) -> datetime:
 
 def _parse_timestamp(value: str, *, field: str) -> datetime:
     if not isinstance(value, str):
-        raise ValueError(f"{field} must be an ISO 8601 timestamp.")
+        raise TypeError(f"{field} must be an ISO 8601 timestamp.")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"{field} must be an ISO 8601 timestamp.") from exc
     return _normalize_timestamp(parsed, field=field)

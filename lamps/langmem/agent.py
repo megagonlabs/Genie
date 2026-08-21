@@ -151,11 +151,7 @@ class LangMemTools:
         """Implement `manage_memory`."""
 
         namespace = self._namespace(collection)
-        timestamp = (
-            _parse_timestamp(occurred_at, field="occurred_at")
-            if occurred_at is not None
-            else None
-        )
+        timestamp = _parse_timestamp(occurred_at, field="occurred_at") if occurred_at is not None else None
         if action == "create":
             if value is None:
                 raise ValueError("value is required when action is 'create'.")
@@ -384,27 +380,11 @@ class LangMemAgent:
             },
         )["results"]
 
-        model_summary = (
-            model["value"]["summary"] if model is not None else "No semantic profile found."
-        )
-        relevant = "\n".join(
-            f"- {_display_item(result['item'])}" for result in recalled
-        ) or "- No matching memories."
-        dated = "\n".join(
-            f"- {_display_item(item)}" for item in timeline
-        ) or "- No dated experiences."
-        connected = "\n".join(
-            f"- {result['relation']} ({result['direction']}, depth {result['distance']}): "
-            f"{_display_item(result['item'])}"
-            for result in graph
-        ) or "- No related memories."
-        return (
-            f"Question: {question}\n"
-            f"Semantic profile: {model_summary}\n"
-            f"Relevant memories:\n{relevant}\n"
-            f"Experience timeline:\n{dated}\n"
-            f"Graph context:\n{connected}"
-        )
+        model_summary = model["value"]["summary"] if model is not None else "No semantic profile found."
+        relevant = "\n".join(f"- {_display_item(result['item'])}" for result in recalled) or "- No matching memories."
+        dated = "\n".join(f"- {_display_item(item)}" for item in timeline) or "- No dated experiences."
+        connected = "\n".join(f"- {result['relation']} ({result['direction']}, depth {result['distance']}): " f"{_display_item(result['item'])}" for result in graph) or "- No related memories."
+        return f"Question: {question}\n" f"Semantic profile: {model_summary}\n" f"Relevant memories:\n{relevant}\n" f"Experience timeline:\n{dated}\n" f"Graph context:\n{connected}"
 
     def tool_usage(self) -> dict[str, int]:
         """Return usage counts in first-call order."""
@@ -434,9 +414,9 @@ def _display_item(item: dict[str, Any]) -> str:
 
 def _parse_timestamp(value: str, *, field: str) -> datetime:
     if not isinstance(value, str):
-        raise ValueError(f"{field} must be an ISO 8601 timestamp.")
+        raise TypeError(f"{field} must be an ISO 8601 timestamp.")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"{field} must be an ISO 8601 timestamp.") from exc
     if parsed.tzinfo is None:

@@ -188,12 +188,7 @@ class MemoryOSStructures:
 
         def log_anchor(name: str) -> MemoryBlock:
             existing = next(
-                (
-                    child
-                    for child in tree.children()
-                    if child.type == _STRUCTURE_TYPE
-                    and child.value == {"kind": name}
-                ),
+                (child for child in tree.children() if child.type == _STRUCTURE_TYPE and child.value == {"kind": name}),
                 None,
             )
             if existing is not None:
@@ -316,18 +311,12 @@ class MemoryOSMemory:
     def short_term(self) -> list[ShortTermQA]:
         """Return the FIFO queue from oldest to newest."""
 
-        return [
-            _qa_from_block(item.block, sequence=item.entry.sequence + 1)
-            for item in self.structures.short_term.read(limit=_SEARCH_LIMIT)
-        ]
+        return [_qa_from_block(item.block, sequence=item.entry.sequence + 1) for item in self.structures.short_term.read(limit=_SEARCH_LIMIT)]
 
     def mid_term(self) -> list[MidTermPage]:
         """Return summarized pages in dialogue order."""
 
-        return [
-            _page_from_block(item.block, sequence=item.entry.sequence + 1)
-            for item in self.structures.mid_term.read(limit=_SEARCH_LIMIT)
-        ]
+        return [_page_from_block(item.block, sequence=item.entry.sequence + 1) for item in self.structures.mid_term.read(limit=_SEARCH_LIMIT)]
 
     def retrieve_memory(self, query: str, *, limit: int = 5) -> RetrievalBundle:
         """Retrieve context from short, mid, profile, and both knowledge stores.
@@ -346,15 +335,10 @@ class MemoryOSMemory:
             if score > 0:
                 ranked_pages.append((score, page))
         ranked_pages.sort(key=lambda pair: (-pair[0], pair[1].sequence))
-        heated_pages = tuple(
-            self._record_page_visit(page) for _, page in ranked_pages[:normalized_limit]
-        )
+        heated_pages = tuple(self._record_page_visit(page) for _, page in ranked_pages[:normalized_limit])
 
         def ranked_knowledge(owner: KnowledgeOwner) -> tuple[KnowledgeEntry, ...]:
-            ranked = [
-                (_overlap_score(query_tokens, entry.knowledge), entry)
-                for entry in self.knowledge(owner)
-            ]
+            ranked = [(_overlap_score(query_tokens, entry.knowledge), entry) for entry in self.knowledge(owner)]
             ranked = [pair for pair in ranked if pair[0] > 0]
             ranked.sort(key=lambda pair: (-pair[0], pair[1].sequence))
             return tuple(entry for _, entry in ranked[:normalized_limit])
@@ -404,9 +388,7 @@ class MemoryOSMemory:
             )
 
         user_entries = tuple(self._add_knowledge("user", draft) for draft in user_knowledge)
-        assistant_entries = tuple(
-            self._add_knowledge("assistant", draft) for draft in assistant_knowledge
-        )
+        assistant_entries = tuple(self._add_knowledge("assistant", draft) for draft in assistant_knowledge)
         return profile, user_entries, assistant_entries
 
     def get_user_profile(self) -> LongTermProfile | None:
@@ -420,10 +402,7 @@ class MemoryOSMemory:
 
         normalized_owner = _validate_owner(owner)
         log = self._knowledge_log(normalized_owner)
-        return [
-            _knowledge_from_block(item.block, sequence=item.entry.sequence + 1)
-            for item in log.read(limit=_SEARCH_LIMIT)
-        ]
+        return [_knowledge_from_block(item.block, sequence=item.entry.sequence + 1) for item in log.read(limit=_SEARCH_LIMIT)]
 
     def retrieve_temporal(
         self,
@@ -465,19 +444,11 @@ class MemoryOSMemory:
                 )
             elif block.type == MID_TERM_TYPE:
                 page = _page_from_block(block, sequence=0)
-                results.append(
-                    TemporalResult("mid_term", block.id, occurred_at, page.summary)
-                )
+                results.append(TemporalResult("mid_term", block.id, occurred_at, page.summary))
             elif block.type == KNOWLEDGE_TYPE:
                 entry = _knowledge_from_block(block, sequence=0)
-                layer: MemoryLayer = (
-                    "user_knowledge"
-                    if entry.owner == "user"
-                    else "assistant_knowledge"
-                )
-                results.append(
-                    TemporalResult(layer, block.id, occurred_at, entry.knowledge)
-                )
+                layer: MemoryLayer = "user_knowledge" if entry.owner == "user" else "assistant_knowledge"
+                results.append(TemporalResult(layer, block.id, occurred_at, entry.knowledge))
         results.sort(key=lambda result: (result.occurred_at, result.layer, result.item_id))
         return results[:normalized_limit]
 
@@ -619,11 +590,7 @@ class MemoryOSMemory:
             if page is None:
                 raise ValueError(f"Source page {page_id!r} does not exist.")
             if page.segment_heat < self.heat_threshold:
-                raise ValueError(
-                    f"Source page {page_id!r} belongs to a segment with heat "
-                    f"{page.segment_heat:.1f}, below "
-                    f"threshold {self.heat_threshold:.1f}."
-                )
+                raise ValueError(f"Source page {page_id!r} belongs to a segment with heat " f"{page.segment_heat:.1f}, below " f"threshold {self.heat_threshold:.1f}.")
             pages.append(page)
         return tuple(pages)
 
@@ -699,11 +666,7 @@ class MemoryOSMemory:
     def _knowledge_log(self, owner: KnowledgeOwner) -> EventLog:
         """Return the ordered log for one long-term knowledge owner."""
 
-        return (
-            self.structures.user_knowledge
-            if owner == "user"
-            else self.structures.assistant_knowledge
-        )
+        return self.structures.user_knowledge if owner == "user" else self.structures.assistant_knowledge
 
     def _structural_sequence(self, block: MemoryBlock) -> int:
         """Return a log position for stable mixed graph-result ordering."""
@@ -826,7 +789,7 @@ def _normalize_timestamp(value: datetime, *, field: str) -> datetime:
 
 def _parse_timestamp(value: str, *, field: str) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except (AttributeError, ValueError) as exc:
         raise ValueError(f"{field} must be an ISO 8601 timestamp.") from exc
     return _normalize_timestamp(parsed, field=field)

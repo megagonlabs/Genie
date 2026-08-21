@@ -91,10 +91,7 @@ class HindsightTools:
         self.definitions = (
             ToolDefinition(
                 name="retain",
-                description=(
-                    "Store one atomic world fact, agent experience, or derived observation "
-                    "with entities, dates, tags, metadata, and provenance."
-                ),
+                description=("Store one atomic world fact, agent experience, or derived observation " "with entities, dates, tags, metadata, and provenance."),
                 parameters={
                     "text": "string",
                     "fact_type": "world | experience | observation",
@@ -212,10 +209,7 @@ class HindsightTools:
             fact_type=fact_type,
             state=state,
             entities=entities or (),
-            occurred_dates=[
-                _parse_timestamp(value, field="occurred_dates")
-                for value in (occurred_dates or ())
-            ],
+            occurred_dates=[_parse_timestamp(value, field="occurred_dates") for value in (occurred_dates or ())],
             metadata=metadata,
             tags=tags or (),
             provenance=provenance,
@@ -387,9 +381,7 @@ class HindsightAgent:
                 raise ValueError(f"Duplicate memory candidate key {candidate.key!r}.")
             provenance = deepcopy(candidate.provenance)
             if candidate.derived_from:
-                provenance["source_memory_ids"] = [
-                    self._require_memory_id(key) for key in candidate.derived_from
-                ]
+                provenance["source_memory_ids"] = [self._require_memory_id(key) for key in candidate.derived_from]
             result = self._call(
                 "retain",
                 {
@@ -420,9 +412,7 @@ class HindsightAgent:
                 "name": mental_model.name,
                 "source_query": mental_model.source_query,
                 "content": mental_model.content,
-                "source_memory_ids": [
-                    self._require_memory_id(key) for key in mental_model.source_keys
-                ],
+                "source_memory_ids": [self._require_memory_id(key) for key in mental_model.source_keys],
                 "tags": list(mental_model.tags),
             },
         )
@@ -478,10 +468,7 @@ class HindsightAgent:
             f"Question: {question}",
             f"Mental model ({model['name']}): {model['content']}",
             "Relevant atomic memories:",
-            *[
-                f"- [{result['fact_type']}] {result['text']}"
-                for result in recalled["results"]
-            ],
+            *[f"- [{result['fact_type']}] {result['text']}" for result in recalled["results"]],
             f"Experience timeline for {entity}:",
             *[_timeline_line(result) for result in timeline["results"]],
             f"Graph context around {graph_anchor}:",
@@ -569,7 +556,7 @@ def _parse_timestamp(value: str, *, field: str) -> datetime:
     """Parse one timezone-aware ISO 8601 tool timestamp."""
 
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError as error:
         raise ValueError(f"{field} must be an ISO 8601 timestamp.") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:

@@ -179,11 +179,7 @@ class Mem0Tools:
             scope=self._scope,
             kind=kind,
             entities=entities or (),
-            occurred_at=(
-                _parse_timestamp(occurred_at, field="occurred_at")
-                if occurred_at is not None
-                else None
-            ),
+            occurred_at=(_parse_timestamp(occurred_at, field="occurred_at") if occurred_at is not None else None),
             metadata=metadata,
         )
         return _record_result(record)
@@ -399,13 +395,7 @@ class Mem0Agent:
             empty="No related memories.",
         )
         synthesis = model["content"] if model is not None else "No mental model is available."
-        return (
-            f"Question: {question}\n"
-            f"Plan: {synthesis}\n"
-            f"Best matching memory: {preference}\n"
-            f"Prior experience timeline:\n{timeline}\n"
-            f"Shared-entity context:\n{connected}"
-        )
+        return f"Question: {question}\n" f"Plan: {synthesis}\n" f"Best matching memory: {preference}\n" f"Prior experience timeline:\n{timeline}\n" f"Shared-entity context:\n{connected}"
 
     def memory_id(self, key: str) -> str:
         """Return the stored id for a demo candidate key."""
@@ -425,9 +415,7 @@ class Mem0Agent:
 
     def _call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = self.tools.call(name, arguments)
-        self.tool_calls.append(
-            ToolCallRecord(name, deepcopy(arguments), deepcopy(result))
-        )
+        self.tool_calls.append(ToolCallRecord(name, deepcopy(arguments), deepcopy(result)))
         return result
 
 
@@ -462,9 +450,9 @@ def _parse_timestamp(value: str, *, field: str) -> datetime:
     """Parse an aware ISO 8601 timestamp."""
 
     if not isinstance(value, str):
-        raise ValueError(f"{field} must be an ISO 8601 timestamp.")
+        raise TypeError(f"{field} must be an ISO 8601 timestamp.")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"{field} must be an ISO 8601 timestamp.") from exc
     if parsed.tzinfo is None:

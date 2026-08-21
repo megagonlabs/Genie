@@ -196,9 +196,7 @@ class HindsightMemoryBank:
         normalized_state = _validate_state(state)
         normalized_entities = _normalized_strings(entities, field="entities")
         normalized_tags = _normalized_strings(tags, field="tags")
-        normalized_dates = tuple(
-            sorted(_normalize_timestamp(value, field="occurred_dates") for value in occurred_dates)
-        )
+        normalized_dates = tuple(sorted(_normalize_timestamp(value, field="occurred_dates") for value in occurred_dates))
         formatted_dates = [_format_timestamp(value) for value in normalized_dates]
         payload = {
             "text": normalized_text,
@@ -261,9 +259,7 @@ class HindsightMemoryBank:
             TypeError: If the block is not an atomic memory unit.
         """
 
-        block = self.structures.names.get(
-            MemoryAddress(("units",), _unit_id(unit))
-        )
+        block = self.structures.names.get(MemoryAddress(("units",), _unit_id(unit)))
         return _memory_unit_from_block(block) if block is not None else None
 
     def set_state(
@@ -392,9 +388,7 @@ class HindsightMemoryBank:
             Mental model, or `None` when no model has that name.
         """
 
-        block = self.structures.names.get(
-            MemoryAddress(("mental_models",), name)
-        )
+        block = self.structures.names.get(MemoryAddress(("mental_models",), name))
         return _mental_model_from_block(block) if block is not None else None
 
     def recall(
@@ -441,9 +435,7 @@ class HindsightMemoryBank:
                 continue
             if selected_tags and not selected_tags.issubset(unit.tags):
                 continue
-            if normalized_entity is not None and normalized_entity not in {
-                value.casefold() for value in unit.entities
-            }:
+            if normalized_entity is not None and normalized_entity not in {value.casefold() for value in unit.entities}:
                 continue
             haystack = " ".join((unit.text, *unit.entities, *unit.tags))
             overlap = query_tokens.intersection(_tokens(haystack))
@@ -514,21 +506,15 @@ class HindsightMemoryBank:
                 relation=OCCURRENCE_OF_RELATION,
             )
             if len(neighbors) != 1:
-                raise ValueError(
-                    f"Occurrence {temporal.block.id!r} must reference one memory unit."
-                )
+                raise ValueError(f"Occurrence {temporal.block.id!r} must reference one memory unit.")
             unit = self.get_unit(neighbors[0].block)
             if unit is None:
-                raise ValueError(
-                    f"Occurrence {temporal.block.id!r} references a missing memory unit."
-                )
+                raise ValueError(f"Occurrence {temporal.block.id!r} references a missing memory unit.")
             if unit.state != "valid":
                 continue
             if selected_types and unit.fact_type not in selected_types:
                 continue
-            if normalized_entity is not None and normalized_entity not in {
-                value.casefold() for value in unit.entities
-            }:
+            if normalized_entity is not None and normalized_entity not in {value.casefold() for value in unit.entities}:
                 continue
             previous = selected_by_id.get(unit.id)
             if previous is None or occurred_at < previous[0]:
@@ -604,10 +590,7 @@ class HindsightMemoryBank:
     def _all_units(self) -> list[MemoryUnit]:
         """Return every readable atomic unit in insertion order."""
 
-        return [
-            _memory_unit_from_block(item.block)
-            for item in self.structures.units.read(limit=_SEARCH_LIMIT)
-        ]
+        return [_memory_unit_from_block(item.block) for item in self.structures.units.read(limit=_SEARCH_LIMIT)]
 
     def _require_unit(self, unit: str | MemoryBlock | MemoryUnit) -> MemoryUnit:
         """Return an existing memory unit or raise `ValueError`."""
@@ -632,10 +615,7 @@ def _memory_unit_from_block(block: MemoryBlock) -> MemoryUnit:
         fact_type=_validate_fact_type(_payload_string(payload, "fact_type")),
         state=_validate_state(_payload_string(payload, "state")),
         entities=_payload_strings(payload, "entities"),
-        occurred_dates=tuple(
-            _parse_timestamp(value, field="occurred_dates")
-            for value in _payload_strings(payload, "occurred_dates")
-        ),
+        occurred_dates=tuple(_parse_timestamp(value, field="occurred_dates") for value in _payload_strings(payload, "occurred_dates")),
         metadata=_payload_dict(payload, "metadata"),
         tags=_payload_strings(payload, "tags"),
         provenance=_payload_dict(payload, "provenance"),
@@ -698,7 +678,7 @@ def _parse_timestamp(value: str, *, field: str) -> datetime:
     """Parse a timezone-aware ISO 8601 timestamp."""
 
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError as error:
         raise ValueError(f"{field} must contain ISO 8601 timestamps.") from error
     return _normalize_timestamp(parsed, field=field)
