@@ -127,11 +127,11 @@ class InMemoryLinkStore:
             for link in self._links.values():
                 if relation is not None and link.relation != relation:
                     continue
-                if direction == "out" and link.source_id == block_id:
-                    selected.append(_copy_link(link))
-                elif direction == "in" and link.target_id == block_id:
-                    selected.append(_copy_link(link))
-                elif direction == "both" and block_id in {link.source_id, link.target_id}:
+                if (
+                    (direction == "out" and link.source_id == block_id)
+                    or (direction == "in" and link.target_id == block_id)
+                    or (direction == "both" and block_id in {link.source_id, link.target_id})
+                ):
                     selected.append(_copy_link(link))
             return selected
 
@@ -236,9 +236,7 @@ class RoutedBackend:
                 if not replace:
                     raise MemoryConflict(f"Route {route!r} is already configured.")
                 if route in self._catalog.values():
-                    raise MemoryConflict(
-                        f"Route {route!r} cannot be replaced because it owns cataloged blocks."
-                    )
+                    raise MemoryConflict(f"Route {route!r} cannot be replaced because it owns cataloged blocks.")
             self.routes[route] = backend
             if make_default:
                 self.default_route = route
@@ -532,9 +530,7 @@ class RoutedBackend:
         if block.parent_id is not None and self.enforce_tree_route:
             parent_route = self._route_for_existing_block(block.parent_id)
             if selected is not None and selected != parent_route:
-                raise MemoryConflict(
-                    f"Child route {selected!r} does not match parent route {parent_route!r}."
-                )
+                raise MemoryConflict(f"Child route {selected!r} does not match parent route {parent_route!r}.")
             return parent_route
         route = selected or self.default_route
         if route not in self.routes:
@@ -547,8 +543,7 @@ class RoutedBackend:
         block_id: str,
         *,
         missing_ok: Literal[False] = False,
-    ) -> RouteKey:
-        ...
+    ) -> RouteKey: ...
 
     @overload
     def _route_for_existing_block(
@@ -556,8 +551,7 @@ class RoutedBackend:
         block_id: str,
         *,
         missing_ok: Literal[True],
-    ) -> RouteKey | None:
-        ...
+    ) -> RouteKey | None: ...
 
     def _route_for_existing_block(
         self,
@@ -572,11 +566,7 @@ class RoutedBackend:
             if route is not None:
                 return route
 
-            discovered: list[RouteKey] = [
-                route_key
-                for route_key, backend in self.routes.items()
-                if backend.get_block(block_id) is not None
-            ]
+            discovered: list[RouteKey] = [route_key for route_key, backend in self.routes.items() if backend.get_block(block_id) is not None]
             if not discovered:
                 if missing_ok:
                     return None
@@ -599,11 +589,7 @@ class RoutedBackend:
                 if block_id not in seen:
                     seen.add(block_id)
                     linked_ids.append(block_id)
-        blocks = [
-            block
-            for block_id in linked_ids
-            if (block := self.get_block(block_id)) is not None
-        ]
+        blocks = [block for block_id in linked_ids if (block := self.get_block(block_id)) is not None]
         return _search_blocks(query, blocks)
 
 
@@ -655,10 +641,4 @@ def _copy_link(link: MemoryLink) -> MemoryLink:
 def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
     """Return whether two links identify the same relationship."""
 
-    return (
-        left.id == right.id
-        and left.source_id == right.source_id
-        and left.target_id == right.target_id
-        and left.relation == right.relation
-        and left.created_at == right.created_at
-    )
+    return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at

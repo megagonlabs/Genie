@@ -139,14 +139,9 @@ class InMemoryBackend:
 
         with self._structure_lock:
             if expected_versions is not None:
-                current = {
-                    block.id: block.version
-                    for block in self.descendants(block_id, include_self=True)
-                }
+                current = {block.id: block.version for block in self.descendants(block_id, include_self=True)}
                 if current != dict(expected_versions):
-                    raise MemoryConflict(
-                        f"Memory subtree {block_id!r} changed before it could be deleted."
-                    )
+                    raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
             self._delete_block_unchecked(block_id)
 
     def _delete_block_unchecked(self, block_id: str) -> None:
@@ -177,10 +172,7 @@ class InMemoryBackend:
         """
 
         with self._structure_lock:
-            return [
-                _copy_block(self._blocks[child_id])
-                for child_id in self._children.get(block_id, ())
-            ]
+            return [_copy_block(self._blocks[child_id]) for child_id in self._children.get(block_id, ())]
 
     def ancestors(self, block_id: str) -> list[MemoryBlock]:
         """Return ancestors from nearest parent upward.
@@ -262,10 +254,7 @@ class InMemoryBackend:
             )
             slot = _key_slot(binding.collection_id, binding.address)
             if slot in self._key_bindings:
-                raise MemoryConflict(
-                    f"Key address {binding.address!r} is already bound in "
-                    f"collection {binding.collection_id!r}."
-                )
+                raise MemoryConflict(f"Key address {binding.address!r} is already bound in " f"collection {binding.collection_id!r}.")
             self._key_bindings[slot] = binding
             return binding
 
@@ -286,11 +275,7 @@ class InMemoryBackend:
             slot = _key_slot(binding.collection_id, binding.address)
             current = self._key_bindings.get(slot)
             if current is None or current.block_id != expected_block_id:
-                raise MemoryConflict(
-                    f"Key address {binding.address!r} in collection "
-                    f"{binding.collection_id!r} no longer points to expected "
-                    f"block {expected_block_id!r}."
-                )
+                raise MemoryConflict(f"Key address {binding.address!r} in collection " f"{binding.collection_id!r} no longer points to expected " f"block {expected_block_id!r}.")
             self._key_bindings[slot] = binding
             return binding
 
@@ -335,11 +320,7 @@ class InMemoryBackend:
             )
             if after is not None:
                 after_key = (after.namespace, after.key)
-                bindings = [
-                    binding
-                    for binding in bindings
-                    if (binding.address.namespace, binding.address.key) > after_key
-                ]
+                bindings = [binding for binding in bindings if (binding.address.namespace, binding.address.key) > after_key]
             return bindings[:limit]
 
     def unbind_key(
@@ -355,10 +336,7 @@ class InMemoryBackend:
             slot = _key_slot(collection_id, address)
             current = self._key_bindings.get(slot)
             if current is None or current.block_id != expected_block_id:
-                raise MemoryConflict(
-                    f"Key address {address!r} in collection {collection_id!r} "
-                    f"no longer points to expected block {expected_block_id!r}."
-                )
+                raise MemoryConflict(f"Key address {address!r} in collection {collection_id!r} " f"no longer points to expected block {expected_block_id!r}.")
             self._key_bindings.pop(slot)
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
@@ -414,12 +392,7 @@ class InMemoryBackend:
             raise ValueError("stop must be greater than or equal to start.")
         _validate_limit(limit)
         with self._structure_lock:
-            entries = [
-                entry
-                for sequence, entry in self._log_entries.get(log_id, {}).items()
-                if (start is None or sequence >= start)
-                and (stop is None or sequence < stop)
-            ]
+            entries = [entry for sequence, entry in self._log_entries.get(log_id, {}).items() if (start is None or sequence >= start) and (stop is None or sequence < stop)]
             entries = sorted(
                 entries,
                 key=lambda entry: entry.sequence,
@@ -451,10 +424,7 @@ class InMemoryBackend:
             )
             slot = (entry.collection_id, entry.block_id)
             if slot in self._temporal_entries:
-                raise MemoryConflict(
-                    f"Memory block {entry.block_id!r} is already in temporal "
-                    f"collection {entry.collection_id!r}."
-                )
+                raise MemoryConflict(f"Memory block {entry.block_id!r} is already in temporal " f"collection {entry.collection_id!r}.")
             self._temporal_entries[slot] = entry
             return entry
 
@@ -469,10 +439,7 @@ class InMemoryBackend:
             )
             slot = (entry.collection_id, entry.block_id)
             if slot not in self._temporal_entries:
-                raise MemoryConflict(
-                    f"Memory block {entry.block_id!r} is not in temporal "
-                    f"collection {entry.collection_id!r}."
-                )
+                raise MemoryConflict(f"Memory block {entry.block_id!r} is not in temporal " f"collection {entry.collection_id!r}.")
             self._temporal_entries[slot] = entry
             return entry
 
@@ -498,12 +465,7 @@ class InMemoryBackend:
         _validate_limit(limit)
         with self._structure_lock:
             entries = sorted(
-                (
-                    entry
-                    for entry in self._temporal_entries.values()
-                    if entry.collection_id == collection_id
-                    and (after_block_id is None or entry.block_id > after_block_id)
-                ),
+                (entry for entry in self._temporal_entries.values() if entry.collection_id == collection_id and (after_block_id is None or entry.block_id > after_block_id)),
                 key=lambda entry: entry.block_id,
             )
             return entries[:limit]
@@ -514,10 +476,7 @@ class InMemoryBackend:
         with self._structure_lock:
             slot = (collection_id, block_id)
             if slot not in self._temporal_entries:
-                raise MemoryConflict(
-                    f"Memory block {block_id!r} is not in temporal collection "
-                    f"{collection_id!r}."
-                )
+                raise MemoryConflict(f"Memory block {block_id!r} is not in temporal collection " f"{collection_id!r}.")
             self._temporal_entries.pop(slot)
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
@@ -557,9 +516,7 @@ class InMemoryBackend:
         valid_at = _normalize_optional_time(valid_at, name="valid_at")
         if occurred_start is not None and occurred_stop is not None:
             if occurred_stop < occurred_start:
-                raise ValueError(
-                    "occurred_stop must be greater than or equal to occurred_start."
-                )
+                raise ValueError("occurred_stop must be greater than or equal to occurred_start.")
         if overlaps is not None and not isinstance(overlaps, ValidityInterval):
             raise TypeError("overlaps must be a ValidityInterval.")
         _validate_limit(limit)
@@ -613,10 +570,7 @@ class InMemoryBackend:
 
         with self._structure_lock:
             if link.relation in self._acyclic_relations:
-                raise MemoryConflict(
-                    f"Link relation {link.relation!r} is protected as an acyclic "
-                    "graph; use atomic acyclic insertion."
-                )
+                raise MemoryConflict(f"Link relation {link.relation!r} is protected as an acyclic " "graph; use atomic acyclic insertion.")
             self._validate_new_link(link)
             return self._store_new_link(link)
 
@@ -630,22 +584,14 @@ class InMemoryBackend:
 
         with self._structure_lock:
             self._validate_new_link(link)
-            if (
-                link.relation not in self._acyclic_relations
-                and self._relation_has_cycle(link.relation)
-            ):
-                raise MemoryConflict(
-                    f"Link relation {link.relation!r} already contains a cycle."
-                )
+            if link.relation not in self._acyclic_relations and self._relation_has_cycle(link.relation):
+                raise MemoryConflict(f"Link relation {link.relation!r} already contains a cycle.")
             if link.source_id == link.target_id or self._link_path_exists(
                 link.target_id,
                 link.source_id,
                 relation=link.relation,
             ):
-                raise MemoryConflict(
-                    f"Link {link.source_id!r} -> {link.target_id!r} would create "
-                    f"a cycle in relation {link.relation!r}."
-                )
+                raise MemoryConflict(f"Link {link.source_id!r} -> {link.target_id!r} would create " f"a cycle in relation {link.relation!r}.")
             self._acyclic_relations.add(link.relation)
             return self._store_new_link(link)
 
@@ -684,11 +630,7 @@ class InMemoryBackend:
             if current_id in visited:
                 continue
             visited.add(current_id)
-            pending.extend(
-                link.target_id
-                for link in self._links.values()
-                if link.relation == relation and link.source_id == current_id
-            )
+            pending.extend(link.target_id for link in self._links.values() if link.relation == relation and link.source_id == current_id)
         return False
 
     def _relation_has_cycle(self, relation: str) -> bool:
@@ -767,11 +709,11 @@ class InMemoryBackend:
             for link in self._links.values():
                 if relation is not None and link.relation != relation:
                     continue
-                if direction == "out" and link.source_id == block_id:
-                    selected.append(_copy_link(link))
-                elif direction == "in" and link.target_id == block_id:
-                    selected.append(_copy_link(link))
-                elif direction == "both" and block_id in {link.source_id, link.target_id}:
+                if (
+                    (direction == "out" and link.source_id == block_id)
+                    or (direction == "in" and link.target_id == block_id)
+                    or (direction == "both" and block_id in {link.source_id, link.target_id})
+                ):
                     selected.append(_copy_link(link))
             return selected
 
@@ -814,9 +756,7 @@ class InMemoryBackend:
                         continue
                     score = float(haystack.count(text) or 1)
                     reason = "matched text"
-                results.append(
-                    SearchResult(block=_copy_block(block), score=score, reason=reason)
-                )
+                results.append(SearchResult(block=_copy_block(block), score=score, reason=reason))
             results.sort(key=lambda result: result.score, reverse=True)
             return results[: query.limit]
 
@@ -853,10 +793,7 @@ class InMemoryBackend:
             raise MemoryConflict("A memory block cannot be its own parent.")
         if updated.parent_id is not None and self.contains(updated.id, updated.parent_id):
             raise MemoryConflict("A memory block cannot be moved under one of its descendants.")
-        if (
-            previous.parent_id is not None
-            and previous.id in self._children.get(previous.parent_id, [])
-        ):
+        if previous.parent_id is not None and previous.id in self._children.get(previous.parent_id, []):
             self._children[previous.parent_id].remove(previous.id)
         if updated.parent_id is not None:
             self._children[updated.parent_id].append(updated.id)
@@ -887,13 +824,7 @@ def _copy_link(link: MemoryLink) -> MemoryLink:
 def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
     """Return whether two links identify the same relationship."""
 
-    return (
-        left.id == right.id
-        and left.source_id == right.source_id
-        and left.target_id == right.target_id
-        and left.relation == right.relation
-        and left.created_at == right.created_at
-    )
+    return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
 
 
 def _validate_expected_version(
@@ -906,14 +837,9 @@ def _validate_expected_version(
     if expected_version is None:
         return
     if previous.version != expected_version:
-        raise MemoryConflict(
-            f"Memory block {previous.id!r} changed from expected version "
-            f"{expected_version}."
-        )
+        raise MemoryConflict(f"Memory block {previous.id!r} changed from expected version " f"{expected_version}.")
     if replacement.version != expected_version + 1:
-        raise MemoryConflict(
-            "A conditional block replacement must increment its version by one."
-        )
+        raise MemoryConflict("A conditional block replacement must increment its version by one.")
 
 
 def _key_slot(
