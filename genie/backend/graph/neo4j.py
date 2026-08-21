@@ -956,9 +956,8 @@ class Neo4jBackend:
         """Run one managed read transaction and translate driver failures."""
 
         try:
-            with self._operation_driver() as driver:
-                with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
-                    return session.execute_read(operation)
+            with self._operation_driver() as driver, driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
+                return session.execute_read(operation)
         except GenieError:
             raise
         except self._exception_types as error:
@@ -972,9 +971,8 @@ class Neo4jBackend:
             return operation(tx)
 
         try:
-            with self._operation_driver() as driver:
-                with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
-                    return session.execute_write(guarded)
+            with self._operation_driver() as driver, driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
+                return session.execute_write(guarded)
         except GenieError:
             raise
         except self._exception_types as error:
@@ -1187,9 +1185,8 @@ class Neo4jBackend:
 
     def _raw_read(self, operation: Callable[[Any], _T]) -> _T:
         try:
-            with self._operation_driver() as driver:
-                with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
-                    return session.execute_read(operation)
+            with self._operation_driver() as driver, driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
+                return session.execute_read(operation)
         except UnsupportedOperation:
             raise
         except self._exception_types as error:
@@ -1197,9 +1194,8 @@ class Neo4jBackend:
 
     def _raw_write(self, operation: Callable[[Any], _T]) -> _T:
         try:
-            with self._operation_driver() as driver:
-                with driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
-                    return session.execute_write(operation)
+            with self._operation_driver() as driver, driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
+                return session.execute_write(operation)
         except UnsupportedOperation:
             raise
         except self._exception_types as error:

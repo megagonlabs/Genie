@@ -35,7 +35,7 @@ class Principal:
         object.__setattr__(self, "metadata", deepcopy(self.metadata))
 
     @classmethod
-    def coerce(cls, value: "Principal | str | None") -> "Principal":
+    def coerce(cls, value: Principal | str | None) -> Principal:
         """Convert common principal representations into a `Principal`.
 
         Args:

@@ -148,7 +148,7 @@ class TaskMemory:
     knowledge: Knowledge
 
     @classmethod
-    def create(cls, memory: Memory, *, workspace: MemoryBlock) -> "TaskMemory":
+    def create(cls, memory: Memory, *, workspace: MemoryBlock) -> TaskMemory:
         """Create structure roots and return a value-oriented task memory."""
 
         backend = memory.backend

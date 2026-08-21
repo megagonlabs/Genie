@@ -830,7 +830,7 @@ class Memory:
         allow_global: bool = False,
         allow_mounts: bool = False,
         allow_policy_override: bool = False,
-    ) -> "MemoryHandle":
+    ) -> MemoryHandle:
         """Create a bounded memory handle to pass to agents.
 
         Args:
@@ -887,7 +887,7 @@ class Memory:
         allow_global: bool = False,
         allow_mounts: bool = False,
         allow_policy_override: bool = False,
-    ) -> "MemoryHandle":
+    ) -> MemoryHandle:
         """Create an explicit unbounded memory handle.
 
         An unbounded handle has no default subtree root. It can still be limited
@@ -972,7 +972,7 @@ class Memory:
         allow_global: bool,
         allow_mounts: bool,
         allow_policy_override: bool,
-    ) -> "MemoryHandle":
+    ) -> MemoryHandle:
         """Construct a `MemoryHandle` after root validation is complete."""
 
         from genie.memory.handle import MemoryHandle

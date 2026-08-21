@@ -37,7 +37,7 @@ class MemoryHandle:
     def __init__(
         self,
         *,
-        memory: "Memory",
+        memory: Memory,
         root_id: str | None,
         principal: Principal,
         default_scope: Scope = Scope.SUBTREE,
@@ -684,7 +684,7 @@ class MemoryHandle:
         allow_global: bool = False,
         allow_mounts: bool = False,
         allow_policy_override: bool = False,
-    ) -> "MemoryHandle":
+    ) -> MemoryHandle:
         """Create a narrower child handle.
 
         Args:
@@ -768,7 +768,7 @@ class MemoryHandle:
             allow_policy_override=allow_policy_override,
         )
 
-    def _as_principal(self) -> "Memory":
+    def _as_principal(self) -> Memory:
         """Create a `Memory` handle that shares state but uses this principal."""
 
         return self._memory.__class__(

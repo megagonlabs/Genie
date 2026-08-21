@@ -1,0 +1,1 @@
+ruff check . --output-format grouped --output-file ruff_report.txt

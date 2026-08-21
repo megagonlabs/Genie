@@ -57,7 +57,7 @@ class AccessRule:
         )
 
     @classmethod
-    def allow(cls) -> "AccessRule":
+    def allow(cls) -> AccessRule:
         """Create a rule that allows every principal.
 
         Returns:
@@ -67,7 +67,7 @@ class AccessRule:
         return cls(allow_all=True)
 
     @classmethod
-    def deny(cls) -> "AccessRule":
+    def deny(cls) -> AccessRule:
         """Create a rule that denies every principal.
 
         Returns:
@@ -83,7 +83,7 @@ class AccessRule:
         principals: set[str] | frozenset[str] | None = None,
         roles: set[str] | frozenset[str] | None = None,
         owner: bool = False,
-    ) -> "AccessRule":
+    ) -> AccessRule:
         """Create a rule that allows only listed principals or roles.
 
         Args:
@@ -103,7 +103,7 @@ class AccessRule:
         )
 
     @classmethod
-    def owner(cls) -> "AccessRule":
+    def owner(cls) -> AccessRule:
         """Create a rule that allows only the block creator.
 
         Returns:
@@ -155,7 +155,7 @@ class _FrozenOperationRules(Mapping[str, AccessRule]):
 
         return len(self._rules)
 
-    def __deepcopy__(self, memo: dict[int, object]) -> "_FrozenOperationRules":
+    def __deepcopy__(self, memo: dict[int, object]) -> _FrozenOperationRules:
         """Return a copied immutable mapping."""
 
         copied = self.__class__(deepcopy(self._rules, memo))
@@ -209,7 +209,7 @@ class MemoryPolicy:
         object.__setattr__(self, "operations", _freeze_operation_rules(self.operations))
 
     @classmethod
-    def public(cls) -> "MemoryPolicy":
+    def public(cls) -> MemoryPolicy:
         """Create a public policy.
 
         Returns:
@@ -219,7 +219,7 @@ class MemoryPolicy:
         return cls()
 
     @classmethod
-    def owner_private(cls) -> "MemoryPolicy":
+    def owner_private(cls) -> MemoryPolicy:
         """Create a policy that allows only the block creator.
 
         The owner is resolved from `MemoryBlock.created_by` when a policy check
@@ -245,7 +245,7 @@ class MemoryPolicy:
         *,
         principals: set[str] | frozenset[str] | None = None,
         roles: set[str] | frozenset[str] | None = None,
-    ) -> "MemoryPolicy":
+    ) -> MemoryPolicy:
         """Create a policy that allows the creator plus listed principals or roles.
 
         This is useful for managed memory systems where the creator should keep

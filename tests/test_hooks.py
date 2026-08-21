@@ -2825,9 +2825,8 @@ def test_nested_scopes_inherit_and_override_attributes() -> None:
 
     hook = RecordingContextHook()
     memory = Memory(hooks=[hook])
-    with memory.hooks.scope("agent.run", attributes={"run_id": "r1", "turn": "6"}) as run:
-        with memory.hooks.scope("agent.turn", attributes={"turn": "7"}) as turn:
-            memory.put(type="note", value="one")
+    with memory.hooks.scope("agent.run", attributes={"run_id": "r1", "turn": "6"}) as run, memory.hooks.scope("agent.turn", attributes={"turn": "7"}) as turn:
+        memory.put(type="note", value="one")
 
     context = hook.contexts[0]
     assert turn.parent_operation_id == run.operation_id
@@ -2864,9 +2863,8 @@ def test_operations_cannot_be_opened_as_spans() -> None:
 
     registry = HookRegistry()
     for operation in (HookOperation.SCOPE, "scope"):
-        with pytest.raises(ValueError, match="Open it with HookRegistry.scope"):
-            with registry.operation(operation):
-                pytest.fail("A span must not start as a dispatched operation.")
+        with pytest.raises(ValueError, match="Open it with HookRegistry.scope"), registry.operation(operation):
+            pytest.fail("A span must not start as a dispatched operation.")
 
 
 @pytest.mark.parametrize(
@@ -2912,9 +2910,8 @@ def test_scope_rejects_names_that_are_not_strings(name: object) -> None:
     """A scope name is a caller-defined string."""
 
     registry = HookRegistry()
-    with pytest.raises(TypeError, match="Scope name must be a string"):
-        with registry.scope(cast(Any, name)):
-            pass
+    with pytest.raises(TypeError, match="Scope name must be a string"), registry.scope(cast(Any, name)):
+        pass
 
 
 @pytest.mark.parametrize("name", ["", "   "])
@@ -2922,9 +2919,8 @@ def test_scope_rejects_empty_names(name: str) -> None:
     """An unnamed scope would group operations under nothing."""
 
     registry = HookRegistry()
-    with pytest.raises(ValueError, match="Scope name must not be empty"):
-        with registry.scope(name):
-            pass
+    with pytest.raises(ValueError, match="Scope name must not be empty"), registry.scope(name):
+        pass
 
 
 def test_scope_context_is_released_after_an_error() -> None:
@@ -2932,10 +2928,9 @@ def test_scope_context_is_released_after_an_error() -> None:
 
     hook = RecordingContextHook()
     memory = Memory(hooks=[hook])
-    with pytest.raises(RuntimeError):
-        with memory.hooks.scope("agent.turn", attributes={"run_id": "r1"}):
-            memory.put(type="note", value="one")
-            raise RuntimeError("the turn failed")
+    with pytest.raises(RuntimeError), memory.hooks.scope("agent.turn", attributes={"run_id": "r1"}):
+        memory.put(type="note", value="one")
+        raise RuntimeError("the turn failed")
     memory.put(type="note", value="two")
 
     failed, recovered = hook.contexts

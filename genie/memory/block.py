@@ -73,7 +73,7 @@ class MemoryBlock:
     created_by: str | None = None
     version: int = 1
 
-    def with_updates(self, **changes: Any) -> "MemoryBlock":
+    def with_updates(self, **changes: Any) -> MemoryBlock:
         """Return a copy of the block with selected fields replaced.
 
         Args:
