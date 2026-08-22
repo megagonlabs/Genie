@@ -70,6 +70,29 @@ def main() -> None:
         current_region.id,
     }
 
+    # scan applies every supplied filter at once. An entry missing a time field
+    # a filter needs does not match, so combining bounds narrows the result.
+    rollout = memory.put(type="fact", value="rollout window is open")
+    timeline.add(
+        rollout,
+        occurred_at=at(12),
+        validity=ValidityInterval(valid_at=at(12), invalid_at=at(20)),
+    )
+
+    dated = timeline.events(start=at(1), stop=at(20))
+    valid_mid_january = timeline.valid_at(at(15))
+    both = timeline.scan(occurred_start=at(1), occurred_stop=at(20), valid_at=at(15))
+
+    print(f"entries with an event time in range: {len(dated)}")
+    print(f"entries valid on Jan 15, 2026: {len(valid_mid_january)}")
+    print(f"entries matching both bounds: {[item.block.value for item in both]}")
+
+    assert {item.block.id for item in dated} == {deployed.id, rollout.id}
+    assert {item.block.id for item in valid_mid_january} == {current_region.id, rollout.id}
+    # The deployment has no validity and the region fact has no event time, so
+    # only the rollout window satisfies both filters.
+    assert [item.block.id for item in both] == [rollout.id]
+
     timeline.replace(
         old_region,
         validity=ValidityInterval(valid_at=at(1), invalid_at=at(8)),

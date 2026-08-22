@@ -305,9 +305,11 @@ def main() -> None:
     else:
         raise AssertionError("The planner must not create an out-of-scope handle.")
 
-    section("Audit hook observed writes")
+    section("Audit hook observed writes and deletions")
+    memory.delete(other_project)
     print(f"audit events: {len(audit.events)}")
     assert any(event.startswith("created:task:") for event in audit.events)
+    assert f"deleted:project:{other_project.id}" in audit.events
 
     section("Done")
     print("The full Memory object stayed in trusted application code; agents only received handles.")
