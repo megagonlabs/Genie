@@ -58,7 +58,7 @@ class BlockStore(Protocol):
         Args:
             block: Encoded replacement block.
             expected_version: Required current version. When supplied, the
-                replacement must have version ``expected_version + 1`` and the
+                replacement must have version `expected_version + 1` and the
                 write must fail if another writer changed the block first.
 
         Returns:
@@ -86,7 +86,7 @@ class BlockStore(Protocol):
                 subtree membership or any version changed.
 
         Raises:
-            MemoryConflict: If ``expected_versions`` no longer describes the
+            MemoryConflict: If `expected_versions` no longer describes the
                 complete subtree.
         """
 

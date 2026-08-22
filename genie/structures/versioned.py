@@ -23,12 +23,12 @@ from genie.structures.records import (
 
 @runtime_checkable
 class VersionedAccess(BlockReader, Protocol):
-    """Small access surface required by ``VersionedRecords``."""
+    """Small access surface required by `VersionedRecords`."""
 
 
 @runtime_checkable
 class VersionedStore(KeyedStore, SequenceStore, Protocol):
-    """Combined existing capabilities required by ``VersionedRecords``."""
+    """Combined existing capabilities required by `VersionedRecords`."""
 
 
 class VersionedRecords:
@@ -106,7 +106,15 @@ class VersionedRecords:
         return self._identities.bind(address, identity)
 
     def identity(self, address: MemoryAddress) -> MemoryBlock | None:
-        """Return the visible stable identity at an exact address."""
+        """Return the visible stable identity at an exact address.
+
+        Args:
+            address: Address of a registered stable identity.
+
+        Returns:
+            Visible identity block, or `None` when the address is
+            unregistered.
+        """
 
         return self._identities.get(address)
 
@@ -117,7 +125,22 @@ class VersionedRecords:
         recursive: bool = False,
         limit: int = 100,
     ) -> list[KeyedItem]:
-        """List visible registered identities in stable address order."""
+        """List visible registered identities in stable address order.
+
+        Args:
+            namespace: Optional exact namespace. With `recursive=True`, it is
+                treated as a namespace prefix.
+            recursive: Whether to include nested namespaces below `namespace`.
+            limit: Maximum visible identities to return.
+
+        Returns:
+            Visible identities in ascending address order.
+
+        Raises:
+            TypeError: If `recursive` is not a boolean or `limit` is not an
+                integer.
+            ValueError: If `limit` is negative.
+        """
 
         return self._identities.items(
             namespace=namespace,
@@ -136,7 +159,7 @@ class VersionedRecords:
             Allocated positive revision number and resolved revision block.
 
         Raises:
-            MemoryNotFound: If no identity is registered at ``address``.
+            MemoryNotFound: If no identity is registered at `address`.
         """
 
         identity = self.identity(address)
@@ -153,7 +176,15 @@ class VersionedRecords:
         return _revision_item(item)
 
     def current(self, address: MemoryAddress) -> RevisionItem | None:
-        """Return the newest visible revision at an address, if one exists."""
+        """Return the newest visible revision at an address, if one exists.
+
+        Args:
+            address: Address of a registered stable identity.
+
+        Returns:
+            Newest visible revision, or `None` when the address is
+            unregistered or has no visible revision.
+        """
 
         log = self._log(address)
         if log is None:
@@ -166,7 +197,20 @@ class VersionedRecords:
         address: MemoryAddress,
         revision: int,
     ) -> RevisionItem | None:
-        """Return one exact visible logical revision, if it exists."""
+        """Return one exact visible logical revision, if it exists.
+
+        Args:
+            address: Address of a registered stable identity.
+            revision: Positive logical revision number.
+
+        Returns:
+            Matching revision, or `None` when the address is unregistered or
+            the revision does not exist.
+
+        Raises:
+            TypeError: If `revision` is not an integer.
+            ValueError: If `revision` is less than one.
+        """
 
         _validate_revision(revision, name="revision")
         log = self._log(address)
@@ -195,6 +239,13 @@ class VersionedRecords:
 
         Returns:
             Visible revisions in ascending or descending revision order.
+            Missing or inaccessible targets are omitted.
+
+        Raises:
+            TypeError: If `reverse` is not a boolean, or `start`, `stop`, or
+                `limit` is not an integer.
+            ValueError: If `start` or `stop` is less than one, `limit` is
+                negative, or `stop` is less than `start`.
         """
 
         _validate_revision(start, name="start")

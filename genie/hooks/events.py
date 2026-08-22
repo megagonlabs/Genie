@@ -23,17 +23,17 @@ class HookOperation(StrEnum):
 
     Mount resolution and handle creation appear here so refusals can be
     reported. They do not have paired before and after callbacks, so they reach
-    hooks only through ``on_denied`` and the matching terminal event.
+    hooks only through `on_denied` and the matching terminal event.
 
-    ``SUPPRESS`` is the registry disabling its own dispatch. It is an operation
-    like any other, so a suppression window is announced by ``on_suppressed``,
+    `SUPPRESS` is the registry disabling its own dispatch. It is an operation
+    like any other, so a suppression window is announced by `on_suppressed`,
     bounded by a terminal event, and named as the parent of everything done
     inside it.
 
-    ``SCOPE`` is the one member that dispatches nothing. It marks a
-    caller-defined span opened with ``HookRegistry.scope``, which names work
-    Genie does not model and carries that name in ``HookContext.scope_name``.
-    Hooks never receive a scope context, so every ``operation`` they observe is
+    `SCOPE` is the one member that dispatches nothing. It marks a
+    caller-defined span opened with `HookRegistry.scope`, which names work
+    Genie does not model and carries that name in `HookContext.scope_name`.
+    Hooks never receive a scope context, so every `operation` they observe is
     one Genie performed.
     """
 
@@ -90,8 +90,8 @@ class HandleCapability(StrEnum):
 class HookOutcome(StrEnum):
     """Terminal result of one logical operation.
 
-    ``DENIED`` marks a policy refusal, which is an expected decision rather
-    than a fault. Every other failure is ``ERROR``; hooks can inspect the
+    `DENIED` marks a policy refusal, which is an expected decision rather
+    than a fault. Every other failure is `ERROR`; hooks can inspect the
     reported exception when they need a finer classification.
     """
 
@@ -220,9 +220,9 @@ RecordT = TypeVar("RecordT")
 class StructureChange(Generic[RecordT]):
     """One logical change to structure membership.
 
-    ``before`` and ``after`` contain the facade's immutable structural record,
+    `before` and `after` contain the facade's immutable structural record,
     such as a key binding, log entry, or temporal entry. A before callback may
-    see ``after=None`` when the backend must allocate the final record.
+    see `after=None` when the backend must allocate the final record.
 
     Attributes:
         kind: Structural state family.
@@ -244,11 +244,11 @@ class StructureChange(Generic[RecordT]):
 class TraversalKind(StrEnum):
     """Relationships a structural read can follow.
 
-    ``LINKS`` covers link listing in any direction, and ``CONTAINS`` covers a
+    `LINKS` covers link listing in any direction, and `CONTAINS` covers a
     subtree membership test, which follows ownership without returning what it
     finds.
 
-    ``MOUNTS`` and ``SUBTREE_MOUNTS`` separate the symbolic mounts of one block
+    `MOUNTS` and `SUBTREE_MOUNTS` separate the symbolic mounts of one block
     from a scan that collects them from every readable block under a root. The
     two report the same kind of record from very different amounts of memory, so
     a trail that could not tell them apart would understate the second.
@@ -306,8 +306,8 @@ class Traversal:
 class SuppressionScope(StrEnum):
     """Reach of one suppression window.
 
-    ``SELECTED`` names the hooks it silences and leaves the rest reporting.
-    ``REGISTRY`` silences every hook that is not mandatory, including hooks
+    `SELECTED` names the hooks it silences and leaves the rest reporting.
+    `REGISTRY` silences every hook that is not mandatory, including hooks
     registered after the window opens, so the two are not interchangeable even
     when they silence the same hooks today.
     """
@@ -322,8 +322,8 @@ class Suppression:
 
     Suppression is a trusted escape hatch, so the escape is itself an event: a
     hook learns that it is about to stop reporting before it does. The window
-    is announced by ``on_suppressed``, closed by the terminal event of the same
-    ``HookOperation.SUPPRESS`` operation, and named as the parent of every
+    is announced by `on_suppressed`, closed by the terminal event of the same
+    `HookOperation.SUPPRESS` operation, and named as the parent of every
     operation performed inside it.
 
     Attributes:

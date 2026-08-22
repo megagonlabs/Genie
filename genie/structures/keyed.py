@@ -24,7 +24,7 @@ from genie.structures.records import KeyBinding, KeyedItem, MemoryAddress
 
 @runtime_checkable
 class KeyedAccess(BlockReader, Protocol):
-    """Small access surface required by ``KeyedCollection``."""
+    """Small access surface required by `KeyedCollection`."""
 
 
 class KeyedCollection:
@@ -59,11 +59,11 @@ class KeyedCollection:
             store: Backend capability that stores key bindings atomically.
             collection: Block or id that identifies this collection's key space.
             hooks: Optional registry. Defaults to the registry owned by a
-                ``Memory`` or ``MemoryHandle`` access object.
+                `Memory` or `MemoryHandle` access object.
 
         Raises:
             MemoryNotFound: If the collection block is missing.
-            UnsupportedOperation: If ``store`` lacks the keyed capability.
+            UnsupportedOperation: If `store` lacks the keyed capability.
         """
 
         if not isinstance(store, KeyedStore):
@@ -186,13 +186,36 @@ class KeyedCollection:
             return KeyedItem(binding=binding, block=stored_block)
 
     def get(self, address: MemoryAddress) -> MemoryBlock | None:
-        """Return the visible block at an exact address, if one is bound."""
+        """Return the visible block at an exact address, if one is bound.
+
+        Args:
+            address: Exact namespace and key to look up.
+
+        Returns:
+            Visible block, or `None` when the address is unbound.
+
+        Raises:
+            MemoryNotFound: If the address is bound to a block that no longer
+                exists.
+        """
 
         item = self.get_item(address)
         return item.block if item is not None else None
 
     def get_item(self, address: MemoryAddress) -> KeyedItem | None:
-        """Return an exact visible binding and block."""
+        """Return an exact visible binding and block.
+
+        Args:
+            address: Exact namespace and key to look up.
+
+        Returns:
+            Keyed item pairing the binding with its block, or `None` when the
+            address is unbound.
+
+        Raises:
+            MemoryNotFound: If the address is bound to a block that no longer
+                exists.
+        """
 
         _require_address(address)
         self._require_collection()
@@ -217,13 +240,18 @@ class KeyedCollection:
         """List visible items in stable namespace-and-key order.
 
         Args:
-            namespace: Optional exact namespace. With ``recursive=True``, it is
+            namespace: Optional exact namespace. With `recursive=True`, it is
                 treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below ``namespace``.
+            recursive: Whether to include nested namespaces below `namespace`.
             limit: Maximum visible items to return.
 
         Returns:
             Visible keyed items. Missing or inaccessible targets are omitted.
+
+        Raises:
+            TypeError: If `recursive` is not a boolean or `limit` is not an
+                integer.
+            ValueError: If `limit` is negative.
         """
 
         self._require_collection()

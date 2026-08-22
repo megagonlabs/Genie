@@ -264,7 +264,20 @@ class InMemoryBackend:
         *,
         expected_block_id: str,
     ) -> KeyBinding:
-        """Atomically replace a key binding with compare-and-swap semantics."""
+        """Atomically replace a key binding with compare-and-swap semantics.
+
+        Args:
+            binding: Replacement binding. Its collection id and address select
+                the existing binding to replace.
+            expected_block_id: Block id the binding must currently point to.
+
+        Returns:
+            Stored replacement binding.
+
+        Raises:
+            MemoryConflict: If the collection or block is missing, the address
+                is unbound, or it no longer points to `expected_block_id`.
+        """
 
         with self._structure_lock:
             self._require_structure_blocks(
@@ -284,7 +297,15 @@ class InMemoryBackend:
         collection_id: str,
         address: MemoryAddress,
     ) -> KeyBinding | None:
-        """Return one exact key binding."""
+        """Return one exact key binding.
+
+        Args:
+            collection_id: Id of the collection that owns the key space.
+            address: Exact namespace and key to look up.
+
+        Returns:
+            Stored binding, or `None` when the address is unused.
+        """
 
         with self._structure_lock:
             return self._key_bindings.get(_key_slot(collection_id, address))
@@ -298,7 +319,25 @@ class InMemoryBackend:
         after: MemoryAddress | None = None,
         limit: int = 100,
     ) -> list[KeyBinding]:
-        """Return one bounded page in stable namespace-and-key order."""
+        """Return one bounded page in stable namespace-and-key order.
+
+        Args:
+            collection_id: Id of the collection to list.
+            namespace: Optional exact namespace filter. With `recursive=True`
+                it is treated as a namespace prefix.
+            recursive: Whether to include nested namespaces below `namespace`.
+            after: Optional exclusive start address used to page through
+                results in address order.
+            limit: Maximum number of bindings to return.
+
+        Returns:
+            Matching bindings in ascending namespace-and-key order.
+
+        Raises:
+            TypeError: If `recursive` is not a boolean or `limit` is not an
+                integer.
+            ValueError: If `limit` is negative.
+        """
 
         if not isinstance(recursive, bool):
             raise TypeError("recursive must be a boolean.")
@@ -330,7 +369,17 @@ class InMemoryBackend:
         *,
         expected_block_id: str,
     ) -> None:
-        """Atomically remove a key binding when its block id still matches."""
+        """Atomically remove a key binding when its block id still matches.
+
+        Args:
+            collection_id: Id of the collection that owns the key space.
+            address: Exact namespace and key to remove.
+            expected_block_id: Block id the binding must currently point to.
+
+        Raises:
+            MemoryConflict: If the address is unbound or it no longer points
+                to `expected_block_id`.
+        """
 
         with self._structure_lock:
             slot = _key_slot(collection_id, address)
@@ -340,7 +389,12 @@ class InMemoryBackend:
             self._key_bindings.pop(slot)
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
-        """Remove bindings owned by or pointing to one deleted block."""
+        """Remove bindings owned by or pointing to one deleted block.
+
+        Args:
+            block_id: Id of the deleted block. Bindings whose collection id or
+                target block id match are removed.
+        """
 
         with self._structure_lock:
             for slot, binding in list(self._key_bindings.items()):
@@ -348,7 +402,18 @@ class InMemoryBackend:
                     self._key_bindings.pop(slot, None)
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:
-        """Atomically append a block reference with a unique sequence number."""
+        """Atomically append a block reference with a unique sequence number.
+
+        Args:
+            log_id: Id of the ordered log to append to.
+            block_id: Id of the memory block to place at the new position.
+
+        Returns:
+            Stored entry carrying the allocated sequence number.
+
+        Raises:
+            MemoryConflict: If the log or referenced block does not exist.
+        """
 
         from genie.structures.records import LogEntry
 
@@ -365,7 +430,19 @@ class InMemoryBackend:
             return entry
 
     def get_log_entry(self, log_id: str, sequence: int) -> LogEntry | None:
-        """Return one exact log entry."""
+        """Return one exact log entry.
+
+        Args:
+            log_id: Id of the ordered log.
+            sequence: Exact position within the log.
+
+        Returns:
+            Stored entry, or `None` when the position holds no entry.
+
+        Raises:
+            TypeError: If `sequence` is not an integer.
+            ValueError: If `sequence` is negative.
+        """
 
         _validate_sequence(sequence, name="sequence")
         with self._structure_lock:
@@ -380,7 +457,25 @@ class InMemoryBackend:
         reverse: bool = False,
         limit: int = 100,
     ) -> list[LogEntry]:
-        """Return one bounded page in a half-open sequence range."""
+        """Return one bounded page in a half-open sequence range.
+
+        Args:
+            log_id: Id of the ordered log.
+            start: Optional inclusive lower sequence bound.
+            stop: Optional exclusive upper sequence bound.
+            reverse: Whether to return entries in descending sequence order.
+            limit: Maximum number of entries to return.
+
+        Returns:
+            Matching entries in sequence order, descending when `reverse` is
+            `True`.
+
+        Raises:
+            TypeError: If `reverse` is not a boolean, or `start`, `stop`, or
+                `limit` is not an integer.
+            ValueError: If a bound or `limit` is negative, or `stop` is less
+                than `start`.
+        """
 
         if not isinstance(reverse, bool):
             raise TypeError("reverse must be a boolean.")
@@ -401,7 +496,12 @@ class InMemoryBackend:
             return entries[:limit]
 
     def delete_log_entries_for_block(self, block_id: str) -> None:
-        """Remove an owned log or entries pointing to one deleted block."""
+        """Remove an owned log or entries pointing to one deleted block.
+
+        Args:
+            block_id: Id of the deleted block. A log owned by this id is
+                dropped, along with entries pointing to it in any other log.
+        """
 
         with self._structure_lock:
             self._log_entries.pop(block_id, None)
@@ -414,7 +514,19 @@ class InMemoryBackend:
                     self._log_entries.pop(log_id, None)
 
     def add_temporal_entry(self, entry: TemporalEntry) -> TemporalEntry:
-        """Atomically add unique temporal membership for one block."""
+        """Atomically add unique temporal membership for one block.
+
+        Args:
+            entry: Collection id, block id, and event time or validity period
+                to store.
+
+        Returns:
+            Stored entry.
+
+        Raises:
+            MemoryConflict: If the collection or block is missing, or the
+                collection already contains the block.
+        """
 
         with self._structure_lock:
             self._require_structure_blocks(
@@ -429,7 +541,19 @@ class InMemoryBackend:
             return entry
 
     def replace_temporal_entry(self, entry: TemporalEntry) -> TemporalEntry:
-        """Atomically replace temporal membership for one existing block."""
+        """Atomically replace temporal membership for one existing block.
+
+        Args:
+            entry: Replacement entry. Its collection id and block id select
+                the existing entry to replace.
+
+        Returns:
+            Stored replacement entry.
+
+        Raises:
+            MemoryConflict: If the collection or block is missing, or the
+                collection does not contain the block.
+        """
 
         with self._structure_lock:
             self._require_structure_blocks(
@@ -448,7 +572,16 @@ class InMemoryBackend:
         collection_id: str,
         block_id: str,
     ) -> TemporalEntry | None:
-        """Return one exact temporal entry."""
+        """Return one exact temporal entry.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            block_id: Id of the timed memory block.
+
+        Returns:
+            Stored entry, or `None` when the collection does not contain the
+            block.
+        """
 
         with self._structure_lock:
             return self._temporal_entries.get((collection_id, block_id))
@@ -460,7 +593,21 @@ class InMemoryBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one temporal membership page in stable block-id order."""
+        """Return one temporal membership page in stable block-id order.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            after_block_id: Optional exclusive start block id used to page
+                through results in block-id order.
+            limit: Maximum number of entries to return.
+
+        Returns:
+            Entries in ascending block-id order.
+
+        Raises:
+            TypeError: If `limit` is not an integer.
+            ValueError: If `limit` is negative.
+        """
 
         _validate_limit(limit)
         with self._structure_lock:
@@ -471,7 +618,15 @@ class InMemoryBackend:
             return entries[:limit]
 
     def remove_temporal_entry(self, collection_id: str, block_id: str) -> None:
-        """Atomically remove one temporal membership entry."""
+        """Atomically remove one temporal membership entry.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            block_id: Id of the timed memory block to remove.
+
+        Raises:
+            MemoryConflict: If the collection does not contain the block.
+        """
 
         with self._structure_lock:
             slot = (collection_id, block_id)
@@ -480,7 +635,12 @@ class InMemoryBackend:
             self._temporal_entries.pop(slot)
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
-        """Remove collections owned by and entries pointing to a deleted block."""
+        """Remove collections owned by and entries pointing to a deleted block.
+
+        Args:
+            block_id: Id of the deleted block. Entries whose collection id or
+                target block id match are removed.
+        """
 
         with self._structure_lock:
             for slot, entry in list(self._temporal_entries.items()):
@@ -499,7 +659,32 @@ class InMemoryBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one indexed-contract page matching temporal filters."""
+        """Return one indexed-contract page matching temporal filters.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            occurred_only: Whether to keep only entries that carry an event
+                time.
+            occurred_start: Optional inclusive lower bound on event time.
+            occurred_stop: Optional exclusive upper bound on event time.
+            valid_at: Optional instant that an entry's validity period must
+                contain.
+            overlaps: Optional validity period an entry's own period must
+                overlap.
+            after_block_id: Optional exclusive start block id used to page
+                through results in block-id order.
+            limit: Maximum number of entries to return.
+
+        Returns:
+            Matching entries in ascending block-id order.
+
+        Raises:
+            TypeError: If `occurred_only` is not a boolean, a time bound is
+                not a datetime, `overlaps` is not a `ValidityInterval`, or
+                `limit` is not an integer.
+            ValueError: If a time bound is naive, `occurred_stop` is earlier
+                than `occurred_start`, or `limit` is negative.
+        """
 
         from genie.structures.records import ValidityInterval
 
@@ -579,6 +764,18 @@ class InMemoryBackend:
         Existing links with the same relation are adopted on the first call
         only when they already form a DAG. The relation is then protected from
         ordinary link insertion.
+
+        Args:
+            link: Link to store. Its relation identifies the protected graph
+                the cycle check applies to.
+
+        Returns:
+            Defensive copy of the stored link.
+
+        Raises:
+            MemoryConflict: If the link id already exists, either endpoint is
+                missing, the relation already contains a cycle, or the new
+                link would create one.
         """
 
         with self._structure_lock:

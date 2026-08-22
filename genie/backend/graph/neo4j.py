@@ -86,26 +86,17 @@ _INDEXES: dict[str, tuple[str, tuple[str, ...]]] = {
 class Neo4jBackend:
     """Persistent backend backed by the official Neo4j Python driver.
 
-    The ``neo4j`` package is an optional dependency. Install it with
-    ``pip install 'genie[neo4j]'`` before constructing this backend.
+    The `neo4j` package is an optional dependency. Install it with
+    `pip install 'genie[neo4j]'` before constructing this backend.
 
-    Args:
-        uri: Neo4j URI, such as ``"neo4j://localhost:7687"``.
-        auth: Optional ``(username, password)`` authentication pair.
-        database: Existing Neo4j database in which Genie state is stored.
+    Attributes:
+        uri: Neo4j URI this backend connected to.
+        database: Neo4j database in which Genie state is stored.
         connection_timeout: Seconds allowed while establishing a connection.
         max_transaction_retry_time: Maximum seconds the driver retries managed
             transactions after retryable failures.
-        encrypted: Optional driver encryption override.
-        verify_connectivity: Whether to verify the server during construction.
-        initialize_schema: Whether to create missing Genie constraints and
-            indexes. Set this to ``False`` for runtime identities that may use
-            existing data but may not administer schema.
-
-    Raises:
-        UnsupportedOperation: If the driver is unavailable or the stored schema
-            is incompatible.
-        BackendError: If Neo4j cannot be reached, configured, or initialized.
+        encrypted: Driver encryption override, or `None` for the driver
+            default.
     """
 
     def __init__(
@@ -120,7 +111,31 @@ class Neo4jBackend:
         verify_connectivity: bool = True,
         initialize_schema: bool = True,
     ) -> None:
-        """Open a driver and initialize or validate the Genie graph schema."""
+        """Open a driver and initialize or validate the Genie graph schema.
+
+        Args:
+            uri: Neo4j URI, such as `"neo4j://localhost:7687"`.
+            auth: Optional `(username, password)` authentication pair.
+            database: Existing Neo4j database in which Genie state is stored.
+            connection_timeout: Seconds allowed while establishing a
+                connection.
+            max_transaction_retry_time: Maximum seconds the driver retries
+                managed transactions after retryable failures.
+            encrypted: Optional driver encryption override.
+            verify_connectivity: Whether to verify the server during
+                construction.
+            initialize_schema: Whether to create missing Genie constraints and
+                indexes. Set this to `False` for runtime identities that may
+                use existing data but may not administer schema.
+
+        Raises:
+            TypeError: If an argument has the wrong type.
+            ValueError: If `uri`, `database`, or a timeout is invalid.
+            UnsupportedOperation: If the driver is unavailable or the stored
+                schema is incompatible.
+            BackendError: If Neo4j cannot be reached, configured, or
+                initialized.
+        """
 
         _validate_nonempty_string(uri, name="uri")
         _validate_nonempty_string(database, name="database")
@@ -175,7 +190,14 @@ class Neo4jBackend:
             raise
 
     def __enter__(self) -> Self:
-        """Return this open backend for use as a context manager."""
+        """Return this open backend for use as a context manager.
+
+        Returns:
+            This backend instance.
+
+        Raises:
+            RuntimeError: If the backend is already closed.
+        """
 
         self._require_driver()
         return self
@@ -186,7 +208,13 @@ class Neo4jBackend:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Close the owned driver when leaving a context manager."""
+        """Close the owned driver when leaving a context manager.
+
+        Args:
+            exc_type: Type of the exception leaving the block, if any.
+            exc: Exception instance leaving the block, if any.
+            traceback: Traceback of the exception leaving the block, if any.
+        """
 
         self.close()
 
@@ -216,7 +244,19 @@ class Neo4jBackend:
     # Core block storage and ownership traversal
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Persist a new encoded memory block."""
+        """Persist a new encoded memory block.
+
+        Args:
+            block: Encoded block to store.
+
+        Returns:
+            Stored block.
+
+        Raises:
+            MemoryConflict: If the id already exists or the parent is missing
+                or self-referential.
+            BackendError: If the Neo4j write fails.
+        """
 
         properties = _block_properties(block)
 
@@ -244,7 +284,17 @@ class Neo4jBackend:
         return self._write(operation)
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        """Fetch a block by id."""
+        """Fetch a block by id.
+
+        Args:
+            block_id: Memory block id.
+
+        Returns:
+            Stored block, or `None` when it does not exist.
+
+        Raises:
+            BackendError: If the Neo4j read fails.
+        """
 
         def operation(tx: Any) -> MemoryBlock | None:
             record = self._block_record(tx, block_id)
@@ -258,7 +308,21 @@ class Neo4jBackend:
         *,
         expected_version: int | None = None,
     ) -> MemoryBlock:
-        """Replace an existing block, optionally using compare-and-swap."""
+        """Replace an existing block, optionally using compare-and-swap.
+
+        Args:
+            block: Encoded replacement block.
+            expected_version: Required current version. When supplied, the
+                replacement must have version `expected_version + 1`.
+
+        Returns:
+            Stored replacement block.
+
+        Raises:
+            MemoryConflict: If the block is missing, its version changed, or
+                the new parent is missing or would create an ownership cycle.
+            BackendError: If the Neo4j write fails.
+        """
 
         properties = _block_properties(block)
 
@@ -308,7 +372,19 @@ class Neo4jBackend:
         *,
         expected_versions: Mapping[str, int] | None = None,
     ) -> None:
-        """Delete a subtree, optionally from an exact version snapshot."""
+        """Delete a subtree, optionally from an exact version snapshot.
+
+        Args:
+            block_id: Memory block id. Missing ids are ignored.
+            expected_versions: Exact id-to-version snapshot of the subtree to
+                delete. When supplied, the delete fails if subtree membership
+                or any version changed.
+
+        Raises:
+            MemoryConflict: If `expected_versions` no longer describes the
+                complete subtree.
+            BackendError: If the Neo4j write fails.
+        """
 
         def operation(tx: Any) -> None:
             records = self._descendant_records(tx, block_id, include_self=True)
@@ -336,7 +412,14 @@ class Neo4jBackend:
         self._write(operation)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
-        """Return direct children in creation order."""
+        """Return direct children in creation order.
+
+        Args:
+            block_id: Parent block id.
+
+        Returns:
+            Direct child blocks in creation order.
+        """
 
         return self._read(
             lambda tx: [
@@ -355,7 +438,14 @@ class Neo4jBackend:
         )
 
     def ancestors(self, block_id: str) -> list[MemoryBlock]:
-        """Return ancestors from the nearest parent upward."""
+        """Return ancestors from the nearest parent upward.
+
+        Args:
+            block_id: Block id to inspect.
+
+        Returns:
+            Ancestor blocks in nearest-parent-first order.
+        """
 
         return self._read(
             lambda tx: [
@@ -374,12 +464,28 @@ class Neo4jBackend:
         )
 
     def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
-        """Return descendants in deterministic depth-first creation order."""
+        """Return descendants in deterministic depth-first creation order.
+
+        Args:
+            block_id: Root block id.
+            include_self: Whether to include `block_id` in the result.
+
+        Returns:
+            Descendant blocks in depth-first creation order.
+        """
 
         return self._read(lambda tx: [_block_from_record(record) for record in self._descendant_records(tx, block_id, include_self=include_self)])
 
     def contains(self, root_id: str, block_id: str) -> bool:
-        """Return whether ``block_id`` is equal to or below ``root_id``."""
+        """Return whether `block_id` is equal to or below `root_id`.
+
+        Args:
+            root_id: Potential subtree root id.
+            block_id: Candidate block id.
+
+        Returns:
+            `True` when the candidate is the root or one of its descendants.
+        """
 
         return self._read(lambda tx: self._contains(tx, root_id, block_id))
 
@@ -387,7 +493,18 @@ class Neo4jBackend:
     # Keyed collection
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
-        """Atomically bind an unused namespaced address to a block."""
+        """Atomically bind an unused namespaced address to a block.
+
+        Args:
+            binding: Key binding to create.
+
+        Returns:
+            Stored binding.
+
+        Raises:
+            MemoryConflict: If the collection or block is missing, or the
+                address is already bound.
+        """
 
         namespace_json = _encode_namespace(binding.address.namespace)
         identity = _identity(binding.collection_id, namespace_json, binding.address.key)
@@ -415,7 +532,20 @@ class Neo4jBackend:
         return self._write(operation)
 
     def rebind_key(self, binding: KeyBinding, *, expected_block_id: str) -> KeyBinding:
-        """Replace a binding only when its current block id matches."""
+        """Replace a binding only when its current block id matches.
+
+        Args:
+            binding: Replacement binding. Its collection id and address select
+                the existing binding to replace.
+            expected_block_id: Block id the binding must currently point to.
+
+        Returns:
+            Stored replacement binding.
+
+        Raises:
+            MemoryConflict: If the collection or block is missing, the address
+                is unbound, or it no longer points to `expected_block_id`.
+        """
 
         namespace_json = _encode_namespace(binding.address.namespace)
         identity = _identity(binding.collection_id, namespace_json, binding.address.key)
@@ -440,7 +570,15 @@ class Neo4jBackend:
         return self._write(operation)
 
     def get_key(self, collection_id: str, address: MemoryAddress) -> KeyBinding | None:
-        """Return one exact key binding."""
+        """Return one exact key binding.
+
+        Args:
+            collection_id: Id of the collection that owns the key space.
+            address: Exact namespace and key to look up.
+
+        Returns:
+            Stored binding, or `None` when the address is unused.
+        """
 
         namespace_json = _encode_namespace(address.namespace)
         identity = _identity(collection_id, namespace_json, address.key)
@@ -461,7 +599,25 @@ class Neo4jBackend:
         after: MemoryAddress | None = None,
         limit: int = 100,
     ) -> list[KeyBinding]:
-        """Return one bounded page in stable namespace-and-key order."""
+        """Return one bounded page in stable namespace-and-key order.
+
+        Args:
+            collection_id: Id of the collection to list.
+            namespace: Optional exact namespace filter. With `recursive=True`
+                it is treated as a namespace prefix.
+            recursive: Whether to include nested namespaces below `namespace`.
+            after: Optional exclusive start address used to page through
+                results in address order.
+            limit: Maximum number of bindings to return.
+
+        Returns:
+            Matching bindings in ascending namespace-and-key order.
+
+        Raises:
+            TypeError: If `recursive` is not a boolean or `limit` is not an
+                integer.
+            ValueError: If `limit` is negative.
+        """
 
         if not isinstance(recursive, bool):
             raise TypeError("recursive must be a boolean.")
@@ -481,7 +637,17 @@ class Neo4jBackend:
         return bindings[:limit]
 
     def unbind_key(self, collection_id: str, address: MemoryAddress, *, expected_block_id: str) -> None:
-        """Remove a binding only when its current block id matches."""
+        """Remove a binding only when its current block id matches.
+
+        Args:
+            collection_id: Id of the collection that owns the key space.
+            address: Exact namespace and key to remove.
+            expected_block_id: Block id the binding must currently point to.
+
+        Raises:
+            MemoryConflict: If the address is unbound or it no longer points
+                to `expected_block_id`.
+        """
 
         namespace_json = _encode_namespace(address.namespace)
         identity = _identity(collection_id, namespace_json, address.key)
@@ -504,7 +670,12 @@ class Neo4jBackend:
         self._write(operation)
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
-        """Remove bindings owned by or pointing to one block."""
+        """Remove bindings owned by or pointing to one block.
+
+        Args:
+            block_id: Id of the deleted block. Bindings whose collection id or
+                target block id match are removed.
+        """
 
         self._write(
             lambda tx: _consume(
@@ -518,7 +689,18 @@ class Neo4jBackend:
     # Ordered event log
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:
-        """Atomically allocate a sequence and append a block reference."""
+        """Atomically allocate a sequence and append a block reference.
+
+        Args:
+            log_id: Id of the ordered log to append to.
+            block_id: Id of the memory block to place at the new position.
+
+        Returns:
+            Stored entry carrying the allocated sequence number.
+
+        Raises:
+            MemoryConflict: If the log or referenced block does not exist.
+        """
 
         from genie.structures.records import LogEntry
 
@@ -549,7 +731,19 @@ class Neo4jBackend:
         return self._write(operation)
 
     def get_log_entry(self, log_id: str, sequence: int) -> LogEntry | None:
-        """Return one exact log entry."""
+        """Return one exact log entry.
+
+        Args:
+            log_id: Id of the ordered log.
+            sequence: Exact position within the log.
+
+        Returns:
+            Stored entry, or `None` when the position holds no entry.
+
+        Raises:
+            TypeError: If `sequence` is not an integer.
+            ValueError: If `sequence` is negative.
+        """
 
         _validate_sequence(sequence, name="sequence")
         return self._read(
@@ -576,7 +770,25 @@ class Neo4jBackend:
         reverse: bool = False,
         limit: int = 100,
     ) -> list[LogEntry]:
-        """Return one bounded page in a half-open sequence range."""
+        """Return one bounded page in a half-open sequence range.
+
+        Args:
+            log_id: Id of the ordered log.
+            start: Optional inclusive lower sequence bound.
+            stop: Optional exclusive upper sequence bound.
+            reverse: Whether to return entries in descending sequence order.
+            limit: Maximum number of entries to return.
+
+        Returns:
+            Matching entries in sequence order, descending when `reverse` is
+            `True`.
+
+        Raises:
+            TypeError: If `reverse` is not a boolean, or `start`, `stop`, or
+                `limit` is not an integer.
+            ValueError: If a bound or `limit` is negative, or `stop` is less
+                than `start`.
+        """
 
         if not isinstance(reverse, bool):
             raise TypeError("reverse must be a boolean.")
@@ -608,7 +820,12 @@ class Neo4jBackend:
         )
 
     def delete_log_entries_for_block(self, block_id: str) -> None:
-        """Remove a log and entries owned by or pointing to one block."""
+        """Remove a log and entries owned by or pointing to one block.
+
+        Args:
+            block_id: Id of the deleted block. A log owned by this id is
+                dropped, along with entries pointing to it in any other log.
+        """
 
         def operation(tx: Any) -> None:
             _consume(
@@ -624,7 +841,19 @@ class Neo4jBackend:
     # Temporal collection and index
 
     def add_temporal_entry(self, entry: TemporalEntry) -> TemporalEntry:
-        """Add one unique temporal collection entry."""
+        """Add one unique temporal collection entry.
+
+        Args:
+            entry: Collection id, block id, and event time or validity period
+                to store.
+
+        Returns:
+            Stored entry.
+
+        Raises:
+            MemoryConflict: If the collection or block is missing, or the
+                collection already contains the block.
+        """
 
         properties = _temporal_properties(entry)
 
@@ -638,7 +867,19 @@ class Neo4jBackend:
         return self._write(operation)
 
     def replace_temporal_entry(self, entry: TemporalEntry) -> TemporalEntry:
-        """Replace an existing temporal collection entry."""
+        """Replace an existing temporal collection entry.
+
+        Args:
+            entry: Replacement entry. Its collection id and block id select
+                the existing entry to replace.
+
+        Returns:
+            Stored replacement entry.
+
+        Raises:
+            MemoryConflict: If the collection or block is missing, or the
+                collection does not contain the block.
+        """
 
         properties = _temporal_properties(entry)
 
@@ -657,7 +898,16 @@ class Neo4jBackend:
         return self._write(operation)
 
     def get_temporal_entry(self, collection_id: str, block_id: str) -> TemporalEntry | None:
-        """Return one exact temporal entry."""
+        """Return one exact temporal entry.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            block_id: Id of the timed memory block.
+
+        Returns:
+            Stored entry, or `None` when the collection does not contain the
+            block.
+        """
 
         identity = _identity(collection_id, block_id)
         return self._read(
@@ -682,7 +932,21 @@ class Neo4jBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one page in stable block-id order."""
+        """Return one page in stable block-id order.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            after_block_id: Optional exclusive start block id used to page
+                through results in block-id order.
+            limit: Maximum number of entries to return.
+
+        Returns:
+            Entries in ascending block-id order.
+
+        Raises:
+            TypeError: If `limit` is not an integer.
+            ValueError: If `limit` is negative.
+        """
 
         _validate_limit(limit)
         clauses = ["n.collection_id = $collection_id"]
@@ -702,7 +966,15 @@ class Neo4jBackend:
         )
 
     def remove_temporal_entry(self, collection_id: str, block_id: str) -> None:
-        """Remove one temporal entry."""
+        """Remove one temporal entry.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            block_id: Id of the timed memory block to remove.
+
+        Raises:
+            MemoryConflict: If the collection does not contain the block.
+        """
 
         def operation(tx: Any) -> None:
             record = _single(
@@ -721,7 +993,12 @@ class Neo4jBackend:
         self._write(operation)
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
-        """Remove temporal entries owned by or pointing to one block."""
+        """Remove temporal entries owned by or pointing to one block.
+
+        Args:
+            block_id: Id of the deleted block. Entries whose collection id or
+                target block id match are removed.
+        """
 
         self._write(
             lambda tx: _consume(
@@ -743,7 +1020,32 @@ class Neo4jBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one temporal page matching every supplied time filter."""
+        """Return one temporal page matching every supplied time filter.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            occurred_only: Whether to keep only entries that carry an event
+                time.
+            occurred_start: Optional inclusive lower bound on event time.
+            occurred_stop: Optional exclusive upper bound on event time.
+            valid_at: Optional instant that an entry's validity period must
+                contain.
+            overlaps: Optional validity period an entry's own period must
+                overlap.
+            after_block_id: Optional exclusive start block id used to page
+                through results in block-id order.
+            limit: Maximum number of entries to return.
+
+        Returns:
+            Matching entries in ascending block-id order.
+
+        Raises:
+            TypeError: If `occurred_only` is not a boolean, a time bound is
+                not a datetime, `overlaps` is not a `ValidityInterval`, or
+                `limit` is not an integer.
+            ValueError: If a time bound is naive, `occurred_stop` is earlier
+                than `occurred_start`, or `limit` is negative.
+        """
 
         from genie.structures.records import ValidityInterval
 
@@ -795,7 +1097,18 @@ class Neo4jBackend:
     # Typed property graph and lineage DAG
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
-        """Persist a typed link between existing blocks."""
+        """Persist a typed link between existing blocks.
+
+        Args:
+            link: Link to store.
+
+        Returns:
+            Stored link.
+
+        Raises:
+            MemoryConflict: If the link id already exists, either endpoint is
+                missing, or the relation is protected as an acyclic graph.
+        """
 
         def operation(tx: Any) -> MemoryLink:
             if self._relation_is_protected(tx, link.relation):
@@ -806,7 +1119,24 @@ class Neo4jBackend:
         return self._write(operation)
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Atomically add a link unless it would create a directed cycle."""
+        """Atomically add a link unless it would create a directed cycle.
+
+        Existing links with the same relation are adopted on the first call
+        only when they already form a DAG. The relation is then protected from
+        ordinary link insertion.
+
+        Args:
+            link: Link to store. Its relation identifies the protected graph
+                the cycle check applies to.
+
+        Returns:
+            Stored link.
+
+        Raises:
+            MemoryConflict: If the link id already exists, either endpoint is
+                missing, the relation already contains a cycle, or the new
+                link would create one.
+        """
 
         def operation(tx: Any) -> MemoryLink:
             self._validate_new_link(tx, link)
@@ -832,7 +1162,18 @@ class Neo4jBackend:
         return self._write(operation)
 
     def update_link(self, link: MemoryLink) -> MemoryLink:
-        """Replace only the metadata of an existing link."""
+        """Replace only the metadata of an existing link.
+
+        Args:
+            link: Link containing the replacement metadata.
+
+        Returns:
+            Stored replacement link.
+
+        Raises:
+            MemoryConflict: If the link is missing or any field other than
+                metadata changed.
+        """
 
         metadata_json = _dump_json(link.metadata, field_name="link metadata")
 
@@ -862,7 +1203,19 @@ class Neo4jBackend:
         relation: str | None = None,
         direction: Literal["out", "in", "both"] = "out",
     ) -> list[MemoryLink]:
-        """List links connected to one block."""
+        """List links connected to one block.
+
+        Args:
+            block_id: Block id to inspect.
+            relation: Optional relation type filter.
+            direction: Link direction relative to `block_id`.
+
+        Returns:
+            Matching links.
+
+        Raises:
+            ValueError: If `direction` is invalid.
+        """
 
         if direction not in {"out", "in", "both"}:
             raise ValueError("direction must be one of 'out', 'in', or 'both'.")
@@ -886,7 +1239,11 @@ class Neo4jBackend:
         )
 
     def delete_links_for_block(self, block_id: str) -> None:
-        """Delete incoming and outgoing links for one block."""
+        """Delete incoming and outgoing links for one block.
+
+        Args:
+            block_id: Block id whose connected links should be removed.
+        """
 
         def operation(tx: Any) -> None:
             _consume(
@@ -906,7 +1263,18 @@ class Neo4jBackend:
     # Portable search
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search blocks using the portable in-memory matching behavior."""
+        """Search blocks using the portable in-memory matching behavior.
+
+        Candidate records are narrowed in Cypher by scope, then matched in
+        Python so results stay consistent with the reference backend.
+
+        Args:
+            query: Normalized query from the public API.
+
+        Returns:
+            Search results ordered by descending score, limited to
+            `query.limit`.
+        """
 
         candidates = self._read(lambda tx: [_block_from_record(record) for record in self._scope_candidate_records(tx, query)])
         results: list[SearchResult] = []
@@ -1062,6 +1430,8 @@ class Neo4jBackend:
         self._validate_schema_objects()
 
     def _read_schema_identity(self) -> dict[str, Any] | None:
+        """Read the stored Genie schema identity, or `None` when absent."""
+
         return self._raw_read(
             lambda tx: _single(
                 tx,
@@ -1070,6 +1440,8 @@ class Neo4jBackend:
         )
 
     def _validate_schema_identity(self, state: Mapping[str, Any]) -> None:
+        """Require the stored schema identity to match this Genie version."""
+
         self._schema_version(state, allow_older=False)
 
     def _schema_version(
@@ -1093,6 +1465,8 @@ class Neo4jBackend:
         return version
 
     def _validate_schema_objects(self) -> None:
+        """Require every constraint and index owned by Genie to exist."""
+
         constraint_records = self._raw_read(
             lambda tx: _records(
                 tx,
@@ -1144,9 +1518,13 @@ class Neo4jBackend:
                 raise UnsupportedOperation(f"The Genie Neo4j index {name!r} is missing or incompatible.")
 
     def _schema_statement(self, statement: str) -> None:
+        """Run one schema DDL statement in its own write transaction."""
+
         self._raw_write(lambda tx: _consume(tx, statement))
 
     def _raw_read(self, operation: Callable[[Any], _T]) -> _T:
+        """Run one managed read transaction without the mutation guard."""
+
         try:
             with self._operation_driver() as driver, driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
                 return session.execute_read(operation)
@@ -1156,6 +1534,8 @@ class Neo4jBackend:
             raise _translate_neo4j_error(error) from error
 
     def _raw_write(self, operation: Callable[[Any], _T]) -> _T:
+        """Run one managed write transaction without the mutation guard."""
+
         try:
             with self._operation_driver() as driver, driver.session(database=self.database, bookmark_manager=self._bookmark_manager) as session:
                 return session.execute_write(operation)
@@ -1165,6 +1545,8 @@ class Neo4jBackend:
             raise _translate_neo4j_error(error) from error
 
     def _require_driver(self) -> Any:
+        """Return the open driver or fail after `close`."""
+
         with self._lifecycle:
             if self._driver is None or self._closing:
                 raise RuntimeError("Neo4jBackend is closed.")
@@ -1172,7 +1554,7 @@ class Neo4jBackend:
 
     @contextmanager
     def _operation_driver(self) -> Generator[Any, None, None]:
-        """Lease the driver so ``close`` cannot race an active session."""
+        """Lease the driver so `close` cannot race an active session."""
 
         with self._lifecycle:
             if self._driver is None or self._closing:
@@ -1188,6 +1570,8 @@ class Neo4jBackend:
                     self._lifecycle.notify_all()
 
     def _discard_driver(self) -> None:
+        """Drop the driver reference and close it, ignoring failures."""
+
         with self._lifecycle:
             driver = self._driver
             self._driver = None
@@ -1200,6 +1584,8 @@ class Neo4jBackend:
     # Transaction-local data helpers
 
     def _next_storage_order(self, tx: Any, name: str) -> int:
+        """Allocate the next stable storage order value from a counter."""
+
         record = _single(
             tx,
             """
@@ -1215,6 +1601,8 @@ class Neo4jBackend:
         return int(record["storage_order"])
 
     def _block_record(self, tx: Any, block_id: str) -> dict[str, Any] | None:
+        """Return one raw block record together with its parent id."""
+
         return _single(
             tx,
             """
@@ -1226,6 +1614,8 @@ class Neo4jBackend:
         )
 
     def _link_record(self, tx: Any, link_id: str) -> dict[str, Any] | None:
+        """Return one raw link record by id."""
+
         return _single(
             tx,
             "MATCH (l:GenieLink {id: $link_id}) RETURN properties(l) AS link",
@@ -1233,12 +1623,16 @@ class Neo4jBackend:
         )
 
     def _validate_parent(self, tx: Any, block_id: str, parent_id: str | None) -> None:
+        """Require a parent placement to exist and not be self-referential."""
+
         if parent_id == block_id:
             raise MemoryConflict("A memory block cannot be its own parent.")
         if parent_id is not None and self._block_record(tx, parent_id) is None:
             raise MemoryConflict(f"Parent memory block {parent_id!r} does not exist.")
 
     def _descendant_records(self, tx: Any, block_id: str, *, include_self: bool) -> list[dict[str, Any]]:
+        """Return raw subtree records in depth-first creation order."""
+
         records = _records(
             tx,
             """
@@ -1256,6 +1650,8 @@ class Neo4jBackend:
         return [record for record in records if int(record["depth"]) > 0]
 
     def _contains(self, tx: Any, root_id: str, block_id: str) -> bool:
+        """Return whether a block is equal to or below a subtree root."""
+
         return (
             _single(
                 tx,
@@ -1270,12 +1666,16 @@ class Neo4jBackend:
         )
 
     def _require_structure_blocks(self, tx: Any, *, container_id: str, block_id: str, container_name: str) -> None:
+        """Require a structure container and referenced block to exist."""
+
         if self._block_record(tx, container_id) is None:
             raise MemoryConflict(f"{container_name} block {container_id!r} does not exist.")
         if self._block_record(tx, block_id) is None:
             raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
 
     def _validate_new_link(self, tx: Any, link: MemoryLink) -> None:
+        """Validate identity and endpoints before storing a link."""
+
         if self._link_record(tx, link.id) is not None:
             raise MemoryConflict(f"Memory link {link.id!r} already exists.")
         if self._block_record(tx, link.source_id) is None:
@@ -1284,6 +1684,8 @@ class Neo4jBackend:
             raise MemoryConflict(f"Target memory block {link.target_id!r} does not exist.")
 
     def _insert_link(self, tx: Any, link: MemoryLink) -> MemoryLink:
+        """Create a link node with its source, target, and edge relationships."""
+
         properties = _link_properties(link)
         properties["storage_order"] = self._next_storage_order(tx, "links")
         _consume(tx, "CREATE (l:GenieLink) SET l = $properties", properties=properties)
@@ -1307,6 +1709,8 @@ class Neo4jBackend:
         return _link_from_record(record)
 
     def _relation_is_protected(self, tx: Any, relation: str) -> bool:
+        """Return whether a link relation is protected as an acyclic graph."""
+
         return (
             _single(
                 tx,
@@ -1317,6 +1721,8 @@ class Neo4jBackend:
         )
 
     def _scope_candidate_records(self, tx: Any, query: MemoryQuery) -> list[dict[str, Any]]:
+        """Return raw candidate block records for one query scope."""
+
         if query.scope == Scope.GLOBAL or query.root_id is None:
             return _records(
                 tx,
@@ -1391,6 +1797,8 @@ def _consume(tx: Any, query: str, **parameters: Any) -> None:
 
 
 def _block_properties(block: MemoryBlock) -> dict[str, Any]:
+    """Return stored Neo4j node properties for an encoded block."""
+
     if isinstance(block.version, bool) or not isinstance(block.version, int) or block.version < 1:
         raise ValueError("block version must be an integer greater than or equal to one.")
     return {
@@ -1408,6 +1816,8 @@ def _block_properties(block: MemoryBlock) -> dict[str, Any]:
 
 
 def _block_from_record(record: Mapping[str, Any]) -> MemoryBlock:
+    """Rebuild a memory block from one stored Neo4j record."""
+
     try:
         data = record["block"]
         return MemoryBlock(
@@ -1430,6 +1840,8 @@ def _block_from_record(record: Mapping[str, Any]) -> MemoryBlock:
 
 
 def _link_properties(link: MemoryLink) -> dict[str, Any]:
+    """Return stored Neo4j node properties for a link."""
+
     return {
         "id": link.id,
         "source_id": link.source_id,
@@ -1441,6 +1853,8 @@ def _link_properties(link: MemoryLink) -> dict[str, Any]:
 
 
 def _link_from_record(record: Mapping[str, Any]) -> MemoryLink:
+    """Rebuild a memory link from one stored Neo4j record."""
+
     try:
         data = record["link"]
         return MemoryLink(
@@ -1458,10 +1872,14 @@ def _link_from_record(record: Mapping[str, Any]) -> MemoryLink:
 
 
 def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
+    """Return whether two links identify the same relationship."""
+
     return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
 
 
 def _validate_expected_version(previous: MemoryBlock, replacement: MemoryBlock, expected_version: int | None) -> None:
+    """Raise when a conditional replacement does not match its version."""
+
     if expected_version is None:
         return
     if previous.version != expected_version:
@@ -1471,6 +1889,8 @@ def _validate_expected_version(previous: MemoryBlock, replacement: MemoryBlock, 
 
 
 def _binding_from_record(record: Mapping[str, Any]) -> KeyBinding:
+    """Rebuild a key binding from one stored Neo4j record."""
+
     from genie.structures.records import KeyBinding, MemoryAddress
 
     try:
@@ -1487,6 +1907,8 @@ def _binding_from_record(record: Mapping[str, Any]) -> KeyBinding:
 
 
 def _log_entry_from_record(record: Mapping[str, Any]) -> LogEntry:
+    """Rebuild a log entry from one stored Neo4j record."""
+
     from genie.structures.records import LogEntry
 
     try:
@@ -1497,6 +1919,8 @@ def _log_entry_from_record(record: Mapping[str, Any]) -> LogEntry:
 
 
 def _temporal_properties(entry: TemporalEntry) -> dict[str, Any]:
+    """Return stored Neo4j node properties for a temporal entry."""
+
     return {
         "identity": _identity(entry.collection_id, entry.block_id),
         "collection_id": entry.collection_id,
@@ -1508,6 +1932,8 @@ def _temporal_properties(entry: TemporalEntry) -> dict[str, Any]:
 
 
 def _temporal_from_record(record: Mapping[str, Any]) -> TemporalEntry:
+    """Rebuild a temporal entry from one stored Neo4j record."""
+
     from genie.structures.records import TemporalEntry, ValidityInterval
 
     try:
@@ -1531,6 +1957,8 @@ def _temporal_from_record(record: Mapping[str, Any]) -> TemporalEntry:
 
 
 def _encode_policy(policy: MemoryPolicy | None) -> str | None:
+    """Encode an access policy as stored JSON, or `None` when unset."""
+
     if policy is None:
         return None
     payload = {
@@ -1545,6 +1973,8 @@ def _encode_policy(policy: MemoryPolicy | None) -> str | None:
 
 
 def _decode_policy(value: object) -> MemoryPolicy | None:
+    """Decode a stored access policy, or `None` when unset."""
+
     if value is None:
         return None
     payload = _load_json(value)
@@ -1559,6 +1989,8 @@ def _decode_policy(value: object) -> MemoryPolicy | None:
 
 
 def _encode_rule(rule: AccessRule) -> dict[str, Any]:
+    """Encode one access rule as a JSON-compatible mapping."""
+
     return {
         "allow_all": rule.allow_all,
         "principals": sorted(rule.principals),
@@ -1568,6 +2000,8 @@ def _encode_rule(rule: AccessRule) -> dict[str, Any]:
 
 
 def _decode_rule(payload: Mapping[str, Any]) -> AccessRule:
+    """Decode one access rule from its stored mapping."""
+
     return AccessRule(
         allow_all=payload["allow_all"],
         principals=frozenset(payload["principals"]),
@@ -1577,12 +2011,16 @@ def _decode_rule(payload: Mapping[str, Any]) -> AccessRule:
 
 
 def _dump_json(value: Any, *, field_name: str) -> str:
+    """Serialize strict JSON data to a compact, key-sorted string."""
+
     if not _is_strict_json(value):
         raise TypeError(f"Neo4jBackend {field_name} must be strict JSON data.")
     return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _load_json(value: object) -> Any:
+    """Parse a stored JSON string and require strict JSON data."""
+
     if not isinstance(value, str):
         raise BackendCorruption("Stored Neo4j JSON values must be strings.")
     try:
@@ -1595,6 +2033,8 @@ def _load_json(value: object) -> Any:
 
 
 def _is_strict_json(value: Any) -> bool:
+    """Return whether a value is JSON data with finite numbers only."""
+
     if value is None or isinstance(value, str | bool | int):
         return True
     if isinstance(value, float):
@@ -1607,6 +2047,8 @@ def _is_strict_json(value: Any) -> bool:
 
 
 def _encode_datetime(value: datetime, *, field_name: str) -> str:
+    """Encode an aware datetime as a UTC ISO 8601 string."""
+
     if not isinstance(value, datetime):
         raise TypeError(f"{field_name} must be a datetime.")
     if value.tzinfo is None or value.utcoffset() is None:
@@ -1615,6 +2057,8 @@ def _encode_datetime(value: datetime, *, field_name: str) -> str:
 
 
 def _decode_datetime(value: object) -> datetime:
+    """Decode a stored ISO 8601 timestamp into an aware UTC datetime."""
+
     if not isinstance(value, str):
         raise BackendCorruption("Stored Neo4j timestamps must be strings.")
     try:
@@ -1627,10 +2071,14 @@ def _decode_datetime(value: object) -> datetime:
 
 
 def _encode_namespace(namespace: tuple[str, ...]) -> str:
+    """Encode key namespace segments as a stored JSON string."""
+
     return _dump_json(list(namespace), field_name="key namespace")
 
 
 def _decode_namespace(value: object) -> tuple[str, ...]:
+    """Decode stored key namespace segments into a tuple."""
+
     decoded = _load_json(value)
     if not isinstance(decoded, list) or not all(isinstance(segment, str) for segment in decoded):
         raise BackendCorruption("Stored Neo4j key namespaces must be string lists.")
@@ -1638,6 +2086,8 @@ def _decode_namespace(value: object) -> tuple[str, ...]:
 
 
 def _namespace_matches(candidate: tuple[str, ...], selected: tuple[str, ...] | None, *, recursive: bool) -> bool:
+    """Return whether a namespace satisfies an exact or prefix filter."""
+
     if selected is None:
         return True
     if recursive:
@@ -1646,10 +2096,14 @@ def _namespace_matches(candidate: tuple[str, ...], selected: tuple[str, ...] | N
 
 
 def _identity(*parts: object) -> str:
+    """Build one stable composite identity for a uniqueness constraint."""
+
     return json.dumps(parts, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
 
 
 def _edges_have_cycle(edges: list[tuple[str, str]]) -> bool:
+    """Return whether a set of directed edges contains a cycle."""
+
     adjacency: dict[str, list[str]] = defaultdict(list)
     indegree: dict[str, int] = defaultdict(int)
     nodes: set[str] = set()
@@ -1671,6 +2125,8 @@ def _edges_have_cycle(edges: list[tuple[str, str]]) -> bool:
 
 
 def _edge_path_exists(edges: list[tuple[str, str]], start_id: str, target_id: str) -> bool:
+    """Return whether directed edges connect a start block to a target."""
+
     adjacency: dict[str, list[str]] = defaultdict(list)
     for source_id, next_id in edges:
         adjacency[source_id].append(next_id)
@@ -1688,6 +2144,8 @@ def _edge_path_exists(edges: list[tuple[str, str]], start_id: str, target_id: st
 
 
 def _validate_sequence(value: object, *, name: str) -> None:
+    """Require a non-negative integer sequence value."""
+
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
     if value < 0:
@@ -1695,6 +2153,8 @@ def _validate_sequence(value: object, *, name: str) -> None:
 
 
 def _validate_limit(value: object) -> None:
+    """Require a non-negative integer page limit."""
+
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("limit must be an integer.")
     if value < 0:
@@ -1702,6 +2162,8 @@ def _validate_limit(value: object) -> None:
 
 
 def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
+    """Validate and normalize an optional aware datetime to UTC."""
+
     if value is None:
         return None
     if not isinstance(value, datetime):
@@ -1712,6 +2174,8 @@ def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
 
 
 def _validate_nonempty_string(value: object, *, name: str) -> None:
+    """Require a non-empty string configuration value."""
+
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string.")
     if not value:
@@ -1719,6 +2183,8 @@ def _validate_nonempty_string(value: object, *, name: str) -> None:
 
 
 def _validate_timeout(value: object, *, name: str) -> None:
+    """Require a finite, non-negative timeout in seconds."""
+
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TypeError(f"{name} must be a number.")
     if not math.isfinite(float(value)) or value < 0:
@@ -1726,6 +2192,8 @@ def _validate_timeout(value: object, *, name: str) -> None:
 
 
 def _load_neo4j_driver() -> tuple[Any, tuple[type[BaseException], ...]]:
+    """Import the optional driver and return it with its exception types."""
+
     try:
         import neo4j
     except ImportError as error:

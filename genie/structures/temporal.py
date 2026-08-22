@@ -25,7 +25,7 @@ from genie.structures.records import TemporalEntry, TemporalItem, ValidityInterv
 
 @runtime_checkable
 class TemporalAccess(BlockReader, Protocol):
-    """Small access surface required by ``TemporalCollection``."""
+    """Small access surface required by `TemporalCollection`."""
 
 
 class TemporalCollection:
@@ -64,10 +64,10 @@ class TemporalCollection:
             store: Backend capability that persists temporal membership.
             collection: Block or id that identifies this temporal collection.
             index: Optional efficient temporal query index. When omitted, the
-                store is used as the index if it implements ``TemporalIndex``;
+                store is used as the index if it implements `TemporalIndex`;
                 otherwise queries use a portable paged scan.
             hooks: Optional registry. Defaults to the registry owned by a
-                ``Memory`` or ``MemoryHandle`` access object.
+                `Memory` or `MemoryHandle` access object.
 
         Raises:
             MemoryNotFound: If the collection block is missing.
@@ -159,8 +159,8 @@ class TemporalCollection:
 
         Args:
             block: Existing visible temporal member.
-            occurred_at: Replacement event time, or ``None`` to omit it.
-            validity: Replacement validity period, or ``None`` to omit it.
+            occurred_at: Replacement event time, or `None` to omit it.
+            validity: Replacement validity period, or `None` to omit it.
 
         Returns:
             Replacement temporal entry and resolved block.
@@ -201,7 +201,19 @@ class TemporalCollection:
             return TemporalItem(entry=entry, block=stored_block)
 
     def get(self, block: BlockRef) -> TemporalItem | None:
-        """Return one exact visible temporal member, if present."""
+        """Return one exact visible temporal member, if present.
+
+        Args:
+            block: Memory block or id to look up.
+
+        Returns:
+            Temporal item pairing the entry with its block, or `None` when the
+            collection does not contain the block.
+
+        Raises:
+            MemoryNotFound: If the entry references a block that no longer
+                exists.
+        """
 
         self._require_collection()
         entry = self._store.get_temporal_entry(self.collection_id, _block_id(block))
@@ -253,8 +265,8 @@ class TemporalCollection:
     ) -> list[TemporalItem]:
         """Return visible entries matching all supplied temporal filters.
 
-        Event bounds use ``[occurred_start, occurred_stop)``. ``valid_at``
-        selects validity intervals containing one instant. ``overlaps`` selects
+        Event bounds use `[occurred_start, occurred_stop)`. `valid_at`
+        selects validity intervals containing one instant. `overlaps` selects
         validity intervals that overlap the supplied half-open period. Entries
         missing a time field required by a filter do not match.
 
@@ -285,7 +297,25 @@ class TemporalCollection:
         stop: datetime | None = None,
         limit: int = 100,
     ) -> list[TemporalItem]:
-        """Return visible entries with event times in a half-open range."""
+        """Return visible entries with event times in a half-open range.
+
+        Entries without an event time are excluded.
+
+        Args:
+            start: Optional inclusive lower bound on event time.
+            stop: Optional exclusive upper bound on event time.
+            limit: Maximum visible items to return.
+
+        Returns:
+            Visible temporal items in ascending block-id order. Missing or
+            inaccessible targets are omitted.
+
+        Raises:
+            TypeError: If a bound is not a datetime or `limit` is not an
+                integer.
+            ValueError: If a bound is naive, `stop` is earlier than `start`,
+                or `limit` is negative.
+        """
 
         return self._scan(
             occurred_only=True,
@@ -297,7 +327,24 @@ class TemporalCollection:
         )
 
     def valid_at(self, when: datetime, *, limit: int = 100) -> list[TemporalItem]:
-        """Return visible entries whose validity contains ``when``."""
+        """Return visible entries whose validity contains `when`.
+
+        Validity periods are half-open, so an entry matches when `when` is at
+        or after its start and strictly before its end.
+
+        Args:
+            when: Instant an entry's validity period must contain.
+            limit: Maximum visible items to return.
+
+        Returns:
+            Visible temporal items in ascending block-id order. Missing or
+            inaccessible targets are omitted.
+
+        Raises:
+            TypeError: If `when` is not a datetime or `limit` is not an
+                integer.
+            ValueError: If `when` is naive or `limit` is negative.
+        """
 
         return self._scan(
             occurred_only=False,
@@ -314,7 +361,21 @@ class TemporalCollection:
         *,
         limit: int = 100,
     ) -> list[TemporalItem]:
-        """Return visible entries whose validity overlaps ``interval``."""
+        """Return visible entries whose validity overlaps `interval`.
+
+        Args:
+            interval: Validity period an entry's own period must overlap.
+            limit: Maximum visible items to return.
+
+        Returns:
+            Visible temporal items in ascending block-id order. Missing or
+            inaccessible targets are omitted.
+
+        Raises:
+            TypeError: If `interval` is not a `ValidityInterval` or `limit` is
+                not an integer.
+            ValueError: If `limit` is negative.
+        """
 
         return self._scan(
             occurred_only=False,

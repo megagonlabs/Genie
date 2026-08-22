@@ -16,6 +16,11 @@ class Principal:
             `"agent:planner"`.
         roles: Role names granted to this principal.
         metadata: Optional application metadata about the principal.
+
+    Raises:
+        TypeError: If `id` is not a string, `roles` is not a set of strings,
+            or `metadata` is not a dictionary.
+        ValueError: If `id` is empty or `roles` contains an empty string.
     """
 
     id: str = "system"

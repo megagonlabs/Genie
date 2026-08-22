@@ -24,6 +24,11 @@ class MemoryAddress:
         namespace: Ordered namespace segments. An empty tuple represents the
             collection root.
         key: Unique key within the namespace.
+
+    Raises:
+        TypeError: If `namespace` is not a tuple of strings or `key` is not a
+            string.
+        ValueError: If a namespace segment or `key` is empty.
     """
 
     namespace: tuple[str, ...]
@@ -52,6 +57,11 @@ class KeyBinding:
         collection_id: Id of the collection that owns the key space.
         address: Namespace and key used to find the block.
         block_id: Id of the addressed memory block.
+
+    Raises:
+        TypeError: If an id is not a string or `address` is not a
+            `MemoryAddress`.
+        ValueError: If an id is empty.
     """
 
     collection_id: str
@@ -74,6 +84,11 @@ class KeyedItem:
     Attributes:
         binding: Structural key binding for the block.
         block: Visible memory block resolved through normal memory access.
+
+    Raises:
+        TypeError: If `binding` is not a `KeyBinding` or `block` is not a
+            `MemoryBlock`.
+        ValueError: If the binding and block refer to different ids.
     """
 
     binding: KeyBinding
@@ -102,6 +117,10 @@ class LogEntry:
         log_id: Id of the ordered log.
         sequence: Stable, non-negative position within the log.
         block_id: Id of the memory block at this position.
+
+    Raises:
+        TypeError: If an id is not a string or `sequence` is not an integer.
+        ValueError: If an id is empty or `sequence` is negative.
     """
 
     log_id: str
@@ -126,6 +145,11 @@ class LogItem:
     Attributes:
         entry: Structural position of the block in a log.
         block: Visible memory block resolved through normal memory access.
+
+    Raises:
+        TypeError: If `entry` is not a `LogEntry` or `block` is not a
+            `MemoryBlock`.
+        ValueError: If the entry and block refer to different ids.
     """
 
     entry: LogEntry
@@ -146,13 +170,18 @@ class LogItem:
 class ValidityInterval:
     """Half-open period during which information is valid.
 
-    The interval includes ``valid_at`` and excludes ``invalid_at``. A missing
-    ``invalid_at`` means that the interval is open-ended. Timestamps must be
+    The interval includes `valid_at` and excludes `invalid_at`. A missing
+    `invalid_at` means that the interval is open-ended. Timestamps must be
     timezone-aware and are normalized to UTC.
 
     Attributes:
         valid_at: Inclusive start of the validity period.
         invalid_at: Optional exclusive end of the validity period.
+
+    Raises:
+        TypeError: If a bound is not a datetime.
+        ValueError: If a bound is naive or `invalid_at` is not later than
+            `valid_at`.
     """
 
     valid_at: datetime
@@ -177,7 +206,7 @@ class ValidityInterval:
 class TemporalEntry:
     """Attach event time or a validity period to a memory block.
 
-    At least one of ``occurred_at`` or ``validity`` must be present. Event time
+    At least one of `occurred_at` or `validity` must be present. Event time
     and validity are separate because an event may happen once while a fact
     remains valid for a longer period.
 
@@ -186,6 +215,12 @@ class TemporalEntry:
         block_id: Id of the timed memory block.
         occurred_at: Optional time when an event happened.
         validity: Optional period during which information is valid.
+
+    Raises:
+        TypeError: If an id is not a string, `occurred_at` is not a datetime,
+            or `validity` is not a `ValidityInterval`.
+        ValueError: If an id is empty, `occurred_at` is naive, or neither
+            `occurred_at` nor `validity` is supplied.
     """
 
     collection_id: str
@@ -217,6 +252,11 @@ class TemporalItem:
     Attributes:
         entry: Event time or validity period attached to the block.
         block: Visible memory block resolved through normal memory access.
+
+    Raises:
+        TypeError: If `entry` is not a `TemporalEntry` or `block` is not a
+            `MemoryBlock`.
+        ValueError: If the entry and block refer to different ids.
     """
 
     entry: TemporalEntry
@@ -244,6 +284,13 @@ class GraphPath:
     Attributes:
         block_ids: Block ids in traversal order.
         links: Links followed between neighboring blocks.
+
+    Raises:
+        TypeError: If `block_ids` or `links` is not a tuple, a block id is not
+            a string, or a link is not a `MemoryLink`.
+        ValueError: If `block_ids` is empty, a block id is empty, the counts
+            do not differ by exactly one, or a link does not connect its
+            neighboring blocks.
     """
 
     block_ids: tuple[str, ...]
@@ -303,7 +350,7 @@ class GraphPath:
 class GraphNeighbor:
     """A neighboring block reached through one typed link.
 
-    ``direction`` is relative to the block from which the caller requested
+    `direction` is relative to the block from which the caller requested
     neighbors. An outgoing step reaches the link target; an incoming step
     reaches the link source. Parallel links produce separate neighbor records.
 
@@ -311,6 +358,12 @@ class GraphNeighbor:
         block: Visible neighboring memory block.
         link: Link used to reach the neighboring block.
         direction: Link direction relative to the starting block.
+
+    Raises:
+        TypeError: If `block` is not a `MemoryBlock` or `link` is not a
+            `MemoryLink`.
+        ValueError: If `direction` is not `"out"` or `"in"`, or `block` is not
+            the neighbor that `direction` selects.
     """
 
     block: MemoryBlock
@@ -340,7 +393,7 @@ class GraphNeighbor:
 class RevisionEntry:
     """Place an immutable block revision under a stable logical record id.
 
-    ``revision`` is separate from ``MemoryBlock.version``. A block version is
+    `revision` is separate from `MemoryBlock.version`. A block version is
     the update counter for one stored block, while a revision identifies one
     preserved block in a logical record's history.
 
@@ -348,6 +401,10 @@ class RevisionEntry:
         record_id: Stable logical identity shared by all revisions.
         revision: Positive revision number.
         block_id: Id of the memory block holding this revision's value.
+
+    Raises:
+        TypeError: If an id is not a string or `revision` is not an integer.
+        ValueError: If an id is empty or `revision` is less than one.
     """
 
     record_id: str
@@ -372,6 +429,11 @@ class RevisionItem:
     Attributes:
         entry: Stable record id and positive logical revision number.
         block: Visible memory block holding the revision value.
+
+    Raises:
+        TypeError: If `entry` is not a `RevisionEntry` or `block` is not a
+            `MemoryBlock`.
+        ValueError: If the entry and block refer to different ids.
     """
 
     entry: RevisionEntry

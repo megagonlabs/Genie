@@ -1,8 +1,8 @@
 """Shared memory access protocols for optional structures.
 
 Structure facades depend on these small protocols instead of a concrete
-``Memory`` or ``MemoryHandle`` class. Both public access classes satisfy the
-combined ``MemoryAccess`` protocol. A facade can depend on a narrower protocol
+`Memory` or `MemoryHandle` class. Both public access classes satisfy the
+combined `MemoryAccess` protocol. A facade can depend on a narrower protocol
 when it needs only part of the memory API.
 """
 
@@ -28,7 +28,14 @@ class BlockReader(Protocol):
     """Read access needed by structure facades."""
 
     def get(self, block_id: BlockRef) -> MemoryBlock | None:
-        """Fetch a visible memory block by block or id."""
+        """Fetch a visible memory block by block or id.
+
+        Args:
+            block_id: Block or block id to read.
+
+        Returns:
+            Visible block, or `None` when it is missing or not visible.
+        """
 
         ...
 
@@ -48,7 +55,20 @@ class BlockWriter(Protocol):
         content_type: str | None = None,
         id: str | None = None,
     ) -> MemoryBlock:
-        """Create a memory block."""
+        """Create a memory block.
+
+        Args:
+            type: Application-defined block type.
+            value: User-level value to encode and store.
+            parent: Optional parent block or id.
+            metadata: Optional metadata used for filtering or indexing.
+            policy: Optional block-level access policy.
+            content_type: Optional explicit codec content type.
+            id: Optional caller-provided block id.
+
+        Returns:
+            Stored block with a decoded value.
+        """
 
         ...
 
@@ -59,7 +79,16 @@ class BlockWriter(Protocol):
         *,
         content_type: str | None = None,
     ) -> MemoryBlock:
-        """Replace a memory block's value."""
+        """Replace a memory block's value.
+
+        Args:
+            block_id: Block or block id to replace.
+            value: Replacement user-level value.
+            content_type: Optional explicit codec content type.
+
+        Returns:
+            Stored block with a decoded value.
+        """
 
         ...
 
@@ -70,12 +99,26 @@ class BlockWriter(Protocol):
         value: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryBlock:
-        """Merge fields into a dictionary value or block metadata."""
+        """Merge fields into a dictionary value or block metadata.
+
+        Args:
+            block_id: Block or block id to update.
+            value: Optional fields to merge into a dictionary value.
+            metadata: Optional fields to merge into the block metadata.
+
+        Returns:
+            Stored block with a decoded value.
+        """
 
         ...
 
     def delete(self, block_id: BlockRef) -> None:
-        """Delete a memory block using the access object's normal rules."""
+        """Delete a memory block using the access object's normal rules.
+
+        Args:
+            block_id: Block or block id to delete, together with everything it
+                owns.
+        """
 
         ...
 
@@ -85,12 +128,26 @@ class TreeReader(Protocol):
     """Parent/child traversal access needed by tree-based structures."""
 
     def children(self, block_id: BlockRef) -> list[MemoryBlock]:
-        """Return visible direct children of a memory block."""
+        """Return visible direct children of a memory block.
+
+        Args:
+            block_id: Parent block or block id.
+
+        Returns:
+            Visible direct child blocks.
+        """
 
         ...
 
     def ancestors(self, block_id: BlockRef) -> list[MemoryBlock]:
-        """Return visible ancestors of a memory block."""
+        """Return visible ancestors of a memory block.
+
+        Args:
+            block_id: Block or block id to inspect.
+
+        Returns:
+            Visible ancestor blocks in nearest-parent-first order.
+        """
 
         ...
 
@@ -106,7 +163,16 @@ class LinkReader(Protocol):
         relation: str | None = None,
         direction: LinkDirection = "out",
     ) -> list[MemoryLink]:
-        """List visible links connected to a memory block."""
+        """List visible links connected to a memory block.
+
+        Args:
+            block_id: Block or block id to inspect.
+            relation: Optional relation type filter.
+            direction: Link direction relative to `block_id`.
+
+        Returns:
+            Visible links matching the filters.
+        """
 
         ...
 
@@ -123,7 +189,17 @@ class LinkWriter(Protocol):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Create a typed link between two memory blocks."""
+        """Create a typed link between two memory blocks.
+
+        Args:
+            source: Block or id the link starts from.
+            target: Block or id the link points to.
+            relation: Application-defined relationship type.
+            metadata: Optional relationship metadata.
+
+        Returns:
+            Stored link.
+        """
 
         ...
 
@@ -133,7 +209,15 @@ class LinkWriter(Protocol):
         *,
         metadata: dict[str, Any],
     ) -> MemoryLink:
-        """Merge metadata into an existing typed link."""
+        """Merge metadata into an existing typed link.
+
+        Args:
+            link: Link to update.
+            metadata: Fields to merge into the link metadata.
+
+        Returns:
+            Stored replacement link.
+        """
 
         ...
 
@@ -150,7 +234,17 @@ class AcyclicLinkWriter(Protocol):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Atomically create a typed link unless it would form a cycle."""
+        """Atomically create a typed link unless it would form a cycle.
+
+        Args:
+            source: Block or id the link starts from.
+            target: Block or id the link points to.
+            relation: Relation identifying the protected acyclic graph.
+            metadata: Optional relationship metadata.
+
+        Returns:
+            Stored link.
+        """
 
         ...
 
@@ -160,7 +254,14 @@ class SearchAccess(Protocol):
     """Search access needed by structures with portable query fallbacks."""
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
-        """Run a normalized memory query through the access boundary."""
+        """Run a normalized memory query through the access boundary.
+
+        Args:
+            query: Normalized memory query.
+
+        Returns:
+            Visible search results.
+        """
 
         ...
 

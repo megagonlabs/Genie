@@ -24,13 +24,18 @@ BUILTIN_OPERATION_NAMES = frozenset(
 class AccessRule:
     """A rule that grants or denies one operation.
 
-    Args:
+    Attributes:
         allow_all: Whether every principal is allowed.
         principals: Explicit principal ids allowed when `allow_all` is false.
         roles: Principal roles allowed when `allow_all` is false.
         allow_owner: Whether the block creator is allowed when `allow_all` is
             false. The owner is the principal id stored in
             `MemoryBlock.created_by`.
+
+    Raises:
+        TypeError: If a flag is not a boolean, or `principals` or `roles` is
+            not a set of strings.
+        ValueError: If `principals` or `roles` contains an empty string.
     """
 
     allow_all: bool = True
@@ -136,7 +141,11 @@ class _FrozenOperationRules(Mapping[str, AccessRule]):
     """Immutable, deepcopy-friendly mapping for custom operation rules."""
 
     def __init__(self, rules: Mapping[str, AccessRule]) -> None:
-        """Create an immutable copy of operation rules."""
+        """Create an immutable copy of operation rules.
+
+        Args:
+            rules: Operation rules to copy.
+        """
 
         self._rules = dict(rules)
 
@@ -185,6 +194,11 @@ class MemoryPolicy:
         operations: Optional application-defined operation rules, such as
             `"export"` or `"approve"`. These names cannot override Genie's
             built-in operation fields.
+
+    Raises:
+        TypeError: If a built-in field is not an `AccessRule`, or `operations`
+            is not a mapping of names to `AccessRule` values.
+        ValueError: If `operations` reuses a name reserved by Genie.
     """
 
     read: AccessRule = field(default_factory=AccessRule.allow)

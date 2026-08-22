@@ -14,7 +14,7 @@ from genie.structures.access import BlockReader, BlockRef, TreeReader
 
 @runtime_checkable
 class OwnershipAccess(BlockReader, TreeReader, Protocol):
-    """Small access surface required by ``OwnershipTree``."""
+    """Small access surface required by `OwnershipTree`."""
 
     def put(
         self,
@@ -27,12 +27,29 @@ class OwnershipAccess(BlockReader, TreeReader, Protocol):
         content_type: str | None = None,
         id: str | None = None,
     ) -> MemoryBlock:
-        """Create a memory block."""
+        """Create a memory block.
+
+        Args:
+            type: Application-defined block type.
+            value: User-level value to encode and store.
+            parent: Optional parent block or id.
+            metadata: Optional metadata used for filtering or indexing.
+            policy: Optional block-level access policy.
+            content_type: Optional explicit codec content type.
+            id: Optional caller-provided block id.
+
+        Returns:
+            Stored block with a decoded value.
+        """
 
         ...
 
     def delete(self, block_id: BlockRef) -> None:
-        """Delete a memory block and its owned descendants."""
+        """Delete a memory block and its owned descendants.
+
+        Args:
+            block_id: Block or block id to delete.
+        """
 
         ...
 
@@ -42,7 +59,7 @@ class OwnershipTree:
 
     The facade adds no storage behavior. It keeps every operation inside its
     configured root and delegates reads, writes, traversal, policy checks, and
-    recursive deletion to the supplied ``Memory`` or ``MemoryHandle`` access
+    recursive deletion to the supplied `Memory` or `MemoryHandle` access
     object.
     """
 
@@ -154,7 +171,7 @@ class OwnershipTree:
             block: Tree member whose parent should be returned.
 
         Returns:
-            Visible direct parent, or ``None`` for the facade root.
+            Visible direct parent, or `None` for the facade root.
 
         Raises:
             AccessDenied: If the block is outside this tree or upward traversal
@@ -226,14 +243,14 @@ class OwnershipTree:
     def contains(self, block: BlockRef) -> bool:
         """Return whether a block id is visible inside this tree.
 
-        Missing, unreadable, and out-of-tree block ids return ``False`` unless
+        Missing, unreadable, and out-of-tree block ids return `False` unless
         traversal itself is denied. The check does not cross links or mounts.
 
         Args:
             block: Candidate block or id.
 
         Returns:
-            ``True`` when the candidate is the root or a visible descendant.
+            `True` when the candidate is the root or a visible descendant.
 
         Raises:
             AccessDenied: If downward traversal needed for the check is denied.

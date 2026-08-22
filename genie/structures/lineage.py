@@ -13,14 +13,14 @@ from genie.structures.records import GraphNeighbor, GraphPath
 
 @runtime_checkable
 class LineageAccess(GraphAccess, AcyclicLinkWriter, Protocol):
-    """Access surface required by ``LineageDAG``."""
+    """Access surface required by `LineageDAG`."""
 
 
 class LineageDAG:
     """A directed acyclic lineage view over existing typed links.
 
     One exact link relation identifies the DAG. Edges point from a predecessor
-    to a successor. Reads and metadata updates use ``PropertyGraph``; insertion
+    to a successor. Reads and metadata updates use `PropertyGraph`; insertion
     uses the access object's atomic acyclic-link operation.
     """
 
@@ -35,8 +35,8 @@ class LineageDAG:
                 distinct relation for each independent lineage graph.
 
         Raises:
-            TypeError: If ``relation`` is not a string.
-            ValueError: If ``relation`` is empty or reserved for mounts.
+            TypeError: If `relation` is not a string.
+            ValueError: If `relation` is empty or reserved for mounts.
         """
 
         _validate_relation(relation)
@@ -81,7 +81,20 @@ class LineageDAG:
         *,
         metadata: dict[str, Any],
     ) -> MemoryLink:
-        """Merge metadata into one lineage edge without changing topology."""
+        """Merge metadata into one lineage edge without changing topology.
+
+        Args:
+            edge: Existing lineage edge to update.
+            metadata: Edge property fields to merge.
+
+        Returns:
+            Persisted replacement link with stable identity and endpoints.
+
+        Raises:
+            MemoryConflict: If the edge does not belong to this DAG's
+                relation.
+            MemoryNotFound: If the edge no longer exists.
+        """
 
         stored = self._require_stored_edge(edge)
         self._require_relation(stored)
@@ -93,7 +106,15 @@ class LineageDAG:
         *,
         direction: LinkDirection = "out",
     ) -> list[MemoryLink]:
-        """Return visible lineage edges connected to one block."""
+        """Return visible lineage edges connected to one block.
+
+        Args:
+            block: Memory block or id whose edges should be returned.
+            direction: Edge direction relative to the selected block.
+
+        Returns:
+            Visible edges in this DAG's relation, in edge order.
+        """
 
         return self._graph.edges(
             block,
@@ -102,7 +123,20 @@ class LineageDAG:
         )
 
     def predecessors(self, block: BlockRef) -> list[GraphNeighbor]:
-        """Return visible direct predecessors connected by incoming edges."""
+        """Return visible direct predecessors connected by incoming edges.
+
+        Args:
+            block: Memory block or id whose predecessors should be returned.
+
+        Returns:
+            One neighbor record per incoming edge, so parallel edges remain
+            distinct.
+
+        Raises:
+            MemoryConflict: If a backend returns an edge that is not connected
+                to the selected block.
+            MemoryNotFound: If an edge endpoint disappears during traversal.
+        """
 
         return self._graph.neighbors(
             block,
@@ -111,7 +145,20 @@ class LineageDAG:
         )
 
     def successors(self, block: BlockRef) -> list[GraphNeighbor]:
-        """Return visible direct successors connected by outgoing edges."""
+        """Return visible direct successors connected by outgoing edges.
+
+        Args:
+            block: Memory block or id whose successors should be returned.
+
+        Returns:
+            One neighbor record per outgoing edge, so parallel edges remain
+            distinct.
+
+        Raises:
+            MemoryConflict: If a backend returns an edge that is not connected
+                to the selected block.
+            MemoryNotFound: If an edge endpoint disappears during traversal.
+        """
 
         return self._graph.neighbors(
             block,
@@ -126,7 +173,21 @@ class LineageDAG:
         max_depth: int = 6,
         limit: int = 100,
     ) -> list[GraphPath]:
-        """Return bounded lineage paths walking toward earlier blocks."""
+        """Return bounded lineage paths walking toward earlier blocks.
+
+        Args:
+            block: Starting memory block or id.
+            max_depth: Maximum number of edges in a returned path.
+            limit: Maximum number of paths to return.
+
+        Returns:
+            Paths of length one through `max_depth` in breadth-first order.
+
+        Raises:
+            MemoryNotFound: If the starting block is missing.
+            TypeError: If `max_depth` or `limit` is not an integer.
+            ValueError: If either bound is negative.
+        """
 
         return self._graph.walk(
             block,
@@ -143,7 +204,21 @@ class LineageDAG:
         max_depth: int = 6,
         limit: int = 100,
     ) -> list[GraphPath]:
-        """Return bounded lineage paths walking toward derived blocks."""
+        """Return bounded lineage paths walking toward derived blocks.
+
+        Args:
+            block: Starting memory block or id.
+            max_depth: Maximum number of edges in a returned path.
+            limit: Maximum number of paths to return.
+
+        Returns:
+            Paths of length one through `max_depth` in breadth-first order.
+
+        Raises:
+            MemoryNotFound: If the starting block is missing.
+            TypeError: If `max_depth` or `limit` is not an integer.
+            ValueError: If either bound is negative.
+        """
 
         return self._graph.walk(
             block,
@@ -160,7 +235,22 @@ class LineageDAG:
         *,
         max_depth: int = 6,
     ) -> GraphPath | None:
-        """Return the shortest visible forward lineage path, if one exists."""
+        """Return the shortest visible forward lineage path, if one exists.
+
+        Args:
+            predecessor: Starting memory block or id.
+            successor: Target memory block or id.
+            max_depth: Maximum number of edges to inspect.
+
+        Returns:
+            Shortest path, a zero-edge path when both blocks are the same, or
+            `None` when no path is found within `max_depth`.
+
+        Raises:
+            MemoryNotFound: If either endpoint is missing.
+            TypeError: If `max_depth` is not an integer.
+            ValueError: If `max_depth` is negative.
+        """
 
         return self._graph.shortest_path(
             predecessor,

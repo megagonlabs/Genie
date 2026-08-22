@@ -20,7 +20,7 @@ from genie.structures.records import GraphNeighbor, GraphPath
 
 @runtime_checkable
 class GraphAccess(BlockReader, LinkReader, LinkWriter, Protocol):
-    """Small access surface required by ``PropertyGraph``."""
+    """Small access surface required by `PropertyGraph`."""
 
 
 class PropertyGraph:
@@ -28,7 +28,7 @@ class PropertyGraph:
 
     The facade adds graph traversal but no graph persistence. Edge creation,
     metadata updates, edge lookup, block reads, policy checks, and handle scope
-    checks remain in the supplied ``Memory`` or ``MemoryHandle`` object.
+    checks remain in the supplied `Memory` or `MemoryHandle` object.
     """
 
     __slots__ = ("_access",)
@@ -126,7 +126,7 @@ class PropertyGraph:
         """Return visible neighboring nodes with the edges used to reach them.
 
         One record is returned per edge, so parallel edges remain distinct.
-        Self-links are reported as outgoing when ``direction="both"``.
+        Self-links are reported as outgoing when `direction="both"`.
 
         Args:
             block: Memory block or id whose neighbors should be returned.
@@ -173,11 +173,11 @@ class PropertyGraph:
             limit: Maximum number of paths to return.
 
         Returns:
-            Paths of length one through ``max_depth`` in breadth-first order.
+            Paths of length one through `max_depth` in breadth-first order.
 
         Raises:
             MemoryNotFound: If the starting block is missing.
-            TypeError: If ``max_depth`` or ``limit`` is not an integer.
+            TypeError: If `max_depth` or `limit` is not an integer.
             ValueError: If either bound is negative or direction is invalid.
         """
 
@@ -234,12 +234,12 @@ class PropertyGraph:
 
         Returns:
             Shortest path, a zero-edge path when both nodes are the same, or
-            ``None`` when no path is found within ``max_depth``.
+            `None` when no path is found within `max_depth`.
 
         Raises:
             MemoryNotFound: If either endpoint is missing.
-            TypeError: If ``max_depth`` is not an integer.
-            ValueError: If ``max_depth`` is negative or direction is invalid.
+            TypeError: If `max_depth` is not an integer.
+            ValueError: If `max_depth` is negative or direction is invalid.
         """
 
         _validate_bound(max_depth, name="max_depth")
@@ -282,7 +282,7 @@ class PropertyGraph:
         *,
         requested_direction: LinkDirection,
     ) -> GraphNeighbor:
-        """Resolve one edge to a visible neighbor relative to ``block_id``."""
+        """Resolve one edge to a visible neighbor relative to `block_id`."""
 
         if edge.source_id == block_id and edge.target_id == block_id:
             direction: Literal["out", "in"] = (

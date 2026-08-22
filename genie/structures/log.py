@@ -23,7 +23,7 @@ from genie.structures.records import LogEntry, LogItem
 
 @runtime_checkable
 class SequenceAccess(BlockReader, Protocol):
-    """Small access surface required by ``EventLog``."""
+    """Small access surface required by `EventLog`."""
 
 
 class EventLog:
@@ -58,11 +58,11 @@ class EventLog:
             store: Backend capability that appends entries atomically.
             log: Block or id that identifies this ordered log.
             hooks: Optional registry. Defaults to the registry owned by a
-                ``Memory`` or ``MemoryHandle`` access object.
+                `Memory` or `MemoryHandle` access object.
 
         Raises:
             MemoryNotFound: If the log block is missing.
-            UnsupportedOperation: If ``store`` lacks the sequence capability.
+            UnsupportedOperation: If `store` lacks the sequence capability.
         """
 
         if not isinstance(store, SequenceStore):
@@ -123,7 +123,20 @@ class EventLog:
             return LogItem(entry=entry, block=stored_block)
 
     def get(self, sequence: int) -> LogItem | None:
-        """Return the visible item at one exact sequence position."""
+        """Return the visible item at one exact sequence position.
+
+        Args:
+            sequence: Exact position within the log.
+
+        Returns:
+            Visible log item, or `None` when the position holds no entry.
+
+        Raises:
+            MemoryNotFound: If the position references a block that no longer
+                exists.
+            TypeError: If `sequence` is not an integer.
+            ValueError: If `sequence` is negative.
+        """
 
         self._require_log()
         _validate_sequence(sequence, name="sequence")
@@ -150,6 +163,13 @@ class EventLog:
 
         Returns:
             Visible log items in ascending or descending sequence order.
+            Missing or inaccessible targets are omitted.
+
+        Raises:
+            TypeError: If `reverse` is not a boolean, or `start`, `stop`, or
+                `limit` is not an integer.
+            ValueError: If a bound or `limit` is negative, or `stop` is less
+                than `start`.
         """
 
         self._require_log()
@@ -198,7 +218,18 @@ class EventLog:
         return items
 
     def tail(self, *, limit: int = 20) -> list[LogItem]:
-        """Return the newest visible items in chronological order."""
+        """Return the newest visible items in chronological order.
+
+        Args:
+            limit: Maximum visible items to return.
+
+        Returns:
+            Up to `limit` of the newest visible items, oldest first.
+
+        Raises:
+            TypeError: If `limit` is not an integer.
+            ValueError: If `limit` is negative.
+        """
 
         items = self.read(reverse=True, limit=limit)
         items.reverse()

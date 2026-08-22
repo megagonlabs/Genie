@@ -33,13 +33,23 @@ class BackendError(GenieError):
 
 
 class BackendBusy(BackendError):
-    """Raised when backend contention exceeds the configured wait time."""
+    """Raised when backend contention exceeds the configured wait time.
+
+    Attributes:
+        retryable: Always `True`; the same request may succeed once contention
+            clears.
+    """
 
     retryable = True
 
 
 class BackendUnavailable(BackendError):
-    """Raised when backend storage cannot currently be reached or used."""
+    """Raised when backend storage cannot currently be reached or used.
+
+    Attributes:
+        retryable: Always `True`; the same request may succeed once storage is
+            reachable again.
+    """
 
     retryable = True
 

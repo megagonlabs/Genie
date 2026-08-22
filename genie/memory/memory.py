@@ -44,6 +44,15 @@ class Memory:
     scoped access, links, mounts, search, hooks, and codecs without owning
     application business logic, memory structure, storage layout, retrieval
     strategy, or value meaning.
+
+    Attributes:
+        backend: Adapter that persists blocks and links.
+        principal: Principal every operation through this object acts as.
+        policy_engine: Evaluator consulted before each block access.
+        codecs: Registry used to encode and decode block values.
+        default_policy: Policy attached to blocks created without one.
+        attributes: Read-only string labels attached to every hook context this
+            memory opens.
     """
 
     def __init__(
@@ -80,6 +89,8 @@ class Memory:
             TypeError: If a configured backend, principal, policy engine,
                 codec registry, default policy, or attribute has the wrong
                 type.
+            ValueError: If `principal` is an empty id string or the same hook
+                appears twice in `hooks`.
         """
 
         if backend is not None and not isinstance(backend, MemoryBackend):
@@ -141,8 +152,9 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write under the parent.
             MemoryNotFound: If the parent id does not exist.
-            TypeError: If metadata is not a strict JSON dictionary or no codec
-                can encode the value.
+            TypeError: If `policy` is not a `MemoryPolicy`, metadata is not a
+                strict JSON dictionary, or no codec can encode the value.
+            ValueError: If a `before_put` hook changes the block's parent id.
         """
 
         with self._operation(HookOperation.PUT) as context:
@@ -220,6 +232,8 @@ class Memory:
             MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
             TypeError: If no codec can encode the value.
+            ValueError: If a `before_update` hook changes a field other than
+                the value, metadata, or content type.
         """
 
         with self._operation(HookOperation.SET) as context:
@@ -263,6 +277,8 @@ class Memory:
             MemoryNotFound: If the block does not exist.
             TypeError: If `value` is provided and the existing decoded value is
                 not a dictionary, or metadata is not a strict JSON dictionary.
+            ValueError: If a `before_update` hook changes a field other than
+                the value, metadata, or content type.
         """
 
         with self._operation(HookOperation.UPDATE) as context:
@@ -399,6 +415,8 @@ class Memory:
                 target.
             MemoryNotFound: If either endpoint is missing.
             TypeError: If metadata is not a strict JSON dictionary.
+            ValueError: If a `before_add_link` hook changes link identity or
+                topology.
         """
 
         return self._add_link(
@@ -434,6 +452,8 @@ class Memory:
                 by its source policy.
             MemoryNotFound: If the link or a non-mount endpoint is missing.
             TypeError: If metadata is not a strict JSON dictionary.
+            ValueError: If a `before_update_link` hook changes link identity or
+                topology.
         """
 
         with self._operation(HookOperation.UPDATE_LINK) as context:
@@ -491,6 +511,8 @@ class Memory:
             MemoryNotFound: If either endpoint is missing.
             TypeError: If metadata is not a strict JSON dictionary.
             UnsupportedOperation: If the backend lacks atomic DAG insertion.
+            ValueError: If `relation` is the reserved mount relation, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         if relation == LinkRelations.MOUNT:
@@ -514,7 +536,32 @@ class Memory:
         hook_operation: HookOperation,
         acyclic: bool,
     ) -> MemoryLink:
-        """Authorize, hook, and persist one link mutation."""
+        """Authorize, hook, and persist one link insertion.
+
+        Args:
+            source: Source block or id.
+            target: Target block or id.
+            relation: Relation type stored on the link.
+            metadata: Optional relationship metadata.
+            hook_operation: Logical operation the insertion is reported under.
+            acyclic: Whether the backend must reject the link when it would
+                close a cycle over `relation`.
+
+        Returns:
+            Stored memory link.
+
+        Raises:
+            AccessDenied: If the principal cannot write the source or read the
+                target.
+            MemoryConflict: If `acyclic` is true and the link would form a
+                cycle.
+            MemoryNotFound: If either endpoint is missing.
+            TypeError: If metadata is not a strict JSON dictionary.
+            UnsupportedOperation: If `acyclic` is true and the backend lacks
+                atomic DAG insertion.
+            ValueError: If a `before_add_link` hook changes link identity or
+                topology.
+        """
 
         with self._operation(hook_operation) as context:
             source_block = self._require_raw(_block_id(source))
@@ -618,6 +665,8 @@ class Memory:
                 target.
             MemoryNotFound: If either endpoint is missing.
             TypeError: If metadata is not a strict JSON dictionary.
+            ValueError: If a `before_add_link` hook changes link identity or
+                topology.
         """
 
         return self._add_link(
@@ -732,9 +781,9 @@ class Memory:
             exists.
 
         Raises:
-            ValueError: If `mount` is not a mount link.
             AccessDenied: If the principal cannot read the source or target.
             MemoryNotFound: If the source block no longer exists.
+            ValueError: If `mount` is not a mount link.
         """
 
         if mount.relation != LinkRelations.MOUNT:
@@ -786,6 +835,8 @@ class Memory:
             AccessDenied: If the principal cannot search or traverse from the
                 query root.
             MemoryNotFound: If the query root does not exist.
+            TypeError: If the text, root, types, filters, or limit arguments
+                have the wrong type.
             ValueError: If the scope is invalid, the limit is negative, or a
                 non-global scope has no root.
         """
@@ -850,8 +901,11 @@ class Memory:
 
         Raises:
             AccessDenied: If the handle principal cannot read `root`.
-            ValueError: If `root` is `None`.
             MemoryNotFound: If `root` does not exist.
+            TypeError: If `principal` is not a principal, id string, or `None`.
+            ValueError: If `root` is `None`, the scope name is unknown, or
+                `default_scope` requires a capability the new handle does not
+                enable.
         """
 
         root_id = _block_id(root)
@@ -908,6 +962,11 @@ class Memory:
 
         Returns:
             An unbounded `MemoryHandle` backed by this memory system.
+
+        Raises:
+            TypeError: If `principal` is not a principal, id string, or `None`.
+            ValueError: If the scope name is unknown or `default_scope`
+                requires a capability the new handle does not enable.
         """
 
         return self._new_handle(
@@ -1015,7 +1074,7 @@ class Memory:
         )
 
     def _authorize_query(self, context: HookContext, query: MemoryQuery) -> None:
-        """Check access required by a query root and scope."""
+        """Require the access a query root and scope demand, or raise."""
 
         if query.root_id is None:
             if query.scope != Scope.GLOBAL:

@@ -18,6 +18,7 @@ OPERATOR_ALIASES = {
     "<=": "$lte",
     "in": "$in",
 }
+"""Human-friendly filter operators and their canonical adapter-facing names."""
 
 _BLOCK_FILTER_FIELDS = frozenset(field.name for field in fields(MemoryBlock))
 

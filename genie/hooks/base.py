@@ -79,10 +79,10 @@ class MemoryHook:
     ) -> MemoryBlock:
         """Run before a block value or metadata update.
 
-        The hook context distinguishes ``set`` from ``update``.
+        The hook context distinguishes `set` from `update`.
         Hooks may change the proposed value, metadata, or content type. Stable
         identity, ownership, policy, creator, timestamps, and version fields
-        are checked by ``Memory`` after hooks run.
+        are checked by `Memory` after hooks run.
 
         Args:
             context: Operation context shared with the matching after callback.
@@ -197,7 +197,7 @@ class MemoryHook:
         """Run before a regular, acyclic, or mount link is stored.
 
         Hooks may change metadata. Link identity, endpoints, relation, and
-        creation time are checked by ``Memory`` after hooks run.
+        creation time are checked by `Memory` after hooks run.
 
         Args:
             context: Operation context shared with the matching after callback.
@@ -374,7 +374,7 @@ class MemoryHook:
         callback, and it is the only callback that observes refusals and
         failures on operations whose before callbacks never ran.
 
-        The reported ``error`` is the exception leaving the operation. Genie
+        The reported `error` is the exception leaving the operation. Genie
         never lets an exception raised here replace it.
 
         Args:

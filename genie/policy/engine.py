@@ -30,7 +30,13 @@ class Operation(StrEnum):
 
 
 class PolicyEngine:
-    """Evaluate block-level policies for a principal."""
+    """Evaluate block-level policies for a principal.
+
+    Attributes:
+        operations: Default rules for application-defined operations. A
+            block's own `MemoryPolicy.operations` entry overrides the default
+            for a matching operation name.
+    """
 
     def __init__(self, *, operations: Mapping[str, AccessRule] | None = None) -> None:
         """Create a policy engine.

@@ -289,6 +289,19 @@ class RoutedBackend:
         Updates do not move a block to another route. If a block is reparented,
         the parent must be in the same route when tree-route enforcement is
         enabled.
+
+        Args:
+            block: Encoded replacement block.
+            expected_version: Required current version. When supplied, the
+                owning route applies the compare-and-swap.
+
+        Returns:
+            Stored replacement block.
+
+        Raises:
+            MemoryConflict: If the block is missing, its version changed, or
+                the new parent is in another route while tree-route
+                enforcement is enabled.
         """
 
         with self._lock:
@@ -312,8 +325,18 @@ class RoutedBackend:
     ) -> None:
         """Delete a block from its owning route and remove catalog state.
 
+        Catalog entries and shared link-store links are removed for the block
+        and every descendant the owning route deleted with it.
+
         Args:
             block_id: Memory block id. Missing ids are ignored.
+            expected_versions: Exact id-to-version snapshot of the subtree to
+                delete. When supplied, the owning route applies the
+                compare-and-swap.
+
+        Raises:
+            MemoryConflict: If `expected_versions` no longer describes the
+                complete subtree.
         """
 
         with self._lock:

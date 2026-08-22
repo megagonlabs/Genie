@@ -32,6 +32,16 @@ class MemoryHandle:
     Each handle has its own `id` and reports its boundary to hooks through
     `attributes`, so work done through one sandbox is distinguishable in an
     audit trail from work done by the same principal through another.
+
+    Attributes:
+        id: Stable id of this handle, unique per handle object.
+        root_id: Block id bounding the handle, or `None` when unbounded.
+        principal: Principal every operation through this handle acts as.
+        default_scope: Search scope used when callers omit `scope`.
+        allow_up: Whether ancestor traversal and search are allowed.
+        allow_global: Whether global search is allowed.
+        allow_mounts: Whether symbolic mount operations are allowed.
+        allow_policy_override: Whether `put` accepts an explicit block policy.
     """
 
     def __init__(
@@ -62,6 +72,10 @@ class MemoryHandle:
             allow_policy_override: Whether this handle can pass an explicit
                 block policy to `put`. When false, new blocks use the memory's
                 configured default policy.
+
+        Raises:
+            ValueError: If `default_scope` is not a known scope name or it
+                requires a capability this handle does not enable.
         """
 
         default_scope = Scope(default_scope)
@@ -140,7 +154,9 @@ class MemoryHandle:
                 is reached.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 parent id.
-            TypeError: If no codec can encode the value.
+            TypeError: If metadata is not a strict JSON dictionary or no codec
+                can encode the value.
+            ValueError: If a `before_put` hook changes the block's parent id.
         """
 
         parent_id = _block_id(parent) if parent is not None else self.root_id
@@ -209,6 +225,8 @@ class MemoryHandle:
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
             TypeError: If no codec can encode the value.
+            ValueError: If a `before_update` hook changes a field other than
+                the value, metadata, or content type.
         """
 
         actual_id = _block_id(block_id)
@@ -240,7 +258,9 @@ class MemoryHandle:
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
             TypeError: If `value` is provided and the existing decoded value is
-                not a dictionary.
+                not a dictionary, or metadata is not a strict JSON dictionary.
+            ValueError: If a `before_update` hook changes a field other than
+                the value, metadata, or content type.
         """
 
         actual_id = _block_id(block_id)
@@ -355,6 +375,9 @@ class MemoryHandle:
                 policy denies the operation.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 endpoint.
+            TypeError: If metadata is not a strict JSON dictionary.
+            ValueError: If a `before_add_link` hook changes link identity or
+                topology.
         """
 
         self._require_in_subtree(HookOperation.ADD_LINK, _block_id(source))
@@ -383,6 +406,9 @@ class MemoryHandle:
             AccessDenied: If the link falls outside the handle boundary, mount
                 access is required, or policy denies the operation.
             MemoryNotFound: If the link or a required endpoint is missing.
+            TypeError: If metadata is not a strict JSON dictionary.
+            ValueError: If a `before_update_link` hook changes link identity or
+                topology.
         """
 
         stored = self._memory._require_stored_link(link)
@@ -417,7 +443,10 @@ class MemoryHandle:
                 policy denies the operation.
             MemoryConflict: If the link would form a cycle.
             MemoryNotFound: If either endpoint is missing.
+            TypeError: If metadata is not a strict JSON dictionary.
             UnsupportedOperation: If the backend lacks atomic DAG insertion.
+            ValueError: If `relation` is the reserved mount relation, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         self._require_in_subtree(HookOperation.ADD_ACYCLIC_LINK, _block_id(source))
@@ -438,9 +467,9 @@ class MemoryHandle:
     ) -> list[MemoryLink]:
         """List links connected to a block inside this handle.
 
-        Links whose other endpoint falls outside the handle boundary are hidden. The
-        underlying `Memory` handle also returns links only when the principal
-        can read both endpoints.
+        Links whose other endpoint falls outside the handle boundary are
+        hidden. The underlying `Memory` handle also returns links only when the
+        principal can read both endpoints.
 
         Args:
             block_id: Block or id to inspect.
@@ -496,6 +525,9 @@ class MemoryHandle:
                 the handle boundary, or policy denies the write/read operation.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 endpoint.
+            TypeError: If metadata is not a strict JSON dictionary.
+            ValueError: If a `before_add_link` hook changes link identity or
+                topology.
         """
 
         self._require_mounts_allowed(HookOperation.ADD_MOUNT)
@@ -581,11 +613,11 @@ class MemoryHandle:
             exists.
 
         Raises:
-            ValueError: If `mount` is not a mount link.
             AccessDenied: If mount access is disabled, the mount source is
                 outside the handle boundary, or policy denies source/target
                 read access.
             MemoryNotFound: If the source block no longer exists.
+            ValueError: If `mount` is not a mount link.
         """
 
         self._require_mounts_allowed(HookOperation.RESOLVE_MOUNT)
@@ -709,6 +741,9 @@ class MemoryHandle:
 
         Raises:
             AccessDenied: If the requested child handle would increase access.
+            TypeError: If `principal` is not a principal, id string, or `None`.
+            ValueError: If the scope name is unknown or `default_scope`
+                requires a capability the child handle does not enable.
         """
 
         if principal is not None and Principal.coerce(principal) != self.principal:
@@ -807,7 +842,7 @@ class MemoryHandle:
             message: Message describing the refusal.
 
         Raises:
-            AccessDenied: Always, carrying ``message``. A registry that cannot
+            AccessDenied: Always, carrying `message`. A registry that cannot
                 report the refusal does not change what the caller receives.
         """
 
