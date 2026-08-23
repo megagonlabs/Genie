@@ -1,21 +1,29 @@
-"""A small tool interface and deterministic agent for the Graphiti lamp.
+"""A tool interface and deterministic agent for the Graphiti lamp.
 
-The agent in this module is intentionally independent of an LLM provider or
-agent framework. It receives named tools with JSON-compatible arguments and
-results. An application can present the same tools to an LLM function-calling
-loop without changing the temporal graph model.
+Graphiti is a library an agent calls: it ingests episodes, resolves entities,
+invalidates contradicted facts, builds communities, and answers hybrid searches.
+This module exposes that surface as named tools with JSON-compatible arguments
+and results, so an application could hand the same definitions to a
+function-calling loop without changing the graph model underneath.
+
+The agent here decides which tools to call from explicit inputs rather than from
+a model, which keeps the example runnable with no API key. Entity and fact
+extraction is the one upstream step that genuinely needs a language model, so
+the agent receives already-extracted triplets — the same shape Graphiti's own
+`add_triplet` entry point accepts.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
-from genie import MemoryBlock
-from lamps.graphiti.temporal_graph import ENTITY_TYPE, TemporalFact, TemporalKnowledgeGraph
+from lamps.graphiti.communities import CommunityBuilder
+from lamps.graphiti.model import Entity, TemporalFact, format_timestamp, parse_timestamp
+from lamps.graphiti.search import RECIPE_NAME, GraphitiSearch, SearchFilters
+from lamps.graphiti.temporal_graph import TemporalKnowledgeGraph
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,8 +42,19 @@ class ToolDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class FactCandidate:
-    """Structured fact an agent has selected from a source episode."""
+class TripletCandidate:
+    """One subject-relation-object fact extracted from an episode.
+
+    Attributes:
+        subject: Subject entity name.
+        subject_type: Subject entity type.
+        relation: Relation name.
+        object: Object entity name.
+        object_type: Object entity type.
+        valid_from: ISO 8601 time the fact became true.
+        valid_to: Optional ISO 8601 time the fact stopped being true.
+        fact: Optional readable sentence for the fact.
+    """
 
     subject: str
     subject_type: str
@@ -44,22 +63,58 @@ class FactCandidate:
     object_type: str
     valid_from: str
     valid_to: str | None = None
-    exclusive: bool = False
+    fact: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryUpdate:
+    """A refreshed entity summary an episode justifies.
+
+    Attributes:
+        entity: Entity name.
+        entity_type: Entity type used to resolve the name.
+        summary: New summary text.
+    """
+
+    entity: str
+    entity_type: str
+    summary: str
 
 
 @dataclass(frozen=True, slots=True)
 class Observation:
-    """Source material and the facts an agent intends to remember."""
+    """One source record plus what the agent extracted from it.
 
+    Attributes:
+        name: Short episode name.
+        content: Raw episode body.
+        reference_time: ISO 8601 time the source event happened.
+        ingested_at: ISO 8601 time the graph processes the episode.
+        source: Episode kind: `message`, `text`, `json`, or `fact_triple`.
+        source_description: Free-text description of the origin.
+        triplets: Facts extracted from the episode.
+        summaries: Entity summaries the episode justifies refreshing.
+    """
+
+    name: str
     content: str
-    source: str
-    observed_at: str
-    facts: tuple[FactCandidate, ...]
+    reference_time: str
+    ingested_at: str
+    source: str = "text"
+    source_description: str = ""
+    triplets: tuple[TripletCandidate, ...] = ()
+    summaries: tuple[SummaryUpdate, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ToolCallRecord:
-    """One tool call made by the example agent."""
+    """One tool call made by the example agent.
+
+    Attributes:
+        name: Invoked tool name.
+        arguments: JSON-compatible arguments passed to the tool.
+        result: JSON-compatible tool result.
+    """
 
     name: str
     arguments: dict[str, Any]
@@ -67,29 +122,48 @@ class ToolCallRecord:
 
 
 class TemporalGraphTools:
-    """Expose temporal knowledge graph operations as agent-callable tools."""
+    """Expose the temporal knowledge graph as agent-callable tools."""
 
-    def __init__(self, graph: TemporalKnowledgeGraph) -> None:
+    def __init__(
+        self,
+        graph: TemporalKnowledgeGraph,
+        *,
+        communities: CommunityBuilder | None = None,
+        search: GraphitiSearch | None = None,
+    ) -> None:
         """Create tools backed by one bounded temporal knowledge graph.
 
         Args:
-            graph: Application model that owns entity, episode, and fact logic.
+            graph: Application model that owns episode, entity, and fact logic.
+            communities: Optional community builder. Created over `graph` when
+                omitted.
+            search: Optional search facade. Created over `graph` and the
+                community builder when omitted.
         """
 
         self._graph = graph
+        self._communities = communities if communities is not None else CommunityBuilder(graph)
+        self._search = search if search is not None else GraphitiSearch(graph)
         self.definitions = (
             ToolDefinition(
                 name="add_episode",
-                description="Store raw source material for later provenance.",
+                description="Store one source record as the ground truth for later facts.",
                 parameters={
+                    "name": "string",
                     "content": "string",
-                    "source": "string",
-                    "observed_at": "ISO 8601 timestamp",
+                    "reference_time": "ISO 8601 timestamp",
+                    "ingested_at": "ISO 8601 timestamp",
+                    "source": "message, text, json, or fact_triple",
+                    "source_description": "string",
                 },
             ),
             ToolDefinition(
-                name="add_fact",
-                description=("Store a temporal subject-relation-object fact and link it " "to its source episode. Entities are reused by name and type."),
+                name="add_triplet",
+                description=(
+                    "Store a subject-relation-object fact from an episode. Entities are "
+                    "resolved by type and name, and a single-valued relation invalidates "
+                    "the subject's previous fact instead of deleting it."
+                ),
                 parameters={
                     "subject": "string",
                     "subject_type": "string",
@@ -99,50 +173,86 @@ class TemporalGraphTools:
                     "episode_id": "string",
                     "valid_from": "ISO 8601 timestamp",
                     "valid_to": "ISO 8601 timestamp or null",
-                    "exclusive": "boolean",
+                    "fact": "optional sentence",
                 },
             ),
             ToolDefinition(
-                name="query_entity",
-                description="Return facts about an entity that are valid at a given time.",
+                name="update_entity_summary",
+                description="Append a new summary revision for an entity, keeping earlier ones.",
                 parameters={
-                    "name": "string",
-                    "as_of": "ISO 8601 timestamp",
-                    "relation": "optional string",
+                    "entity": "string",
+                    "entity_type": "string",
+                    "summary": "string",
                 },
             ),
             ToolDefinition(
-                name="query_neighborhood",
-                description="Return incoming and outgoing facts around an entity at a given time.",
-                parameters={"name": "string", "as_of": "ISO 8601 timestamp"},
+                name="build_communities",
+                description="Group the entities one time slice connects and summarize each group.",
+                parameters={
+                    "as_of": "ISO 8601 timestamp",
+                    "known_at": "ISO 8601 timestamp or null",
+                },
             ),
             ToolDefinition(
-                name="get_history",
-                description="Return validity periods and provenance for an entity relationship.",
-                parameters={"name": "string", "relation": "string"},
+                name="snapshot",
+                description=(
+                    "Return facts on a bi-temporal slice: true at as_of, and optionally "
+                    "restricted to what the graph had on record at known_at."
+                ),
+                parameters={
+                    "as_of": "ISO 8601 timestamp or null",
+                    "known_at": "ISO 8601 timestamp or null",
+                    "entity": "optional string",
+                },
+            ),
+            ToolDefinition(
+                name="get_entity_history",
+                description="Return every version of one relationship with both time axes and sources.",
+                parameters={"entity": "string", "relation": "string"},
+            ),
+            ToolDefinition(
+                name="search",
+                description=(
+                    f"Rank facts for a query with the {RECIPE_NAME} recipe, optionally "
+                    "centered on an entity and filtered by time."
+                ),
+                parameters={
+                    "query": "string",
+                    "center": "optional entity name",
+                    "as_of": "ISO 8601 timestamp or null",
+                    "known_at": "ISO 8601 timestamp or null",
+                },
+            ),
+            ToolDefinition(
+                name="get_community",
+                description="Return the community an entity belongs to, with its member summaries.",
+                parameters={"entity": "string"},
             ),
         )
         self._handlers: dict[str, Callable[..., dict[str, Any]]] = {
             "add_episode": self._add_episode,
-            "add_fact": self._add_fact,
-            "query_entity": self._query_entity,
-            "query_neighborhood": self._query_neighborhood,
-            "get_history": self._get_history,
+            "add_triplet": self._add_triplet,
+            "update_entity_summary": self._update_entity_summary,
+            "build_communities": self._build_communities,
+            "snapshot": self._snapshot,
+            "get_entity_history": self._get_entity_history,
+            "search": self._search_tool,
+            "get_community": self._get_community,
         }
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Invoke a tool by name with JSON-compatible arguments.
 
         Args:
-            name: Tool name from ``definitions``.
+            name: Tool name from `definitions`.
             arguments: Tool arguments.
 
         Returns:
             JSON-compatible tool result.
 
         Raises:
-            ValueError: If the tool name is unknown.
             TypeError: If arguments do not match the selected tool.
+            ValueError: If the tool name is unknown.
         """
 
         handler = self._handlers.get(name)
@@ -153,20 +263,31 @@ class TemporalGraphTools:
     def _add_episode(
         self,
         *,
+        name: str,
         content: str,
-        source: str,
-        observed_at: str,
+        reference_time: str,
+        ingested_at: str,
+        source: str = "text",
+        source_description: str = "",
     ) -> dict[str, Any]:
-        """Implement the ``add_episode`` tool."""
+        """Implement the `add_episode` tool."""
 
         episode = self._graph.add_episode(
-            content,
-            source=source,
-            observed_at=_parse_timestamp(observed_at),
+            name=name,
+            content=content,
+            reference_time=parse_timestamp(reference_time, field="reference_time"),
+            ingested_at=parse_timestamp(ingested_at, field="ingested_at"),
+            source=source,  # type: ignore[arg-type]
+            source_description=source_description,
         )
-        return {"episode_id": episode.id, "source": source}
+        return {
+            "episode_id": episode.id,
+            "name": episode.name,
+            "sequence": episode.sequence,
+            "source": episode.source,
+        }
 
-    def _add_fact(
+    def _add_triplet(
         self,
         *,
         subject: str,
@@ -177,123 +298,184 @@ class TemporalGraphTools:
         episode_id: str,
         valid_from: str,
         valid_to: str | None = None,
-        exclusive: bool = False,
+        fact: str | None = None,
     ) -> dict[str, Any]:
-        """Implement the ``add_fact`` tool."""
+        """Implement the `add_triplet` tool."""
 
-        subject_block = self._get_or_create_entity(subject, subject_type)
-        object_block = self._get_or_create_entity(object, object_type)
-        fact = self._graph.assert_fact(
-            subject_block,
-            relation,
-            object_block,
+        result = self._graph.add_triplet(
+            subject=subject,
+            subject_type=subject_type,
+            relation=relation,
+            object=object,
+            object_type=object_type,
             episode=episode_id,
-            valid_from=_parse_timestamp(valid_from),
-            valid_to=_parse_timestamp(valid_to) if valid_to is not None else None,
-            exclusive=exclusive,
+            valid_at=parse_timestamp(valid_from, field="valid_from"),
+            invalid_at=parse_timestamp(valid_to, field="valid_to") if valid_to is not None else None,
+            fact=fact,
         )
         return {
-            "fact_id": fact.block.id,
-            "subject": subject,
-            "relation": relation,
-            "object": object,
-            "statement": fact.statement,
+            "fact_id": result.fact.id,
+            "created": result.created,
+            "statement": result.fact.statement,
+            "fact": result.fact.fact,
+            "invalidated": [
+                {
+                    "statement": invalid.statement,
+                    "invalid_at": _optional_timestamp(invalid.invalid_at),
+                    "expired_at": _optional_timestamp(invalid.expired_at),
+                }
+                for invalid in result.invalidated
+            ],
         }
 
-    def _query_entity(
+    def _update_entity_summary(
         self,
         *,
-        name: str,
-        as_of: str,
-        relation: str | None = None,
+        entity: str,
+        entity_type: str,
+        summary: str,
     ) -> dict[str, Any]:
-        """Implement the ``query_entity`` tool."""
+        """Implement the `update_entity_summary` tool."""
 
-        entity = self._require_entity(name)
-        facts = self._graph.facts_at(
-            _parse_timestamp(as_of),
-            subject=entity,
-            relation=relation,
+        resolved = self._graph.resolve_entity(entity, entity_type=entity_type)
+        updated = self._graph.update_entity_summary(resolved, summary)
+        return {
+            "entity": updated.name,
+            "revision": updated.revision,
+            "summary": updated.summary,
+        }
+
+    def _build_communities(
+        self,
+        *,
+        as_of: str,
+        known_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Implement the `build_communities` tool."""
+
+        communities = self._communities.build(
+            as_of=parse_timestamp(as_of, field="as_of"),
+            known_at=parse_timestamp(known_at, field="known_at") if known_at is not None else None,
         )
         return {
-            "entity": name,
             "as_of": as_of,
-            "facts": [_fact_result(fact) for fact in facts],
+            "communities": [
+                {
+                    "name": community.name,
+                    "members": list(community.member_names),
+                    "summary": community.summary,
+                }
+                for community in communities
+            ],
         }
 
-    def _query_neighborhood(self, *, name: str, as_of: str) -> dict[str, Any]:
-        """Implement the ``query_neighborhood`` tool."""
+    def _snapshot(
+        self,
+        *,
+        as_of: str | None = None,
+        known_at: str | None = None,
+        entity: str | None = None,
+    ) -> dict[str, Any]:
+        """Implement the `snapshot` tool."""
 
-        entity = self._require_entity(name)
-        facts = self._graph.neighborhood_at(entity, _parse_timestamp(as_of))
+        center = self._require_entity(entity) if entity is not None else None
+        if as_of is not None:
+            facts = self._graph.facts_at(
+                parse_timestamp(as_of, field="as_of"),
+                known_at=parse_timestamp(known_at, field="known_at") if known_at is not None else None,
+            )
+        elif known_at is not None:
+            facts = self._graph.facts_known_at(parse_timestamp(known_at, field="known_at"))
+        else:
+            raise ValueError("snapshot requires as_of, known_at, or both.")
+        if center is not None:
+            facts = [fact for fact in facts if center.id in {fact.subject.id, fact.object.id}]
         return {
-            "entity": name,
             "as_of": as_of,
+            "known_at": known_at,
+            "entity": entity,
             "facts": [_fact_result(fact) for fact in facts],
         }
 
-    def _get_history(self, *, name: str, relation: str) -> dict[str, Any]:
-        """Implement the ``get_history`` tool."""
+    def _get_entity_history(self, *, entity: str, relation: str) -> dict[str, Any]:
+        """Implement the `get_entity_history` tool."""
 
-        entity = self._require_entity(name)
-        history: list[dict[str, Any]] = []
-        for fact in self._graph.history(entity, relation=relation):
+        resolved = self._require_entity(entity)
+        history = []
+        for fact in self._graph.history(resolved, relation=relation):
+            replacement = self._graph.superseded_by(fact)
             history.append(
                 {
                     **_fact_result(fact),
-                    "valid_from": _format_timestamp(fact.valid_from),
-                    "valid_to": (_format_timestamp(fact.valid_to) if fact.valid_to is not None else None),
-                    "sources": [episode.value["source"] for episode in self._graph.provenance(fact)],
+                    "valid_from": format_timestamp(fact.valid_at),
+                    "valid_to": _optional_timestamp(fact.invalid_at),
+                    "ingested_at": format_timestamp(fact.ingested_at),
+                    "expired_at": _optional_timestamp(fact.expired_at),
+                    "sources": [episode.name for episode in self._graph.provenance(fact)],
+                    "superseded_by": replacement.statement if replacement is not None else None,
                 }
             )
-        return {"entity": name, "relation": relation, "facts": history}
+        return {"entity": resolved.name, "relation": relation, "facts": history}
 
-    def _get_or_create_entity(self, name: str, entity_type: str) -> MemoryBlock:
-        """Reuse an exact entity match or create one."""
-
-        matches = self._search_entities(name, entity_type=entity_type)
-        if matches:
-            return matches[0]
-        return self._graph.add_entity(name, entity_type=entity_type)
-
-    def _require_entity(self, name: str) -> MemoryBlock:
-        """Return one unambiguous entity by name."""
-
-        matches = self._search_entities(name)
-        if not matches:
-            raise ValueError(f"Unknown entity {name!r}.")
-        if len(matches) > 1:
-            raise ValueError(f"Entity name {name!r} is ambiguous; include a type when writing facts.")
-        return matches[0]
-
-    def _search_entities(
+    def _search_tool(
         self,
-        name: str,
         *,
-        entity_type: str | None = None,
-    ) -> list[MemoryBlock]:
-        """Find entities through the graph's bounded memory handle."""
+        query: str,
+        center: str | None = None,
+        as_of: str | None = None,
+        known_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Implement the `search` tool."""
 
-        filters: dict[str, Any] = {"metadata.name": name}
-        if entity_type is not None:
-            filters["metadata.entity_type"] = entity_type
-        return [
-            result.block
-            for result in self._graph.memory.search(
-                types=[ENTITY_TYPE],
-                filters=filters,
-                limit=2,
-            )
-        ]
+        hits = self._search.search(
+            query,
+            center=self._require_entity(center) if center is not None else None,
+            filters=SearchFilters(
+                as_of=parse_timestamp(as_of, field="as_of") if as_of is not None else None,
+                known_at=parse_timestamp(known_at, field="known_at") if known_at is not None else None,
+            ),
+        )
+        return {
+            "query": query,
+            "recipe": RECIPE_NAME,
+            "hits": [
+                {"text": hit.text, "score": hit.score, "reason": hit.reason}
+                for hit in hits
+            ],
+        }
+
+    def _get_community(self, *, entity: str) -> dict[str, Any]:
+        """Implement the `get_community` tool."""
+
+        resolved = self._require_entity(entity)
+        community = self._communities.community_of(resolved)
+        if community is None:
+            return {"entity": resolved.name, "community": None}
+        return {
+            "entity": resolved.name,
+            "community": {
+                "name": community.name,
+                "members": list(community.member_names),
+                "summary": community.summary,
+            },
+        }
+
+    def _require_entity(self, name: str) -> Entity:
+        """Resolve one unambiguous entity by name."""
+
+        entity = self._graph.get_entity(name)
+        if entity is None:
+            raise ValueError(f"Unknown entity {name!r}.")
+        return entity
 
 
 class TemporalGraphAgent:
-    """Small agent that learns and answers questions only through tools.
+    """Small agent that learns and answers only through graph tools.
 
-    The decision policy is deterministic so the example is runnable without an
-    API key. ``learn`` selects the write tools needed for each observation,
-    while ``answer`` selects query tools and composes their results into a
-    report. The agent never receives the underlying ``Memory`` or graph object.
+    The decision policy is deterministic so the example runs without an API
+    key. `learn` selects the write tools each observation needs; `answer`
+    selects the read tools and composes their results into a report. The agent
+    never receives the underlying `Memory`, handle, or graph object.
     """
 
     def __init__(self, *, name: str, tools: TemporalGraphTools) -> None:
@@ -309,85 +491,112 @@ class TemporalGraphAgent:
         self._toolbox = tools
         self.call_log: list[ToolCallRecord] = []
 
-    def learn(self, observations: tuple[Observation, ...]) -> None:
-        """Store source episodes and selected facts through agent tools.
+    def learn(self, observations: Sequence[Observation], *, communities_as_of: str) -> None:
+        """Ingest observations, then rebuild the community subgraph.
 
         Args:
-            observations: Source material and structured fact candidates.
+            observations: Source records and what was extracted from them.
+            communities_as_of: Effective time whose valid facts define the
+                communities built after ingestion.
         """
 
         for observation in observations:
-            episode_result = self._call(
+            episode = self._call(
                 "add_episode",
                 {
+                    "name": observation.name,
                     "content": observation.content,
+                    "reference_time": observation.reference_time,
+                    "ingested_at": observation.ingested_at,
                     "source": observation.source,
-                    "observed_at": observation.observed_at,
+                    "source_description": observation.source_description,
                 },
             )
-            for fact in observation.facts:
+            for triplet in observation.triplets:
                 self._call(
-                    "add_fact",
+                    "add_triplet",
                     {
-                        "subject": fact.subject,
-                        "subject_type": fact.subject_type,
-                        "relation": fact.relation,
-                        "object": fact.object,
-                        "object_type": fact.object_type,
-                        "episode_id": episode_result["episode_id"],
-                        "valid_from": fact.valid_from,
-                        "valid_to": fact.valid_to,
-                        "exclusive": fact.exclusive,
+                        "subject": triplet.subject,
+                        "subject_type": triplet.subject_type,
+                        "relation": triplet.relation,
+                        "object": triplet.object,
+                        "object_type": triplet.object_type,
+                        "episode_id": episode["episode_id"],
+                        "valid_from": triplet.valid_from,
+                        "valid_to": triplet.valid_to,
+                        "fact": triplet.fact,
                     },
                 )
+            for update in observation.summaries:
+                self._call(
+                    "update_entity_summary",
+                    {
+                        "entity": update.entity,
+                        "entity_type": update.entity_type,
+                        "summary": update.summary,
+                    },
+                )
+        self._call("build_communities", {"as_of": communities_as_of, "known_at": None})
 
     def answer(
         self,
         question: str,
         *,
         subject: str,
-        context_entity: str,
         as_of: str,
+        known_at: str,
         history_relation: str,
+        query: str,
     ) -> str:
-        """Answer a context question using only temporal graph query tools.
+        """Answer a context question using only graph read tools.
 
         Args:
             question: User-facing question included in the report.
-            subject: Entity whose current facts should be retrieved.
-            context_entity: Related entity whose neighborhood should be queried.
-            as_of: Effective time for current facts and neighborhood queries.
-            history_relation: Relationship whose full history should be shown.
+            subject: Entity the question is about.
+            as_of: Effective time for the current-facts snapshot.
+            known_at: Earlier ingestion time used to show what the graph had on
+                record before the latest episodes arrived.
+            history_relation: Relationship whose full history is reported.
+            query: Natural-language query passed to the search recipes.
 
         Returns:
             Readable answer assembled from tool results.
         """
 
-        current = self._call("query_entity", {"name": subject, "as_of": as_of})
-        neighborhood = self._call(
-            "query_neighborhood",
-            {"name": context_entity, "as_of": as_of},
-        )
+        current = self._call("snapshot", {"as_of": as_of, "entity": subject})
+        earlier = self._call("snapshot", {"known_at": known_at, "entity": subject})
         history = self._call(
-            "get_history",
-            {"name": subject, "relation": history_relation},
+            "get_entity_history",
+            {"entity": subject, "relation": history_relation},
         )
+        ranked = self._call(
+            "search",
+            {"query": query, "center": subject, "as_of": as_of},
+        )
+        context = self._call("get_community", {"entity": subject})
+        community = context["community"]
 
-        current_statements = {fact["statement"] for fact in current["facts"]}
-        related_facts = [fact for fact in neighborhood["facts"] if fact["statement"] not in current_statements]
         lines = [
             f"Question: {question}",
-            f"Current facts for {subject} as of {_display_timestamp(as_of)}:",
+            f"True for {subject} as of {_date(as_of)}:",
             *[f"- {fact['statement']}" for fact in current["facts"]],
-            f"Related context around {context_entity}:",
-            *[f"- {fact['statement']}" for fact in related_facts],
+            f"On record for {subject} on {_date(known_at)}:",
+            *[f"- {fact['statement']}" for fact in earlier["facts"]],
             f"{history_relation} history for {subject}:",
             *[_history_line(fact) for fact in history["facts"]],
+            f"Top facts for {query!r}:",
+            *[f"- {hit['text']} (score {hit['score']:.3f})" for hit in ranked["hits"][:3]],
+            "Community context:",
+            f"- {community['name']}: {community['summary']}" if community else "- none",
         ]
         return "\n".join(lines)
 
     def tool_usage(self) -> str:
-        """Return a compact summary of tools called so far."""
+        """Return a compact summary of tools called so far.
+
+        Returns:
+            Comma-separated `name xcount` pairs in first-call order.
+        """
 
         counts = Counter(record.name for record in self.call_log)
         return ", ".join(f"{name} x{count}" for name, count in counts.items())
@@ -406,41 +615,38 @@ class TemporalGraphAgent:
         return result
 
 
-def _fact_result(fact: TemporalFact) -> dict[str, str]:
-    """Convert a resolved temporal fact to a JSON-compatible tool result."""
+def _fact_result(fact: TemporalFact) -> dict[str, Any]:
+    """Convert a resolved fact into a JSON-compatible tool result."""
 
     return {
+        "fact_id": fact.id,
         "subject": fact.subject.value["name"],
         "relation": fact.relation,
         "object": fact.object.value["name"],
         "statement": fact.statement,
+        "fact": fact.fact,
     }
 
 
 def _history_line(fact: dict[str, Any]) -> str:
-    """Render one historical fact returned by ``get_history``."""
+    """Render one historical fact returned by `get_entity_history`."""
 
-    valid_to = _display_timestamp(fact["valid_to"]) if fact["valid_to"] else "open"
+    valid_to = _date(fact["valid_to"]) if fact["valid_to"] else "open"
+    expired_at = _date(fact["expired_at"]) if fact["expired_at"] else "open"
     sources = ", ".join(fact["sources"])
-    return f"- {fact['statement']}; " f"valid [{_display_timestamp(fact['valid_from'])}, {valid_to}); " f"provenance: {sources}"
+    return (
+        f"- {fact['statement']}; true [{_date(fact['valid_from'])}, {valid_to}); "
+        f"on record [{_date(fact['ingested_at'])}, {expired_at}); sources: {sources}"
+    )
 
 
-def _parse_timestamp(value: str) -> datetime:
-    """Parse a timezone-aware ISO 8601 timestamp supplied to a tool."""
+def _optional_timestamp(value: Any) -> str | None:
+    """Format an optional timestamp for JSON-compatible tool output."""
 
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("Tool timestamps must be timezone-aware ISO 8601 values.")
-    return parsed.astimezone(UTC)
+    return format_timestamp(value) if value is not None else None
 
 
-def _format_timestamp(value: datetime) -> str:
-    """Format a timestamp for JSON-compatible tool output."""
-
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _display_timestamp(value: str) -> str:
+def _date(value: str) -> str:
     """Render a tool timestamp as a date for the compact demo report."""
 
-    return _parse_timestamp(value).date().isoformat()
+    return parse_timestamp(value).date().isoformat()

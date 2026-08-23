@@ -44,7 +44,7 @@ guides document only their unique stored model, workflow, results, and limits.
 
 | Lamp | Preserved upstream idea | Characteristic workflow |
 | --- | --- | --- |
-| [Graphiti](graphiti/README.md) | Entity nodes, temporal relationship facts, episodes, provenance | Add episodes, invalidate changing facts, query current and historical relationships |
+| [Graphiti](graphiti/README.md) | Episodes, entity nodes with evolving summaries, bi-temporal relationship facts, communities | Ingest episodes, invalidate contradicted facts on both time axes, group entities by slice, and rank facts with a hybrid recipe |
 | [Hindsight](hindsight/README.md) | World/experience facts, derived observations, four-way retrieval, mental models | Retain, recall, and assemble a deterministic stand-in for reflection |
 | [LangMem](langmem/README.md) | Schema-shaped values at namespace/key addresses | Agent-managed create/update/delete plus direct and relevant-memory retrieval |
 | [Mem0](mem0/README.md) | Extracted memories scoped by user/agent/run identifiers | Add, update, and retrieve compact memories; deterministic extraction substitutes for an LLM |
