@@ -4,6 +4,20 @@ This lamp builds a compact MemoryOS-like hierarchy with Genie blocks, scoped
 access, metadata, and links. It is an explanatory example, not a compatibility
 layer.
 
+## Run
+
+From the repository root, with no API key and no external service:
+
+```bash
+conda run -n "genie" python -m lamps.memoryos.demo
+conda run -n "genie" python -m pytest lamps/memoryos/tests -q
+```
+
+`demo.py` is the entry point; the module path must be run from the repository
+root so both `lamps` and `genie` resolve. It fills short-term memory, overflows
+it into pages, promotes hot context, and prints every tier. Nothing is random
+or clock-driven, so every run prints the same output.
+
 ## Memory shape
 
 Short-term memory is a FIFO of `memoryos.short_term_qa` values:
@@ -71,8 +85,7 @@ as linked pages. It retrieves matching pages to raise their heat, updates the
 profile plus two user facts and one assistant fact, retrieves all tiers, then
 queries a five-day timeline and a two-hop chronology/promotion graph.
 
-See [the lamp guide](../README.md) for run commands and the shared output
-format.
+See [the lamp guide](../README.md) for the shared output format.
 
 ## Limits
 

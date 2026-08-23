@@ -3,6 +3,20 @@
 This lamp stores application-shaped values as `(namespace, key, value)` items.
 It is a focused Genie example, not a LangMem compatibility layer.
 
+## Run
+
+From the repository root, with no API key and no external service:
+
+```bash
+conda run -n "genie" python -m lamps.langmem.demo
+conda run -n "genie" python -m pytest lamps/langmem/tests -q
+```
+
+`demo.py` is the entry point; the module path must be run from the repository
+root so both `lamps` and `genie` resolve. It runs the travel agent through the
+namespaced store and prints the result. Nothing is random or clock-driven, so
+every run prints the same output.
+
 ## Memory shape
 
 Every `langmem.item` block uses a stable wrapper while the supplied value can
@@ -60,8 +74,7 @@ time range; then follows two graph hops from a seat preference to a successful
 episode and its supporting profile. The `manage_memory` tool also supports the
 same create/update/delete lifecycle as LangMem's default management tool.
 
-See [the lamp guide](../README.md) for run commands and the shared output
-format.
+See [the lamp guide](../README.md) for the shared output format.
 
 ## Limits
 

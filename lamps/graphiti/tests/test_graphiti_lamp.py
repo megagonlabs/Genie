@@ -729,7 +729,7 @@ def test_demo_runs_as_a_module() -> None:
     """The lamp is runnable from the repository root."""
 
     result = subprocess.run(
-        [sys.executable, "-m", "lamps.graphiti"],
+        [sys.executable, "-m", "lamps.graphiti.demo"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

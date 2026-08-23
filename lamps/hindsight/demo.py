@@ -10,167 +10,243 @@ from __future__ import annotations
 from genie import InMemoryBackend, Memory
 from lamps.demo_output import print_agent_demo
 from lamps.hindsight.agent import (
+    DocumentCandidate,
+    EntityCandidate,
+    FactCandidate,
     HindsightAgent,
     HindsightTools,
-    MemoryCandidate,
-    MemoryLinkCandidate,
-    MentalModelCandidate,
+    LinkCandidate,
+    ModelCandidate,
 )
-from lamps.hindsight.memory_bank import (
+from lamps.hindsight.bank import HindsightMemoryBank
+from lamps.hindsight.mental_models import MentalModelStore
+from lamps.hindsight.model import (
+    BANK_TYPE,
     CAUSAL_RELATION,
     SEMANTIC_RELATION,
     TEMPORAL_RELATION,
-    HindsightMemoryBank,
-    HindsightStructures,
+)
+from lamps.hindsight.observations import ConsolidationEngine
+from lamps.hindsight.recall import HindsightRecall
+from lamps.hindsight.reflect import Reflector
+from lamps.hindsight.structures import HindsightStructures
+
+ENTITIES = (
+    EntityCandidate(name="Alice Chen", kind="person", aliases=("Alice",)),
+    EntityCandidate(name="Northwind billing", kind="service", aliases=("billing service",)),
 )
 
+MODELS = (
+    ModelCandidate(
+        name="northwind-change-brief",
+        question="What should I know before changing Northwind?",
+        tags=("northwind",),
+    ),
+)
 
-def build_demo_agent() -> HindsightAgent:
-    """Create an agent that receives only bounded memory tools."""
-
-    backend = InMemoryBackend()
-    memory = Memory(backend=backend, principal="hindsight-demo")
-    root = memory.put(
-        type="hindsight.memory_bank",
-        value={"name": "Atlas operations"},
-    )
-    handle = memory.get_handle(root=root)
-    bank = HindsightMemoryBank(
-        handle,
-        structures=HindsightStructures.create(handle, backend),
-    )
-    return HindsightAgent(name="operations-agent", tools=HindsightTools(bank))
-
-
-def teach_demo_agent(agent: HindsightAgent) -> None:
-    """Have the agent retain facts, experiences, links, and a mental model."""
-
-    agent.learn(
-        memories=(
-            MemoryCandidate(
-                key="release_policy",
-                text="Atlas production releases are scheduled for Fridays.",
+DOCUMENTS = (
+    DocumentCandidate(
+        source="chat/2025-01-14",
+        content=(
+            "Alice Chen: we build every Northwind frontend in React, and the "
+            "billing service stores its data in MySQL."
+        ),
+        context="onboarding call with the platform team",
+        retained_at="2025-01-14T09:00:00Z",
+        facts=(
+            FactCandidate(
+                key="react",
+                text="Alice Chen's team builds every Northwind frontend in React.",
                 fact_type="world",
-                entities=("Atlas",),
-                tags=("project:atlas", "deployment"),
-                provenance={"source": "docs/release-policy"},
+                context="stated on the onboarding call",
+                entities=("Alice Chen", "React"),
+                tags=("northwind", "frontend"),
+                claim="frontend-stack",
+                belief="Northwind frontends are built in React.",
             ),
-            MemoryCandidate(
-                key="large_batch",
-                text="Atlas 2.0 migrated all customer records in one large batch.",
+            FactCandidate(
+                key="mysql",
+                text="The Northwind billing service stores its data in MySQL.",
                 fact_type="world",
-                entities=("Atlas", "Atlas database"),
-                occurred_dates=("2025-03-15T09:00:00Z",),
-                tags=("project:atlas", "deployment"),
-                provenance={"source": "release/atlas-2.0"},
+                context="stated on the onboarding call",
+                entities=("Northwind billing", "MySQL"),
+                tags=("northwind", "billing"),
             ),
-            MemoryCandidate(
+        ),
+    ),
+    DocumentCandidate(
+        source="agent-run/2025-02-03",
+        content=(
+            "I migrated Northwind billing to the new schema in a single batch. "
+            "The migration timed out after forty minutes."
+        ),
+        context="release automation run",
+        retained_at="2025-02-03T18:20:00Z",
+        facts=(
+            FactCandidate(
                 key="timeout",
-                text="I deployed Atlas 2.0 on March 15; the database migration timed out.",
+                text=(
+                    "I migrated Northwind billing in one batch on February 3 and "
+                    "the migration timed out."
+                ),
                 fact_type="experience",
-                entities=("Atlas", "Atlas database"),
-                occurred_dates=("2025-03-15T09:30:00Z",),
-                metadata={"outcome": "failed"},
-                tags=("project:atlas", "deployment"),
-                provenance={"source": "agent-run/17"},
+                context="release automation run",
+                entities=("Northwind billing",),
+                occurred_at="2025-02-03T17:40:00Z",
+                occurred_until="2025-02-03T18:20:00Z",
+                tags=("northwind", "billing", "migration"),
+                claim="migration-batching",
+                belief="Northwind billing migrations finish only in small batches.",
             ),
-            MemoryCandidate(
+        ),
+    ),
+    DocumentCandidate(
+        source="agent-run/2025-03-09",
+        content=(
+            "I retried the Northwind billing migration in four small batches. "
+            "It finished in six minutes."
+        ),
+        context="release automation run",
+        retained_at="2025-03-09T11:05:00Z",
+        facts=(
+            FactCandidate(
                 key="retry",
                 text=(
-                    "I retried Atlas 2.0 on March 16 using smaller migration "
-                    "batches; the deployment succeeded."
+                    "I retried the Northwind billing migration on March 9 in four "
+                    "small batches and it succeeded."
                 ),
                 fact_type="experience",
-                entities=("Atlas", "Atlas database"),
-                occurred_dates=("2025-03-16T10:00:00Z",),
-                metadata={"outcome": "succeeded"},
-                tags=("project:atlas", "deployment"),
-                provenance={"source": "agent-run/18"},
-            ),
-            MemoryCandidate(
-                key="batch_observation",
-                text="Atlas database migrations are more reliable when run in small batches.",
-                fact_type="observation",
-                entities=("Atlas", "Atlas database"),
-                occurred_dates=(
-                    "2025-03-15T09:30:00Z",
-                    "2025-03-16T10:00:00Z",
-                ),
-                tags=("project:atlas", "deployment"),
-                provenance={"method": "agent synthesis"},
-                derived_from=("timeout", "retry"),
+                context="release automation run",
+                entities=("Northwind billing",),
+                occurred_at="2025-03-09T10:59:00Z",
+                occurred_until="2025-03-09T11:05:00Z",
+                tags=("northwind", "billing", "migration"),
+                claim="migration-batching",
+                belief="Northwind billing migrations finish only in small batches.",
             ),
         ),
         links=(
-            MemoryLinkCandidate(
-                source_key="large_batch",
-                target_key="timeout",
-                relation=CAUSAL_RELATION,
-                metadata={"reason": "large migration batch preceded the timeout"},
-            ),
-            MemoryLinkCandidate(
+            LinkCandidate(
                 source_key="timeout",
                 target_key="retry",
                 relation=TEMPORAL_RELATION,
                 metadata={"sequence": "next attempt"},
             ),
-            MemoryLinkCandidate(
-                source_key="batch_observation",
-                target_key="timeout",
-                relation=SEMANTIC_RELATION,
-                metadata={"role": "supporting evidence"},
-            ),
-            MemoryLinkCandidate(
-                source_key="batch_observation",
+            LinkCandidate(
+                source_key="timeout",
                 target_key="retry",
+                relation=CAUSAL_RELATION,
+                metadata={"reason": "the timeout is why the retry used small batches"},
+            ),
+        ),
+    ),
+    DocumentCandidate(
+        source="chat/2025-06-15",
+        content=(
+            "Alice C.: we moved the whole team off React to Vue in June. Billing "
+            "has actually been on Postgres since 2024, so the MySQL note was wrong."
+        ),
+        context="quarterly planning call",
+        retained_at="2025-06-15T14:30:00Z",
+        facts=(
+            FactCandidate(
+                key="vue",
+                text="Alice Chen's team builds every Northwind frontend in Vue.",
+                fact_type="world",
+                context="stated on the quarterly planning call",
+                entities=("Alice C.", "Vue"),
+                occurred_at="2025-06-01T00:00:00Z",
+                tags=("northwind", "frontend"),
+                claim="frontend-stack",
+                belief="Northwind frontends are built in Vue.",
+                stance="contradicts",
+            ),
+            FactCandidate(
+                key="postgres",
+                text="The Northwind billing service stores its data in Postgres.",
+                fact_type="world",
+                context="correction on the quarterly planning call",
+                entities=("Northwind billing", "Postgres"),
+                occurred_at="2024-01-01T00:00:00Z",
+                tags=("northwind", "billing"),
+            ),
+        ),
+        links=(
+            LinkCandidate(
+                source_key="vue",
+                target_key="react",
                 relation=SEMANTIC_RELATION,
-                metadata={"role": "supporting evidence"},
+                metadata={"role": "replaces"},
             ),
         ),
-        mental_model=MentalModelCandidate(
-            name="atlas-deployment-playbook",
-            source_query="How should I deploy Atlas safely?",
-            content=(
-                "Deploy Atlas on Friday, use small database-migration batches, "
-                "and retry failed batches separately."
-            ),
-            source_keys=("release_policy", "batch_observation", "retry"),
-            tags=("project:atlas", "deployment"),
-        ),
+        corrections=("mysql",),
+    ),
+)
+
+QUESTION = "What should I know before I change Northwind billing?"
+QUERY = "Northwind billing migration batches"
+WINDOW_START = "2025-03-01T00:00:00Z"
+WINDOW_END = "2025-04-01T00:00:00Z"
+
+
+def build_agent() -> HindsightAgent:
+    """Assemble an empty bank, its tool set, and an agent over them.
+
+    Returns:
+        An agent whose only memory access is the named tool set.
+    """
+
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="hindsight-demo")
+    root = memory.put(type=BANK_TYPE, value={"name": "Northwind platform"})
+    handle = memory.get_handle(root=root)
+    bank = HindsightMemoryBank(
+        handle,
+        structures=HindsightStructures.create(handle, backend),
     )
-
-
-def answer_demo_question(agent: HindsightAgent) -> str:
-    """Have the agent combine four retrieval paths into one answer."""
-
-    return agent.answer(
-        "How should I deploy Atlas, and what past evidence supports that plan?",
-        query="Atlas deployment migration batches",
-        entity="Atlas",
-        start="2025-03-15T00:00:00Z",
-        end="2025-03-16T23:59:59Z",
-        graph_anchor="timeout",
-        mental_model_name="atlas-deployment-playbook",
+    consolidation = ConsolidationEngine(bank)
+    models = MentalModelStore(bank, consolidation)
+    recall = HindsightRecall(bank, consolidation)
+    return HindsightAgent(
+        name="platform-agent",
+        tools=HindsightTools(
+            bank,
+            consolidation=consolidation,
+            models=models,
+            recall=recall,
+            reflector=Reflector(bank, models, recall),
+        ),
     )
 
 
 def main() -> None:
-    """Run the deterministic Hindsight-inspired agent workflow."""
+    """Let an agent retain, consolidate, and answer through memory tools."""
 
-    agent = build_demo_agent()
-    teach_demo_agent(agent)
-    answer = answer_demo_question(agent)
+    agent = build_agent()
+    agent.learn(DOCUMENTS, entities=ENTITIES, models=MODELS)
+    answer = agent.answer(
+        QUESTION,
+        model_name="northwind-change-brief",
+        query=QUERY,
+        entity="billing service",
+        window_start=WINDOW_START,
+        window_end=WINDOW_END,
+    )
     print_agent_demo(
         title="Hindsight-inspired agent memory",
         purpose=(
-            "An agent combines atomic memories, dated experiences, graph "
-            "relations, and a synthesized mental model."
+            "An agent retains documents, consolidates their facts into "
+            "versioned beliefs, keeps a standing answer current, and reflects "
+            "from the highest layer that already knows."
         ),
         structures=(
+            "ownership tree",
             "event log",
-            "keyed collection",
             "temporal collection",
+            "keyed collection",
             "property graph",
+            "two versioned records",
+            "lineage DAG",
         ),
         tools=agent.tools,
         answer=answer,

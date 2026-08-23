@@ -10,6 +10,20 @@ single index lookup.
 This lamp reproduces that architecture on Genie building blocks. It is an
 architectural example, not a drop-in implementation.
 
+## Run
+
+From the repository root, with no API key and no external service:
+
+```bash
+conda run -n "genie" python -m lamps.graphiti.demo
+conda run -n "genie" python -m pytest lamps/graphiti/tests -q
+```
+
+`demo.py` is the entry point; the module path must be run from the repository
+root so both `lamps` and `genie` resolve. It declares the ontology, ingests
+four episodes, and prints the bi-temporal report. Ingestion times come from the
+episodes rather than a clock, so every run prints the same output.
+
 ## Modules
 
 The lamp is split by topic rather than kept in one file, and the dependency
@@ -204,5 +218,5 @@ episodes](https://help.getzep.com/graphiti/core-concepts/adding-episodes),
 [bi-temporal model](https://mintlify.wiki/getzep/graphiti/concepts/temporal-model),
 and [communities](https://help.getzep.com/graphiti/core-concepts/communities).
 
-Run and test commands plus the shared agent format are in the [lamp
+The shared agent-demo output format is described in the [lamp
 guide](../README.md).

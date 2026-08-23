@@ -3,6 +3,20 @@
 This lamp builds a small, deterministic Mem0-like service from Genie blocks,
 scoped handles, and links. It is not a Mem0 compatibility layer.
 
+## Run
+
+From the repository root, with no API key and no external service:
+
+```bash
+conda run -n "genie" python -m lamps.mem0.demo
+conda run -n "genie" python -m pytest lamps/mem0/tests -q
+```
+
+`demo.py` is the entry point; the module path must be run from the repository
+root so both `lamps` and `genie` resolve. It runs the scoped-memory agent and
+prints the result. Nothing is random or clock-driven, so every run prints the
+same output.
+
 ## Memory shape
 
 Each `mem0.fact_record` value uses the main fields returned by the open-source
@@ -62,8 +76,7 @@ The agent calls `add_memory` four times, `update_memory` once,
 lexical, temporal, and graph retrieval; every invocation remains available in
 `agent.tool_calls`.
 
-See [the lamp guide](../README.md) for run commands and the shared output
-format.
+See [the lamp guide](../README.md) for the shared output format.
 
 ## Limits
 

@@ -1,31 +1,55 @@
-"""Agent-callable tools for the Hindsight-inspired lamp.
+"""A tool interface and deterministic agent for the Hindsight lamp.
 
-The example agent is deterministic and independent of an LLM provider. Its
-named tools use JSON-compatible arguments and results, so the same adapter can
-be placed behind a model function-calling loop.
+Hindsight is a service an agent calls. It retains payloads, consolidates them
+in the background, keeps standing answers current, and serves recall and
+reflection. This module exposes that surface as named tools with
+JSON-compatible arguments and results, so an application could hand the same
+definitions to a function-calling loop without changing the bank underneath.
+
+The agent decides which tools to call from explicit inputs rather than from a
+model, which keeps the example runnable with no API key. Fact extraction is the
+step that genuinely needs a language model upstream, so the agent receives
+already-extracted facts. Consolidation, which upstream runs automatically after
+every `retain`, is an explicit call here for the same reason: the example should
+show when it happened.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
-from lamps.hindsight.memory_bank import (
+from lamps.hindsight.bank import HindsightMemoryBank
+from lamps.hindsight.mental_models import MentalModelStore
+from lamps.hindsight.model import (
+    Claim,
+    Evidence,
+    FactDraft,
     FactType,
-    HindsightMemoryBank,
-    MemoryState,
-    MemoryUnit,
+    MemoryFact,
     MentalModel,
+    Observation,
+    Reflection,
+    format_timestamp,
+    parse_timestamp,
 )
+from lamps.hindsight.observations import ConsolidationEngine
+from lamps.hindsight.recall import HindsightRecall, RecallResponse, RecallWindow
+from lamps.hindsight.reflect import Reflector
 
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """Description of one tool presented to the example agent."""
+    """Description of a tool presented to an agent.
+
+    Attributes:
+        name: Stable tool name used for calls.
+        description: Plain-language guidance for the agent.
+        parameters: Mapping of argument names to short type descriptions.
+    """
 
     name: str
     description: str
@@ -33,23 +57,76 @@ class ToolDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryCandidate:
-    """Structured atomic memory the agent has selected for retention."""
+class ToolCallRecord:
+    """One inspectable tool call made by the example agent.
+
+    Attributes:
+        name: Invoked tool name.
+        arguments: Copy of the JSON-compatible arguments.
+        result: Copy of the JSON-compatible result.
+    """
+
+    name: str
+    arguments: dict[str, Any]
+    result: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class EntityCandidate:
+    """A canonical entity the agent declares before retaining anything.
+
+    Attributes:
+        name: Canonical display name.
+        kind: Application-defined entity kind.
+        aliases: Extra surface forms bound to the same entity.
+    """
+
+    name: str
+    kind: str
+    aliases: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FactCandidate:
+    """One fact an extractor pulled out of a document.
+
+    Attributes:
+        key: Agent-local name so links and corrections can refer to it.
+        text: Narrative sentence to store.
+        fact_type: `world` or `experience`.
+        context: Situation the fact came from.
+        entities: Entity names as written in the source.
+        occurred_at: Optional ISO 8601 start of the period described.
+        occurred_until: Optional ISO 8601 exclusive end of that period.
+        tags: Visibility tags.
+        claim: Optional belief key this fact is evidence for.
+        belief: Sentence the claim asserts, required with `claim`.
+        stance: Whether the fact supports or contradicts that belief.
+    """
 
     key: str
     text: str
     fact_type: FactType
+    context: str = ""
     entities: tuple[str, ...] = ()
-    occurred_dates: tuple[str, ...] = ()
-    metadata: dict[str, Any] = field(default_factory=dict)
+    occurred_at: str | None = None
+    occurred_until: str | None = None
     tags: tuple[str, ...] = ()
-    provenance: dict[str, Any] = field(default_factory=dict)
-    derived_from: tuple[str, ...] = ()
+    claim: str | None = None
+    belief: str | None = None
+    stance: str = "supports"
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryLinkCandidate:
-    """Typed relationship between retained candidates identified by key."""
+class LinkCandidate:
+    """A temporal, semantic, or causal link between two retained facts.
+
+    Attributes:
+        source_key: Fact the directed link starts at.
+        target_key: Fact the directed link ends at.
+        relation: One of the lamp's associative relations.
+        metadata: Optional link properties.
+    """
 
     source_key: str
     target_key: str
@@ -58,116 +135,173 @@ class MemoryLinkCandidate:
 
 
 @dataclass(frozen=True, slots=True)
-class MentalModelCandidate:
-    """Synthesized document the agent intends to store separately."""
+class DocumentCandidate:
+    """One source payload and everything the agent does with it.
 
-    name: str
-    source_query: str
+    Attributes:
+        source: Where the payload came from.
+        content: Raw payload text.
+        retained_at: ISO 8601 time the bank learned the payload.
+        context: Optional framing describing the situation.
+        facts: Facts extracted from the payload.
+        links: Associative links between facts retained so far.
+        corrections: Keys of earlier facts this payload retires.
+    """
+
+    source: str
     content: str
-    source_keys: tuple[str, ...]
-    tags: tuple[str, ...] = ()
+    retained_at: str
+    context: str = ""
+    facts: tuple[FactCandidate, ...] = ()
+    links: tuple[LinkCandidate, ...] = ()
+    corrections: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class ToolCallRecord:
-    """One inspectable tool call made by the example agent."""
+class ModelCandidate:
+    """A standing question the agent wants an answer kept for.
+
+    Attributes:
+        name: Stable model name.
+        question: Question the model answers.
+        tags: Scope tags restricting which memories feed it.
+    """
 
     name: str
-    arguments: dict[str, Any]
-    result: dict[str, Any]
+    question: str
+    tags: tuple[str, ...] = ()
 
 
 class HindsightTools:
-    """Expose Hindsight-inspired bank operations as named agent tools."""
+    """Expose one memory bank's operations as named agent tools."""
 
-    def __init__(self, bank: HindsightMemoryBank) -> None:
-        """Create tools backed by one bounded application memory bank.
+    def __init__(
+        self,
+        bank: HindsightMemoryBank,
+        *,
+        consolidation: ConsolidationEngine,
+        models: MentalModelStore,
+        recall: HindsightRecall,
+        reflector: Reflector,
+    ) -> None:
+        """Create the tool set an agent receives instead of the bank itself.
 
         Args:
-            bank: Hindsight-inspired application model.
+            bank: Retain, entity, link, and invalidation operations.
+            consolidation: Observation consolidation.
+            models: Standing questions and their answers.
+            recall: Four-way retrieval.
+            reflector: Hierarchical reflection.
         """
 
         self._bank = bank
+        self._consolidation = consolidation
+        self._models = models
+        self._recall = recall
+        self._reflector = reflector
         self.definitions = (
             ToolDefinition(
-                name="retain",
-                description=("Store one atomic world fact, agent experience, or derived observation " "with entities, dates, tags, metadata, and provenance."),
+                name="register_entity",
+                description="Declare a canonical entity and the surface forms it answers to.",
                 parameters={
-                    "text": "string",
-                    "fact_type": "world | experience | observation",
-                    "state": "valid | invalidated",
-                    "entities": "list[string]",
-                    "occurred_dates": "list[ISO 8601 timestamp]",
-                    "metadata": "object",
-                    "tags": "list[string]",
-                    "provenance": "object",
+                    "name": "string",
+                    "kind": "string",
+                    "aliases": "list[string]",
+                },
+            ),
+            ToolDefinition(
+                name="retain",
+                description=(
+                    "Store one source payload and the facts extracted from it, resolving "
+                    "entities and recording provenance."
+                ),
+                parameters={
+                    "source": "string",
+                    "content": "string",
+                    "retained_at": "ISO 8601 timestamp",
+                    "context": "string",
+                    "facts": "list[fact object]",
                 },
             ),
             ToolDefinition(
                 name="link_memories",
-                description="Connect two memory units with a temporal, semantic, or causal link.",
+                description="Connect two facts with a temporal, semantic, or causal link.",
                 parameters={
-                    "source_id": "memory unit id",
-                    "target_id": "memory unit id",
+                    "source_id": "memory id",
+                    "target_id": "memory id",
                     "relation": "hindsight.temporal | hindsight.semantic | hindsight.causal",
                     "metadata": "object",
                 },
             ),
             ToolDefinition(
+                name="invalidate_memory",
+                description="Soft-retire one fact so it stops being recalled but stays auditable.",
+                parameters={"memory_id": "memory id"},
+            ),
+            ToolDefinition(
+                name="consolidate",
+                description="Fold the facts retained since the last run into versioned observations.",
+                parameters={"at": "ISO 8601 timestamp"},
+            ),
+            ToolDefinition(
                 name="create_mental_model",
-                description="Store a synthesized document separately from atomic memory units.",
-                parameters={
-                    "name": "string",
-                    "source_query": "string",
-                    "content": "string",
-                    "source_memory_ids": "list[memory unit id]",
-                    "tags": "list[string]",
-                },
+                description="Register a standing question whose answer the bank keeps current.",
+                parameters={"name": "string", "question": "string", "tags": "list[string]"},
             ),
             ToolDefinition(
-                name="recall",
-                description="Rank active memories using portable text, entity, type, and tag matching.",
-                parameters={
-                    "query": "string",
-                    "entity": "optional string",
-                    "fact_types": "optional list[world | experience | observation]",
-                    "tags": "optional list[string]",
-                    "limit": "integer",
-                },
-            ),
-            ToolDefinition(
-                name="recall_temporal",
-                description="Retrieve active memories whose occurred dates fall inside a time range.",
-                parameters={
-                    "start": "ISO 8601 timestamp",
-                    "end": "ISO 8601 timestamp",
-                    "entity": "optional string",
-                    "fact_types": "optional list[world | experience | observation]",
-                },
-            ),
-            ToolDefinition(
-                name="recall_graph",
-                description="Traverse temporal, semantic, and causal links around a memory unit.",
-                parameters={
-                    "memory_id": "memory unit id",
-                    "relations": "optional list[relation]",
-                    "max_depth": "integer",
-                },
+                name="refresh_mental_model",
+                description="Rebuild a standing answer, writing a version only if its scope changed.",
+                parameters={"name": "string", "at": "ISO 8601 timestamp"},
             ),
             ToolDefinition(
                 name="get_mental_model",
-                description="Retrieve one named synthesized mental-model document.",
+                description="Read the current standing answer and the versions before it.",
                 parameters={"name": "string"},
+            ),
+            ToolDefinition(
+                name="recall",
+                description=(
+                    "Rank facts and observations with the similarity, keyword, graph, and "
+                    "temporal retrievers, fused and capped at a token budget."
+                ),
+                parameters={
+                    "query": "string",
+                    "entity": "optional string",
+                    "types": "optional list[world | experience | observation]",
+                    "tags": "optional list[string]",
+                    "window_start": "optional ISO 8601 timestamp",
+                    "window_end": "optional ISO 8601 timestamp",
+                    "max_tokens": "integer",
+                },
+            ),
+            ToolDefinition(
+                name="reflect",
+                description=(
+                    "Answer from the highest layer that knows: mental model, then "
+                    "observations, then raw facts, reporting the evidence used."
+                ),
+                parameters={
+                    "question": "string",
+                    "model_name": "optional string",
+                    "query": "optional string",
+                    "entity": "optional string",
+                    "window_start": "optional ISO 8601 timestamp",
+                    "window_end": "optional ISO 8601 timestamp",
+                    "max_tokens": "integer",
+                },
             ),
         )
         self._handlers: dict[str, Callable[..., dict[str, Any]]] = {
+            "register_entity": self._register_entity,
             "retain": self._retain,
             "link_memories": self._link_memories,
+            "invalidate_memory": self._invalidate_memory,
+            "consolidate": self._consolidate,
             "create_mental_model": self._create_mental_model,
-            "recall": self._recall,
-            "recall_temporal": self._recall_temporal,
-            "recall_graph": self._recall_graph,
+            "refresh_mental_model": self._refresh_mental_model,
             "get_mental_model": self._get_mental_model,
+            "recall": self._recall_tool,
+            "reflect": self._reflect,
         }
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -190,31 +324,47 @@ class HindsightTools:
             raise ValueError(f"Unknown Hindsight tool {name!r}.")
         return handler(**arguments)
 
+    def _register_entity(
+        self,
+        *,
+        name: str,
+        kind: str = "concept",
+        aliases: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Implement the `register_entity` tool."""
+
+        entity = self._bank.register_entity(name, kind=kind, aliases=aliases or ())
+        return {
+            "entity_id": entity.id,
+            "name": entity.name,
+            "kind": entity.kind,
+            "aliases": list(entity.aliases),
+        }
+
     def _retain(
         self,
         *,
-        text: str,
-        fact_type: FactType,
-        state: MemoryState = "valid",
-        entities: list[str] | None = None,
-        occurred_dates: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,
-        tags: list[str] | None = None,
-        provenance: dict[str, Any] | None = None,
+        source: str,
+        content: str,
+        retained_at: str,
+        context: str = "",
+        facts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Implement the `retain` tool."""
 
-        unit = self._bank.retain(
-            text,
-            fact_type=fact_type,
-            state=state,
-            entities=entities or (),
-            occurred_dates=[_parse_timestamp(value, field="occurred_dates") for value in (occurred_dates or ())],
-            metadata=metadata,
-            tags=tags or (),
-            provenance=provenance,
+        drafts = [_draft(item) for item in (facts or [])]
+        result = self._bank.retain(
+            source=source,
+            content=content,
+            retained_at=parse_timestamp(retained_at, field="retained_at"),
+            context=context,
+            facts=drafts,
         )
-        return _unit_result(unit)
+        return {
+            "document_id": result.document.id,
+            "memories": [_fact_result(fact) for fact in result.facts],
+            "re_attested": [fact.id for fact in result.duplicates],
+        }
 
     def _link_memories(
         self,
@@ -226,7 +376,7 @@ class HindsightTools:
     ) -> dict[str, Any]:
         """Implement the `link_memories` tool."""
 
-        link = self._bank.link_units(source_id, target_id, relation, metadata=metadata)
+        link = self._bank.connect(source_id, target_id, relation, metadata=metadata)
         return {
             "link_id": link.id,
             "source_id": link.source_id,
@@ -235,123 +385,121 @@ class HindsightTools:
             "metadata": deepcopy(link.metadata),
         }
 
+    def _invalidate_memory(self, *, memory_id: str) -> dict[str, Any]:
+        """Implement the `invalidate_memory` tool."""
+
+        return _fact_result(self._bank.invalidate(memory_id))
+
+    def _consolidate(self, *, at: str) -> dict[str, Any]:
+        """Implement the `consolidate` tool."""
+
+        observations = self._consolidation.consolidate(at=parse_timestamp(at, field="at"))
+        return {
+            "at": at,
+            "observations": [_observation_result(item) for item in observations],
+            "cursor": self._consolidation.cursor(),
+        }
+
     def _create_mental_model(
         self,
         *,
         name: str,
-        source_query: str,
-        content: str,
-        source_memory_ids: list[str],
+        question: str,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
         """Implement the `create_mental_model` tool."""
 
-        model = self._bank.create_mental_model(
-            name=name,
-            source_query=source_query,
-            content=content,
-            source_memory_ids=source_memory_ids,
-            tags=tags or (),
-        )
-        return _mental_model_result(model)
+        model = self._models.create(name=name, question=question, tags=tags or ())
+        return _model_result(model)
 
-    def _recall(
-        self,
-        *,
-        query: str,
-        entity: str | None = None,
-        fact_types: list[FactType] | None = None,
-        tags: list[str] | None = None,
-        limit: int = 5,
-    ) -> dict[str, Any]:
-        """Implement the `recall` tool."""
+    def _refresh_mental_model(self, *, name: str, at: str) -> dict[str, Any]:
+        """Implement the `refresh_mental_model` tool."""
 
-        results = self._bank.recall(
-            query,
-            entity=entity,
-            fact_types=fact_types or (),
-            tags=tags or (),
-            limit=limit,
-        )
+        before = self._models.current(name)
+        model = self._models.refresh(name, at=parse_timestamp(at, field="at"))
         return {
-            "query": query,
-            "results": [
-                {
-                    **_unit_result(result.unit),
-                    "score": round(result.score, 3),
-                    "reasons": list(result.reasons),
-                }
-                for result in results
-            ],
-        }
-
-    def _recall_temporal(
-        self,
-        *,
-        start: str,
-        end: str,
-        entity: str | None = None,
-        fact_types: list[FactType] | None = None,
-    ) -> dict[str, Any]:
-        """Implement the `recall_temporal` tool."""
-
-        units = self._bank.recall_temporal(
-            _parse_timestamp(start, field="start"),
-            _parse_timestamp(end, field="end"),
-            entity=entity,
-            fact_types=fact_types or (),
-        )
-        return {
-            "start": start,
-            "end": end,
-            "results": [_unit_result(unit) for unit in units],
-        }
-
-    def _recall_graph(
-        self,
-        *,
-        memory_id: str,
-        relations: list[str] | None = None,
-        max_depth: int = 1,
-    ) -> dict[str, Any]:
-        """Implement the `recall_graph` tool."""
-
-        results = self._bank.recall_graph(
-            memory_id,
-            relations=relations or (),
-            max_depth=max_depth,
-        )
-        return {
-            "memory_id": memory_id,
-            "results": [
-                {
-                    **_unit_result(result.unit),
-                    "relation": result.relation,
-                    "direction": result.direction,
-                    "distance": result.distance,
-                }
-                for result in results
-            ],
+            **_model_result(model),
+            "rebuilt": before is None or before.revision != model.revision,
         }
 
     def _get_mental_model(self, *, name: str) -> dict[str, Any]:
         """Implement the `get_mental_model` tool."""
 
-        model = self._bank.get_mental_model(name)
+        model = self._models.current(name)
         if model is None:
             raise ValueError(f"Unknown mental model {name!r}.")
-        return _mental_model_result(model)
+        return {
+            **_model_result(model),
+            "previous_versions": [
+                {"revision": version.revision, "content": version.content}
+                for version in self._models.history(name)
+                if version.revision != model.revision
+            ],
+        }
+
+    def _recall_tool(
+        self,
+        *,
+        query: str,
+        entity: str | None = None,
+        types: list[str] | None = None,
+        tags: list[str] | None = None,
+        window_start: str | None = None,
+        window_end: str | None = None,
+        max_tokens: int = 80,
+    ) -> dict[str, Any]:
+        """Implement the `recall` tool."""
+
+        response = self._recall.recall(
+            query,
+            entity=entity,
+            types=types or (),
+            tags=tags or (),
+            window=_window(window_start, window_end),
+            max_tokens=max_tokens,
+        )
+        return _recall_result(response)
+
+    def _reflect(
+        self,
+        *,
+        question: str,
+        model_name: str | None = None,
+        query: str | None = None,
+        entity: str | None = None,
+        window_start: str | None = None,
+        window_end: str | None = None,
+        max_tokens: int = 80,
+    ) -> dict[str, Any]:
+        """Implement the `reflect` tool."""
+
+        reflection = self._reflector.reflect(
+            question,
+            model_name=model_name,
+            query=query,
+            entity=entity,
+            window=_window(window_start, window_end),
+            max_tokens=max_tokens,
+        )
+        return _reflection_result(reflection)
 
 
 class HindsightAgent:
-    """Small agent that learns and recalls only through named tools."""
+    """Small agent that learns and answers only through named tools.
+
+    The decision policy is deterministic so the example runs without an API
+    key. `learn` walks each source payload through retention, linking,
+    correction, consolidation, and a model refresh, mirroring what Hindsight
+    does automatically after every write. `answer` selects the read tools. The
+    agent never receives the `Memory`, the handle, or the bank.
+    """
 
     def __init__(self, *, name: str, tools: HindsightTools) -> None:
-        """Create an agent with no direct access to Genie or the memory bank.
+        """Create an agent with a Hindsight tool set.
 
         Args:
             name: Human-readable agent name.
-            tools: Only memory interface the agent receives.
+            tools: Only interface the agent receives for memory access.
         """
 
         self.name = name
@@ -362,138 +510,170 @@ class HindsightAgent:
 
     def learn(
         self,
+        documents: Sequence[DocumentCandidate],
         *,
-        memories: tuple[MemoryCandidate, ...],
-        links: tuple[MemoryLinkCandidate, ...],
-        mental_model: MentalModelCandidate,
+        entities: Sequence[EntityCandidate] = (),
+        models: Sequence[ModelCandidate] = (),
     ) -> None:
-        """Retain atomic units, connect them, and store a mental model.
+        """Retain payloads, then consolidate and refresh after each one.
 
         Args:
-            memories: Ordered atomic units. Derived units may reference keys
-                retained earlier in the sequence.
-            links: Graph links expressed with candidate keys.
-            mental_model: Separate synthesized document and its evidence keys.
+            documents: Source payloads in the order the bank learned them.
+            entities: Canonical entities declared before retention.
+            models: Standing questions registered before retention, so every
+                payload can refresh them.
         """
 
-        for candidate in memories:
-            if candidate.key in self._memory_ids:
-                raise ValueError(f"Duplicate memory candidate key {candidate.key!r}.")
-            provenance = deepcopy(candidate.provenance)
-            if candidate.derived_from:
-                provenance["source_memory_ids"] = [self._require_memory_id(key) for key in candidate.derived_from]
-            result = self._call(
-                "retain",
-                {
-                    "text": candidate.text,
-                    "fact_type": candidate.fact_type,
-                    "state": "valid",
-                    "entities": list(candidate.entities),
-                    "occurred_dates": list(candidate.occurred_dates),
-                    "metadata": deepcopy(candidate.metadata),
-                    "tags": list(candidate.tags),
-                    "provenance": provenance,
-                },
-            )
-            self._memory_ids[candidate.key] = result["id"]
-        for link_candidate in links:
+        for candidate in entities:
             self._call(
-                "link_memories",
+                "register_entity",
                 {
-                    "source_id": self._require_memory_id(link_candidate.source_key),
-                    "target_id": self._require_memory_id(link_candidate.target_key),
-                    "relation": link_candidate.relation,
-                    "metadata": deepcopy(link_candidate.metadata),
+                    "name": candidate.name,
+                    "kind": candidate.kind,
+                    "aliases": list(candidate.aliases),
                 },
             )
-        self._call(
-            "create_mental_model",
-            {
-                "name": mental_model.name,
-                "source_query": mental_model.source_query,
-                "content": mental_model.content,
-                "source_memory_ids": [self._require_memory_id(key) for key in mental_model.source_keys],
-                "tags": list(mental_model.tags),
-            },
-        )
+        for model in models:
+            self._call(
+                "create_mental_model",
+                {
+                    "name": model.name,
+                    "question": model.question,
+                    "tags": list(model.tags),
+                },
+            )
+        for document in documents:
+            self._retain_document(document)
+            self._call("consolidate", {"at": document.retained_at})
+            for model in models:
+                self._call(
+                    "refresh_mental_model",
+                    {"name": model.name, "at": document.retained_at},
+                )
 
     def answer(
         self,
         question: str,
         *,
+        model_name: str,
         query: str,
         entity: str,
-        start: str,
-        end: str,
-        graph_anchor: str,
-        mental_model_name: str,
+        window_start: str,
+        window_end: str,
+        max_tokens: int = 45,
     ) -> str:
-        """Answer using lexical, temporal, graph, and mental-model retrieval.
+        """Answer a question using only the read tools.
 
         Args:
             question: User-facing question included in the report.
-            query: Text query for general recall.
-            entity: Entity used to constrain recall and temporal retrieval.
-            start: Inclusive timeline start.
-            end: Inclusive timeline end.
-            graph_anchor: Candidate key at the center of graph traversal.
-            mental_model_name: Synthesized document to retrieve first.
+            model_name: Standing answer to read first.
+            query: Retrieval text for recall and reflection.
+            entity: Entity anchoring graph retrieval.
+            window_start: Inclusive start of the recall window.
+            window_end: Exclusive end of the recall window.
+            max_tokens: Budget the recalled results must fit inside.
 
         Returns:
             Readable answer assembled from tool results.
         """
 
-        model = self._call("get_mental_model", {"name": mental_model_name})
+        model = self._call("get_mental_model", {"name": model_name})
         recalled = self._call(
             "recall",
-            {"query": query, "entity": entity, "limit": 3},
-        )
-        timeline = self._call(
-            "recall_temporal",
             {
-                "start": start,
-                "end": end,
+                "query": query,
                 "entity": entity,
-                "fact_types": ["experience"],
+                "window_start": window_start,
+                "window_end": window_end,
+                "max_tokens": max_tokens,
             },
         )
-        graph = self._call(
-            "recall_graph",
+        reflection = self._call(
+            "reflect",
             {
-                "memory_id": self._require_memory_id(graph_anchor),
-                "max_depth": 1,
+                "question": question,
+                "model_name": model_name,
+                "query": query,
+                "entity": entity,
+                "max_tokens": max_tokens,
             },
         )
         lines = [
             f"Question: {question}",
-            f"Mental model ({model['name']}): {model['content']}",
-            "Relevant atomic memories:",
-            *[f"- [{result['fact_type']}] {result['text']}" for result in recalled["results"]],
-            f"Experience timeline for {entity}:",
-            *[_timeline_line(result) for result in timeline["results"]],
-            f"Graph context around {graph_anchor}:",
-            *[_graph_line(result) for result in graph["results"]],
+            f"Mental model {model['name']} r{model['revision']}: {model['content']}",
+            *[
+                f"- was r{version['revision']}: {version['content']}"
+                for version in model["previous_versions"]
+            ],
+            (
+                f"Recalled for {query!r} "
+                f"({recalled['tokens_used']}/{recalled['max_tokens']} tokens, "
+                f"{recalled['dropped']} dropped):"
+            ),
+            *[_hit_line(hit) for hit in recalled["hits"]],
+            f"Reflection ({' -> '.join(reflection['trace'])}):",
+            f"- {reflection['text']}",
+            "Based on:",
+            *[_evidence_line(item) for item in reflection["based_on"]],
         ]
         return "\n".join(lines)
 
+    def memory_id(self, key: str) -> str:
+        """Return the stored id assigned to a retained fact key.
+
+        Args:
+            key: Agent-local fact key.
+
+        Returns:
+            The stored memory block id.
+
+        Raises:
+            ValueError: If the key was never retained.
+        """
+
+        memory_id = self._memory_ids.get(key)
+        if memory_id is None:
+            raise ValueError(f"Unknown fact key {key!r}.")
+        return memory_id
+
     def tool_usage(self) -> str:
-        """Return a compact summary of all tool calls."""
+        """Return a compact summary of all tool calls.
+
+        Returns:
+            Tool names with their call counts.
+        """
 
         counts = Counter(record.name for record in self.call_log)
         return ", ".join(f"{name} x{count}" for name, count in counts.items())
 
-    def memory_id(self, key: str) -> str:
-        """Return the stored id assigned to a retained candidate key."""
+    def _retain_document(self, document: DocumentCandidate) -> None:
+        """Retain one payload, then link and correct what it changed."""
 
-        return self._require_memory_id(key)
-
-    def _require_memory_id(self, key: str) -> str:
-        """Resolve an agent-local candidate key or raise `ValueError`."""
-
-        memory_id = self._memory_ids.get(key)
-        if memory_id is None:
-            raise ValueError(f"Unknown memory candidate key {key!r}.")
-        return memory_id
+        result = self._call(
+            "retain",
+            {
+                "source": document.source,
+                "content": document.content,
+                "retained_at": document.retained_at,
+                "context": document.context,
+                "facts": [_fact_arguments(fact) for fact in document.facts],
+            },
+        )
+        stored = list(result["memories"])
+        for candidate, memory in zip(document.facts, stored, strict=True):
+            self._memory_ids[candidate.key] = memory["id"]
+        for link in document.links:
+            self._call(
+                "link_memories",
+                {
+                    "source_id": self.memory_id(link.source_key),
+                    "target_id": self.memory_id(link.target_key),
+                    "relation": link.relation,
+                    "metadata": deepcopy(link.metadata),
+                },
+            )
+        for key in document.corrections:
+            self._call("invalidate_memory", {"memory_id": self.memory_id(key)})
 
     def _call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Call one tool and retain an isolated trace record."""
@@ -509,68 +689,168 @@ class HindsightAgent:
         return result
 
 
-def _unit_result(unit: MemoryUnit) -> dict[str, Any]:
-    """Convert a resolved unit to a JSON-compatible tool result."""
+def _draft(payload: dict[str, Any]) -> FactDraft:
+    """Convert one JSON-compatible fact argument into a draft."""
+
+    claim_key = payload.get("claim")
+    belief = payload.get("belief")
+    claim: Claim | None = None
+    if claim_key is not None or belief is not None:
+        if claim_key is None or belief is None:
+            raise ValueError("A fact claim requires both 'claim' and 'belief'.")
+        claim = Claim(key=claim_key, belief=belief, stance=payload.get("stance", "supports"))
+    occurred_at = payload.get("occurred_at")
+    occurred_until = payload.get("occurred_until")
+    return FactDraft(
+        text=payload["text"],
+        fact_type=payload["fact_type"],
+        context=payload.get("context", ""),
+        entities=tuple(payload.get("entities", ())),
+        occurred_at=None if occurred_at is None else parse_timestamp(occurred_at, field="occurred_at"),
+        occurred_until=(
+            None if occurred_until is None else parse_timestamp(occurred_until, field="occurred_until")
+        ),
+        tags=tuple(payload.get("tags", ())),
+        claim=claim,
+    )
+
+
+def _fact_arguments(candidate: FactCandidate) -> dict[str, Any]:
+    """Convert one agent fact candidate into JSON-compatible arguments."""
 
     return {
-        "id": unit.id,
-        "text": unit.text,
-        "fact_type": unit.fact_type,
-        "state": unit.state,
-        "entities": list(unit.entities),
-        "occurred_dates": [_format_timestamp(value) for value in unit.occurred_dates],
-        "metadata": deepcopy(unit.metadata),
-        "tags": list(unit.tags),
-        "provenance": deepcopy(unit.provenance),
+        "text": candidate.text,
+        "fact_type": candidate.fact_type,
+        "context": candidate.context,
+        "entities": list(candidate.entities),
+        "occurred_at": candidate.occurred_at,
+        "occurred_until": candidate.occurred_until,
+        "tags": list(candidate.tags),
+        "claim": candidate.claim,
+        "belief": candidate.belief,
+        "stance": candidate.stance,
     }
 
 
-def _mental_model_result(model: MentalModel) -> dict[str, Any]:
-    """Convert a mental model to a JSON-compatible tool result."""
+def _fact_result(fact: MemoryFact) -> dict[str, Any]:
+    """Convert a stored fact into a JSON-compatible tool result."""
+
+    return {
+        "id": fact.id,
+        "text": fact.text,
+        "fact_type": fact.fact_type,
+        "state": fact.state,
+        "entities": list(fact.entities),
+        "tags": list(fact.tags),
+        "learned_at": format_timestamp(fact.learned_at),
+        "occurred_start": None if fact.occurred is None else format_timestamp(fact.occurred.valid_at),
+        "occurred_end": (
+            None
+            if fact.occurred is None or fact.occurred.invalid_at is None
+            else format_timestamp(fact.occurred.invalid_at)
+        ),
+        "claim": None if fact.claim is None else fact.claim.key,
+        "document_id": fact.document_id,
+    }
+
+
+def _observation_result(observation: Observation) -> dict[str, Any]:
+    """Convert an observation into a JSON-compatible tool result."""
+
+    return {
+        "id": observation.id,
+        "claim": observation.claim,
+        "text": observation.text,
+        "revision": observation.revision,
+        "stance": observation.stance,
+        "proof_count": observation.proof_count,
+        "sources": list(observation.sources),
+        "tags": list(observation.tags),
+        "stale": observation.stale,
+        "consolidated_at": format_timestamp(observation.consolidated_at),
+    }
+
+
+def _model_result(model: MentalModel) -> dict[str, Any]:
+    """Convert a mental model into a JSON-compatible tool result."""
 
     return {
         "id": model.id,
         "name": model.name,
-        "source_query": model.source_query,
+        "question": model.question,
         "content": model.content,
-        "source_memory_ids": list(model.source_memory_ids),
+        "revision": model.revision,
         "tags": list(model.tags),
+        "sources": list(model.sources),
+        "refreshed_at": None if model.refreshed_at is None else format_timestamp(model.refreshed_at),
     }
 
 
-def _timeline_line(result: dict[str, Any]) -> str:
-    """Render one temporal tool result."""
+def _recall_result(response: RecallResponse) -> dict[str, Any]:
+    """Convert a recall response into a JSON-compatible tool result."""
 
-    occurred = ", ".join(_display_timestamp(value) for value in result["occurred_dates"])
-    return f"- {occurred}: {result['text']}"
-
-
-def _graph_line(result: dict[str, Any]) -> str:
-    """Render one graph traversal result."""
-
-    relation = result["relation"].removeprefix("hindsight.")
-    return f"- {relation} ({result['direction']}): {result['text']}"
-
-
-def _parse_timestamp(value: str, *, field: str) -> datetime:
-    """Parse one timezone-aware ISO 8601 tool timestamp."""
-
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as error:
-        raise ValueError(f"{field} must be an ISO 8601 timestamp.") from error
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"{field} must be timezone-aware.")
-    return parsed.astimezone(UTC)
+    return {
+        "query": response.query,
+        "hits": [
+            {
+                "id": hit.id,
+                "text": hit.text,
+                "kind": hit.kind,
+                "score": hit.score,
+                "retrievers": list(hit.retrievers),
+                "tokens": hit.tokens,
+            }
+            for hit in response.hits
+        ],
+        "tokens_used": response.tokens_used,
+        "max_tokens": response.max_tokens,
+        "dropped": response.dropped,
+    }
 
 
-def _format_timestamp(value: datetime) -> str:
-    """Format a timestamp for JSON-compatible tool output."""
+def _reflection_result(reflection: Reflection) -> dict[str, Any]:
+    """Convert a reflection into a JSON-compatible tool result."""
 
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return {
+        "question": reflection.question,
+        "text": reflection.text,
+        "trace": list(reflection.trace),
+        "based_on": [_evidence_result(item) for item in reflection.based_on],
+    }
 
 
-def _display_timestamp(value: str) -> str:
-    """Render a tool timestamp as a date for the compact report."""
+def _evidence_result(evidence: Evidence) -> dict[str, Any]:
+    """Convert one evidence item into a JSON-compatible tool result."""
 
-    return _parse_timestamp(value, field="occurred_dates").date().isoformat()
+    return {
+        "kind": evidence.kind,
+        "id": evidence.block_id,
+        "text": evidence.text,
+        "sources": list(evidence.sources),
+    }
+
+
+def _window(start: str | None, end: str | None) -> RecallWindow | None:
+    """Build a recall window from two optional tool timestamps."""
+
+    if start is None and end is None:
+        return None
+    if start is None or end is None:
+        raise ValueError("A recall window needs both a start and an end.")
+    return RecallWindow(
+        start=parse_timestamp(start, field="window_start"),
+        end=parse_timestamp(end, field="window_end"),
+    )
+
+
+def _hit_line(hit: dict[str, Any]) -> str:
+    """Render one recall hit for the printed report."""
+
+    retrievers = "+".join(hit["retrievers"])
+    return f"- [{hit['kind']}] {hit['text']} ({retrievers}, {hit['score']:.4f})"
+
+
+def _evidence_line(item: dict[str, Any]) -> str:
+    """Render one evidence item for the printed report."""
+
+    return f"- [{item['kind']}] {item['text']} (from {len(item['sources'])} source(s))"

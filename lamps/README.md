@@ -22,12 +22,28 @@ Each `lamps/<name>` package should:
 
 ## Run and test
 
+Every lamp is a package whose `demo.py` is the entry point. Run it as a module
+from the repository root, so the `lamps` and `genie` packages both resolve:
+
 ```bash
-conda run -n "genie" python -m lamps.<name>
+conda run -n "genie" python -m lamps.<name>.demo
 conda run -n "genie" python -m pytest lamps/<name>/tests -q
 ```
 
-Pytest also discovers all lamp tests through `pyproject.toml`.
+Substituting each lamp name gives:
+
+| Lamp | Run the demo | Run the tests |
+| --- | --- | --- |
+| Graphiti | `conda run -n "genie" python -m lamps.graphiti.demo` | `conda run -n "genie" python -m pytest lamps/graphiti/tests -q` |
+| Hindsight | `conda run -n "genie" python -m lamps.hindsight.demo` | `conda run -n "genie" python -m pytest lamps/hindsight/tests -q` |
+| LangMem | `conda run -n "genie" python -m lamps.langmem.demo` | `conda run -n "genie" python -m pytest lamps/langmem/tests -q` |
+| Mem0 | `conda run -n "genie" python -m lamps.mem0.demo` | `conda run -n "genie" python -m pytest lamps/mem0/tests -q` |
+| MemoryOS | `conda run -n "genie" python -m lamps.memoryos.demo` | `conda run -n "genie" python -m pytest lamps/memoryos/tests -q` |
+
+Each demo prints its whole run and exits; no lamp reads a clock, a network, or
+an API key, so repeated runs print the same output. Pytest also discovers all
+lamp tests through `pyproject.toml`, so `conda run -n "genie" python -m pytest
+lamps -q` runs every lamp at once.
 
 ## Shared agent-demo format
 
@@ -45,7 +61,7 @@ guides document only their unique stored model, workflow, results, and limits.
 | Lamp | Preserved upstream idea | Characteristic workflow |
 | --- | --- | --- |
 | [Graphiti](graphiti/README.md) | Episodes, entity nodes with evolving summaries, bi-temporal relationship facts, communities | Ingest episodes, invalidate contradicted facts on both time axes, group entities by slice, and rank facts with a hybrid recipe |
-| [Hindsight](hindsight/README.md) | World/experience facts, derived observations, four-way retrieval, mental models | Retain, recall, and assemble a deterministic stand-in for reflection |
+| [Hindsight](hindsight/README.md) | Documents extracted into world/experience facts, observations consolidated with proof counts, standing mental models, four-way retrieval | Retain and consolidate, refine a belief as evidence supports or reverses it, and reflect from the highest layer that already knows |
 | [LangMem](langmem/README.md) | Schema-shaped values at namespace/key addresses | Agent-managed create/update/delete plus direct and relevant-memory retrieval |
 | [Mem0](mem0/README.md) | Extracted memories scoped by user/agent/run identifiers | Add, update, and retrieve compact memories; deterministic extraction substitutes for an LLM |
 | [MemoryOS](memoryos/README.md) | Short-term FIFO, mid-term sessions/pages, heat, profile and knowledge stores | Overflow, heat relevant sessions, and consolidate hot context into long-term memory |
