@@ -8,16 +8,23 @@ retrieval strategy, storage layout, and operational infrastructure.
 ## Architecture
 
 ```text
-Application or agent tools
-          |
-    MemoryHandle        restricted root, principal, and capabilities
-          |
-       Memory           policy, hooks, codecs, operation flow
-          |
-   MemoryBackend        blocks, ownership, links, and search
-          |
-Database or stores      selected by the backend
+ Application or agent tools
+              |
+      Structure facades     optional views over the same blocks
+              |
+        MemoryHandle        optional root, principal, and capability limits
+              |
+           Memory           policy, hooks, codecs, and operation flow
+              |
+        MemoryBackend       blocks, ownership, links, and search
+              |
+     Stores and indexes     chosen by the backend
 ```
+
+`Memory` and one backend object are the required layers. Handles and structure
+facades are optional views over the same blocks, and a facade accepts either a
+`Memory` or a `MemoryHandle`. A single backend may coordinate several databases
+or indexes behind the same contract.
 
 Keep `Memory`, backends, policy engines, hooks, and codec registries in trusted
 code. Give agents rooted handles or smaller application-defined tools.
