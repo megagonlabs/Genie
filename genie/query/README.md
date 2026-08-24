@@ -32,6 +32,10 @@ types and copies caller-owned type lists and nested filter operands.
 
 Scopes other than `global` require a root when searching through `Memory`.
 
+Each scope is resolved from stored state rather than from the query: `subtree`
+and `ancestors` from stored parents, and `links` from stored links. A search
+index that holds neither needs traversal and link access to resolve them.
+
 A bounded handle cannot use search to escape its root or enable global or
 ancestor access that the handle disables.
 

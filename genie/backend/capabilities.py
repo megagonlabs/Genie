@@ -95,7 +95,20 @@ class BlockStore(Protocol):
 
 @runtime_checkable
 class TraversalIndex(Protocol):
-    """Parent/child traversal interface."""
+    """Read-only parent/child traversal interface.
+
+    Ownership is recorded by `MemoryBlock.parent_id` in the block store, so a
+    traversal index is a derived view and has no write methods. An adapter that
+    keeps blocks and topology in one database can answer these methods directly
+    from stored parents.
+
+    `Memory` resolves every ownership question through this interface and never
+    reads `parent_id` itself. A separately supplied traversal index therefore
+    decides subtree scope, traversal, and recursive deletion, and must stay
+    consistent with the block store. An index that omits descendants makes
+    `Memory.delete` send an incomplete subtree snapshot, which a correct
+    `BlockStore` rejects with `MemoryConflict`.
+    """
 
     def children(self, block_id: str) -> list[MemoryBlock]:
         """Return direct children for a block id.
@@ -150,17 +163,28 @@ class TraversalIndex(Protocol):
 
 @runtime_checkable
 class SearchIndex(Protocol):
-    """Search interface for backend adapters."""
+    """Read-only search interface for backend adapters.
+
+    A search index is a derived view and has no write methods. It is derived
+    from block state and from link state, because `Scope.LINKS` is resolved
+    from stored links rather than from ownership.
+    """
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
         """Search memory blocks.
+
+        The index resolves `query.scope` against `query.root_id` before it
+        ranks anything. An index that holds neither ownership nor link state
+        needs access to a `TraversalIndex` and a `LinkStore` to do that.
 
         Args:
             query: Normalized query from the public API.
 
         Returns:
             Search results. The public `Memory` layer applies policy filtering
-            after backend search.
+            and reapplies the query scope after backend search, so returning
+            out-of-scope blocks is safe but spends `query.limit` on results the
+            caller never receives.
         """
 
         ...

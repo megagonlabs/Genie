@@ -100,6 +100,13 @@ multiple databases or indexes.
 | `Neo4jBackend` | Optional official-driver graph backend; all optional capabilities |
 | `RoutedBackend` | Composite backend with application-defined storage routes |
 
+Block, link, and structural stores hold the source of truth. Ownership
+traversal and search are read-only views over that state, and search depends on
+stored links as well as stored blocks because link scope is resolved from links.
+`Memory` resolves ownership only through the traversal interface, so a backend
+that supplies a separate traversal index defines subtree scope, traversal, and
+recursive deletion there and must keep it consistent with stored parents.
+
 Backends must preserve ownership, clean dependent structural state, enforce
 conditional writes atomically, and map storage failures to Genie errors. Raw
 backend access bypasses handles and policies. Applications remain responsible

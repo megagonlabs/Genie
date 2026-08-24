@@ -51,10 +51,27 @@ as `__cause__`:
 
 ## Stores and indexes
 
-A store is the source of truth for blocks, links, and structural state. A
-search or traversal index is an optimization and should be rebuildable. A
-single database may serve both roles; the distinction describes ownership, not
-a required deployment topology.
+A store owns the source of truth and mutates. `BlockStore` owns blocks,
+`LinkStore` owns links, and the optional structure capabilities own keyed,
+sequence, and temporal state. `TraversalIndex` and `SearchIndex` are read-only
+views over that state and have no write methods.
+
+| Index | Derived from |
+| --- | --- |
+| `TraversalIndex` | `MemoryBlock.parent_id` in the block store |
+| `SearchIndex` | Block state, plus link state for `Scope.LINKS` |
+
+A single database may serve both roles; the distinction describes ownership,
+not a required deployment topology. When one adapter holds the stores and its
+own indexes, keeping them consistent is internal to the adapter.
+
+Supplying an index separately adds two responsibilities. `Memory` resolves
+ownership only through `TraversalIndex` and never reads `parent_id` itself, so
+a supplied traversal index decides subtree scope, traversal, and recursive
+deletion and must agree with the block store. And these contracts have no block
+enumeration method, so rebuilding an index from the stores is an out-of-band
+operation that uses native storage access or an application-held set of root
+ids.
 
 ## Implementations
 
