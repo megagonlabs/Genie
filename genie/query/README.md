@@ -22,6 +22,13 @@ non-negative limit. Backends return ranked `SearchResult` values containing a
 block, finite numeric score, and reason. Query construction validates runtime
 types and copies caller-owned type lists and nested filter operands.
 
+The limit bounds what a backend returns, not what a caller receives. A backend
+applies it before `Memory` removes results the principal cannot see and results
+outside the query scope, so a search can return fewer results than the limit
+even when more matching blocks exist. There is no result cursor: a caller that
+needs a full page requests a larger limit and truncates the result itself, and
+decides how much extra backend work that is worth.
+
 | Scope | Search area |
 | --- | --- |
 | `self` | Root only |

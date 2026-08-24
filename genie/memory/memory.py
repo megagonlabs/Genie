@@ -826,7 +826,11 @@ class Memory:
             scope: Search scope.
             types: Optional block types to include.
             filters: Optional metadata or block-field filters.
-            limit: Maximum result count.
+            limit: Maximum result count. The backend applies this limit before
+                policy and scope filtering runs, so a search can return fewer
+                results than the limit even when more matching blocks are
+                visible. Callers that need a full page request a larger limit
+                and truncate the result themselves.
 
         Returns:
             Search results with decoded blocks.

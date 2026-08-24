@@ -59,7 +59,9 @@ event, and every policy or handle refusal is reported with its subject and the
 check that produced it, so denials and failures stay observable. Every event
 carries its start time and inherited string attributes, and caller-defined
 scopes group the operations of one agent run, turn, or tool call. Changed
-searches are authorized again and final results are filtered again. Reentrant callbacks are
+searches are authorized again and final results are filtered again. That
+filtering runs after a backend has already applied the query limit, so a result
+page can be shorter than the limit the caller asked for. Reentrant callbacks are
 skipped with bounded causal context. Callbacks that observe already-committed
 work are isolated from one another, so one failing sink cannot cost the others
 the record they are owed, and a sink that declares itself fail-open cannot fail
