@@ -1,26 +1,57 @@
-"""Agent-callable tools for the MemoryOS-inspired lamp."""
+"""A tool interface and deterministic agent for the MemoryOS lamp.
+
+MemoryOS is used through a handful of calls, and what makes it interesting to
+put behind a tool boundary is how much happens that the caller did not ask for.
+`add_memory` takes one exchange, and on the way out it may have paged the oldest
+exchange into a segment, opened that segment, evicted a colder one, promoted the
+hottest one into the profile, and dropped the oldest fact from a knowledge base
+to make room. So every tool here returns what the tiers did rather than a
+success flag: the call log is where the hierarchy becomes visible.
+
+The other thing worth noticing at this boundary is that retrieving is not free.
+`retrieve_memory` raises the heat of every segment it reaches, which is what
+eventually promotes one. An agent that keeps asking about seats is an agent that
+ends up with a profile that mentions seats.
+
+Every tool set is bound to one user's memory at construction, so no tool
+argument can name another user's tiers. The example agent chooses its calls from
+explicit inputs rather than from a model, which keeps the demo runnable with no
+API key.
+"""
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
-from lamps.memoryos.memory_system import (
-    KnowledgeDraft,
-    KnowledgeEntry,
-    MemoryOSMemory,
-    MidTermPage,
-    ShortTermQA,
+from lamps.memoryos.memoryos import MemoryOS
+from lamps.memoryos.model import (
+    ASSISTANT,
+    USER,
+    Exchange,
+    KnowledgeOwner,
+    exchange_from_json,
+    format_timestamp,
+    owner_of,
+    parse_timestamp,
+    positive,
+    required_text,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """Description of one tool presented to the example agent."""
+    """Description of a tool presented to an agent.
+
+    Attributes:
+        name: Stable tool name used for calls.
+        description: Plain-language guidance for the agent.
+        parameters: Mapping of argument names to short type descriptions.
+    """
 
     name: str
     description: str
@@ -28,39 +59,14 @@ class ToolDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class ConversationCandidate:
-    """One QA pair the agent selected for memory."""
-
-    key: str
-    user_input: str
-    agent_response: str
-    occurred_at: str
-    summary: str
-    entities: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class KnowledgeCandidate:
-    """One long-term fact synthesized from selected mid-term pages."""
-
-    knowledge: str
-    source_keys: tuple[str, ...]
-    entities: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class LongTermCandidate:
-    """Profile and knowledge updates selected after page reflection."""
-
-    profile_updates: dict[str, Any]
-    profile_source_keys: tuple[str, ...]
-    user_knowledge: tuple[KnowledgeCandidate, ...] = ()
-    assistant_knowledge: tuple[KnowledgeCandidate, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class ToolCallRecord:
-    """One inspectable memory-tool call made by the agent."""
+    """One inspectable tool call made by the example agent.
+
+    Attributes:
+        name: Invoked tool name.
+        arguments: Copy of the JSON-compatible arguments.
+        result: Copy of the JSON-compatible result.
+    """
 
     name: str
     arguments: dict[str, Any]
@@ -68,379 +74,403 @@ class ToolCallRecord:
 
 
 class MemoryOSTools:
-    """Expose a bounded MemoryOS-inspired service as agent tools."""
+    """Memory tools bound to one user's hierarchy, with JSON-compatible calls."""
 
-    def __init__(self, memory: MemoryOSMemory) -> None:
-        """Create named JSON-compatible tools over one memory hierarchy."""
+    def __init__(self, system: MemoryOS, *, user_id: str, assistant_id: str) -> None:
+        """Bind one tool set to one user's memory operating system.
 
-        self._memory = memory
-        self.definitions = (
-            ToolDefinition(
-                name="add_memory",
-                description="Append a short-term QA pair and process FIFO overflow into pages.",
-                parameters={
-                    "key": "string",
-                    "user_input": "string",
-                    "agent_response": "string",
-                    "occurred_at": "ISO 8601 timestamp",
-                    "summary": "promotion summary",
-                    "entities": "list[string]",
-                },
-            ),
-            ToolDefinition(
-                name="retrieve_memory",
-                description="Retrieve all tiers and heat the sessions containing matching pages.",
-                parameters={"query": "string", "limit": "integer"},
-            ),
-            ToolDefinition(
-                name="update_long_term",
-                description="Promote pages from hot sessions into profile and knowledge collections.",
-                parameters={
-                    "profile_updates": "object",
-                    "profile_source_page_ids": "list[page id]",
-                    "user_knowledge": "list[knowledge draft]",
-                    "assistant_knowledge": "list[knowledge draft]",
-                },
-            ),
-            ToolDefinition(
-                name="get_user_profile",
-                description="Retrieve the current long-term user-profile dictionary.",
-                parameters={},
-            ),
-            ToolDefinition(
-                name="retrieve_temporal",
-                description="Retrieve dated short-, mid-, and long-term entries in an interval.",
-                parameters={
-                    "start": "ISO 8601 timestamp",
-                    "end": "ISO 8601 timestamp",
-                    "limit": "integer",
-                },
-            ),
-            ToolDefinition(
-                name="retrieve_graph",
-                description="Traverse page chronology and mid-to-long promotion links.",
-                parameters={
-                    "anchor_page_id": "page id",
-                    "max_depth": "integer",
-                    "limit": "integer",
-                },
-            ),
-        )
+        Args:
+            system: The hierarchy every call reads and writes.
+            user_id: Whose memory this is, shown in the tool descriptions.
+            assistant_id: Which assistant it is paired with.
+        """
+
+        self.system = system
+        self.user_id = required_text(user_id, field="user_id")
+        self.assistant_id = required_text(assistant_id, field="assistant_id")
+        self.definitions = _definitions(self)
         self._handlers: dict[str, Callable[..., dict[str, Any]]] = {
             "add_memory": self._add_memory,
             "retrieve_memory": self._retrieve_memory,
-            "update_long_term": self._update_long_term,
             "get_user_profile": self._get_user_profile,
-            "retrieve_temporal": self._retrieve_temporal,
-            "retrieve_graph": self._retrieve_graph,
+            "inspect_sessions": self._inspect_sessions,
+            "analyze_now": self._analyze_now,
+            "trace_knowledge": self._trace_knowledge,
+            "read_dialogue_chain": self._read_dialogue_chain,
+            "memory_stats": self._memory_stats,
         }
 
-    def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Invoke one named memory tool."""
+    def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        """Invoke one named tool with JSON-compatible arguments.
+
+        Args:
+            name: Tool name.
+            arguments: JSON-compatible keyword arguments.
+
+        Returns:
+            The JSON-compatible tool result.
+
+        Raises:
+            ValueError: If the tool name is unknown.
+        """
 
         handler = self._handlers.get(name)
         if handler is None:
             raise ValueError(f"Unknown MemoryOS tool {name!r}.")
         return handler(**arguments)
 
-    def _add_memory(
-        self,
-        *,
-        key: str,
-        user_input: str,
-        agent_response: str,
-        occurred_at: str,
-        summary: str,
-        entities: list[str] | None = None,
-    ) -> dict[str, Any]:
-        result = self._memory.add_memory(
-            key=key,
-            user_input=user_input,
-            agent_response=agent_response,
-            occurred_at=_parse_timestamp(occurred_at, field="occurred_at"),
-            summary=summary,
-            entities=entities or (),
-        )
-        return {
-            "short_term_qa": _qa_result(result.qa),
-            "promoted_pages": [_page_result(page) for page in result.promoted_pages],
-        }
+    def _add_memory(self, **exchange: Any) -> dict[str, Any]:
+        """Implement `add_memory`, one exchange and everything it sets off."""
 
-    def _retrieve_memory(self, *, query: str, limit: int = 5) -> dict[str, Any]:
-        bundle = self._memory.retrieve_memory(query, limit=limit)
-        return {
-            "short_term": [_qa_result(qa) for qa in bundle.short_term],
-            "mid_term": [_page_result(page) for page in bundle.mid_term],
-            "user_profile": (deepcopy(bundle.user_profile.data) if bundle.user_profile is not None else None),
-            "user_knowledge": [_knowledge_result(item) for item in bundle.user_knowledge],
-            "assistant_knowledge": [_knowledge_result(item) for item in bundle.assistant_knowledge],
-        }
+        return self.system.add_memory(exchange_from_json(exchange)).as_json()
 
-    def _update_long_term(
-        self,
-        *,
-        profile_updates: dict[str, Any],
-        profile_source_page_ids: list[str],
-        user_knowledge: list[dict[str, Any]] | None = None,
-        assistant_knowledge: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        profile, user_entries, assistant_entries = self._memory.update_long_term(
-            profile_updates=profile_updates,
-            profile_source_page_ids=profile_source_page_ids,
-            user_knowledge=tuple(_knowledge_draft(value) for value in (user_knowledge or ())),
-            assistant_knowledge=tuple(_knowledge_draft(value) for value in (assistant_knowledge or ())),
-        )
-        return {
-            "user_profile": deepcopy(profile.data),
-            "user_knowledge": [_knowledge_result(item) for item in user_entries],
-            "assistant_knowledge": [_knowledge_result(item) for item in assistant_entries],
-        }
+    def _retrieve_memory(self, *, query: str, at: str) -> dict[str, Any]:
+        """Implement `retrieve_memory` across all four tiers."""
+
+        return self.system.retrieve_memory(query, now=parse_timestamp(at, field="at")).as_json()
 
     def _get_user_profile(self) -> dict[str, Any]:
-        profile = self._memory.get_user_profile()
-        return {"user_profile": deepcopy(profile.data) if profile is not None else None}
+        """Implement `get_user_profile`, including the readings it replaced."""
 
-    def _retrieve_temporal(
-        self,
-        *,
-        start: str,
-        end: str,
-        limit: int = 20,
-    ) -> dict[str, Any]:
-        results = self._memory.retrieve_temporal(
-            _parse_timestamp(start, field="start"),
-            _parse_timestamp(end, field="end"),
-            limit=limit,
-        )
+        current = self.system.get_user_profile()
+        history = self.system.profile_history()
         return {
-            "results": [
-                {
-                    "layer": result.layer,
-                    "item_id": result.item_id,
-                    "occurred_at": _format_timestamp(result.occurred_at),
-                    "text": result.text,
-                }
-                for result in results
-            ]
+            "user_id": self.user_id,
+            "profile": dict(current.data) if current is not None else {},
+            "revision": current.revision if current is not None else 0,
+            "history": [revision.as_json() for revision in history],
         }
 
-    def _retrieve_graph(
-        self,
-        *,
-        anchor_page_id: str,
-        max_depth: int = 1,
-        limit: int = 20,
-    ) -> dict[str, Any]:
-        results = self._memory.retrieve_graph(
-            anchor_page_id,
-            max_depth=max_depth,
-            limit=limit,
-        )
+    def _inspect_sessions(self, *, at: str) -> dict[str, Any]:
+        """Implement `inspect_sessions`, the heat table promotion reads."""
+
+        now = parse_timestamp(at, field="at")
+        segments = self.system.segments(now=now)
+        hottest = max(segments, key=lambda segment: segment.heat, default=None)
         return {
-            "results": [
-                {
-                    "item_id": result.block.id,
-                    "item_type": result.block.type,
-                    "relation": result.relation,
-                    "direction": result.direction,
-                    "distance": result.distance,
-                    "description": result.description,
-                }
-                for result in results
-            ]
+            "at": format_timestamp(now),
+            "threshold": self.system.updater.heat_threshold,
+            "hottest": hottest.segment_id if hottest is not None else None,
+            "sessions": [segment.as_json() for segment in segments],
         }
 
+    def _analyze_now(self, *, at: str) -> dict[str, Any]:
+        """Implement `analyze_now`, upstream's forced mid-term analysis."""
 
+        promotion = self.system.force_mid_term_analysis(now=parse_timestamp(at, field="at"))
+        return {"promoted": promotion.as_json() if promotion is not None else None}
+
+    def _trace_knowledge(self, *, owner: str, knowledge_id: str) -> dict[str, Any]:
+        """Implement `trace_knowledge`, the provenance read upstream cannot make."""
+
+        selected = owner_of(owner)
+        item = next((entry for entry in self.system.knowledge(selected) if entry.id == knowledge_id), None)
+        if item is None:
+            return {"owner": selected, "knowledge_id": knowledge_id, "found": False, "pages": []}
+        pages = self.system.sources_of(item.block)
+        return {
+            "owner": selected,
+            "knowledge_id": knowledge_id,
+            "found": True,
+            "knowledge": item.knowledge,
+            "recorded_page_ids": list(item.source_page_ids),
+            "pages": [page.as_json() for page in pages],
+        }
+
+    def _read_dialogue_chain(self, *, page_id: str, depth: int = 5) -> dict[str, Any]:
+        """Implement `read_dialogue_chain`, a walk along the lineage edges."""
+
+        start = self.system.page(page_id)
+        following = self.system.dialogue_chain(page_id, depth=positive(depth, field="depth"))
+        return {
+            "page_id": page_id,
+            "found": start is not None,
+            "start": start.as_json() if start is not None else None,
+            "continues_with": [page.as_json() for page in following],
+        }
+
+    def _memory_stats(self) -> dict[str, Any]:
+        """Implement `memory_stats`, the counts each tier holds."""
+
+        return {"user_id": self.user_id, "assistant_id": self.assistant_id, **self.system.memory_stats()}
+
+
+@dataclass(slots=True)
 class MemoryOSAgent:
-    """Deterministic agent that uses tools for all memory operations."""
+    """A deterministic agent whose only memory access is the tool set.
 
-    def __init__(self, *, name: str, tools: MemoryOSTools) -> None:
-        """Create an agent with no direct access to the memory hierarchy."""
+    Attributes:
+        name: Agent name shown in the demo output.
+        tools: Tool set bound to one user's hierarchy.
+        call_log: Every call the agent made, in order.
+    """
 
-        self.name = name
-        self.tools = tools.definitions
-        self._toolbox = tools
-        self.call_log: list[ToolCallRecord] = []
-        self._page_ids: dict[str, str] = {}
+    name: str
+    tools: MemoryOSTools
+    call_log: list[ToolCallRecord] = field(default_factory=list)
 
-    def learn(
-        self,
-        *,
-        conversations: tuple[ConversationCandidate, ...],
-        reflection_query: str,
-        long_term: LongTermCandidate,
-    ) -> None:
-        """Add QA pairs, heat relevant pages, and consolidate long-term memory."""
+    def record(self, exchange: Exchange) -> dict[str, Any]:
+        """Hand one exchange to the hierarchy and read back what moved.
 
-        for candidate in conversations:
-            result = self._call(
-                "add_memory",
-                {
-                    "key": candidate.key,
-                    "user_input": candidate.user_input,
-                    "agent_response": candidate.agent_response,
-                    "occurred_at": candidate.occurred_at,
-                    "summary": candidate.summary,
-                    "entities": list(candidate.entities),
-                },
-            )
-            for page in result["promoted_pages"]:
-                self._page_ids[page["source_key"]] = page["page_id"]
+        Args:
+            exchange: The turn pair, its time, its themed summary, whether it
+                continues the previous one, and what an analysis of it would
+                conclude.
 
-        self._call("retrieve_memory", {"query": reflection_query, "limit": 10})
-        self._call(
-            "update_long_term",
-            {
-                "profile_updates": deepcopy(long_term.profile_updates),
-                "profile_source_page_ids": [self._required_page_id(key) for key in long_term.profile_source_keys],
-                "user_knowledge": [_knowledge_candidate_result(candidate, self._page_ids) for candidate in long_term.user_knowledge],
-                "assistant_knowledge": [_knowledge_candidate_result(candidate, self._page_ids) for candidate in long_term.assistant_knowledge],
-            },
-        )
+        Returns:
+            The stored exchange plus every page-out, promotion, and eviction the
+            call caused.
+        """
+
+        return self._call("add_memory", exchange.as_json())
+
+    def recall(self, query: str, *, at: datetime) -> dict[str, Any]:
+        """Retrieve context, which also heats every segment the query reaches.
+
+        Args:
+            query: Free text to retrieve for.
+            at: Time of the retrieval.
+
+        Returns:
+            One block of context per tier.
+        """
+
+        return self._call("retrieve_memory", {"query": query, "at": format_timestamp(at)})
+
+    def review(self, *, at: datetime) -> dict[str, Any]:
+        """Read the heat table that decides what gets promoted next.
+
+        Args:
+            at: Time heat is being taken at.
+
+        Returns:
+            Every open session with its three heat terms.
+        """
+
+        return self._call("inspect_sessions", {"at": format_timestamp(at)})
+
+    def analyze(self, *, at: datetime) -> dict[str, Any]:
+        """Promote the hottest session now instead of waiting for it to warm.
+
+        Args:
+            at: Time the analysis is taken at.
+
+        Returns:
+            What the analysis wrote into long-term memory.
+        """
+
+        return self._call("analyze_now", {"at": format_timestamp(at)})
+
+    def trace(self, owner: KnowledgeOwner, knowledge_id: str) -> dict[str, Any]:
+        """Ask which pages a stored fact was extracted from.
+
+        Args:
+            owner: Whose knowledge base holds the fact.
+            knowledge_id: Block id of the entry.
+
+        Returns:
+            The pages the analysis read, and which of them are still stored.
+        """
+
+        return self._call("trace_knowledge", {"owner": owner, "knowledge_id": knowledge_id})
+
+    def follow(self, page_id: str, *, depth: int = 5) -> dict[str, Any]:
+        """Walk the dialogue chain forward from one page.
+
+        Args:
+            page_id: Page to start from.
+            depth: Maximum edges to follow.
+
+        Returns:
+            The pages that continue the conversation.
+        """
+
+        return self._call("read_dialogue_chain", {"page_id": page_id, "depth": depth})
+
+    def stats(self) -> dict[str, Any]:
+        """Read how much each tier holds.
+
+        Returns:
+            Counts per tier, plus the profile's revision number.
+        """
+
+        return self._call("memory_stats", {})
 
     def answer(
         self,
         question: str,
         *,
         query: str,
-        start: str,
-        end: str,
-        graph_anchor_key: str,
+        at: datetime,
+        knowledge_id: str,
+        chain_from: str,
+        owner: KnowledgeOwner = USER,
     ) -> str:
-        """Combine profile, multi-tier, temporal, and graph retrieval."""
+        """Answer from every tier, and say what each one contributed.
 
-        profile = self._call("get_user_profile", {})["user_profile"]
-        memories = self._call("retrieve_memory", {"query": query, "limit": 5})
-        temporal = self._call(
-            "retrieve_temporal",
-            {"start": start, "end": end, "limit": 20},
-        )["results"]
-        graph = self._call(
-            "retrieve_graph",
-            {
-                "anchor_page_id": self._required_page_id(graph_anchor_key),
-                "max_depth": 2,
-                "limit": 10,
-            },
-        )["results"]
+        Args:
+            question: User-facing question included in the report.
+            query: Retrieval text the tiers are searched with.
+            at: Time of the retrieval.
+            knowledge_id: Promoted fact to trace back to the pages it came from.
+            chain_from: Page to walk the dialogue chain forward from.
+            owner: Whose knowledge base holds the traced fact.
 
-        profile_text = json_profile(profile)
-        facts = [
-            *(item["knowledge"] for item in memories["user_knowledge"]),
-            *(item["knowledge"] for item in memories["assistant_knowledge"]),
+        Returns:
+            Readable answer assembled from tool results.
+        """
+
+        context = self.recall(query, at=at)
+        profile = self._call("get_user_profile", {})
+        traced = self.trace(owner, knowledge_id)
+        chain = self.follow(chain_from)
+        stats = self.stats()
+        lines = [
+            f"Question: {question}",
+            f"Profile on file (revision {profile['revision']}):",
+            *_profile_lines(profile["profile"]),
+            f"Recent exchanges still in short-term memory ({stats['short_term']}/{stats['short_term_capacity']}):",
+            *_queue_lines(context["short_term"]),
+            f"Mid-term pages retrieved for {query!r}:",
+            *_page_lines(context["retrieved_pages"]),
+            "What is on file about the user:",
+            *_knowledge_lines(context["retrieved_user_knowledge"]),
+            "What the assistant learned about doing the job:",
+            *_knowledge_lines(context["retrieved_assistant_knowledge"]),
+            *_trace_lines(traced),
+            "The exchange that started the seat conversation, and what continued it:",
+            *_chain_lines(chain),
+            "Where the tiers stand:",
+            f"- {stats['mid_term_sessions']}/{stats['mid_term_capacity']} sessions holding {stats['mid_term_pages']} page(s)",
+            f"- {stats['user_knowledge']} user fact(s) and {stats['assistant_knowledge']} assistant fact(s) promoted",
         ]
-        fact_lines = "\n".join(f"- {fact}" for fact in facts) or "- No matching facts."
-        timeline_lines = "\n".join(f"- {result['occurred_at'][:10]} [{result['layer']}]: {result['text']}" for result in temporal) or "- No dated memories."
-        graph_lines = "\n".join(f"- {result['relation']} ({result['direction']}, depth {result['distance']}): " f"{result['description']}" for result in graph) or "- No graph context."
-        return (
-            f"Question: {question}\n"
-            f"Long-term user profile: {profile_text}\n"
-            f"Relevant long-term facts:\n{fact_lines}\n"
-            f"Experience timeline:\n{timeline_lines}\n"
-            f"Graph context:\n{graph_lines}"
-        )
-
-    def page_id(self, source_key: str) -> str:
-        """Return the page created from one demo conversation key."""
-
-        return self._required_page_id(source_key)
+        return "\n".join(lines)
 
     def tool_usage(self) -> dict[str, int]:
-        """Return usage counts in first-call order."""
+        """Return call counts per tool in first-call order.
 
-        return dict(Counter(call.name for call in self.call_log))
+        Returns:
+            Tool names mapped to how often the agent called them.
+        """
 
-    def _required_page_id(self, source_key: str) -> str:
-        page_id = self._page_ids.get(source_key)
-        if page_id is None:
-            raise ValueError(f"Conversation {source_key!r} has not reached mid-term memory.")
-        return page_id
+        return dict(Counter(record.name for record in self.call_log))
 
-    def _call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = self._toolbox.call(name, arguments)
-        self.call_log.append(ToolCallRecord(name, deepcopy(arguments), deepcopy(result)))
+    def _call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        """Call one tool and retain an isolated trace record."""
+
+        result = self.tools.call(name, arguments)
+        self.call_log.append(ToolCallRecord(name=name, arguments=deepcopy(dict(arguments)), result=deepcopy(result)))
         return result
 
 
-def _qa_result(qa: ShortTermQA) -> dict[str, Any]:
-    return {
-        "id": qa.block.id,
-        "key": qa.key,
-        "user_input": qa.user_input,
-        "agent_response": qa.agent_response,
-        "timestamp": _format_timestamp(qa.occurred_at),
-    }
+def _definitions(tools: MemoryOSTools) -> tuple[ToolDefinition, ...]:
+    """Describe the tool set, naming the hierarchy every call is bound to."""
 
-
-def _page_result(page: MidTermPage) -> dict[str, Any]:
-    return {
-        "page_id": page.id,
-        "session_id": page.session_id,
-        "source_key": page.source_key,
-        "summary": page.summary,
-        "dialogue": {
-            "user_input": page.user_input,
-            "agent_response": page.agent_response,
-            "timestamp": _format_timestamp(page.occurred_at),
-        },
-        "segment_heat": page.segment_heat,
-        "segment_visit_count": page.segment_visit_count,
-    }
-
-
-def _knowledge_result(item: KnowledgeEntry) -> dict[str, Any]:
-    return {
-        "id": item.block.id,
-        "owner": item.owner,
-        "knowledge": item.knowledge,
-        "timestamp": _format_timestamp(item.timestamp),
-        "source_page_ids": list(item.source_page_ids),
-    }
-
-
-def _knowledge_draft(value: dict[str, Any]) -> KnowledgeDraft:
-    return KnowledgeDraft(
-        knowledge=value["knowledge"],
-        source_page_ids=tuple(value["source_page_ids"]),
-        entities=tuple(value.get("entities", [])),
+    bound = f"{tools.user_id}/{tools.assistant_id}"
+    capacity = tools.system.short_term.capacity
+    threshold = tools.system.updater.heat_threshold
+    return (
+        ToolDefinition(
+            name="add_memory",
+            description=(
+                f"Record one exchange for {bound}. A full short-term queue ({capacity}) pages its oldest "
+                f"exchange into a session first, and a session over {threshold} heat is analyzed afterwards."
+            ),
+            parameters={
+                "user_input": "what the user said",
+                "agent_response": "what the assistant answered",
+                "timestamp": "ISO 8601 time the exchange happened",
+                "topic": "themed summary a model would have written for it",
+                "continues": "true when it continues the previous exchange",
+                "insight": "{profile, user_knowledge, assistant_knowledge} an analysis would conclude",
+            },
+        ),
+        ToolDefinition(
+            name="retrieve_memory",
+            description="Read all four tiers for a query. Every session the query reaches gets hotter.",
+            parameters={"query": "string", "at": "ISO 8601 timestamp"},
+        ),
+        ToolDefinition(
+            name="get_user_profile",
+            description="Read the profile the analyses arrived at, and every reading it replaced.",
+            parameters={},
+        ),
+        ToolDefinition(
+            name="inspect_sessions",
+            description="Read each mid-term session with its visit, length, and recency terms.",
+            parameters={"at": "ISO 8601 timestamp"},
+        ),
+        ToolDefinition(
+            name="analyze_now",
+            description="Analyze the hottest session immediately, whatever its heat.",
+            parameters={"at": "ISO 8601 timestamp"},
+        ),
+        ToolDefinition(
+            name="trace_knowledge",
+            description="Ask which pages one promoted fact was extracted from.",
+            parameters={"owner": f"{USER} or {ASSISTANT}", "knowledge_id": "string"},
+        ),
+        ToolDefinition(
+            name="read_dialogue_chain",
+            description="Walk forward from one page along the exchanges that continued it.",
+            parameters={"page_id": "string", "depth": "integer"},
+        ),
+        ToolDefinition(
+            name="memory_stats",
+            description=f"Read how much each tier of {bound} holds.",
+            parameters={},
+        ),
     )
 
 
-def _knowledge_candidate_result(
-    candidate: KnowledgeCandidate,
-    page_ids: dict[str, str],
-) -> dict[str, Any]:
-    try:
-        source_ids = [page_ids[key] for key in candidate.source_keys]
-    except KeyError as exc:
-        raise ValueError(f"Conversation {exc.args[0]!r} has not reached mid-term memory.") from exc
-    return {
-        "knowledge": candidate.knowledge,
-        "source_page_ids": source_ids,
-        "entities": list(candidate.entities),
-    }
+def _profile_lines(profile: Mapping[str, Any]) -> list[str]:
+    """Render the profile traits, or say nothing has been promoted."""
+
+    if not profile:
+        return ["- nothing promoted yet"]
+    return [f"- {trait}: {value}" for trait, value in profile.items()]
 
 
-def json_profile(profile: dict[str, Any] | None) -> str:
-    """Render the compact demo profile without exposing storage details."""
+def _queue_lines(entries: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render the resident queue entries, or say the queue is empty."""
 
-    if profile is None:
-        return "No profile available."
-    seat = profile.get("seat_preference", "unknown seat")
-    hotel = profile.get("austin_hotel", "unknown hotel")
-    strategy = profile.get("planning_strategy", "no planning strategy")
-    return f"seat={seat}; Austin hotel={hotel}; strategy={strategy}"
+    if not entries:
+        return ["- none"]
+    return [f"- {entry['user_input']}" for entry in entries]
 
 
-def _parse_timestamp(value: str, *, field: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (AttributeError, ValueError) as exc:
-        raise ValueError(f"{field} must be an ISO 8601 timestamp.") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"{field} must include a timezone.")
-    return parsed
+def _page_lines(pages: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render retrieved mid-term pages with the session they came from."""
+
+    if not pages:
+        return ["- none"]
+    return [f"- [{page['session_summary']}] {page['user_input']} (score {page['score']})" for page in pages]
 
 
-def _format_timestamp(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+def _knowledge_lines(hits: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render retrieved knowledge entries, or say none matched."""
+
+    if not hits:
+        return ["- none"]
+    return [f"- {hit['knowledge']} (score {hit['score']})" for hit in hits]
+
+
+def _trace_lines(traced: Mapping[str, Any]) -> list[str]:
+    """Render where one promoted fact came from, which upstream cannot say."""
+
+    if not traced["found"]:
+        return ["That fact is no longer in the knowledge base:", "- it was dropped when the base reached capacity"]
+    header = f"Why {traced['knowledge']!r} is on file:"
+    if not traced["pages"]:
+        return [header, "- the pages it was read from have since been evicted"]
+    return [header, *(f"- read from: {page['user_input']!r}" for page in traced["pages"])]
+
+
+def _chain_lines(chain: Mapping[str, Any]) -> list[str]:
+    """Render a dialogue chain as the exchange that opened it and its sequels."""
+
+    if not chain["found"]:
+        return ["- that page is no longer in mid-term memory"]
+    lines = [f"- {chain['start']['user_input']}"]
+    lines.extend(f"- then: {page['user_input']}" for page in chain["continues_with"])
+    return lines
