@@ -21,6 +21,7 @@ service:
 | `stdlib_codecs.py` | Standard-library codecs | Explicit bytes, datetime, decimal, UUID, dataclass, and enum registration |
 | `routed_backend.py` | `RoutedBackend`, `InMemoryLinkStore` | Route selection/inheritance, cross-store search, pending mount resolution |
 | `sqlite_persistence.py` | `SQLiteBackend` | Persistent blocks and links across backend instances |
+| `heterogeneous_backend.py` | `RoutedBackend`, `SQLiteBackend`, `TraversalIndex`/`SearchIndex`/`LinkStore` | One backend assembled from SQL blocks, a graph topology index, and a vector search index; resolving query scope inside a search index; keeping derived indexes current from a hook |
 | `basic_usage.py` | Core components together | Integrated application-owned memory and bounded agent tools |
 
 `hook_audit.py`, `write_hooks.py`, and `search_hooks.py` cover the hook
@@ -30,5 +31,6 @@ optional `genie.structures` facades, so it is covered in
 [`advanced/structure_hooks.py`](../advanced/structure_hooks.py).
 
 Every script contains assertions. Most use `InMemoryBackend`; the storage
-examples deliberately use routed stores or SQLite. Run commands and shared
+examples deliberately use routed stores, SQLite, or application-supplied
+traversal and search components. Run commands and shared
 conventions are in the [examples guide](../README.md).

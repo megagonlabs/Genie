@@ -38,6 +38,9 @@ conda run -n "genie" python examples/<path>.py
     stores.
 15. [`basic/sqlite_persistence.py`](basic/sqlite_persistence.py): close and
     reopen persistent blocks and links with SQLite.
+16. [`basic/heterogeneous_backend.py`](basic/heterogeneous_backend.py): build
+    one backend from SQL blocks, a graph topology index, and a vector search
+    index.
 
 [`basic/basic_usage.py`](basic/basic_usage.py) combines handles, ownership,
 search, links, policies, hooks, dataclass codecs, and stdlib codecs in one agent

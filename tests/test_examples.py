@@ -28,6 +28,7 @@ RUNNABLE_EXAMPLES = [
     ("basic/custom_codecs.py", "Custom codecs"),
     ("basic/stdlib_codecs.py", "Standard-library codecs"),
     ("basic/sqlite_persistence.py", "SQLite persistence"),
+    ("basic/heterogeneous_backend.py", "Heterogeneous routed backend"),
     ("basic/basic_usage.py", "Integrated agent memory walkthrough"),
     ("advanced/temporal_collection.py", "Temporal collection"),
     ("advanced/graph_traversal.py", "Graph traversal"),
