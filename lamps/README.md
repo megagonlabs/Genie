@@ -62,6 +62,6 @@ guides document only their unique stored model, workflow, results, and limits.
 | --- | --- | --- |
 | [Graphiti](graphiti/README.md) | Episodes, entity nodes with evolving summaries, bi-temporal relationship facts, communities | Ingest episodes, invalidate contradicted facts on both time axes, group entities by slice, and rank facts with a hybrid recipe |
 | [Hindsight](hindsight/README.md) | Documents extracted into world/experience facts, observations consolidated with proof counts, standing mental models, four-way retrieval | Retain and consolidate, refine a belief as evidence supports or reverses it, and reflect from the highest layer that already knows |
-| [LangMem](langmem/README.md) | Schema-shaped values at namespace/key addresses | Agent-managed create/update/delete plus direct and relevant-memory retrieval |
+| [LangMem](langmem/README.md) | Namespaced items in collection and profile shapes, hot-path and background formation, the agent's prompt as memory | Debounce a thread, apply the changes the manager is permitted to make, and revise the prompt from feedback |
 | [Mem0](mem0/README.md) | Extracted memories scoped by user/agent/run identifiers | Add, update, and retrieve compact memories; deterministic extraction substitutes for an LLM |
 | [MemoryOS](memoryos/README.md) | Short-term FIFO, mid-term sessions/pages, heat, profile and knowledge stores | Overflow, heat relevant sessions, and consolidate hot context into long-term memory |

@@ -13,6 +13,7 @@ every other module in the lamp can depend on it without a cycle.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -35,9 +36,7 @@ DERIVED_FROM_RELATION = "hindsight.derived_from"
 SEMANTIC_RELATION = "hindsight.semantic"
 CAUSAL_RELATION = "hindsight.causal"
 TEMPORAL_RELATION = "hindsight.temporal"
-ASSOCIATIVE_RELATIONS: frozenset[str] = frozenset(
-    {SEMANTIC_RELATION, CAUSAL_RELATION, TEMPORAL_RELATION}
-)
+ASSOCIATIVE_RELATIONS: frozenset[str] = frozenset({SEMANTIC_RELATION, CAUSAL_RELATION, TEMPORAL_RELATION})
 
 ENTITY_NAMESPACE = ("entities",)
 CLAIM_NAMESPACE = ("claims",)
@@ -151,7 +150,7 @@ def unique_strings(values: object, *, field: str) -> tuple[str, ...]:
         ValueError: If any entry is empty.
     """
 
-    if isinstance(values, str) or not hasattr(values, "__iter__"):
+    if isinstance(values, (str, bytes)) or not isinstance(values, Iterable):
         raise TypeError(f"{field} must be a sequence of strings.")
     selected: list[str] = []
     for value in values:
@@ -549,11 +548,7 @@ def fact_from_block(block: MemoryBlock) -> MemoryFact:
     occurred = (
         ValidityInterval(
             valid_at=parse_timestamp(occurred_start, field="occurred_start"),
-            invalid_at=(
-                parse_timestamp(occurred_end, field="occurred_end")
-                if isinstance(occurred_end, str)
-                else None
-            ),
+            invalid_at=(parse_timestamp(occurred_end, field="occurred_end") if isinstance(occurred_end, str) else None),
         )
         if isinstance(occurred_start, str)
         else None

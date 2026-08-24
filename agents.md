@@ -9,16 +9,26 @@ Use:
 conda run -n "genie" python file_name.py
 conda run -n "genie" python -m pytest
 conda run -n "genie" python -m compileall -q genie tests examples lamps
+conda run -n "genie" ruff check .
 ```
+
+A plain `pytest` run skips the live Neo4j tests unless the optional `neo4j`
+package is installed and `GENIE_NEO4J_URI`, `GENIE_NEO4J_USER`, and
+`GENIE_NEO4J_PASSWORD` are set. Report such runs as partial rather than as a
+full pass. `scripts/test_full.sh` runs the complete suite against a disposable
+Neo4j container and needs Docker. `scripts/ruff_report.sh` regenerates
+`ruff_report.txt`.
 
 ## Library Purpose
 
 Genie is a utility library for developers building their own memory systems
 from typed memory blocks, parent/child ownership, typed relationships, scoped
 access, and optional composable structures. It also defines extension boundaries
-for backends, search, policies, hooks, and codecs. Genie should stay independent
-of agent frameworks, concrete databases and search engines, memory use cases,
-and stored value types.
+for backends, search indexes, policies, hooks, and codecs. Genie should stay
+independent of agent frameworks, memory use cases, stored value types, and any
+single database or search engine. Concrete storage adapters belong behind the
+backend contracts, stay optional, and must guard their third-party imports; the
+core package has no third-party runtime dependencies.
 
 Keep application business logic, memory taxonomies, agent behavior, storage
 layout, retrieval strategy, and domain-specific value meaning outside the core
@@ -47,9 +57,15 @@ subset, or all of them over the same memory blocks. Reuse existing facades when
 building higher-level structures instead of creating duplicate storage models.
 
 Genie is database-agnostic, not database-free. `InMemoryBackend` is the reference
-implementation for tests, examples, and local prototypes. Production adapters may
-use SQL, graph, vector, document, object, or composed storage while preserving the
-public backend contracts.
+implementation for tests, examples, and local prototypes. `SQLiteBackend` and
+`Neo4jBackend` are shipped adapters that show how the contracts map onto real
+stores; they must keep their third-party imports optional and raise
+`UnsupportedOperation` when a driver is missing. Other production adapters may
+use SQL, graph, vector, document, object, or composed storage while preserving
+the public backend contracts.
+
+Search is a backend capability (`SearchIndex`) with portable query and result
+types in `genie.query`, not a separate search engine integration point.
 
 Facades should depend on narrow backend capability protocols rather than concrete
 backend classes. Do not assume that every backend implements every optional
@@ -71,6 +87,8 @@ the size, risk, and user-facing impact of the change:
 - Keep docs and comments plain. Avoid fancy phrases when a direct and clearer wording/phrase works.
 - Keep public APIs clear and typed, with Google-style docstrings and predictable
   exceptions where they affect users.
+- Follow the formatting and lint configuration in `pyproject.toml` (ruff, black,
+  and isort at a 193-character line length) and keep `ruff check .` clean.
 - Prefer explicit, least-privilege behavior for scoped memory access and policy
   checks.
 - Add or update tests when behavior, public APIs, edge cases, or regressions are
@@ -91,6 +109,9 @@ the size, risk, and user-facing impact of the change:
 - Keep each lamp's tests under `lamps/<name>/tests`.
 - Organize small runnable examples under `examples/basic/` or
   `examples/advanced/` as appropriate.
+- Keep `docs/design.md` in sync with the public memory model, architecture, and
+  safety boundaries when they change.
+- Keep repository-wide developer scripts under `scripts/`.
 - Treat lamps as architectural demonstrations, not compatibility layers or
   production implementations. Document their concept mappings and deliberate
   limits.
