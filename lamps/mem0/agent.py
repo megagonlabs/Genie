@@ -1,31 +1,56 @@
-"""Agent-callable tools for the Mem0-inspired lamp.
+"""A tool interface and deterministic agent for the Mem0 lamp.
 
-The deterministic agent stands in for an LLM function-calling loop. It sees
-named JSON-compatible tools, while the underlying Genie handle remains private
-to the application adapter.
+Mem0 is used through a small set of calls, and the interesting thing about them
+is how little the caller controls. An agent hands over an exchange; what gets
+stored, replaced, or removed is decided by the pipeline, and the agent finds out
+afterwards by reading the events it returns. That asymmetry is why the tools
+here return the decisions rather than a success flag: the call log is where the
+agent's memory writes become inspectable.
+
+The user and agent identifiers are bound once, at construction, so no tool
+argument can name another user's memories. A run is a tool argument, because a
+run is one conversation and upstream passes it per call — but it can only narrow
+the bound scope, never leave it.
+
+The example agent chooses its calls from explicit inputs rather than from a
+model, which keeps the demo runnable with no API key. Extraction and the
+add-or-replace-or-forget judgment are the two steps that genuinely need a model
+upstream, so the agent receives candidate facts and relationships already formed.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
-from lamps.mem0.memory_store import (
-    ExtractedFactRecord,
-    Mem0Memory,
-    MemoryKind,
-    MemoryScope,
-    MentalModel,
+from lamps.mem0.client import Mem0Memory
+from lamps.mem0.model import (
+    FACTUAL,
+    PROCEDURAL,
+    Exchange,
+    Session,
+    facts_from_json,
+    json_mapping,
+    messages_from_json,
+    optional_text,
+    parse_timestamp,
+    required_text,
+    triplets_from_json,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """Description of one function presented to the example agent."""
+    """Description of a tool presented to an agent.
+
+    Attributes:
+        name: Stable tool name used for calls.
+        description: Plain-language guidance for the agent.
+        parameters: Mapping of argument names to short type descriptions.
+    """
 
     name: str
     description: str
@@ -33,39 +58,14 @@ class ToolDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryCandidate:
-    """Structured memory selected by the agent for storage."""
-
-    key: str
-    text: str
-    kind: MemoryKind = "fact"
-    entities: tuple[str, ...] = ()
-    occurred_at: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryUpdateCandidate:
-    """Update selected by the agent for a previously stored record."""
-
-    key: str
-    text: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class MentalModelCandidate:
-    """Synthesis selected by the agent after retaining atomic records."""
-
-    name: str
-    source_query: str
-    content: str
-    source_keys: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class ToolCallRecord:
-    """One inspectable tool call made by the deterministic agent."""
+    """One inspectable tool call made by the example agent.
+
+    Attributes:
+        name: Invoked tool name.
+        arguments: Copy of the JSON-compatible arguments.
+        result: Copy of the JSON-compatible result.
+    """
 
     name: str
     arguments: dict[str, Any]
@@ -73,394 +73,490 @@ class ToolCallRecord:
 
 
 class Mem0Tools:
-    """Expose a scope-bound subset of Mem0-inspired operations to an agent."""
+    """Scope-bound memory tools with JSON-compatible arguments."""
 
-    def __init__(self, store: Mem0Memory, *, scope: MemoryScope) -> None:
-        """Create tools that cannot escape one exact entity scope."""
+    def __init__(self, client: Mem0Memory, *, session: Session) -> None:
+        """Bind one tool set to one user and agent.
 
-        self._store = store
-        self._scope = scope
-        self.definitions = (
-            ToolDefinition(
-                name="add_memory",
-                description="Add one extracted fact or experience and deduplicate exact text.",
-                parameters={
-                    "text": "string",
-                    "kind": "fact | experience",
-                    "entities": "list[string]",
-                    "occurred_at": "optional ISO 8601 timestamp",
-                    "metadata": "object",
-                },
-            ),
-            ToolDefinition(
-                name="update_memory",
-                description="Replace record text or merge application metadata without changing its id.",
-                parameters={
-                    "memory_id": "memory id",
-                    "text": "optional string",
-                    "metadata": "optional object",
-                },
-            ),
-            ToolDefinition(
-                name="search_memories",
-                description="Rank scoped facts and experiences by text and entity matches.",
-                parameters={
-                    "query": "string",
-                    "kinds": "optional list[fact | experience]",
-                    "limit": "integer",
-                },
-            ),
-            ToolDefinition(
-                name="search_temporal",
-                description="Find memories whose event times fall in an inclusive interval.",
-                parameters={
-                    "start": "ISO 8601 timestamp",
-                    "end": "ISO 8601 timestamp",
-                    "kinds": "optional list[fact | experience]",
-                    "limit": "integer",
-                },
-            ),
-            ToolDefinition(
-                name="search_graph",
-                description="Traverse records linked because they mention a shared entity.",
-                parameters={
-                    "memory_id": "memory id",
-                    "max_depth": "integer",
-                    "limit": "integer",
-                },
-            ),
-            ToolDefinition(
-                name="create_mental_model",
-                description="Store a separate synthesis supported by selected memory ids.",
-                parameters={
-                    "name": "string",
-                    "source_query": "string",
-                    "content": "string",
-                    "source_memory_ids": "list[memory id]",
-                },
-            ),
-            ToolDefinition(
-                name="get_mental_model",
-                description="Retrieve one named synthesis from the bound scope.",
-                parameters={"name": "string"},
-            ),
-        )
+        Args:
+            client: Memory client the tools call.
+            session: Scope every call is made inside, normally naming the
+                user and agent only. A `run_id` on it becomes the default run,
+                which a call may replace; the user and agent cannot be named by
+                any tool argument at all.
+        """
+
+        self.client = client
+        self.session = session
+        self.definitions = _definitions(session, client)
         self._handlers: dict[str, Callable[..., dict[str, Any]]] = {
-            "add_memory": self._add_memory,
-            "update_memory": self._update_memory,
+            "add_memories": self._add_memories,
             "search_memories": self._search_memories,
-            "search_temporal": self._search_temporal,
-            "search_graph": self._search_graph,
-            "create_mental_model": self._create_mental_model,
-            "get_mental_model": self._get_mental_model,
+            "list_memories": self._list_memories,
+            "update_memory": self._update_memory,
+            "delete_memory": self._delete_memory,
+            "memory_history": self._memory_history,
+            "forget_scope": self._forget_scope,
         }
 
-    def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Invoke one named tool with JSON-compatible arguments."""
+    def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        """Invoke one named tool with JSON-compatible arguments.
+
+        Args:
+            name: Tool name.
+            arguments: JSON-compatible keyword arguments.
+
+        Returns:
+            The JSON-compatible tool result.
+
+        Raises:
+            ValueError: If the tool name is unknown.
+        """
 
         handler = self._handlers.get(name)
         if handler is None:
             raise ValueError(f"Unknown Mem0 tool {name!r}.")
         return handler(**arguments)
 
-    def _add_memory(
+    def scope(self, *, run: str | None = None, actor: str | None = None) -> Session:
+        """Return the session one call runs in.
+
+        Args:
+            run: Run to narrow to, or `None` to keep the bound run.
+            actor: Speaker to credit, or `None` to keep the bound one.
+
+        Returns:
+            A session inside the bound user and agent.
+        """
+
+        selected = optional_text(run, field="run")
+        return Session(
+            user_id=self.session.user_id,
+            agent_id=self.session.agent_id,
+            run_id=selected or self.session.run_id,
+            actor_id=optional_text(actor, field="actor") or self.session.actor_id,
+        )
+
+    def _add_memories(
         self,
         *,
-        text: str,
-        kind: MemoryKind = "fact",
-        entities: list[str] | None = None,
-        occurred_at: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        at: str,
+        messages: Sequence[Mapping[str, Any]] = (),
+        facts: Sequence[Mapping[str, Any]] = (),
+        relations: Sequence[Mapping[str, Any]] = (),
+        infer: bool = True,
+        memory_type: str = FACTUAL,
+        metadata: Mapping[str, Any] | None = None,
+        run: str | None = None,
+        actor: str | None = None,
     ) -> dict[str, Any]:
-        """Implement `add_memory`."""
+        """Implement `add_memories`, the whole two-phase write."""
 
-        record = self._store.add(
-            text,
-            scope=self._scope,
-            kind=kind,
-            entities=entities or (),
-            occurred_at=(_parse_timestamp(occurred_at, field="occurred_at") if occurred_at is not None else None),
-            metadata=metadata,
+        result = self.client.add(
+            self.scope(run=run, actor=actor),
+            messages_from_json(messages),
+            facts=facts_from_json(facts),
+            relations=triplets_from_json(relations),
+            infer=bool(infer),
+            memory_type=required_text(memory_type, field="memory_type"),
+            metadata=json_mapping(metadata, field="metadata") or None,
+            at=parse_timestamp(at, field="at"),
         )
-        return _record_result(record)
-
-    def _update_memory(
-        self,
-        *,
-        memory_id: str,
-        text: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Implement `update_memory`."""
-
-        return _record_result(
-            self._store.update(
-                memory_id,
-                scope=self._scope,
-                text=text,
-                metadata=metadata,
-            )
-        )
+        return result.as_json()
 
     def _search_memories(
         self,
         *,
         query: str,
-        kinds: list[MemoryKind] | None = None,
-        limit: int = 5,
+        filters: Mapping[str, Any] | None = None,
+        limit: int = 10,
+        threshold: float = 0.0,
+        run: str | None = None,
     ) -> dict[str, Any]:
-        """Implement `search_memories`."""
+        """Implement `search_memories` over the scope and the graph together."""
 
-        results = self._store.search(
+        result = self.client.search(
+            self.scope(run=run),
             query,
-            scope=self._scope,
-            kinds=kinds or (),
+            filters=json_mapping(filters, field="filters") or None,
             limit=limit,
+            threshold=threshold,
         )
-        return {
-            "memories": [
-                {
-                    **_record_result(result.memory),
-                    "score": result.score,
-                    "reasons": list(result.reasons),
-                }
-                for result in results
-            ]
-        }
+        return {"filters": json_mapping(filters, field="filters"), "threshold": threshold, **result.as_json()}
 
-    def _search_temporal(
+    def _list_memories(
         self,
         *,
-        start: str,
-        end: str,
-        kinds: list[MemoryKind] | None = None,
-        limit: int = 20,
+        filters: Mapping[str, Any] | None = None,
+        limit: int = 100,
+        run: str | None = None,
     ) -> dict[str, Any]:
-        """Implement `search_temporal`."""
+        """Implement `list_memories` for one scope."""
 
-        memories = self._store.search_temporal(
-            _parse_timestamp(start, field="start"),
-            _parse_timestamp(end, field="end"),
-            scope=self._scope,
-            kinds=kinds or (),
-            limit=limit,
-        )
-        return {"memories": [_record_result(memory) for memory in memories]}
+        scope = self.scope(run=run)
+        memories = self.client.get_all(scope, filters=json_mapping(filters, field="filters") or None, limit=limit)
+        return {
+            "scope": scope.label,
+            "results": [memory.as_json() for memory in memories],
+            "relations": [relation.as_json() for relation in self.client.relations(scope)],
+        }
 
-    def _search_graph(
+    def _update_memory(
         self,
         *,
         memory_id: str,
-        max_depth: int = 1,
-        limit: int = 20,
+        text: str,
+        at: str,
+        metadata: Mapping[str, Any] | None = None,
+        actor: str | None = None,
     ) -> dict[str, Any]:
-        """Implement `search_graph`."""
+        """Implement `update_memory`, the caller's own correction."""
 
-        results = self._store.search_graph(
+        change = self.client.update(
             memory_id,
-            scope=self._scope,
-            max_depth=max_depth,
-            limit=limit,
+            text,
+            metadata=json_mapping(metadata, field="metadata") or None,
+            actor_id=optional_text(actor, field="actor"),
+            at=parse_timestamp(at, field="at"),
         )
+        return change.as_json()
+
+    def _delete_memory(self, *, memory_id: str, at: str, actor: str | None = None) -> dict[str, Any]:
+        """Implement `delete_memory`, the caller's own removal."""
+
+        change = self.client.delete(
+            memory_id,
+            actor_id=optional_text(actor, field="actor"),
+            at=parse_timestamp(at, field="at"),
+        )
+        return change.as_json()
+
+    def _memory_history(self, *, memory_id: str) -> dict[str, Any]:
+        """Implement `memory_history` for one memory, deleted or not."""
+
+        entries = self.client.history(memory_id)
         return {
-            "memories": [
-                {
-                    **_record_result(result.memory),
-                    "shared_entities": list(result.shared_entities),
-                    "direction": result.direction,
-                    "distance": result.distance,
-                }
-                for result in results
-            ]
+            "memory_id": memory_id,
+            "exists": self.client.get(memory_id) is not None,
+            "events": [entry.as_json() for entry in entries],
         }
 
-    def _create_mental_model(
-        self,
-        *,
-        name: str,
-        source_query: str,
-        content: str,
-        source_memory_ids: list[str],
-    ) -> dict[str, Any]:
-        """Implement `create_mental_model`."""
+    def _forget_scope(self, *, at: str, run: str | None = None) -> dict[str, Any]:
+        """Implement `forget_scope`, one subtree delete for a whole scope."""
 
-        model = self._store.create_mental_model(
-            name=name,
-            source_query=source_query,
-            content=content,
-            source_memory_ids=source_memory_ids,
-            scope=self._scope,
-        )
-        return _mental_model_result(model)
-
-    def _get_mental_model(self, *, name: str) -> dict[str, Any]:
-        """Implement `get_mental_model`."""
-
-        model = self._store.get_mental_model(name, scope=self._scope)
-        return {"mental_model": _mental_model_result(model) if model is not None else None}
-
-    def __iter__(self) -> Iterator[ToolDefinition]:
-        """Iterate over tool definitions for display or registration."""
-
-        return iter(self.definitions)
+        scope = self.scope(run=run)
+        changes = self.client.delete_all(scope, at=parse_timestamp(at, field="at"))
+        return {"scope": scope.label, "removed": [change.as_json() for change in changes]}
 
 
+@dataclass(slots=True)
 class Mem0Agent:
-    """Deterministic agent that learns and answers only through named tools."""
+    """A deterministic agent whose only memory access is the tool set.
 
-    def __init__(self, *, name: str, tools: Mem0Tools) -> None:
-        """Create an agent with a tool adapter and no direct memory access."""
+    Attributes:
+        name: Agent name shown in the demo output.
+        tools: Scope-bound tool set.
+        call_log: Every call the agent made, in order.
+    """
 
-        self.name = name
-        self.tools = tools
-        self.tool_calls: list[ToolCallRecord] = []
-        self._memory_ids: dict[str, str] = {}
+    name: str
+    tools: Mem0Tools
+    call_log: list[ToolCallRecord] = field(default_factory=list)
 
-    def learn(
-        self,
-        *,
-        memories: tuple[MemoryCandidate, ...],
-        updates: tuple[MemoryUpdateCandidate, ...] = (),
-        mental_model: MentalModelCandidate | None = None,
-    ) -> None:
-        """Use write tools to retain, revise, link, and synthesize memories."""
+    def learn(self, exchange: Exchange, *, at: str, run: str | None = None, metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Hand one exchange to the pipeline and read back what it decided.
 
-        for candidate in memories:
-            result = self._call(
-                "add_memory",
-                {
-                    "text": candidate.text,
-                    "kind": candidate.kind,
-                    "entities": list(candidate.entities),
-                    "occurred_at": candidate.occurred_at,
-                    "metadata": deepcopy(candidate.metadata),
-                },
-            )
-            self._memory_ids[candidate.key] = result["id"]
-        for update_candidate in updates:
-            memory_id = self._memory_ids.get(update_candidate.key)
-            if memory_id is None:
-                raise ValueError(f"Unknown memory key {update_candidate.key!r}.")
-            arguments: dict[str, Any] = {
-                "memory_id": memory_id,
-                "text": update_candidate.text,
-                "metadata": deepcopy(update_candidate.metadata) or None,
-            }
-            self._call("update_memory", arguments)
-        if mental_model is not None:
-            source_ids = [self._required_memory_id(key) for key in mental_model.source_keys]
-            self._call(
-                "create_mental_model",
-                {
-                    "name": mental_model.name,
-                    "source_query": mental_model.source_query,
-                    "content": mental_model.content,
-                    "source_memory_ids": source_ids,
-                },
-            )
+        Args:
+            exchange: Turns, candidate facts, and candidate relationships.
+            at: ISO 8601 time recorded on every write the call makes.
+            run: Run to write in, defaulting to the bound one.
+            metadata: Application metadata to keep with each memory.
 
-    def answer(
-        self,
-        question: str,
-        *,
-        query: str,
-        start: str,
-        end: str,
-        graph_anchor: str,
-        mental_model_name: str,
-    ) -> str:
-        """Use semantic, temporal, graph, and model tools to answer a question."""
+        Returns:
+            The memory events and relationship changes the call produced.
+        """
 
-        semantic = self._call(
+        return self._call(
+            "add_memories",
+            {
+                "messages": [message.as_json() for message in exchange.messages],
+                "facts": [
+                    {"text": fact.text, "retracts": fact.retracts, "actor_id": fact.actor_id, "role": fact.role}
+                    for fact in exchange.facts
+                ],
+                "relations": [
+                    {
+                        "source": triplet.source,
+                        "relationship": triplet.relation,
+                        "destination": triplet.target,
+                        "retracts": triplet.retracts,
+                    }
+                    for triplet in exchange.relations
+                ],
+                "at": at,
+                "run": run,
+                "metadata": dict(metadata) if metadata else None,
+            },
+        )
+
+    def transcribe(self, exchange: Exchange, *, at: str, run: str | None = None) -> dict[str, Any]:
+        """Store an exchange as it was said, with no extraction at all.
+
+        Args:
+            exchange: Turns to keep verbatim.
+            at: ISO 8601 time recorded on the writes.
+            run: Run to write in, defaulting to the bound one.
+
+        Returns:
+            One `ADD` per kept turn.
+        """
+
+        return self._call(
+            "add_memories",
+            {
+                "messages": [message.as_json() for message in exchange.messages],
+                "infer": False,
+                "at": at,
+                "run": run,
+            },
+        )
+
+    def summarize(self, exchange: Exchange, summary: str, *, at: str, run: str | None = None) -> dict[str, Any]:
+        """Store one procedural summary of how a task was carried out.
+
+        Args:
+            exchange: Turns the summary was written from.
+            summary: The summary a model would have produced.
+            at: ISO 8601 time recorded on the write.
+            run: Run to write in, defaulting to the bound one.
+
+        Returns:
+            The single `ADD` the write produced.
+        """
+
+        return self._call(
+            "add_memories",
+            {
+                "messages": [message.as_json() for message in exchange.messages],
+                "facts": [{"text": summary}],
+                "memory_type": PROCEDURAL,
+                "at": at,
+                "run": run,
+            },
+        )
+
+    def revise(self, memory_id: str, text: str, *, at: str, actor: str | None = None) -> dict[str, Any]:
+        """Correct one memory directly, without asking the pipeline.
+
+        Args:
+            memory_id: Memory to rewrite.
+            text: Replacement text.
+            at: ISO 8601 time recorded on the write.
+            actor: Who asked for the correction.
+
+        Returns:
+            The change that was applied.
+        """
+
+        return self._call("update_memory", {"memory_id": memory_id, "text": text, "at": at, "actor": actor})
+
+    def discard(self, memory_id: str, *, at: str, actor: str | None = None) -> dict[str, Any]:
+        """Delete one memory because the caller asked for it to go.
+
+        Args:
+            memory_id: Memory to delete.
+            at: ISO 8601 time recorded on the history row.
+            actor: Who asked for the deletion.
+
+        Returns:
+            The change that was applied, carrying the deleted memory.
+        """
+
+        return self._call("delete_memory", {"memory_id": memory_id, "at": at, "actor": actor})
+
+    def forget(self, *, at: str, run: str | None = None) -> dict[str, Any]:
+        """Retire one scope and everything stored below it.
+
+        Args:
+            at: ISO 8601 time recorded on every history row.
+            run: Run to retire, or `None` to retire the whole bound scope.
+
+        Returns:
+            The memories that were removed.
+        """
+
+        return self._call("forget_scope", {"at": at, "run": run})
+
+    def inspect(self, memory_id: str) -> dict[str, Any]:
+        """Read every recorded change to one memory.
+
+        Args:
+            memory_id: Memory to read the history of.
+
+        Returns:
+            The events, and whether the memory itself still exists.
+        """
+
+        return self._call("memory_history", {"memory_id": memory_id})
+
+    def answer(self, question: str, *, query: str, memory_id: str, limit: int = 3, threshold: float = 0.0) -> str:
+        """Answer from the memories, the relationships, and one memory's past.
+
+        Args:
+            question: User-facing question included in the report.
+            query: Retrieval text for the search.
+            memory_id: Memory whose history is shown, to make the pipeline's
+                decisions visible in the answer.
+            limit: Maximum search hits to show.
+            threshold: Minimum score a hit must reach.
+
+        Returns:
+            Readable answer assembled from tool results.
+        """
+
+        found = self._call(
             "search_memories",
-            {"query": query, "kinds": ["fact", "experience"], "limit": 4},
-        )["memories"]
-        temporal = self._call(
-            "search_temporal",
-            {"start": start, "end": end, "kinds": ["experience"], "limit": 10},
-        )["memories"]
-        graph = self._call(
-            "search_graph",
-            {"memory_id": self._required_memory_id(graph_anchor), "max_depth": 1, "limit": 10},
-        )["memories"]
-        model = self._call("get_mental_model", {"name": mental_model_name})["mental_model"]
-
-        preference = semantic[0]["memory"] if semantic else "No matching preference was found."
-        timeline = _format_bullets(
-            (memory["memory"] for memory in temporal),
-            empty="No events found.",
+            {"query": query, "limit": limit, "threshold": threshold, "filters": {"memory_type": FACTUAL}},
         )
-        connected = _format_bullets(
-            (memory["memory"] for memory in graph),
-            empty="No related memories.",
-        )
-        synthesis = model["content"] if model is not None else "No mental model is available."
-        return f"Question: {question}\n" f"Plan: {synthesis}\n" f"Best matching memory: {preference}\n" f"Prior experience timeline:\n{timeline}\n" f"Shared-entity context:\n{connected}"
-
-    def memory_id(self, key: str) -> str:
-        """Return the stored id for a demo candidate key."""
-
-        return self._required_memory_id(key)
+        procedure = self._call("list_memories", {"filters": {"memory_type": PROCEDURAL}, "limit": limit})
+        past = self._call("memory_history", {"memory_id": memory_id})
+        lines = [
+            f"Question: {question}",
+            f"Relevant memories for {query!r}:",
+            *_memory_lines(found["results"]),
+            "Related entities:",
+            *_relation_lines(found["relations"]),
+            "How this was handled before:",
+            *_memory_lines(procedure["results"]),
+            f"How the top memory reached its current wording (v{_version(past['events'])}):",
+            *_history_lines(past["events"]),
+        ]
+        return "\n".join(lines)
 
     def tool_usage(self) -> dict[str, int]:
-        """Return counts of inspectable calls made by the agent."""
+        """Return call counts per tool in first-call order.
 
-        return dict(Counter(call.name for call in self.tool_calls))
+        Returns:
+            Tool names mapped to how often the agent called them.
+        """
 
-    def _required_memory_id(self, key: str) -> str:
-        memory_id = self._memory_ids.get(key)
-        if memory_id is None:
-            raise ValueError(f"Unknown memory key {key!r}.")
-        return memory_id
+        return dict(Counter(record.name for record in self.call_log))
 
     def _call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = self.tools.call(name, arguments)
-        self.tool_calls.append(ToolCallRecord(name, deepcopy(arguments), deepcopy(result)))
+        """Call one tool and retain an isolated trace record."""
+
+        result = self.tools.call(name, {key: value for key, value in arguments.items() if value is not None})
+        self.call_log.append(ToolCallRecord(name=name, arguments=deepcopy(arguments), result=deepcopy(result)))
         return result
 
 
-def _record_result(record: ExtractedFactRecord) -> dict[str, Any]:
-    """Return the JSON-compatible extracted-memory record."""
+def _definitions(session: Session, client: Mem0Memory) -> tuple[ToolDefinition, ...]:
+    """Describe the tool set, including the scope every call is made inside."""
 
-    return record.canonical_value()
+    bound = "/".join(session.path[:2])
+    floor = client.updater.threshold
+    return (
+        ToolDefinition(
+            name="add_memories",
+            description=(
+                f"Extract memories from an exchange and reconcile them against {bound}. "
+                f"Each candidate becomes ADD, UPDATE, DELETE, or NONE at a {floor} similarity floor."
+            ),
+            parameters={
+                "messages": "list of {role, content, name}",
+                "facts": "list of {text, retracts} a model would have extracted",
+                "relations": "list of {source, relationship, destination, retracts}",
+                "infer": "false stores the turns verbatim instead",
+                "memory_type": "factual or procedural_memory",
+                "metadata": "optional metadata kept and indexed with each memory",
+                "at": "ISO 8601 timestamp",
+                "run": "optional run inside the bound scope",
+                "actor": "optional speaker to credit",
+            },
+        ),
+        ToolDefinition(
+            name="search_memories",
+            description=f"Search memories below {bound} and return the relationships beside them.",
+            parameters={
+                "query": "string",
+                "filters": "optional metadata filter, such as {'memory_type': 'factual'}",
+                "limit": "integer",
+                "threshold": "minimum score, from zero to one",
+                "run": "optional run inside the bound scope",
+            },
+        ),
+        ToolDefinition(
+            name="list_memories",
+            description=f"List every memory below {bound}, or below one run inside it.",
+            parameters={
+                "filters": "optional metadata filter",
+                "limit": "integer",
+                "run": "optional run inside the bound scope",
+            },
+        ),
+        ToolDefinition(
+            name="update_memory",
+            description="Rewrite one memory by id, keeping the id and recording the old wording.",
+            parameters={
+                "memory_id": "string",
+                "text": "replacement memory",
+                "metadata": "optional metadata to merge",
+                "at": "ISO 8601 timestamp",
+                "actor": "optional speaker to credit",
+            },
+        ),
+        ToolDefinition(
+            name="delete_memory",
+            description="Delete one memory by id. Its recorded history stays readable.",
+            parameters={"memory_id": "string", "at": "ISO 8601 timestamp", "actor": "optional speaker to credit"},
+        ),
+        ToolDefinition(
+            name="memory_history",
+            description="Read every ADD, UPDATE, and DELETE recorded for one memory.",
+            parameters={"memory_id": "string"},
+        ),
+        ToolDefinition(
+            name="forget_scope",
+            description=f"Retire {bound}, or one run inside it, with everything stored below it.",
+            parameters={"at": "ISO 8601 timestamp", "run": "optional run inside the bound scope"},
+        ),
+    )
 
 
-def _format_bullets(values: Iterable[str], *, empty: str) -> str:
-    """Format readable evidence lines for the agent answer."""
+def _memory_lines(results: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render stored memories for the agent's answer, or say there were none."""
 
-    items = list(values)
-    return "\n".join(f"- {item}" for item in items) if items else f"- {empty}"
-
-
-def _mental_model_result(model: MentalModel) -> dict[str, Any]:
-    """Return a JSON-compatible synthesized-document view."""
-
-    return {
-        "id": model.id,
-        "name": model.name,
-        "source_query": model.source_query,
-        "content": model.content,
-        "source_memory_ids": list(model.source_memory_ids),
-        "created_at": _format_timestamp(model.created_at),
-        "updated_at": _format_timestamp(model.updated_at),
-    }
+    if not results:
+        return ["- none"]
+    return [f"- {result['memory']} (v{result['version']}{_score(result)})" for result in results]
 
 
-def _parse_timestamp(value: str, *, field: str) -> datetime:
-    """Parse an aware ISO 8601 timestamp."""
+def _relation_lines(relations: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render relationships for the agent's answer, or say there were none."""
 
-    if not isinstance(value, str):
-        raise TypeError(f"{field} must be an ISO 8601 timestamp.")
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(f"{field} must be an ISO 8601 timestamp.") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"{field} must include a timezone.")
-    return parsed
+    if not relations:
+        return ["- none"]
+    return [f"- {relation['source']} {relation['relationship']} {relation['destination']}" for relation in relations]
 
 
-def _format_timestamp(value: datetime) -> str:
-    """Format a timestamp in UTC form."""
+def _history_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render one memory's recorded changes for the agent's answer."""
 
-    return value.isoformat().replace("+00:00", "Z")
+    if not events:
+        return ["- none"]
+    return [
+        f"- {event['event']}: {event['old_memory'] or 'nothing on file'} -> {event['new_memory'] or 'deleted'}"
+        for event in events
+    ]
+
+
+def _score(result: Mapping[str, Any]) -> str:
+    """Render a hit's score, when the result carries one."""
+
+    return "" if "score" not in result else f", score {result['score']}"
+
+
+def _version(events: Sequence[Mapping[str, Any]]) -> int:
+    """Return how many recorded changes a memory has."""
+
+    return len(events)
