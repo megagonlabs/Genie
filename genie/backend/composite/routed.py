@@ -163,8 +163,9 @@ class RoutedBackend:
 
     The composite implements the core `MemoryBackend` contract only. It owns no
     structural state, so it does not implement the optional structure capability
-    protocols in `genie.backend.structure_capabilities`. Use `backend_for_block`
-    to reach the route that does.
+    protocols in `genie.backend.structure_capabilities`. It does implement
+    `BlockRouter`, so passing it as a structure facade's store resolves to the
+    route that does.
     """
 
     def __init__(
@@ -549,13 +550,11 @@ class RoutedBackend:
         This is the routing primitive. Every route-local operation resolves its
         target backend through this method instead of reading `routes` directly.
 
-        Applications use it to reach a route's optional capabilities.
-        `RoutedBackend` implements the core `MemoryBackend` contract only, so a
-        structure facade takes the owning route as its store while the access
-        object stays the composite-backed `Memory`:
-
-            log_route = backend.backend_for_block(log_root.id)
-            log = EventLog(memory, log_route, log=log_root)
+        It reports ownership. A structure facade does not need it: pass the
+        composite as the facade's store and it resolves the owning route through
+        `BlockRouter`. Resolve by hand only to use a route's optional
+        capabilities directly, and check the capability first, because
+        `MemoryBackend` does not include the optional structure protocols.
 
         Because a tree never spans routes, the backend returned for a container
         block also owns every block in that container's subtree.

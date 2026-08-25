@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from genie.backend.base import BlockRouter
 from genie.backend.structure_capabilities import KeyedStore, SequenceStore
 from genie.hooks import HookRegistry
 from genie.memory.block import MemoryBlock
@@ -47,7 +48,7 @@ class VersionedRecords:
     def __init__(
         self,
         access: VersionedAccess,
-        store: VersionedStore,
+        store: VersionedStore | BlockRouter,
         *,
         collection: BlockRef,
         hooks: HookRegistry | None = None,
@@ -56,7 +57,9 @@ class VersionedRecords:
 
         Args:
             access: Full or scoped memory access used to resolve every block.
-            store: Backend implementing keyed and sequence capabilities.
+            store: Backend implementing keyed and sequence capabilities, or a
+                routing backend that resolves to the route holding the
+                collection.
             collection: Block or id that owns the record address space.
             hooks: Optional registry forwarded to the reused keyed collection
                 and event logs. Defaults to the access object's registry.

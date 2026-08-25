@@ -873,6 +873,9 @@ def test_structure_facade_binds_through_backend_for_block() -> None:
 
     log_route = backend.backend_for_block(log_root.id)
     assert log_route is route_a
+    # `MemoryBackend` excludes the optional structure protocols, so a hand
+    # resolved route is checked for the capability before it is used as a store.
+    assert isinstance(log_route, SequenceStore)
     events = EventLog(memory, log_route, log=log_root)
     events.append(event)
 

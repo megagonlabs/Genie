@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 
+from genie.backend.base import BlockRouter
 from genie.backend.structure_capabilities import TemporalIndex, TemporalStore
 from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
@@ -52,21 +53,24 @@ class TemporalCollection:
     def __init__(
         self,
         access: TemporalAccess,
-        store: TemporalStore,
+        store: TemporalStore | BlockRouter,
         *,
         collection: BlockRef,
-        index: TemporalIndex | None = None,
+        index: TemporalIndex | BlockRouter | None = None,
         hooks: HookRegistry | None = None,
     ) -> None:
         """Create a temporal view anchored by a visible collection block.
 
         Args:
             access: Full or scoped memory access used to resolve blocks.
-            store: Backend capability that persists temporal membership.
+            store: Backend capability that persists temporal membership, or a
+                routing backend that resolves to the route holding the
+                collection.
             collection: Block or id that identifies this temporal collection.
             index: Optional efficient temporal query index. When omitted, the
                 store is used as the index if it implements `TemporalIndex`;
-                otherwise queries use a portable paged scan.
+                otherwise queries use a portable paged scan. A routing backend
+                resolves to the route holding the collection.
             hooks: Optional registry. Defaults to the registry owned by a
                 `Memory` or `MemoryHandle` access object.
 

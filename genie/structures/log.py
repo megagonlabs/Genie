@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from genie.backend.base import BlockRouter
 from genie.backend.structure_capabilities import SequenceStore
 from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
@@ -47,7 +48,7 @@ class EventLog:
     def __init__(
         self,
         access: SequenceAccess,
-        store: SequenceStore,
+        store: SequenceStore | BlockRouter,
         *,
         log: BlockRef,
         hooks: HookRegistry | None = None,
@@ -56,7 +57,8 @@ class EventLog:
 
         Args:
             access: Full or scoped memory access used to resolve blocks.
-            store: Backend capability that appends entries atomically.
+            store: Backend capability that appends entries atomically, or a
+                routing backend that resolves to the route holding the log.
             log: Block or id that identifies this ordered log.
             hooks: Optional registry. Defaults to the registry owned by a
                 `Memory` or `MemoryHandle` access object.

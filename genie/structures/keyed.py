@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Protocol, runtime_checkable
 
+from genie.backend.base import BlockRouter
 from genie.backend.structure_capabilities import KeyedStore
 from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
@@ -48,7 +49,7 @@ class KeyedCollection:
     def __init__(
         self,
         access: KeyedAccess,
-        store: KeyedStore,
+        store: KeyedStore | BlockRouter,
         *,
         collection: BlockRef,
         hooks: HookRegistry | None = None,
@@ -57,7 +58,9 @@ class KeyedCollection:
 
         Args:
             access: Full or scoped memory access used to resolve blocks.
-            store: Backend capability that stores key bindings atomically.
+            store: Backend capability that stores key bindings atomically, or a
+                routing backend that resolves to the route holding the
+                collection.
             collection: Block or id that identifies this collection's key space.
             hooks: Optional registry. Defaults to the registry owned by a
                 `Memory` or `MemoryHandle` access object.
