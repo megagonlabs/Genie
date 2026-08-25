@@ -1,7 +1,7 @@
 # Queries
 
-`genie.query` defines portable search requests and results without choosing a
-ranking method or search engine.
+`genie.query` defines portable search requests and results. It does not choose a
+ranking method or a search engine for you.
 
 ## Requests and scopes
 
@@ -16,18 +16,19 @@ results = memory.search(
 )
 ```
 
-`Memory.search` normalizes friendly arguments into `MemoryQuery`: optional
-text and root id, one scope, optional block types and filters, and a
-non-negative limit. Backends return ranked `SearchResult` values containing a
-block, finite numeric score, and reason. Query construction validates runtime
-types and copies caller-owned type lists and nested filter operands.
+`Memory.search` turns these friendly arguments into a `MemoryQuery`: optional
+text, an optional root id, one scope, optional block types and filters, and a
+limit that cannot be negative. Backends return ranked `SearchResult` values.
+Each one holds a block, a finite numeric score, and a reason. Building a query
+checks the runtime types, and it copies the type lists and nested filter
+operands that the caller owns.
 
-The limit bounds what a backend returns, not what a caller receives. A backend
-applies it before `Memory` removes results the principal cannot see and results
-outside the query scope, so a search can return fewer results than the limit
-even when more matching blocks exist. There is no result cursor: a caller that
-needs a full page requests a larger limit and truncates the result itself, and
-decides how much extra backend work that is worth.
+The limit bounds what a backend returns, not what the caller receives. The
+backend applies the limit first. Then `Memory` removes results that the
+principal cannot see and results outside the query scope. So a search can return
+fewer results than the limit even when more matching blocks exist. There is no
+result cursor. A caller who needs a full page asks for a larger limit and cuts
+the list itself, and decides how much extra backend work that is worth.
 
 | Scope | Search area |
 | --- | --- |
@@ -35,28 +36,29 @@ decides how much extra backend work that is worth.
 | `subtree` | Root and descendants |
 | `ancestors` | Root and ancestors |
 | `links` | Blocks linked to the root |
-| `global` | All backend-visible blocks |
+| `global` | All blocks the backend can see |
 
-Scopes other than `global` require a root when searching through `Memory`.
+Every scope except `global` needs a root when you search through `Memory`.
 
-Each scope is resolved from stored state rather than from the query: `subtree`
-and `ancestors` from stored parents, and `links` from stored links. A search
-index that holds neither needs traversal and link access to resolve them.
+Each scope is resolved from stored state, not from the query: `subtree` and
+`ancestors` come from stored parents, and `links` comes from stored links. A
+search index that holds neither one needs traversal and link access to resolve
+them.
 
 No scope resolves structure membership. Key bindings, log entries, temporal
-entries, and revisions record membership by block id without changing stored
-parents, so a search rooted at a container block finds only the members the
+entries, and revisions record membership by block id and do not change stored
+parents. So a search rooted at a container block finds only the members that the
 application also created as children of that container.
 
-A bounded handle cannot use search to escape its root or enable global or
-ancestor access that the handle disables.
+A bounded handle cannot use search to escape its root. It also cannot use search
+to turn on global or ancestor access that the handle has disabled.
 
 ## Filters
 
-Filters address block fields or metadata such as `metadata.priority`.
-Unprefixed names use declared `MemoryBlock` fields first, then metadata. `$in`
-requires a list-like collection; invalid or empty operator maps fail closed.
-Operators normalize as follows:
+A filter addresses a block field or a metadata field such as
+`metadata.priority`. A name with no prefix matches a declared `MemoryBlock`
+field first, then metadata. `$in` needs a list-like collection. An invalid or
+empty operator map fails closed. Operators are normalized like this:
 
 | Friendly | Canonical |
 | --- | --- |
@@ -66,21 +68,22 @@ Operators normalize as follows:
 | `<`, `<=` | `$lt`, `$lte` |
 | `in` | `$in` |
 
-`InMemoryBackend`, `SQLiteBackend`, and `Neo4jBackend` use the same portable
-matcher. Persistent adapters scan candidates in the requested scope. Other
-adapters may use richer indexes while preserving public query meaning.
+`InMemoryBackend`, `SQLiteBackend`, and `Neo4jBackend` all use the same portable
+matcher. The persistent adapters scan candidates inside the requested scope.
+Other adapters may use richer indexes, as long as the public meaning of a query
+stays the same.
 
 ## Authorization flow
 
 1. Genie checks the requested root and scope.
-2. `before_search` may modify the normalized query.
-3. Genie authorizes the modified query again.
+2. `before_search` may change the normalized query.
+3. Genie authorizes the changed query again.
 4. The backend searches.
-5. Genie decodes and policy-filters results.
+5. Genie decodes the results and filters them by policy.
 6. `after_search` may filter or reorder them.
-7. Genie reapplies scope and policy filtering.
+7. Genie applies the scope and policy filters one more time.
 
-This prevents hooks or backend results from widening access.
+This is what stops a hook or a backend result from widening access.
 
 Related: [Memory](../memory/README.md), [Backends](../backend/README.md),
 [Policies](../policy/README.md), and [Hooks](../hooks/README.md).

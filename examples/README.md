@@ -1,7 +1,7 @@
 # Examples
 
-Examples are runnable from the repository root, contain plain assertions, and
-use the project Conda environment:
+Every example runs from the repository root, uses plain assertions, and runs in
+the project Conda environment:
 
 ```bash
 conda run -n "genie" python examples/<path>.py
@@ -12,28 +12,28 @@ conda run -n "genie" python examples/<path>.py
 1. [`basic/crud_blocks.py`](basic/crud_blocks.py): block CRUD, versions,
    ownership traversal, and recursive deletion.
 2. [`basic/block_presence.py`](basic/block_presence.py): subtree membership
-   tests, and which absences are answers rather than errors.
+   tests, and which missing blocks are an answer rather than an error.
 3. [`basic/search_filters.py`](basic/search_filters.py): friendly search,
-   portable queries/results, scopes, types, and metadata filters.
+   portable queries and results, scopes, types, and metadata filters.
 4. [`basic/scoped_agents.py`](basic/scoped_agents.py): bounded handles for
    agents and sub-agents.
 5. [`basic/links.py`](basic/links.py): typed links, metadata updates, mounts,
    and linked search.
-6. [`basic/acyclic_links.py`](basic/acyclic_links.py): keep one relation acyclic
-   with atomic cycle-checked inserts.
+6. [`basic/acyclic_links.py`](basic/acyclic_links.py): keep one relation free of
+   cycles with atomic, cycle-checked inserts.
 7. [`basic/mounted_handles.py`](basic/mounted_handles.py): mount access as a
    handle capability that does not widen the subtree.
 8. [`basic/policies.py`](basic/policies.py): private defaults and shared access.
 9. [`basic/hook_audit.py`](basic/hook_audit.py): the hook audit surface, from
    scopes and traversal events to refusals and suppression windows.
-10. [`basic/write_hooks.py`](basic/write_hooks.py): transform and observe every
+10. [`basic/write_hooks.py`](basic/write_hooks.py): change and observe every
     write, and refuse one from a hook.
 11. [`basic/search_hooks.py`](basic/search_hooks.py): rewrite a query and review
     its results with transforming hooks.
 12. [`basic/custom_codecs.py`](basic/custom_codecs.py): write your own codec and
-    inspect the payload it stores.
-13. [`basic/stdlib_codecs.py`](basic/stdlib_codecs.py): opt-in stdlib codecs and
-    raw payloads.
+    look at the payload it stores.
+13. [`basic/stdlib_codecs.py`](basic/stdlib_codecs.py): opt-in standard-library
+    codecs and raw payloads.
 14. [`basic/routed_backend.py`](basic/routed_backend.py): route blocks across
     stores.
 15. [`basic/sqlite_persistence.py`](basic/sqlite_persistence.py): close and
@@ -42,20 +42,20 @@ conda run -n "genie" python examples/<path>.py
     one backend from SQL blocks, a graph topology index, and a vector search
     index.
 
-[`basic/basic_usage.py`](basic/basic_usage.py) combines handles, ownership,
-search, links, policies, hooks, dataclass codecs, and stdlib codecs in one agent
-workflow. See the [basic guide](basic/README.md).
+[`basic/basic_usage.py`](basic/basic_usage.py) puts handles, ownership, search,
+links, policies, hooks, dataclass codecs, and standard-library codecs together
+in one agent workflow. See the [basic guide](basic/README.md).
 
 ## Advanced structures
 
 - [`advanced/temporal_collection.py`](advanced/temporal_collection.py): event
   time, validity periods, and combined temporal filters.
-- [`advanced/graph_traversal.py`](advanced/graph_traversal.py): bounded
-  multi-hop walks in both directions, and edge annotation.
+- [`advanced/graph_traversal.py`](advanced/graph_traversal.py): multi-hop walks
+  in both directions with a depth limit, and edge annotation.
 - [`advanced/versioned_catalog.py`](advanced/versioned_catalog.py): list
   registered records by namespace, and retire one by pruning its subtree.
-- [`advanced/agent_memory.py`](advanced/agent_memory.py): an application-owned
-  task memory composed from keyed preconditions, an experiment log, and a
+- [`advanced/agent_memory.py`](advanced/agent_memory.py): a task memory owned by
+  the application, built from keyed preconditions, an experiment log, and a
   property graph.
 - [`advanced/experiment_memory.py`](advanced/experiment_memory.py): all seven
   structures, their shared records, and atomic lineage protection in one
@@ -64,21 +64,21 @@ workflow. See the [basic guide](basic/README.md).
   events, so an audit trail records how memory was organized as well as what it
   stored.
 - [`advanced/facade_containers.py`](advanced/facade_containers.py): the ordinary
-  block each facade is bound to, and what happens when it is deleted.
+  block that each facade is bound to, and what happens when it is deleted.
 
 See the [advanced guide](advanced/README.md).
 
 ## Conventions
 
-- `InMemoryBackend` makes local storage explicit and dependency-free.
-- `SQLiteBackend` demonstrates that the same APIs work with persistent storage.
-- Agent examples use rooted handles; unbounded handles appear only for trusted
+- `InMemoryBackend` makes local storage explicit and needs no extra packages.
+- `SQLiteBackend` shows that the same APIs work with persistent storage.
+- Agent examples use rooted handles. Unbounded handles appear only for trusted
   administrative or routing behavior.
-- Application types and agent decisions stay in example code.
-- Production code can use `SQLiteBackend` for local persistence or another
+- Application types and agent decisions stay in the example code.
+- Production code can use `SQLiteBackend` for local persistence, or another
   adapter with suitable storage, search, and operational behavior.
 
-Neo4j is covered in the [backend guide](../genie/backend/README.md) rather than
-in a runnable example because it requires a separately configured service. The
-backend protocols and operational errors are adapter-author APIs and are also
-documented there instead of being presented as application workflows.
+Neo4j is covered in the [backend guide](../genie/backend/README.md) instead of a
+runnable example, because it needs a separately configured service. The backend
+protocols and operational errors are APIs for adapter authors, so they are
+documented there too rather than shown as application workflows.

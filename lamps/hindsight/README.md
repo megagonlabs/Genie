@@ -1,13 +1,14 @@
 # Hindsight-inspired agent memory
 
-Hindsight is a memory service for agents that are meant to improve. It retains
-source payloads and extracts facts from them, keeps what the agent did apart
-from what the agent knows, consolidates related facts into evidence-backed
-observations that are refined rather than overwritten, keeps standing answers
-current in the background, and answers a query by running four retrievers at
-once and fusing them into one budgeted result set.
+Hindsight is a memory service for agents that are meant to get better over
+time. It keeps the source payloads and extracts facts from them. It keeps what
+the agent did apart from what the agent knows. It folds related facts into
+observations backed by evidence, and refines them instead of overwriting them.
+It keeps standing answers up to date in the background. And it answers a query
+by running four retrievers at once and combining them into one result set that
+fits a budget.
 
-This lamp reproduces that architecture on Genie building blocks. It is an
+This lamp rebuilds that architecture on Genie building blocks. It is an
 architectural example, not a drop-in implementation.
 
 ## Run
@@ -19,23 +20,23 @@ conda run -n "genie" python -m lamps.hindsight.demo
 conda run -n "genie" python -m pytest lamps/hindsight/tests -q
 ```
 
-`demo.py` is the entry point; the module path must be run from the repository
-root so both `lamps` and `genie` resolve. It declares two entities and one
+`demo.py` is the entry point. Run the module path from the repository root so
+that both `lamps` and `genie` can be found. It declares two entities and one
 standing question, retains four documents, and prints the answer. Every
-timestamp comes from a document rather than a clock, so each run prints the
+timestamp comes from a document and not from a clock, so each run prints the
 same output.
 
 ## Modules
 
-The lamp is split by topic rather than kept in one file, and the dependency
-order runs downward:
+The lamp is split by topic instead of kept in one file. Each module depends on
+the ones above it:
 
 | Module | Contents |
 | --- | --- |
 | `model.py` | Block types, relations, taxonomy, records, and time helpers |
 | `structures.py` | Genie facades wired to the bank's five ownership tiers |
 | `bank.py` | Retain, entity resolution, links, invalidation, both time axes |
-| `observations.py` | Consolidating facts into versioned, evidence-backed beliefs |
+| `observations.py` | Folding facts into versioned beliefs backed by evidence |
 | `mental_models.py` | Standing questions and the versions of their answers |
 | `recall.py` | Four retrievers, reciprocal rank fusion, and the token budget |
 | `reflect.py` | Answering from the highest layer that already knows |
@@ -67,15 +68,15 @@ order runs downward:
 | Stale observation | Retention cursor against the claims still pending |
 | Mental model | `VersionedRecords` identity keyed by name |
 | Mental-model versions | Revisions plus lineage edges from observations |
-| Deduplication on retain | Metadata-filtered `MemoryHandle.search` |
+| Deduplication on retain | `MemoryHandle.search` with a metadata filter |
 | TEMPR keyword retriever | One `MemoryHandle.search` per query term |
 | TEMPR graph retriever | `PropertyGraph.walk` from an entity |
 | TEMPR temporal retriever | `TemporalCollection.events` and `.overlapping` |
 | Deleting a bank or a belief | `OwnershipTree.delete_subtree` |
 | Agent access | Named JSON-compatible tools |
 
-Hindsight's layers become ownership tiers below one root, so deleting a bank
-deletes everything in it and deleting a belief deletes its history:
+Hindsight's layers become ownership tiers below one root. So deleting a bank
+deletes everything in it, and deleting a belief deletes its history:
 
 ```text
 hindsight.bank                    one isolated memory bank
@@ -89,7 +90,7 @@ hindsight.bank                    one isolated memory bank
 ## Two time axes in one entry
 
 Hindsight tracks when something happened separately from when the bank found
-out, and leaves the first absent for an ongoing fact such as a preference. A
+out. For an ongoing fact such as a preference, the first one is simply absent. A
 `TemporalEntry` already carries both, so each fact joins the timeline once:
 
 | Axis | Field | Question it answers |
@@ -97,44 +98,46 @@ out, and leaves the first absent for an ongoing fact such as a preference. A
 | Learned | `occurred_at` | When did the bank find this out? |
 | Described | `validity` | What period is this fact about? |
 
-That is why the temporal retriever reads the collection two ways. In the demo a
-June 2025 call reports that billing has been on Postgres since 2024: a 2024
+That is why the temporal retriever reads the collection in two ways. In the demo
+a call in June 2025 reports that billing has been on Postgres since 2024. A 2024
 window reaches that fact through the described axis, and only a June 2025 window
 reaches it through the learned axis.
 
 ## Consolidation without a model
 
-Upstream, a language model decides which facts belong to the same belief and
-how the wording should change when new evidence lands. A deterministic example
-cannot, so each extracted fact names the belief it speaks to and whether it
-supports or contradicts it — the same substitution the Graphiti lamp makes when
-it accepts structured triplets instead of natural-language extraction.
+Upstream, a language model decides which facts belong to the same belief, and
+how the wording should change when new evidence arrives. A deterministic example
+cannot do that. So each extracted fact names the belief it speaks to, and says
+whether it supports or contradicts it. The Graphiti lamp makes the same kind of
+substitution when it accepts structured triplets instead of extraction from
+natural language.
 
-The three outcomes Hindsight describes then fall out of that:
+The three outcomes that Hindsight describes then follow directly:
 
-- **Strengthen.** A fact repeating a belief already on file adds a lineage
-  edge and nothing else. The proof count rises; no revision is written.
-- **Extend.** A supporting fact with something new to say appends to the
-  wording and writes a revision.
-- **Reconcile.** A contradicting fact writes a revision that leads with the new
-  belief and keeps the old one visible, which is Hindsight's "full journey"
+- **Strengthen.** A fact that repeats a belief already on file adds a lineage
+  edge and nothing else. The proof count rises, and no revision is written.
+- **Extend.** A supporting fact that has something new to say is appended to the
+  wording, and a revision is written.
+- **Reconcile.** A contradicting fact writes a revision that starts with the new
+  belief and keeps the old one visible. That is Hindsight's "full journey"
   rather than an overwrite.
 
-Because evidence is a `LineageDAG` edge rather than a stored list, the proof
-count is counted off the graph and cannot drift from the facts. Because a
-belief is a `VersionedRecords` identity, its earlier wording is a read rather
-than an audit table the lamp maintains.
+Evidence is a `LineageDAG` edge and not a stored list, so the proof count is
+counted off the graph and cannot drift away from the facts. A belief is a
+`VersionedRecords` identity, so its earlier wording is a read rather than an
+audit table that the lamp has to maintain.
 
-Consolidation is a batch over the retention log after a stored cursor, which is
-also what makes staleness answerable: an observation is stale when facts naming
-its claim sit past the cursor. Upstream this runs in the background after every
-`retain`; here it is an explicit call so the example can show when it happened.
+Consolidation is a batch over the retention log, starting after a stored cursor.
+That is also what makes staleness answerable: an observation is stale when facts
+naming its claim sit past the cursor. Upstream this runs in the background after
+every `retain`. Here it is an explicit call, so the example can show when it
+happened.
 
 ## Recall
 
-Hindsight runs four retrievers per query and fuses them, rather than hitting one
-index. Observations ride along with raw facts, so a consolidated belief can
-outrank the sentences it was built from.
+Hindsight runs four retrievers per query and combines them, instead of hitting
+one index. Observations are ranked together with raw facts, so a consolidated
+belief can rank above the sentences it was built from.
 
 | Retriever | How it runs |
 | --- | --- |
@@ -143,36 +146,36 @@ outrank the sentences it was built from.
 | `graph` | `PropertyGraph.walk` outward from an entity named in the query |
 | `temporal` | `TemporalCollection` reads on both axes inside a window |
 
-Three of the four go through Genie, which is the point: ranking is what Genie
-leaves to applications, so the retrievers are where the library does the work
-and reciprocal rank fusion is the only scoring the lamp writes. The graph walk
-is worth reading twice — it crosses three relations without knowing it, from an
-entity to the facts that mention it, along the associative edges between those
-facts, and out to the observations derived from them.
+Three of the four run through Genie, and that is the point. Genie leaves ranking
+to applications, so the retrievers are where the library does the work, and
+reciprocal rank fusion is the only scoring the lamp writes itself. The graph
+walk is the interesting one: it crosses three relations without being told to,
+going from an entity to the facts that mention it, along the associative edges
+between those facts, and out to the observations derived from them.
 
-Results then fill a token budget instead of a row count, so a query reports what
-the budget left out. Every ranking step breaks ties on the candidate's own text,
-never on `MemoryBlock.id`: block ids are fresh UUIDs on each run, and an
-id-ordered tie would change a candidate's rank inside a retriever, change its
-reciprocal-rank contribution, and make scores differ between runs.
+The results then fill a token budget rather than a row count, so a query reports
+what the budget left out. Every ranking step breaks ties on the candidate's own
+text, never on `MemoryBlock.id`. Block ids are new UUIDs on every run, and a tie
+broken by id would change a candidate's rank inside a retriever, change how much
+it contributes to the fused rank, and make the scores differ between runs.
 
 ## Mental models and reflection
 
-A mental model is a question asked once whose answer the bank keeps current, so
-reading it is a lookup rather than a retrieval and a synthesis. That is
-`VersionedRecords` almost verbatim: the question is the identity, each rebuild
-is a revision, and the previous wording stays readable.
+A mental model is a question that is asked once and whose answer the bank keeps
+up to date. So reading it is a lookup, not a retrieval followed by a synthesis.
+That is almost exactly `VersionedRecords`: the question is the identity, each
+rebuild is a revision, and the previous wording stays readable.
 
-A rebuild happens only when the answer changes. The lamp composes an answer from
-the beliefs in the model's tag scope and deliberately leaves proof counts out of
-it, so more evidence for a belief already on file moves the count without
+A rebuild happens only when the answer changes. The lamp builds an answer from
+the beliefs in the model's tag scope, and deliberately leaves proof counts out
+of it. So more evidence for a belief already on file moves the count without
 writing a version. In the demo the third document does exactly that.
 
-`reflect` then keeps Hindsight's preference order — mental model, observations,
-raw facts — and reports every layer it consulted as evidence. Each item names
-what it was derived from by walking the lineage relation: a fact points back at
-its document, a belief at its supporting facts, a model version at the beliefs
-it summarized.
+`reflect` then keeps Hindsight's order of preference — mental model,
+observations, raw facts — and reports every layer it consulted as evidence. Each
+item names what it was derived from by walking the lineage relation: a fact
+points back at its document, a belief at its supporting facts, and a model
+version at the beliefs it summarized.
 
 ## Tools and workflow
 
@@ -182,7 +185,7 @@ it summarized.
 | `retain` | Store a payload and the facts extracted from it |
 | `link_memories` | Add a temporal, semantic, or causal connection |
 | `invalidate_memory` | Retire a fact without deleting it |
-| `consolidate` | Fold new facts into versioned, evidence-backed beliefs |
+| `consolidate` | Fold new facts into versioned beliefs backed by evidence |
 | `create_mental_model` | Register a standing question |
 | `refresh_mental_model` | Rebuild its answer if the scope changed |
 | `get_mental_model` | Read the current answer and the versions before it |
@@ -191,13 +194,13 @@ it summarized.
 
 The agent learns a Northwind platform bank from four payloads: a January
 onboarding call, two agent runs against the billing service, and a June planning
-call. Along the way `Alice`, `Alice Chen`, and `Alice C.` resolve to one entity;
-the June correction retires the MySQL fact without deleting it; the February
-timeout and the March retry strengthen one belief; and the June move from React
-to Vue reconciles another.
+call. Along the way `Alice`, `Alice Chen`, and `Alice C.` all resolve to one
+entity. The June correction retires the MySQL fact without deleting it. The
+February timeout and the March retry strengthen one belief. And the June move
+from React to Vue reconciles another.
 
 The standing question `northwind-change-brief` is refreshed after each payload
-and rebuilt three times out of four — the March retry raises a proof count
+and rebuilt three times out of four. The March retry raises a proof count
 without changing the answer, so no version is written:
 
 - r1: Northwind frontends are built in React.
@@ -219,31 +222,32 @@ without changing the answer, so no version is written:
 
 ## Limits
 
-The lamp omits Hindsight's language-model fact extraction and observation
+The lamp leaves out Hindsight's language-model fact extraction and observation
 synthesis, its embeddings and BM25 backends, cross-encoder reranking and the
-recency, temporal-proximity, and proof-count boosts, temporal-language parsing,
-fuzzy entity resolution by co-occurrence, background consolidation and scheduled
-model refresh, near-duplicate observation reconciliation, observation scopes,
-knowledge pages, the reflect agent's disposition and directives, Memory Defense,
-multilingual handling, webhooks, and its PostgreSQL and Oracle storage. Declared
-claims replace model-judged consolidation, token overlap replaces embeddings,
-term matching replaces BM25, name subsumption over a keyed alias table replaces
-fuzzy resolution, and explicit calls replace background work.
+recency, temporal-proximity, and proof-count boosts, parsing of temporal
+language, fuzzy entity resolution by co-occurrence, background consolidation and
+scheduled model refresh, reconciling near-duplicate observations, observation
+scopes, knowledge pages, the reflect agent's disposition and directives, Memory
+Defense, multilingual handling, webhooks, and its PostgreSQL and Oracle storage.
+Declared claims replace consolidation judged by a model. Token overlap replaces
+embeddings. Term matching replaces BM25. Name subsumption over a keyed alias
+table replaces fuzzy resolution. And explicit calls replace background work.
 
-Those omissions are deliberate rather than unfinished. A lamp exists to show
-that Genie's blocks, links, and structure facades can carry another system's
-memory model, so upstream features that are pure ranking, clustering, or
-scheduling — which Genie leaves to applications by design — add hand-written
-algorithm without adding any demonstration. The features kept are the ones that
-land on a facade.
+These omissions are on purpose, not unfinished work. A lamp exists to show that
+Genie's blocks, links, and structure facades can carry another system's memory
+model. Upstream features that are pure ranking, clustering, or scheduling are
+exactly what Genie leaves to applications by design, so writing them here would
+add a hand-written algorithm and demonstrate nothing. The features that were
+kept are the ones that land on a facade.
 
-Two modelling notes matter when reading the results. An observation revision is
-a separate block owned by the belief it revises, so history survives a rewording
-but a belief and its whole history are one subtree delete; upstream instead
-re-synthesizes an observation in place and exposes a `clear_observations`
-endpoint. And a mental model here is composed only from the beliefs in its
-scope, which is what makes "rebuild only when the answer changed" observable;
-upstream also reads raw facts and edits the previous version incrementally.
+Two modelling notes matter when you read the results. An observation revision is
+a separate block owned by the belief it revises. So history survives a
+rewording, but a belief and its whole history go together in one subtree delete.
+Upstream instead rewrites an observation in place and offers a
+`clear_observations` endpoint. Also, a mental model here is built only from the
+beliefs in its scope, which is what makes "rebuild only when the answer changed"
+something you can observe. Upstream also reads raw facts and edits the previous
+version step by step.
 
 References: [Hindsight repository](https://github.com/vectorize-io/hindsight),
 [retain](https://hindsight.vectorize.io/developer/retain),

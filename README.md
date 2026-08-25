@@ -1,30 +1,33 @@
 # Genie
 
-Genie provides typed building blocks for developers creating memory systems:
-memory blocks, parent/child ownership, typed relationships, scoped access, and
-composable structural views. It stays independent of agent frameworks,
-databases, memory taxonomies, retrieval strategies, and stored value types.
+Genie gives developers typed building blocks for making memory systems. It
+provides memory blocks, parent/child ownership, typed relationships, scoped
+access, and optional structure views. Genie does not depend on any agent
+framework, database, memory taxonomy, retrieval strategy, or stored value type.
 
-> Genie is alpha software. Public APIs may evolve.
+> Genie is alpha software. Public APIs may still change.
 
 ## What it provides
 
-- `MemoryBlock` values with application-defined types, metadata, policies, and
-  versions.
-- Parent/child ownership for containment, subtree scope, and lifecycle.
-- `MemoryLink` relationships that do not imply ownership.
-- Least-privilege `MemoryHandle` objects for agents and services.
+- `MemoryBlock` values. Your application chooses their type, metadata, policy,
+  and version.
+- Parent/child ownership, which controls containment, subtree scope, and
+  lifecycle.
+- `MemoryLink` relationships, which do not imply ownership.
+- `MemoryHandle` objects that give agents and services only the access they
+  need.
 - Structure facades for trees, graphs, keys, logs, time, lineage, and versions.
-- Storage protocols plus in-memory and SQLite implementations.
+- Storage protocols, with in-memory, SQLite, and optional Neo4j
+  implementations, plus a routed backend that combines several of them.
 - Separate policies, hooks, queries, and codecs.
 
-Genie does not provide agent execution, planning, embeddings, a managed
-database service, or a universal memory schema.
+Genie does not run agents, plan their work, create embeddings, host a database,
+or define one memory schema for everyone.
 
 ## Install
 
-Genie requires Python 3.11 or newer and has no required runtime dependencies.
-From a cloned repository:
+Genie needs Python 3.11 or newer. It has no required runtime dependencies. From
+a cloned repository:
 
 ```bash
 conda run -n "genie" python -m pip install -e .
@@ -54,16 +57,17 @@ results = agent_memory.search("concise")
 assert results[0].block.id == requirement.id
 ```
 
-New blocks are owner-private by default. Keep the full `Memory` and backend in
-trusted application code; give agents rooted handles or application-defined
-tools.
+By default, only the creator of a block can read it. Keep the full `Memory`
+object and the backend inside trusted application code. Give agents rooted
+handles, or tools that you write yourself.
 
 ## Storage
 
-`InMemoryBackend` is the dependency-free reference backend for tests, examples,
-and prototypes. `SQLiteBackend` adds embedded persistence, while the optional
-`Neo4jBackend` adds graph persistence through the official Neo4j driver. Both
-support all seven structure facades. SQLite uses Python's built-in driver:
+`InMemoryBackend` is the reference backend. It needs no extra packages, so it
+suits tests, examples, and prototypes. `SQLiteBackend` adds local persistent
+storage. The optional `Neo4jBackend` adds graph storage through the official
+Neo4j driver. Both persistent backends support all seven structure facades.
+SQLite uses the driver that ships with Python:
 
 ```python
 from genie import Memory, SQLiteBackend
@@ -74,9 +78,10 @@ with SQLiteBackend("memory.db") as backend:
     memory.put(type="note", value={"text": "Persist this"})
 ```
 
-The command-line SQLite program is not required. See the [backend
-guide](genie/backend/README.md) for storage contracts, implementation details,
-and production considerations. Install `genie[neo4j]` when using Neo4j.
+You do not need the SQLite command-line program. The [backend
+guide](genie/backend/README.md) explains the storage contracts, how each
+backend works, and what to think about in production. Install `genie[neo4j]` if
+you use Neo4j.
 
 ## Model and structures
 
@@ -90,8 +95,9 @@ MemoryLink
   requirement --supports--> observation
 ```
 
-Ownership defines scope and lifecycle. Links express non-owning relationships.
-Applications define the meaning of block types, values, metadata, and links.
+Ownership decides scope and lifecycle. Links describe relationships without
+ownership. Your application decides what block types, values, metadata, and
+links mean.
 
 | Facade | Purpose |
 | --- | --- |
@@ -100,11 +106,11 @@ Applications define the meaning of block types, values, metadata, and links.
 | `KeyedCollection` | Namespaced key lookup |
 | `EventLog` | Stable append order |
 | `TemporalCollection` | Event time and validity periods |
-| `LineageDAG` | Cycle-protected derivation history |
+| `LineageDAG` | Derivation history, protected from cycles |
 | `VersionedRecords` | Stable identities and ordered revisions |
 
-Facades reference the same blocks, can be combined freely, and preserve normal
-handle scope and policy checks.
+All facades point at the same blocks. You can combine them freely, and they
+keep the normal handle scope and policy checks.
 
 ## Architecture
 
@@ -122,13 +128,13 @@ handle scope and policy checks.
      Stores and indexes     chosen by the backend
 ```
 
-`Memory` and one backend object are the required layers. Handles and structure
-facades are optional views over the same blocks, and a facade accepts either a
-`Memory` or a `MemoryHandle`. A single backend may coordinate several databases
-or indexes behind the same contract.
+Only two layers are required: `Memory` and one backend object. Handles and
+structure facades are optional views over the same blocks, and a facade accepts
+either a `Memory` or a `MemoryHandle`. One backend may run several databases or
+indexes behind the same contract.
 
 Keep `Memory`, backends, policy engines, hooks, and codec registries in trusted
-code. Give agents rooted handles or smaller application-defined tools.
+code. Give agents rooted handles, or smaller tools that you define.
 
 ## Learn more
 
@@ -149,5 +155,5 @@ conda run -n "genie" python -m pytest
 conda run -n "genie" python -m compileall -q genie tests examples lamps
 ```
 
-Run `./scripts/test_full.sh` for the complete suite against a disposable Neo4j
-container. Extra arguments are passed to pytest.
+Run `./scripts/test_full.sh` to run the whole suite against a throwaway Neo4j
+container. Any extra arguments are passed on to pytest.

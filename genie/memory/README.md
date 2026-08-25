@@ -1,13 +1,15 @@
 # Memory
 
-`genie.memory` defines Genie's storage-independent data model and public access
-objects. Applications decide what stored values mean.
+`genie.memory` defines Genie's data model and its public access objects. The
+model does not depend on any storage engine. Your application decides what the
+stored values mean.
 
 ## Blocks, ownership, and links
 
-`MemoryBlock` is the smallest independently addressable value. It carries a
-stable id, application-defined type and value, optional parent, metadata,
-content type, policy, creator, timestamps, and version.
+`MemoryBlock` is the smallest value you can address on its own. It holds a
+stable id, a type and a value that your application defines, an optional
+parent, metadata, a content type, a policy, a creator, timestamps, and a
+version.
 
 ```python
 note = memory.put(
@@ -17,30 +19,32 @@ note = memory.put(
 )
 ```
 
-Create a separate block when a value needs its own identity, policy,
-provenance, lifecycle, search behavior, or relationships.
+Make a value its own block when it needs its own identity, policy, provenance,
+lifecycle, search behavior, or relationships.
 
-Parent/child relationships mean ownership: a child has one parent, and the
-tree controls subtree scope, traversal, and recursive deletion. `MemoryLink`
-represents a directed, typed, non-owning relationship:
+A parent/child relationship means ownership. A child has exactly one parent,
+and the tree controls subtree scope, traversal, and recursive deletion. A
+`MemoryLink` is a directed, typed relationship that does not mean ownership:
 
 ```python
 edge = memory.add_link(requirement, proposal, "supports")
 edge = memory.update_link(edge, metadata={"confidence": 0.9})
 ```
 
-Link updates merge metadata while preserving id, endpoints, relation, and
-creation time. Use ownership for containment and lifecycle; use links for
-references, provenance, and cross-cutting relationships.
+Updating a link merges its metadata and keeps the id, endpoints, relation, and
+creation time. Use ownership for containment and lifecycle. Use links for
+references, provenance, and relationships that cut across the tree.
 
 ## Trusted and restricted access
 
-`Memory` configures one backend, principal, policy engine, default policy,
-codecs, hooks, and the `attributes` reported to hooks. It provides block CRUD,
-traversal, links, mounts, search, and handle creation. Keep it in trusted
-application code. `hooks` is read-only: which hooks run is changed on that
-registry rather than by replacing it, so a mandatory hook cannot be detached.
-See [hooks](../hooks/README.md#the-registry).
+`Memory` holds one backend, principal, policy engine, default policy, set of
+codecs, set of hooks, and the `attributes` it reports to hooks. It offers block
+CRUD, traversal, links, mounts, search, and handle creation. Keep it inside
+trusted application code.
+
+`hooks` is read-only. You change which hooks run by editing that registry, not
+by replacing it, so nobody can detach a mandatory hook. See
+[hooks](../hooks/README.md#the-registry).
 
 ```python
 from genie import InMemoryBackend, Memory
@@ -57,21 +61,22 @@ planner = memory.get_handle(root=root, principal="agent:planner")
 task_agent = planner.get_handle(root=task)
 ```
 
-A child handle may narrow access but cannot change its principal, move its root
-outside the parent, enable access disabled by the parent, or bypass policies.
-Only `Memory.get_unbounded_handle(...)` creates an administrative handle.
+A child handle can narrow access, but it cannot change its principal, move its
+root outside the parent, turn on access that the parent turned off, or skip
+policies. Only `Memory.get_unbounded_handle(...)` creates an administrative
+handle.
 
-Scope and policy are independent: a block must be inside the handle's allowed
-scope and permitted by its `MemoryPolicy`.
+Scope and policy are checked separately. A block must be inside the handle's
+allowed scope, and the block's `MemoryPolicy` must also allow the operation.
 
-Each handle also has its own `id` and reports its root and enabled capabilities
-to hooks through `attributes`, so an audit trail can tell which sandbox did the
-work when several handles share one principal. See
+Every handle has its own `id`. Through `attributes` it reports its root and its
+enabled capabilities to hooks. So when several handles share one principal, an
+audit trail still shows which sandbox did the work. See
 [hooks](../hooks/README.md#scopes-and-attributes).
 
 ## Mounts
 
-A `genie.mount` link points to another root without making it a child:
+A `genie.mount` link points at another root without making it a child:
 
 ```python
 mount = memory.add_mount(local_root, remote_root)
@@ -79,25 +84,28 @@ target = memory.resolve_mount(mount)
 ```
 
 Subtree traversal, search, and deletion do not follow mounts. Discovery finds
-mount links without entering their targets. Handle mount operations require
+mount links but does not enter their targets. Mount operations on a handle need
 `allow_mounts=True`.
 
 ## Safety rules
 
-- New blocks are owner-private by default.
-- Recursive deletion requires write access to every checked block.
-- Block updates reject a stale version; deletion rejects a changed subtree.
-- Links with unreadable endpoints are hidden.
-- Bounded handles reject out-of-scope references.
-- Handles need policy override permission to choose a new block's policy.
+- By default, only the creator of a new block can read it.
+- Recursive deletion needs write access to every block it checks.
+- A block update fails on a stale version. A deletion fails if the subtree
+  changed.
+- Links are hidden when an endpoint cannot be read.
+- A bounded handle rejects references outside its scope.
+- A handle needs policy override permission to choose the policy of a new
+  block.
 - Block and link metadata must be strict JSON dictionaries.
 - Returned JSON values and metadata are defensive copies.
-- Hooks cannot widen an authorized parent or search scope.
-- Hook callbacks may perform nested memory operations; active callbacks are
-  skipped on reentry and nesting is bounded.
+- Hooks cannot widen a parent or search scope that was already authorized.
+- A hook callback may run nested memory operations. Callbacks that are already
+  running are skipped on reentry, and nesting has a limit.
 
-Genie supplies access-control building blocks, not a Python sandbox. Give
-untrusted agents bounded tools or facades, never raw backends or registries.
+Genie gives you access-control building blocks, not a Python sandbox. Give
+untrusted agents bounded tools or facades. Never give them raw backends or
+registries.
 
 Related: [Structures](../structures/README.md), [Queries](../query/README.md),
 [Policies](../policy/README.md), [Backends](../backend/README.md),

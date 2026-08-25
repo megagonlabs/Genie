@@ -1,9 +1,9 @@
 # In-memory backend
 
-`reference.py` provides `InMemoryBackend`, Genie's dependency-free reference
-implementation. It stores blocks, links, keys, logs, and temporal entries in
-Python dictionaries; a reentrant lock protects structural operations within
-one process.
+`reference.py` provides `InMemoryBackend`, Genie's reference implementation. It
+needs no extra packages. It keeps blocks, links, keys, logs, and temporal
+entries in Python dictionaries, and a reentrant lock protects structural
+operations inside one process.
 
 ```python
 from genie import InMemoryBackend, Memory
@@ -15,13 +15,13 @@ memory = Memory(
 )
 ```
 
-The backend implements the core contract and every optional structure
-capability. It provides deterministic storage and executable guidance for
-tests, examples, prototypes, and adapter authors.
+This backend implements the core contract and every optional structure
+capability. Its storage is predictable, and its code is working guidance for
+tests, examples, prototypes, and people writing their own adapters.
 
-State disappears when the process exits. It has no durable storage,
-cross-process coordination, backup, or operational monitoring, so it is not a
-persistent deployment backend.
+All state is lost when the process exits. There is no durable storage, no
+coordination between processes, no backup, and no operational monitoring. So it
+is not a backend for a persistent deployment.
 
 Related: [Backend contracts](../README.md), [Memory](../../memory/README.md),
 and [Structures](../../structures/README.md).

@@ -1,7 +1,7 @@
 # Relational backend
 
-`SQLiteBackend` provides persistent local storage and every core and optional
-backend capability.
+`SQLiteBackend` gives you persistent local storage. It provides every core
+capability and every optional one.
 
 ```python
 from genie import Memory, SQLiteBackend
@@ -12,28 +12,32 @@ with SQLiteBackend("memory.db") as backend:
     memory.put(type="note", value={"text": "Persist this"})
 ```
 
-Python's built-in `sqlite3` driver is sufficient; neither the SQLite CLI nor an
-extra Python dependency is required.
+The `sqlite3` driver that ships with Python is enough. You need neither the
+SQLite command-line program nor an extra Python package.
 
 ## Behavior
 
 - File databases use foreign keys, WAL, a lock timeout, and full synchronous
-  durability. `durability="normal"` trades recent-crash durability for speed.
-- Version compare-and-swap protects block updates. Recursive deletion verifies
-  one exact subtree snapshot and deletes leaf-first.
-- Genie application identity, exact schema validation, and ordered atomic
-  migrations reject incompatible databases without modifying them.
-- Tables store blocks, links, keys, logs, and temporal entries. Values and
-  metadata are strict JSON; constraints and transactions enforce structure.
-- Operational failures use `BackendError`; busy and unavailable errors are
-  retryable, while read-only, capacity, and corruption have distinct types.
-  The SQLite error remains available as `__cause__`.
+  durability. Setting `durability="normal"` gives up durability after a recent
+  crash in exchange for speed.
+- Block updates are protected by a version compare-and-swap. Recursive deletion
+  checks one exact snapshot of the subtree and deletes leaves first.
+- The backend checks the Genie application identity and the exact schema, and it
+  runs ordered atomic migrations. An incompatible database is rejected and left
+  unchanged.
+- Tables hold blocks, links, keys, logs, and temporal entries. Values and
+  metadata are strict JSON, and constraints and transactions keep the structure
+  correct.
+- Operational failures use `BackendError`. Busy and unavailable errors can be
+  retried, while read-only, capacity, and corruption errors have their own
+  types. The SQLite error stays available as `__cause__`.
 
 ## Limits
 
-Portable search scans scoped candidates. Use another search implementation for
-large text or vector indexes. Production deployments must define their backup,
-restore, monitoring, process, and performance requirements.
+Portable search scans the candidates inside the scope. Use another search
+implementation for large text or vector indexes. Production deployments must
+decide their own backup, restore, monitoring, process, and performance
+requirements.
 
 Related: [Backend contracts](../README.md), [SQLite
 tests](../../../tests/test_sqlite_backend.py), [Memory](../../memory/README.md),

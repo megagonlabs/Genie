@@ -1,21 +1,23 @@
 # Codecs
 
-`genie.codecs` converts application values to storage-safe data and restores
-them on read. Each encoded value contains a codec `content_type` and the data
-stored in `MemoryBlock.value`.
+`genie.codecs` turns application values into data that is safe to store, and
+rebuilds them on read. Each encoded value carries a codec `content_type` and the
+data that is stored in `MemoryBlock.value`.
 
 ## Default JSON codec
 
 `Memory` registers only `JsonCodec` by default. It accepts `None`, strings,
-booleans, integers, finite floats, lists, and dictionaries with string keys.
-Encoding and decoding deep-copy values; `NaN` and infinity are rejected.
+booleans, integers, finite floats, lists, and dictionaries whose keys are
+strings. Encoding and decoding both deep-copy the value. `NaN` and infinity are
+rejected.
 
 ## Selection
 
-`CodecRegistry` uses an explicitly requested `content_type`, or the first codec
-whose `can_encode` accepts the value. The stored content type selects the codec
-again during decoding. Content types must be non-empty strings, and `encode`
-must return an `EncodedValue` carrying the codec's own content type.
+`CodecRegistry` uses the `content_type` you ask for. If you ask for none, it
+uses the first codec whose `can_encode` accepts the value. On decode, the stored
+content type picks the codec again. A content type must be a non-empty string,
+and `encode` must return an `EncodedValue` that carries the codec's own content
+type.
 
 ```python
 memory.codecs.register(PreferenceCodec())
@@ -41,10 +43,10 @@ class PreferenceCodec:
         return Preference(**value.data)
 ```
 
-Choose stable content types and portable encoded data. Backends should not need
-application knowledge to interpret the original Python object. `JsonCodec`
-validates stored payloads again during decode so malformed backend data fails
-instead of entering application code.
+Choose stable content types and portable encoded data. A backend should not need
+to know anything about your application to read the stored data. `JsonCodec`
+checks stored payloads again while decoding, so bad backend data fails instead
+of reaching application code.
 
 ## Opt-in standard-library codecs
 
@@ -55,7 +57,7 @@ instead of entering application code.
 - `DataclassCodec`
 - `EnumCodec`
 
-Register only required types. Keep domain taxonomies and validation outside
+Register only the types you need. Keep domain taxonomies and validation outside
 Genie codecs.
 
 Related: [Memory](../memory/README.md) and [Backends](../backend/README.md).
