@@ -225,3 +225,4 @@ __marimo__/
 *.env
 .DS_Store
 ruff_report.txt
+CLAUDE.local.md
