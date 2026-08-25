@@ -5,7 +5,8 @@ lamps take their ideas from other systems, but they are architectural examples.
 They are not compatibility layers, and they are not production implementations.
 
 Each lamp keeps the main memory idea of the project it represents, plus one
-workflow that is typical of it. It may replace model calls, specialized indexes,
+workflow that is typical of it. These guides call that original project
+*upstream*. It may replace model calls, specialized indexes,
 or production storage with plain application code, so that the example runs
 locally. Any extra Genie structure is marked as an addition rather than an
 upstream feature.
@@ -62,6 +63,6 @@ documents only its own stored model, workflow, results, and limits.
 | --- | --- | --- |
 | [Graphiti](graphiti/README.md) | Episodes, entity nodes with summaries that change over time, relationship facts on two time axes, communities | Ingest episodes, invalidate contradicted facts on both time axes, group entities by slice, and rank facts with a hybrid recipe |
 | [Hindsight](hindsight/README.md) | Documents turned into world and experience facts, observations built up with proof counts, standing mental models, four-way retrieval | Retain and consolidate, refine a belief as evidence supports or reverses it, and answer from the highest layer that already knows |
-| [LangMem](langmem/README.md) | Namespaced items in collection and profile shapes, memory formed on the hot path or in the background, the agent's prompt as memory | Debounce a thread, apply the changes the manager is allowed to make, and revise the prompt from feedback |
+| [LangMem](langmem/README.md) | Namespaced items in collection and profile shapes, memory formed during the conversation or in the background, the agent's prompt as memory | Debounce a thread, apply the changes the manager is allowed to make, and revise the prompt from feedback |
 | [Mem0](mem0/README.md) | Facts pulled from an exchange and reconciled against what is on file, scoped by user, agent, and run identifiers, with a change history and a graph half | Decide `ADD`, `UPDATE`, `DELETE`, or `NONE` for each candidate, apply it, and read afterwards why a memory says what it says |
-| [MemoryOS](memoryos/README.md) | An operating-system hierarchy: a short-term FIFO, mid-term topic sessions scored by heat, and a long-term profile beside two capped knowledge bases | Page the oldest exchange out of a full queue, let retrieval heat a session until it crosses the threshold and is read into the profile, and evict the session nobody came back to |
+| [MemoryOS](memoryos/README.md) | An operating-system hierarchy: a short-term queue, mid-term topic sessions scored by heat, and a long-term profile beside two capped knowledge bases | Page the oldest exchange out of a full queue, let retrieval heat a session until it crosses the threshold and is read into the profile, and evict the session nobody came back to |

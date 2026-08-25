@@ -19,8 +19,8 @@ note = memory.put(
 )
 ```
 
-Make a value its own block when it needs its own identity, policy, provenance,
-lifecycle, search behavior, or relationships.
+Make a value its own block when it needs its own identity, policy, provenance
+(a record of where it came from), lifecycle, search behavior, or relationships.
 
 A parent/child relationship means ownership. A child has exactly one parent,
 and the tree controls subtree scope, traversal, and recursive deletion. A
@@ -61,10 +61,13 @@ planner = memory.get_handle(root=root, principal="agent:planner")
 task_agent = planner.get_handle(root=task)
 ```
 
+A handle with a root is *bounded*: it reaches that root and the blocks below it,
+and nothing else. A handle with no root is *unbounded*, and only
+`Memory.get_unbounded_handle(...)` creates one.
+
 A child handle can narrow access, but it cannot change its principal, move its
 root outside the parent, turn on access that the parent turned off, or skip
-policies. Only `Memory.get_unbounded_handle(...)` creates an administrative
-handle.
+policies.
 
 Scope and policy are checked separately. A block must be inside the handle's
 allowed scope, and the block's `MemoryPolicy` must also allow the operation.
@@ -98,7 +101,8 @@ mount links but does not enter their targets. Mount operations on a handle need
 - A handle needs policy override permission to choose the policy of a new
   block.
 - Block and link metadata must be strict JSON dictionaries.
-- Returned JSON values and metadata are defensive copies.
+- Returned JSON values and metadata are defensive copies. You get a copy, so
+  changing what you received does not change what is stored.
 - Hooks cannot widen a parent or search scope that was already authorized.
 - A hook callback may run nested memory operations. Callbacks that are already
   running are skipped on reentry, and nesting has a limit.

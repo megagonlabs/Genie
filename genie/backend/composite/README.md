@@ -14,6 +14,8 @@ backend = RoutedBackend(
 )
 ```
 
+A route is one named backend in that mapping, such as `us` or `eu`.
+
 Each block belongs to exactly one route, and a tree never spans two routes. A
 child is always stored in its parent's route, and a block cannot be moved to a
 new parent in another route. Both attempts raise `MemoryConflict`. That rule is

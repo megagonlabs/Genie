@@ -57,9 +57,12 @@ results = agent_memory.search("concise")
 assert results[0].block.id == requirement.id
 ```
 
+A principal is whoever is acting: a user, an agent, or a service. Genie checks
+it against each block's policy on every operation.
+
 By default, only the creator of a block can read it. Keep the full `Memory`
-object and the backend inside trusted application code. Give agents rooted
-handles, or tools that you write yourself.
+object and the backend inside trusted application code. Give agents handles
+rooted at one block, or tools that you write yourself.
 
 ## Storage
 

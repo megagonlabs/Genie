@@ -1,8 +1,9 @@
 # MemoryOS-inspired tiered agent memory
 
 MemoryOS takes its design from an operating system. Memory is a hierarchy of
-tiers rather than one store. Short-term memory is a fixed-size FIFO that holds
-the last few exchanges word for word. Mid-term memory is a paged tier where
+tiers rather than one store. Short-term memory is a fixed-size queue that
+holds the last few exchanges word for word and drops the oldest first, which is
+called first-in, first-out (FIFO). Mid-term memory is a paged tier where
 exchanges are grouped into topic *sessions*, which it also calls segments.
 Long-term memory holds a profile of the user, plus two knowledge bases with a
 size cap: one for what is known about the user, and one for what the assistant
@@ -70,13 +71,13 @@ ones above it:
 | `page_id` / `session_id` | `KeyedCollection` addresses in two namespaces |
 | `get_page_by_id` | One keyed read instead of a scan across every session |
 | `pre_page` / `next_page` | `LineageDAG` edges on `memoryos.next_page`, protected from cycles |
-| Topic grouping of a paged-out batch | Summary overlap plus MemoryOS's keyword Jaccard term |
+| Topic grouping of a paged-out batch | Summary overlap plus MemoryOS's keyword-overlap (Jaccard) term |
 | `L_interaction` | The pages a session owns that no analysis has read |
 | `N_visit` / `access_count_lfu` | Counters on the session block, raised by retrieval |
 | `last_visit_time` | The session's entry in a `TemporalCollection` |
-| `R_recency` | `time_decay` over that entry, at MemoryOS's 24-hour tau |
+| `R_recency` | `time_decay` over that entry, at MemoryOS's 24-hour decay constant (tau) |
 | `H_segment` | `segment_heat` over the three terms, computed on read |
-| LFU eviction at `mid_term_capacity` | `OwnershipTree.delete_subtree` on the least-used session |
+| Least-frequently-used (LFU) eviction at `mid_term_capacity` | `OwnershipTree.delete_subtree` on the least-used session |
 | Mid-term page search | `MemoryHandle.search` inside the mid-term subtree, one query per term |
 | Promotion driven by heat | Read the hottest session, write long-term, reset its terms |
 | `update_user_profile` | A `VersionedRecords` identity with one revision per analysis |

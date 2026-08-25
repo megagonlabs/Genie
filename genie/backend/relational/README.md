@@ -17,7 +17,8 @@ SQLite command-line program nor an extra Python package.
 
 ## Behavior
 
-- File databases use foreign keys, WAL, a lock timeout, and full synchronous
+- File databases use foreign keys, write-ahead logging (WAL), a lock timeout,
+  and full synchronous
   durability. Setting `durability="normal"` gives up durability after a recent
   crash in exchange for speed.
 - Block updates are protected by a version compare-and-swap. Recursive deletion

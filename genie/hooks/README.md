@@ -99,8 +99,9 @@ operation's other callbacks, with one of three outcomes.
 | `denied` | Policy refused the operation. |
 | `error` | The operation failed for some other reason. |
 
-Because it always runs, it is the right place to close a span, record how long
-an operation took, and release state that a before callback saved. It is also
+Because it always runs, it is the right place to close a tracing span, record
+how long an operation took, and release state that a before callback saved. A
+span here is one timed unit of work in a trace. It is also
 the only callback that sees refusals and failures. A denied `set` never reaches
 `before_update`. A failed one reaches `before_update` but never `after_update`.
 
@@ -393,9 +394,10 @@ the outcome.
 | `after_*` returning `None`, `on_denied`, `on_operation_end` | Is collected; every hook still runs. |
 | `on_suppressed` | Is collected; every hook still runs, then the window is refused. |
 
-A failure before the commit point is a veto, and it has to stop everything. An
-aborted `put` stores nothing, and a failed `after_search` returns no results
-rather than results that a redaction hook never reviewed.
+The commit point is the moment the change is written to storage. A failure
+before it is a veto, so it has to stop everything. An aborted `put` stores
+nothing, and a failed `after_search` returns no results rather than results that
+a redaction hook never reviewed.
 
 The observing callbacks are different. They report work that is already decided.
 Stopping there cannot undo it, and it would only destroy the records that the
@@ -412,7 +414,9 @@ anything is reported. But what it reports has not happened yet. A failure leaves
 dispatch enabled and does not run the suppressed body. A suppression that no
 hook could record is exactly what this callback exists to prevent.
 
-A best-effort sink can declare that its own outages must not reach callers:
+A sink is wherever a hook sends its records, such as a log service or a metrics
+service. A best-effort sink can declare that its own outages must not reach
+callers:
 
 ```python
 class AuditHook(MemoryHook):

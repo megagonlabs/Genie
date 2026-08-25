@@ -28,12 +28,14 @@ with Neo4jBackend(
   encodings instead of Neo4j-specific value types.
 - Managed transactions, uniqueness constraints, stable sequence counters, and
   one database mutation guard give the same atomic behavior as SQLite. That
-  includes CAS, conditional subtree deletion, and DAG insertion.
+  includes compare-and-swap updates, conditional subtree deletion, and DAG
+  insertion.
 - A shared bookmark manager keeps read-after-write ordering when operations use
   different sessions in a cluster.
 - On construction the backend checks the schema identity, version, constraint
   type, index type, entity type, and index state. Versioned migrations are
-  idempotent, so DDL that was interrupted can be resumed. Passing
+  idempotent, so running one again is safe and schema statements (DDL) that
+  were interrupted can be resumed. Passing
   `initialize_schema=False` validates the schema without running DDL.
 - Driver failures are mapped to Genie's stable `BackendError` types. The
   original error stays available as `__cause__`.

@@ -80,7 +80,8 @@ graphiti.graph                    one graph partition
 ## Two time axes
 
 A fact block joins two separate `TemporalCollection` facades, one per time axis.
-The intervals are half-open, and a missing end means the interval is still open.
+The intervals are half-open, so the start is included and the end is not. A
+missing end means the interval is still open.
 
 | Axis | Interval | Question it answers |
 | --- | --- | --- |

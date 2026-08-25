@@ -32,10 +32,11 @@ receives one backend object.
 - `delete_block(..., expected_versions=...)` succeeds only when the mapping
   matches the current subtree exactly.
 
-`Memory.set`, `Memory.update`, and `Memory.delete` pass these expectations after
-they authorize the request. A backend must check and change state in one atomic
-step. Passing `None` lets trusted backend-level administration make an
-unconditional change.
+`Memory.set`, `Memory.update`, and `Memory.delete` pass these expectations
+after they authorize the request. A backend must check and change state in one
+atomic step, which means the check and the change happen together so that no
+other writer can slip in between them. Passing `None` lets trusted
+backend-level administration make an unconditional change.
 
 ### Errors
 
@@ -72,8 +73,8 @@ out ownership only through `TraversalIndex` and never reads `parent_id` itself.
 So a supplied traversal index decides subtree scope, traversal, and recursive
 deletion, and it must agree with the block store. Second, these contracts have
 no method that lists every block. Rebuilding an index from the stores is
-therefore an out-of-band job. It needs native storage access, or a set of root
-ids that the application keeps.
+therefore a job you do outside these contracts. It needs native storage access,
+or a set of root ids that the application keeps.
 
 ## Implementations
 
@@ -147,7 +148,8 @@ A production adapter should:
 
 - reject duplicate ids and parent cycles;
 - keep ownership correct, and clean up dependent state on deletion;
-- return defensive values and page results in a stable order;
+- return copies rather than internal objects, and page results in a stable
+  order;
 - atomically enforce block versions, subtree snapshots, keyed updates,
   sequences, and DAG insertion;
 - map operational failures to `BackendError`; and

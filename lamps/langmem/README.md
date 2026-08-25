@@ -4,7 +4,8 @@ LangMem is LangChain's SDK for long-term agent memory. Its starting idea is that
 an agent's memory has four kinds, not one: facts it has learned, experiences it
 can copy, a profile of the person it works for, and its own operating
 instructions. Everything is addressed by a namespace and a key. Memories are
-formed either on the hot path or in a debounced background pass. And a *manager*
+formed in one of two places: on the hot path, meaning during the conversation
+itself, or in a debounced background pass. And a *manager*
 decides whether new information should be inserted next to what is on file,
 patched into it, or allowed to delete it — the application does not decide that.
 The fourth kind is the unusual one: procedural memory is the agent's prompt,

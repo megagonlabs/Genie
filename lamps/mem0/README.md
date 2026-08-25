@@ -135,7 +135,7 @@ decision can be printed, asserted on, and disagreed with.
 
 | Event | Condition | What is written |
 | --- | --- | --- |
-| `NONE` | A stored memory has the same digest | Nothing, not even a history row |
+| `NONE` | A stored memory has the same content hash | Nothing, not even a history row |
 | `UPDATE` | The nearest memory is above the similarity floor | The block, in place |
 | `DELETE` | The same, and the candidate contradicts it | The block is removed |
 | `ADD` | Nothing is close enough | A new block and binding |
