@@ -35,6 +35,15 @@ Records validate but do not persist data. Backend capabilities own bindings,
 positions, and temporal entries. `MemoryBlock.version` counts updates to one
 block; `RevisionEntry.revision` is its position in a record history.
 
+Membership is not ownership. A record names a block by id and does not change
+`MemoryBlock.parent_id`, so adding a block to a keyed collection, log, or
+timeline does not place it under the container block. Search scopes and
+traversal follow stored parents, so a search rooted at a container reaches only
+the members that are also its children. Create members under the container when
+container-scoped search should find them, and note that ownership then also
+controls their lifecycle. Keep them elsewhere when the structure should
+reference blocks that another part of the tree owns.
+
 ## Ownership and graphs
 
 `OwnershipTree` is a rooted view of parent/child behavior:

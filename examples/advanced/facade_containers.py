@@ -7,7 +7,10 @@ stable while the property always reflects the block's current value.
 
 Because the container is ordinary memory, it can be renamed, searched, and
 policy-protected like anything else, and deleting it makes the facade report a
-missing container rather than returning stale results. Link-based facades such
+missing container rather than returning stale results. Membership records name
+blocks by id and leave ownership alone, so a block bound into a facade stays
+where its parent put it and container-scoped search follows parents, not
+membership. Link-based facades such
 as `PropertyGraph` and `LineageDAG` bind to a relation instead, so they have no
 container block.
 
@@ -104,6 +107,14 @@ def main() -> None:
     assert item.block == ranker
     assert item.binding.address == ACTIVE
     assert item.binding.collection_id == catalog_root.id
+    # Binding recorded membership without changing ownership, so the ranker is
+    # still a child of the workspace. Search scopes follow parents, so a search
+    # rooted at the catalog does not reach it.
+    assert memory.search("candidate ranker", root=catalog_root, scope="subtree") == []
+    assert [
+        result.block.id
+        for result in memory.search("candidate ranker", root=workspace, scope="subtree")
+    ] == [ranker.id]
     # An unbound address is absent rather than an error, in both forms.
     assert catalog.get(MemoryAddress(("serving",), "missing")) is None
     assert catalog.get_item(MemoryAddress(("serving",), "missing")) is None

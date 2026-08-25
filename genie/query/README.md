@@ -43,6 +43,11 @@ Each scope is resolved from stored state rather than from the query: `subtree`
 and `ancestors` from stored parents, and `links` from stored links. A search
 index that holds neither needs traversal and link access to resolve them.
 
+No scope resolves structure membership. Key bindings, log entries, temporal
+entries, and revisions record membership by block id without changing stored
+parents, so a search rooted at a container block finds only the members the
+application also created as children of that container.
+
 A bounded handle cannot use search to escape its root or enable global or
 ancestor access that the handle disables.
 

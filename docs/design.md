@@ -89,6 +89,11 @@ identity and an event log. Atomic keys, sequences, temporal membership, and
 cycle-protected insertion are optional backend capabilities. A lineage cycle
 check and edge insertion must be one atomic operation.
 
+Facade membership is not ownership. Key bindings, log entries, temporal
+entries, and revisions reference blocks by id without changing stored parents,
+so subtree search and traversal reach a structure's members only when the
+application also creates them under the container block.
+
 ## Backends
 
 `MemoryBackend` structurally combines block storage, ownership traversal,
