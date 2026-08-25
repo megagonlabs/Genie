@@ -17,6 +17,7 @@ from genie.structures._hooks import (
     principal_id,
     resolve_hooks,
 )
+from genie.structures._routing import resolve_store
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.records import LogEntry, LogItem
 
@@ -65,6 +66,7 @@ class EventLog:
             UnsupportedOperation: If `store` lacks the sequence capability.
         """
 
+        store = resolve_store(store, log, missing_message=f"Event log block {_block_id(log)!r} does not exist.")
         if not isinstance(store, SequenceStore):
             raise UnsupportedOperation("The configured store does not support event logs.")
         stored_log = access.get(log)

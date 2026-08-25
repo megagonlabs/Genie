@@ -19,6 +19,7 @@ from genie.structures._hooks import (
     principal_id,
     resolve_hooks,
 )
+from genie.structures._routing import resolve_store
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.records import TemporalEntry, TemporalItem, ValidityInterval
 
@@ -74,10 +75,14 @@ class TemporalCollection:
             UnsupportedOperation: If a supplied capability is unsupported.
         """
 
+        missing_message = f"Temporal collection block {_block_id(collection)!r} does not exist."
+        store = resolve_store(store, collection, missing_message=missing_message)
         if not isinstance(store, TemporalStore):
             raise UnsupportedOperation("The configured store does not support temporal collections.")
-        if index is not None and not isinstance(index, TemporalIndex):
-            raise UnsupportedOperation("The configured index does not support temporal queries.")
+        if index is not None:
+            index = resolve_store(index, collection, missing_message=missing_message)
+            if not isinstance(index, TemporalIndex):
+                raise UnsupportedOperation("The configured index does not support temporal queries.")
         stored_collection = access.get(collection)
         if stored_collection is None:
             raise MemoryNotFound(f"Temporal collection block {_block_id(collection)!r} does not exist.")

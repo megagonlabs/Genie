@@ -125,12 +125,17 @@ deltas; trusted code can still update their blocks through normal memory APIs.
 | `TemporalStore` | `TemporalCollection` |
 | `TemporalIndex` | Optional temporal optimization |
 
-Unsupported construction raises `UnsupportedOperation`. A composite backend
-such as `RoutedBackend` owns no structural state and implements the core
-contract only, so pass the route that owns the container block as the facade's
-store while the access object stays the composite-backed `Memory`. Resolve it
-with `backend.backend_for_block(container.id)`. Structure membership then stays
-inside that route; see the [composite guide](../backend/composite/README.md).
+Unsupported construction raises `UnsupportedOperation`. Facades take the store
+separately from the access object because an access object does not expose a
+backend; a `MemoryHandle` hides its backend on purpose, since revealing it would
+let a caller bypass the handle's scope.
+
+A composite backend such as `RoutedBackend` owns no structural state and cannot
+hold records itself, but it implements `BlockRouter`, so passing it as the store
+resolves to the route that owns the container block. An unknown container raises
+`MemoryNotFound` rather than reporting a missing capability. Structure membership
+stays inside the resolved route; see the
+[composite guide](../backend/composite/README.md).
 
 Facades store references rather than copies, so applications can combine any
 subset:

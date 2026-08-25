@@ -18,6 +18,7 @@ from genie.structures._hooks import (
     principal_id,
     resolve_hooks,
 )
+from genie.structures._routing import resolve_store
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.records import KeyBinding, KeyedItem, MemoryAddress
 
@@ -66,6 +67,11 @@ class KeyedCollection:
             UnsupportedOperation: If `store` lacks the keyed capability.
         """
 
+        store = resolve_store(
+            store,
+            collection,
+            missing_message=f"Keyed collection block {_block_id(collection)!r} does not exist.",
+        )
         if not isinstance(store, KeyedStore):
             raise UnsupportedOperation("The configured store does not support keyed collections.")
         stored_collection = access.get(collection)

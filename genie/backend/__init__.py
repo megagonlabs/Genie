@@ -1,6 +1,6 @@
 """Backend protocols and reference implementations."""
 
-from genie.backend.base import MemoryBackend
+from genie.backend.base import BlockRouter, MemoryBackend
 from genie.backend.capabilities import BlockStore, LinkStore, SearchIndex, TraversalIndex
 from genie.backend.composite import (
     InMemoryLinkStore,
@@ -22,6 +22,7 @@ from genie.backend.structure_capabilities import (
 
 __all__ = [
     "AcyclicLinkStore",
+    "BlockRouter",
     "BlockStore",
     "InMemoryBackend",
     "InMemoryLinkStore",

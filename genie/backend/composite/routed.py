@@ -12,12 +12,13 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import RLock
+from types import MappingProxyType
 from typing import Literal, overload
 
 from genie.backend.base import MemoryBackend
 from genie.backend.capabilities import LinkStore, SearchIndex, TraversalIndex
 from genie.memory.block import MemoryBlock
-from genie.memory.errors import MemoryConflict
+from genie.memory.errors import MemoryConflict, UnsupportedOperation
 from genie.memory.links import MemoryLink
 from genie.query.filters import matches_filters
 from genie.query.query import MemoryQuery
@@ -197,16 +198,31 @@ class RoutedBackend:
 
         if not routes:
             raise ValueError("RoutedBackend requires at least one route.")
-        self.routes = dict(routes)
+        self._routes: dict[RouteKey, MemoryBackend] = dict(routes)
         self.route_selector = route_selector
-        self.default_route = default_route or next(iter(self.routes))
+        self.default_route = default_route or next(iter(self._routes))
         self.traversal_index = traversal_index
         self.search_index = search_index
         self.link_store = link_store
         self._catalog: dict[str, RouteKey] = {}
         self._lock = RLock()
-        if self.default_route not in self.routes:
+        if self.default_route not in self._routes:
             raise ValueError(f"Default route {self.default_route!r} is not configured.")
+
+    @property
+    def routes(self) -> Mapping[RouteKey, MemoryBackend]:
+        """Return a read-only view of the configured routes.
+
+        The mapping is a live view, so it reflects later `register_route` calls.
+        Routes are read-only because replacing one has to go through
+        `register_route`, which refuses to strand blocks the outgoing backend
+        still holds.
+
+        Returns:
+            Read-only mapping of route keys to backend adapters.
+        """
+
+        return MappingProxyType(self._routes)
 
     def register_route(
         self,
@@ -227,23 +243,23 @@ class RoutedBackend:
         Args:
             route: Route key to register.
             backend: Backend adapter for the route.
-            replace: Whether an existing route with no cataloged blocks may be
-                replaced.
+            replace: Whether an existing route may be replaced. A route is
+                replaceable only when its backend still holds no blocks.
             make_default: Whether future unselected root blocks should use this
                 route as the default.
 
         Raises:
             MemoryConflict: If the route already exists without `replace`, or
-                if replacing it would orphan cataloged blocks.
+                if replacing it would strand blocks the route still holds.
         """
 
         with self._lock:
-            if route in self.routes:
+            if route in self._routes:
                 if not replace:
                     raise MemoryConflict(f"Route {route!r} is already configured.")
-                if route in self._catalog.values():
-                    raise MemoryConflict(f"Route {route!r} cannot be replaced because it owns cataloged blocks.")
-            self.routes[route] = backend
+                if self._route_holds_blocks(route):
+                    raise MemoryConflict(f"Route {route!r} cannot be replaced because it still holds blocks.")
+            self._routes[route] = backend
             if make_default:
                 self.default_route = route
 
@@ -265,7 +281,7 @@ class RoutedBackend:
             if self.get_block(block.id) is not None:
                 raise MemoryConflict(f"Memory block {block.id!r} already exists.")
             route = self._route_for_new_block(block)
-            stored = self.routes[route].put_block(block)
+            stored = self._routes[route].put_block(block)
             self._catalog[stored.id] = route
             return stored
 
@@ -312,7 +328,7 @@ class RoutedBackend:
                 parent_route = self._route_for_existing_block(block.parent_id)
                 if parent_route != route:
                     raise MemoryConflict("A memory block cannot be reparented across routes.")
-            stored = self.routes[route].update_block(
+            stored = self._routes[route].update_block(
                 block,
                 expected_version=expected_version,
             )
@@ -420,7 +436,7 @@ class RoutedBackend:
         block_route = self._route_for_existing_block(block_id, missing_ok=True)
         if root_route is None or block_route is None or root_route != block_route:
             return False
-        return self.routes[root_route].contains(root_id, block_id)
+        return self._routes[root_route].contains(root_id, block_id)
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
         """Persist a link in the shared link store or source route.
@@ -444,7 +460,7 @@ class RoutedBackend:
                 return self.link_store.add_link(link)
             if source_route != target_route:
                 raise MemoryConflict("Cross-route links require a shared link_store.")
-            return self.routes[source_route].add_link(link)
+            return self._routes[source_route].add_link(link)
 
     def update_link(self, link: MemoryLink) -> MemoryLink:
         """Replace link metadata in the shared store or source route.
@@ -464,7 +480,7 @@ class RoutedBackend:
             if self.link_store is not None:
                 return self.link_store.update_link(link)
             source_route = self._route_for_existing_block(link.source_id)
-            return self.routes[source_route].update_link(link)
+            return self._routes[source_route].update_link(link)
 
     def list_links(
         self,
@@ -522,7 +538,7 @@ class RoutedBackend:
             backend = self.backend_for_block(query.root_id)
             return [] if backend is None else backend.search(query)
         results: list[SearchResult] = []
-        for backend in self.routes.values():
+        for backend in self._routes.values():
             results.extend(backend.search(query))
         results.sort(key=lambda result: result.score, reverse=True)
         return results[: query.limit]
@@ -552,7 +568,7 @@ class RoutedBackend:
         """
 
         route = self._route_for_existing_block(block_id, missing_ok=True)
-        return None if route is None else self.routes[route]
+        return None if route is None else self._routes[route]
 
     def route_for_block(self, block_id: str) -> RouteKey | None:
         """Return the route that owns a block id.
@@ -566,6 +582,34 @@ class RoutedBackend:
 
         return self._route_for_existing_block(block_id, missing_ok=True)
 
+    def _route_holds_blocks(self, route: RouteKey) -> bool:
+        """Return whether a route's backend still holds any block.
+
+        The backend is asked directly, because the catalog is a cache filled
+        lazily as blocks are routed. A composite opened over a store that
+        already has data starts with an empty catalog, so the catalog alone
+        would report a populated route as empty.
+
+        The probe is a bounded global search, which every `MemoryBackend`
+        supports. A backend whose search index is stale or externally managed
+        can still under-report, so a route the catalog already knows about is
+        treated as populated without probing.
+
+        Args:
+            route: Route key to inspect.
+
+        Returns:
+            `True` when the route still holds blocks, or when emptiness cannot
+            be established.
+        """
+
+        if route in self._catalog.values():
+            return True
+        try:
+            return bool(self._routes[route].search(MemoryQuery(scope=Scope.GLOBAL, limit=1)))
+        except UnsupportedOperation:
+            return False
+
     def _route_for_new_block(self, block: MemoryBlock) -> RouteKey:
         """Choose and validate the owning route for a new block."""
 
@@ -576,7 +620,7 @@ class RoutedBackend:
                 raise MemoryConflict(f"Child route {selected!r} does not match parent route {parent_route!r}.")
             return parent_route
         route = selected or self.default_route
-        if route not in self.routes:
+        if route not in self._routes:
             raise MemoryConflict(f"Route {route!r} is not configured.")
         return route
 
@@ -609,7 +653,7 @@ class RoutedBackend:
             if route is not None:
                 return route
 
-            discovered: list[RouteKey] = [route_key for route_key, backend in self.routes.items() if backend.get_block(block_id) is not None]
+            discovered: list[RouteKey] = [route_key for route_key, backend in self._routes.items() if backend.get_block(block_id) is not None]
             if not discovered:
                 if missing_ok:
                     return None

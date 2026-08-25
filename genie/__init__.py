@@ -14,6 +14,7 @@ to agents.
 
 from genie.backend import (
     AcyclicLinkStore,
+    BlockRouter,
     InMemoryBackend,
     InMemoryLinkStore,
     KeyedStore,
@@ -77,6 +78,7 @@ __all__ = [
     "BackendError",
     "BackendReadOnly",
     "BackendUnavailable",
+    "BlockRouter",
     "CodecRegistry",
     "EncodedValue",
     "GenieError",

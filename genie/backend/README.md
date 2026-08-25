@@ -127,7 +127,14 @@ are separate concerns.
 | `TemporalIndex` | Optional temporal query prefiltering |
 
 These are not part of `MemoryBackend`; adapters implement only what they
-support. `VersionedRecords` combines `KeyedStore` and `SequenceStore` without
+support. A structure facade takes the store separately from the access object,
+so it can bind to whichever adapter holds the records.
+
+`BlockRouter` is the one capability a composite backend adds. It reports which
+backend owns a block, and a facade given a router resolves through it before
+checking for a structure capability. Routing is not a storage claim: a composite
+that implements `BlockRouter` still advertises only what it implements
+directly. `VersionedRecords` combines `KeyedStore` and `SequenceStore` without
 adding another backend method. A split internal implementation must coordinate
 cleanup and transactions so it cannot leave dangling structure records.
 

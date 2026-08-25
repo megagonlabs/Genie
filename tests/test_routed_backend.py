@@ -27,9 +27,9 @@ from genie import (
     MemoryQuery,
     RoutedBackend,
     SearchResult,
-    UnsupportedOperation,
+    SQLiteBackend,
 )
-from genie.backend.base import MemoryBackend
+from genie.backend.base import BlockRouter, MemoryBackend
 from genie.backend.structure_capabilities import (
     AcyclicLinkStore,
     KeyedStore,
@@ -38,7 +38,7 @@ from genie.backend.structure_capabilities import (
     TemporalStore,
 )
 from genie.memory.block import MemoryBlock
-from genie.memory.errors import MemoryConflict
+from genie.memory.errors import MemoryConflict, MemoryNotFound
 from genie.structures import EventLog, KeyedCollection, MemoryAddress
 
 
@@ -567,7 +567,7 @@ def test_routed_backend_register_route_controls_default_for_new_roots() -> None:
 
 
 def test_routed_backend_register_route_rejects_unsafe_replacement() -> None:
-    """Route registration rejects duplicates and cataloged-route replacement."""
+    """Route registration rejects duplicates and replacing a populated route."""
 
     backend = RoutedBackend({"us": InMemoryBackend()}, default_route="us")
     memory = Memory(backend=backend)
@@ -829,10 +829,8 @@ def test_structure_facade_membership_stays_inside_one_route() -> None:
     catalog_root = memory.put(type="collection", value="catalog", metadata={"route": "a"})
     far_block = memory.put(type="config", value="timeout budget is ten", metadata={"route": "b"})
 
-    with pytest.raises(UnsupportedOperation):
-        KeyedCollection(memory, backend, collection=catalog_root)
-
-    catalog = KeyedCollection(memory, route_a, collection=catalog_root)
+    # The composite is not a structure store, but it routes to the one that is.
+    catalog = KeyedCollection(memory, backend, collection=catalog_root)
 
     with pytest.raises(MemoryConflict):
         catalog.bind(MemoryAddress(("service",), "timeout"), far_block)
@@ -911,3 +909,94 @@ def test_a_tree_cannot_span_routes() -> None:
     # The invariant is what makes route-local traversal exact.
     assert backend.children(parent.id) == []
     assert backend.contains(parent.id, orphan.id) is False
+
+
+def test_facade_accepts_the_composite_and_routes_to_the_owning_adapter() -> None:
+    """Passing the composite binds the facade to the route that holds the records."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend, principal="app:demo")
+    log_root = memory.put(type="log", value="events", metadata={"route": "a"})
+    event = memory.put(type="event", value="deploy started", metadata={"route": "a"})
+
+    # No hand resolution: the facade takes the composite directly.
+    EventLog(memory, backend, log=log_root).append(event)
+
+    # The entry landed in route "a", which is what a facade bound straight to
+    # that adapter reads back.
+    assert [item.block.id for item in EventLog(memory, route_a, log=log_root).read()] == [event.id]
+    assert EventLog(memory, route_b, log=log_root).read() == []
+
+
+def test_facade_reports_an_unknown_container_rather_than_a_missing_capability() -> None:
+    """A routed store with no owning route is a missing block, not a bad store."""
+
+    backend = RoutedBackend({"a": InMemoryBackend()})
+    memory = Memory(backend=backend, principal="app:demo")
+    log_root = memory.put(type="log", value="events")
+    memory.delete(log_root.id)
+
+    with pytest.raises(MemoryNotFound):
+        EventLog(memory, backend, log=log_root)
+
+
+def test_composite_still_advertises_no_structure_capability() -> None:
+    """Routing for a facade is not a claim to any storage capability."""
+
+    backend = RoutedBackend({"a": InMemoryBackend()})
+
+    assert isinstance(backend, BlockRouter)
+    assert not isinstance(backend, SequenceStore)
+    assert not isinstance(backend, KeyedStore)
+
+
+def test_routes_mapping_is_read_only() -> None:
+    """Routes are replaced through `register_route`, never by direct assignment."""
+
+    backend = RoutedBackend({"a": InMemoryBackend()})
+
+    assert "a" in backend.routes
+    with pytest.raises(TypeError):
+        backend.routes["a"] = InMemoryBackend()  # type: ignore[index]
+
+    # The view is live rather than a copy.
+    backend.register_route("c", InMemoryBackend())
+    assert sorted(backend.routes) == ["a", "c"]
+
+
+def test_route_replacement_probes_the_backend_when_the_catalog_is_cold(tmp_path: Any) -> None:
+    """A composite opened over existing data must not strand it.
+
+    The catalog is filled lazily, so a freshly constructed composite has not
+    cataloged anything yet. Replacement has to ask the backend itself.
+    """
+
+    database = tmp_path / "genie.db"
+    first = RoutedBackend({"a": SQLiteBackend(database), "b": InMemoryBackend()}, default_route="a")
+    stored = Memory(backend=first, principal="app:demo").put(type="note", value="persisted")
+
+    # Reopen the same store, as a restart would.
+    second = RoutedBackend({"a": SQLiteBackend(database), "b": InMemoryBackend()}, default_route="a")
+
+    with pytest.raises(MemoryConflict, match="still holds blocks"):
+        second.register_route("a", InMemoryBackend(), replace=True)
+
+    assert Memory(backend=second, principal="app:demo").get(stored.id) is not None
+
+
+def test_route_replacement_allows_a_genuinely_empty_route(tmp_path: Any) -> None:
+    """An empty backend stays replaceable, so the probe is not a blanket refusal."""
+
+    database = tmp_path / "empty.db"
+    backend = RoutedBackend({"a": SQLiteBackend(database), "b": InMemoryBackend()}, default_route="b")
+    replacement = InMemoryBackend()
+
+    backend.register_route("a", replacement, replace=True)
+
+    assert backend.routes["a"] is replacement

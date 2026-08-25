@@ -17,8 +17,14 @@ backend = RoutedBackend(
 Each block has one owning route, and a tree never spans routes. A child is
 always stored in its parent's route, and a block cannot be reparented into
 another route; both attempts raise `MemoryConflict`. That invariant is what
-makes route-local subtree traversal and deletion exact. Routes may be registered
-later for application-managed tenant or mount discovery.
+makes route-local subtree traversal and deletion exact.
+
+Routes may be registered later for application-managed tenant or mount
+discovery. `routes` is a read-only live view, so a route is replaced only
+through `register_route`, which refuses to replace one whose backend still
+holds blocks. That check asks the backend directly rather than trusting the
+internal catalog, because the catalog fills lazily and is empty for a composite
+opened over a store that already has data.
 
 `backend_for_block` resolves the adapter that owns a block, and is the routing
 primitive every route-local operation goes through:
@@ -46,10 +52,9 @@ parent and child sit in different routes.
 ## Structure facades
 
 `RoutedBackend` owns no structural state, so it implements the core contract and
-none of the optional structure capabilities. The composite cannot be a facade's
-store; pass the route that owns the container block instead. Facades take the
-access object and the store as separate arguments, which is what makes this
-work:
+none of the optional structure capabilities. It does implement `BlockRouter`, so
+pass the composite as the facade's store and it resolves to the route that owns
+the container block:
 
 ```python
 from genie.structures import KeyedCollection
@@ -59,13 +64,18 @@ backend = RoutedBackend({"a": sql_a, "b": sql_b}, default_route="a")
 memory = Memory(backend=backend)
 catalog_root = memory.put(type="collection", value="catalog")
 
-catalog = KeyedCollection(memory, backend.backend_for_block(catalog_root.id), collection=catalog_root)
+catalog = KeyedCollection(memory, backend, collection=catalog_root)
 ```
 
-Reads and writes still go through `memory`, so routing, policy, and hooks are
-unchanged; only the structure records live in the resolved route. A container
-and its subtree always share one route, so that store is the right one for every
-member.
+Resolution happens once, when the facade is created. A container is fixed at that
+point and a container and its subtree always share one route, so per-call routing
+would return the same adapter every time. Passing a route directly still works and
+is the way to be explicit about which adapter holds the records.
+
+Reads and writes go through `memory`, so routing, policy, and hooks are unchanged;
+only the structure records live in the resolved route. `RoutedBackend` gains no
+structure method from this: it routes, and the facade binds to the adapter that
+stores.
 
 Membership stays inside that route. Binding a block owned by another route
 raises `MemoryConflict`, because the route's structure store does not hold the

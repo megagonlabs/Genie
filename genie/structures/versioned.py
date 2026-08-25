@@ -9,6 +9,8 @@ from genie.hooks import HookRegistry
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryNotFound, UnsupportedOperation
 from genie.structures._hooks import resolve_hooks
+from genie.structures._routing import block_id as _block_id
+from genie.structures._routing import resolve_store
 from genie.structures.access import BlockReader, BlockRef
 from genie.structures.keyed import KeyedCollection
 from genie.structures.log import EventLog
@@ -64,6 +66,11 @@ class VersionedRecords:
             UnsupportedOperation: If the store lacks either required capability.
         """
 
+        store = resolve_store(
+            store,
+            collection,
+            missing_message=f"Versioned collection block {_block_id(collection)!r} does not exist.",
+        )
         if not isinstance(store, VersionedStore):
             raise UnsupportedOperation(
                 "The configured store does not support keyed versioned records."
