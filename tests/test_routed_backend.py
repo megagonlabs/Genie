@@ -27,9 +27,19 @@ from genie import (
     MemoryQuery,
     RoutedBackend,
     SearchResult,
+    UnsupportedOperation,
+)
+from genie.backend.base import MemoryBackend
+from genie.backend.structure_capabilities import (
+    AcyclicLinkStore,
+    KeyedStore,
+    SequenceStore,
+    TemporalIndex,
+    TemporalStore,
 )
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryConflict
+from genie.structures import EventLog, KeyedCollection, MemoryAddress
 
 
 def route_by_metadata(block: MemoryBlock) -> str | None:
@@ -770,3 +780,134 @@ def test_routed_backend_works_with_memory_layer_extensions() -> None:
     assert retrieved.value == Preference("tone", "warm")
     with pytest.raises(AccessDenied):
         reader.get(private)
+
+
+def test_structure_facades_use_the_route_that_owns_the_container() -> None:
+    """Facades work over a routed backend when the owning route is the store."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend, principal="app:demo")
+    catalog_root = memory.put(type="collection", value="catalog", metadata={"route": "a"})
+    log_root = memory.put(type="log", value="events", metadata={"route": "a"})
+    config = memory.put(type="config", value="retry budget is three", metadata={"route": "a"})
+    event = memory.put(type="event", value="retry budget changed", metadata={"route": "a"})
+
+    # The access object stays the composite-backed Memory; only the structure
+    # records live in the route that owns the container block.
+    catalog = KeyedCollection(memory, route_a, collection=catalog_root)
+    events = EventLog(memory, route_a, log=log_root)
+    address = MemoryAddress(("service",), "retry")
+    catalog.bind(address, config)
+    events.append(event)
+
+    stored = catalog.get(address)
+
+    assert stored is not None
+    assert stored.id == config.id
+    assert [item.block.id for item in catalog.items()] == [config.id]
+    assert [item.block.id for item in events.read()] == [event.id]
+    assert backend.route_for_block(config.id) == "a"
+
+
+def test_structure_facade_membership_stays_inside_one_route() -> None:
+    """The composite is not a structure store, and membership cannot span routes."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend, principal="app:demo")
+    catalog_root = memory.put(type="collection", value="catalog", metadata={"route": "a"})
+    far_block = memory.put(type="config", value="timeout budget is ten", metadata={"route": "b"})
+
+    with pytest.raises(UnsupportedOperation):
+        KeyedCollection(memory, backend, collection=catalog_root)
+
+    catalog = KeyedCollection(memory, route_a, collection=catalog_root)
+
+    with pytest.raises(MemoryConflict):
+        catalog.bind(MemoryAddress(("service",), "timeout"), far_block)
+
+
+def test_backend_for_block_resolves_the_owning_route() -> None:
+    """The routing primitive returns the adapter that owns a block."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend, principal="app:demo")
+    here = memory.put(type="note", value="local", metadata={"route": "a"})
+    there = memory.put(type="note", value="remote", metadata={"route": "b"})
+    child = memory.put(type="note", value="child", parent=there, metadata={"route": "b"})
+
+    assert backend.backend_for_block(here.id) is route_a
+    assert backend.backend_for_block(there.id) is route_b
+    # A tree never spans routes, so a child resolves to its parent's adapter.
+    assert backend.backend_for_block(child.id) is route_b
+    assert backend.backend_for_block("missing") is None
+
+
+def test_structure_facade_binds_through_backend_for_block() -> None:
+    """Applications reach a route's optional capabilities without the route table."""
+
+    route_a = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": InMemoryBackend()},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend, principal="app:demo")
+    log_root = memory.put(type="log", value="events", metadata={"route": "a"})
+    event = memory.put(type="event", value="retry budget changed", metadata={"route": "a"})
+
+    log_route = backend.backend_for_block(log_root.id)
+    assert log_route is route_a
+    events = EventLog(memory, log_route, log=log_root)
+    events.append(event)
+
+    assert [item.block.id for item in events.read()] == [event.id]
+
+
+def test_routed_backend_does_not_claim_structure_capabilities() -> None:
+    """The composite satisfies the core contract and none of the optional ones."""
+
+    backend = RoutedBackend({"a": InMemoryBackend()})
+
+    assert isinstance(backend, MemoryBackend)
+    for capability in (AcyclicLinkStore, KeyedStore, SequenceStore, TemporalStore, TemporalIndex):
+        assert not isinstance(backend, capability)
+
+
+def test_a_tree_cannot_span_routes() -> None:
+    """Cross-route parenting is rejected by the composite, on create and on update."""
+
+    backend = RoutedBackend(
+        {"a": InMemoryBackend(), "b": InMemoryBackend()},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    parent = backend.put_block(MemoryBlock(type="folder", value="parent", id="p1", metadata={"route": "a"}))
+    orphan = backend.put_block(MemoryBlock(type="note", value="orphan", id="n1", metadata={"route": "b"}))
+
+    with pytest.raises(MemoryConflict, match="does not match parent route"):
+        backend.put_block(MemoryBlock(type="note", value="child", id="n2", parent_id=parent.id, metadata={"route": "b"}))
+
+    with pytest.raises(MemoryConflict, match="cannot be reparented across routes"):
+        backend.update_block(orphan.with_updates(parent_id=parent.id))
+
+    # The invariant is what makes route-local traversal exact.
+    assert backend.children(parent.id) == []
+    assert backend.contains(parent.id, orphan.id) is False

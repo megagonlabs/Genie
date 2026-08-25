@@ -154,6 +154,16 @@ class RoutedBackend:
     A `RoutedBackend` still satisfies the single `MemoryBackend` interface. Route
     selection is an implementation detail hidden behind the public `Memory`
     object.
+
+    A tree never spans routes. A child is always stored in its parent's route,
+    and a block cannot be reparented into another route. Route-local traversal
+    and link delegation is exact because of that invariant rather than
+    approximate.
+
+    The composite implements the core `MemoryBackend` contract only. It owns no
+    structural state, so it does not implement the optional structure capability
+    protocols in `genie.backend.structure_capabilities`. Use `backend_for_block`
+    to reach the route that does.
     """
 
     def __init__(
@@ -165,7 +175,6 @@ class RoutedBackend:
         traversal_index: TraversalIndex | None = None,
         search_index: SearchIndex | None = None,
         link_store: LinkStore | None = None,
-        enforce_tree_route: bool = True,
     ) -> None:
         """Create a routed backend.
 
@@ -180,8 +189,6 @@ class RoutedBackend:
                 run against route backends and merged when needed.
             link_store: Optional shared link store. If omitted, links are stored
                 route-locally and cross-route links are rejected.
-            enforce_tree_route: Whether children must stay in the same route as
-                their parent. This should usually remain enabled.
 
         Raises:
             ValueError: If no routes are configured or the default route is
@@ -196,7 +203,6 @@ class RoutedBackend:
         self.traversal_index = traversal_index
         self.search_index = search_index
         self.link_store = link_store
-        self.enforce_tree_route = enforce_tree_route
         self._catalog: dict[str, RouteKey] = {}
         self._lock = RLock()
         if self.default_route not in self.routes:
@@ -273,10 +279,8 @@ class RoutedBackend:
             Stored block, or `None` when no route contains the id.
         """
 
-        route = self._route_for_existing_block(block_id, missing_ok=True)
-        if route is None:
-            return None
-        return self.routes[route].get_block(block_id)
+        backend = self.backend_for_block(block_id)
+        return None if backend is None else backend.get_block(block_id)
 
     def update_block(
         self,
@@ -286,9 +290,8 @@ class RoutedBackend:
     ) -> MemoryBlock:
         """Replace a block in its current owning route.
 
-        Updates do not move a block to another route. If a block is reparented,
-        the parent must be in the same route when tree-route enforcement is
-        enabled.
+        Updates do not move a block to another route. A reparented block must
+        keep the same parent route.
 
         Args:
             block: Encoded replacement block.
@@ -300,13 +303,12 @@ class RoutedBackend:
 
         Raises:
             MemoryConflict: If the block is missing, its version changed, or
-                the new parent is in another route while tree-route
-                enforcement is enabled.
+                the new parent is in another route.
         """
 
         with self._lock:
             route = self._route_for_existing_block(block.id)
-            if block.parent_id is not None and self.enforce_tree_route:
+            if block.parent_id is not None:
                 parent_route = self._route_for_existing_block(block.parent_id)
                 if parent_route != route:
                     raise MemoryConflict("A memory block cannot be reparented across routes.")
@@ -340,11 +342,11 @@ class RoutedBackend:
         """
 
         with self._lock:
-            route = self._route_for_existing_block(block_id, missing_ok=True)
-            if route is None:
+            backend = self.backend_for_block(block_id)
+            if backend is None:
                 return
             descendants = self.descendants(block_id, include_self=True)
-            self.routes[route].delete_block(
+            backend.delete_block(
                 block_id,
                 expected_versions=expected_versions,
             )
@@ -365,10 +367,8 @@ class RoutedBackend:
 
         if self.traversal_index is not None:
             return self.traversal_index.children(block_id)
-        route = self._route_for_existing_block(block_id, missing_ok=True)
-        if route is None:
-            return []
-        return self.routes[route].children(block_id)
+        backend = self.backend_for_block(block_id)
+        return [] if backend is None else backend.children(block_id)
 
     def ancestors(self, block_id: str) -> list[MemoryBlock]:
         """Return ancestors for a block id.
@@ -382,10 +382,8 @@ class RoutedBackend:
 
         if self.traversal_index is not None:
             return self.traversal_index.ancestors(block_id)
-        route = self._route_for_existing_block(block_id, missing_ok=True)
-        if route is None:
-            return []
-        return self.routes[route].ancestors(block_id)
+        backend = self.backend_for_block(block_id)
+        return [] if backend is None else backend.ancestors(block_id)
 
     def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
         """Return descendants for a block id.
@@ -400,10 +398,8 @@ class RoutedBackend:
 
         if self.traversal_index is not None:
             return self.traversal_index.descendants(block_id, include_self=include_self)
-        route = self._route_for_existing_block(block_id, missing_ok=True)
-        if route is None:
-            return []
-        return self.routes[route].descendants(block_id, include_self=include_self)
+        backend = self.backend_for_block(block_id)
+        return [] if backend is None else backend.descendants(block_id, include_self=include_self)
 
     def contains(self, root_id: str, block_id: str) -> bool:
         """Return whether `block_id` is in `root_id`'s subtree.
@@ -418,6 +414,8 @@ class RoutedBackend:
 
         if self.traversal_index is not None:
             return self.traversal_index.contains(root_id, block_id)
+        # A tree never spans routes, so blocks owned by different routes can
+        # never share a subtree. The early `False` is exact, not a fallback.
         root_route = self._route_for_existing_block(root_id, missing_ok=True)
         block_route = self._route_for_existing_block(block_id, missing_ok=True)
         if root_route is None or block_route is None or root_route != block_route:
@@ -488,10 +486,8 @@ class RoutedBackend:
 
         if self.link_store is not None:
             return self.link_store.list_links(block_id, relation=relation, direction=direction)
-        route = self._route_for_existing_block(block_id, missing_ok=True)
-        if route is None:
-            return []
-        return self.routes[route].list_links(block_id, relation=relation, direction=direction)
+        backend = self.backend_for_block(block_id)
+        return [] if backend is None else backend.list_links(block_id, relation=relation, direction=direction)
 
     def delete_links_for_block(self, block_id: str) -> None:
         """Delete links connected to a block.
@@ -504,10 +500,9 @@ class RoutedBackend:
             if self.link_store is not None:
                 self.link_store.delete_links_for_block(block_id)
                 return
-            route = self._route_for_existing_block(block_id, missing_ok=True)
-            if route is None:
-                return
-            self.routes[route].delete_links_for_block(block_id)
+            backend = self.backend_for_block(block_id)
+            if backend is not None:
+                backend.delete_links_for_block(block_id)
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
         """Search through the shared search index or route-local indexes.
@@ -524,15 +519,40 @@ class RoutedBackend:
         if query.scope == Scope.LINKS and self.link_store is not None and query.root_id is not None:
             return self._search_linked_blocks(query)
         if query.root_id is not None and query.scope != Scope.GLOBAL:
-            route = self._route_for_existing_block(query.root_id, missing_ok=True)
-            if route is None:
-                return []
-            return self.routes[route].search(query)
+            backend = self.backend_for_block(query.root_id)
+            return [] if backend is None else backend.search(query)
         results: list[SearchResult] = []
         for backend in self.routes.values():
             results.extend(backend.search(query))
         results.sort(key=lambda result: result.score, reverse=True)
         return results[: query.limit]
+
+    def backend_for_block(self, block_id: str) -> MemoryBackend | None:
+        """Return the backend that owns a block id.
+
+        This is the routing primitive. Every route-local operation resolves its
+        target backend through this method instead of reading `routes` directly.
+
+        Applications use it to reach a route's optional capabilities.
+        `RoutedBackend` implements the core `MemoryBackend` contract only, so a
+        structure facade takes the owning route as its store while the access
+        object stays the composite-backed `Memory`:
+
+            log_route = backend.backend_for_block(log_root.id)
+            log = EventLog(memory, log_route, log=log_root)
+
+        Because a tree never spans routes, the backend returned for a container
+        block also owns every block in that container's subtree.
+
+        Args:
+            block_id: Memory block id.
+
+        Returns:
+            Owning backend, or `None` when no route contains the id.
+        """
+
+        route = self._route_for_existing_block(block_id, missing_ok=True)
+        return None if route is None else self.routes[route]
 
     def route_for_block(self, block_id: str) -> RouteKey | None:
         """Return the route that owns a block id.
@@ -550,7 +570,7 @@ class RoutedBackend:
         """Choose and validate the owning route for a new block."""
 
         selected = self.route_selector(block) if self.route_selector is not None else None
-        if block.parent_id is not None and self.enforce_tree_route:
+        if block.parent_id is not None:
             parent_route = self._route_for_existing_block(block.parent_id)
             if selected is not None and selected != parent_route:
                 raise MemoryConflict(f"Child route {selected!r} does not match parent route {parent_route!r}.")
