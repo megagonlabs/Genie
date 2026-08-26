@@ -198,6 +198,34 @@ identity, ownership, topology, policy, timestamp, and version fields before it
 stores anything. Structural hooks observe immutable backend-owned records; they
 do not rewrite them.
 
+A block-creation hook is different. A policy is chosen when a block is created
+and stays stable after that. So `before_put` may set the new block's `policy`,
+and `before_update` may not. `before_put` still cannot change the authorized
+parent.
+
+This makes `before_put` the only place that can choose a policy per block. A
+`MemoryHandle` refuses explicit policies unless it was created with
+`allow_policy_override=True`, and `Memory.default_policy` is one fixed policy
+for every write. A hook sees the block and the `HookContext`, so it can decide
+from the block type, the metadata, the acting principal, or the attributes of
+the surrounding scope:
+
+```python
+class GrantHook(MemoryHook):
+    def before_put(self, context, block):
+        orchestrator = context.attributes.get("task.orchestrator")
+        if orchestrator is None:
+            return block
+        return block.with_updates(
+            policy=MemoryPolicy.owner_or(principals={orchestrator}),
+        )
+```
+
+A hook that sets policies is part of your access control. Register it as
+mandatory, so later code cannot detach it, and keep it in trusted code. Its
+decisions are also worth recording: a reader of the audit trail otherwise
+cannot tell why a block has the policy it has.
+
 ## The registry
 
 `HookRegistry` owns the dispatch order, and the list of installed hooks is

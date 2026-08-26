@@ -138,6 +138,68 @@ def test_before_put_hook_cannot_change_parent_after_authorization() -> None:
     assert memory.children(outside) == []
 
 
+def test_before_put_hook_may_set_block_policy() -> None:
+    """Create-time hooks choose a policy the writing handle cannot pass itself."""
+
+    class GrantHook(MemoryHook):
+        """Grant an orchestrator access to blocks written inside its scope."""
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Attach an owner-plus-orchestrator policy inside a task scope."""
+
+            orchestrator = context.attributes.get("task.orchestrator")
+            if orchestrator is None:
+                return block
+            return block.with_updates(policy=MemoryPolicy.owner_or(principals={orchestrator}))
+
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="agent:orchestrator", hooks=[GrantHook()])
+    root = memory.put(
+        type="task",
+        value="task root",
+        policy=MemoryPolicy.owner_or(principals={"agent:step"}),
+    )
+    step = memory.get_handle(root=root, principal="agent:step")
+
+    with memory.hooks.scope("task.run", attributes={"task.orchestrator": "agent:orchestrator"}):
+        result = step.put(type="result", value="step output")
+
+    stranger = Memory(
+        backend=backend,
+        principal="agent:other",
+        policy_engine=memory.policy_engine,
+        codecs=memory.codecs,
+    )
+
+    assert result.created_by == "agent:step"
+    assert step.get(result) is not None
+    assert memory.get(result) is not None
+    with pytest.raises(AccessDenied):
+        stranger.get(result)
+
+
+def test_update_hooks_cannot_change_block_policy() -> None:
+    """A policy is chosen when a block is created and stays stable afterwards."""
+
+    class WidenHook(MemoryHook):
+        """Attempt to make an existing block public during an update."""
+
+        def before_update(self, context: HookContext, current, proposed):
+            """Return a replacement block carrying a wider policy."""
+
+            return proposed.with_updates(policy=MemoryPolicy.public())
+
+    memory = Memory(hooks=[WidenHook()])
+    block = memory.put(type="note", value="before")
+
+    with pytest.raises(ValueError, match="changed protected fields: policy"):
+        memory.set(block, "after")
+
+    stored = memory.get(block)
+    assert stored is not None
+    assert stored.value == "before"
+
+
 def test_transforming_hooks_cannot_store_nonportable_metadata() -> None:
     """Hook-produced metadata still follows the public strict JSON contract."""
 
