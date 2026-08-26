@@ -65,7 +65,7 @@ def main() -> None:
     else:
         raise AssertionError("An acyclic relation must reject a self link.")
 
-    # "mentions" is an ordinary relation. add_link performs no reachability
+    # "mentions" is an ordinary relation. `add_link` performs no reachability
     # check, so the same three blocks may form a cycle in a different relation.
     memory.add_link(raw, cleaned, "mentions")
     memory.add_link(cleaned, trained, "mentions")

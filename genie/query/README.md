@@ -17,18 +17,19 @@ results = memory.search(
 ```
 
 `Memory.search` turns these friendly arguments into a `MemoryQuery`: optional
-text, an optional root id, one scope, optional block types and filters, and a
-limit that cannot be negative. Backends return ranked `SearchResult` values.
-Each one holds a block, a finite numeric score, and a reason. Building a query
-checks the runtime types, and it copies the type lists and nested filter
+`text`, an optional `root_id`, one `Scope`, optional `types` and `filters`, and
+a `limit` that cannot be negative. Backends return ranked `SearchResult` values.
+Each one holds a `block`, a finite numeric `score`, and a `reason`. Building a
+query checks the runtime types, and it copies the type lists and nested filter
 operands that the caller owns.
 
-The limit bounds what a backend returns, not what the caller receives. The
-backend applies the limit first. Then `Memory` removes results that the
-principal cannot see and results outside the query scope. So a search can return
-fewer results than the limit even when more matching blocks exist. There is no
-result cursor. A caller who needs a full page asks for a larger limit and cuts
-the list itself, and decides how much extra backend work that is worth.
+The `limit` bounds what a backend returns, not what the caller receives. The
+backend applies the `limit` first. Then `Memory` removes results that the
+principal cannot `read` and results outside the query `Scope`. So a search can
+return fewer results than the `limit` even when more matching blocks exist.
+There is no result cursor. A caller who needs a full page asks for a larger
+`limit` and cuts the list itself, and decides how much extra backend work that
+is worth.
 
 | Scope | Search area |
 | --- | --- |
@@ -38,7 +39,7 @@ the list itself, and decides how much extra backend work that is worth.
 | `links` | Blocks linked to the root |
 | `global` | All blocks the backend can see |
 
-Every scope except `global` needs a root when you search through `Memory`.
+Every `Scope` except `global` needs a `root` when you search through `Memory`.
 
 Each scope is resolved from stored state, not from the query: `subtree` and
 `ancestors` come from stored parents, and `links` comes from stored links. A
@@ -50,8 +51,9 @@ entries, and revisions record membership by block id and do not change stored
 parents. So a search rooted at a container block finds only the members that the
 application also created as children of that container.
 
-A bounded handle cannot use search to escape its root. It also cannot use search
-to turn on global or ancestor access that the handle has disabled.
+A bounded handle cannot use search to escape its root. It also cannot use
+search to turn on the `allow_global` or `allow_up` access that the handle has
+disabled.
 
 ## Filters
 

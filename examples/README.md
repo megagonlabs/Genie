@@ -21,9 +21,10 @@ conda run -n "genie" python examples/<path>.py
    and linked search.
 6. [`basic/acyclic_links.py`](basic/acyclic_links.py): keep one relation free of
    cycles with atomic, cycle-checked inserts.
-7. [`basic/mounted_handles.py`](basic/mounted_handles.py): mount access as a
+7. [`basic/mounted_handles.py`](basic/mounted_handles.py): `allow_mounts` as a
    handle capability that does not widen the subtree.
-8. [`basic/policies.py`](basic/policies.py): private defaults and shared access.
+8. [`basic/policies.py`](basic/policies.py): the
+   `MemoryPolicy.owner_private()` default, and sharing access.
 9. [`basic/hook_audit.py`](basic/hook_audit.py): the hook audit surface, from
    scopes and traversal events to refusals and suppression windows.
 10. [`basic/write_hooks.py`](basic/write_hooks.py): change and observe every

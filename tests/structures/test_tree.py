@@ -127,7 +127,7 @@ def test_tree_rejects_operations_outside_its_root() -> None:
 
 
 def test_tree_preserves_handle_upward_traversal_limits() -> None:
-    """The facade does not bypass a MemoryHandle's allow_up setting."""
+    """The facade does not bypass a `MemoryHandle`'s `allow_up` setting."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -259,7 +259,7 @@ def test_tree_requires_an_existing_visible_root() -> None:
 
 
 def test_memory_and_handle_implement_ownership_access() -> None:
-    """Both public access objects can be supplied to OwnershipTree."""
+    """Both public access objects can be supplied to `OwnershipTree`."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

@@ -277,4 +277,4 @@ class MemoryAccess(
     SearchAccess,
     Protocol,
 ):
-    """Combined structural interface implemented by Memory and MemoryHandle."""
+    """Combined structural interface implemented by `Memory` and `MemoryHandle`."""

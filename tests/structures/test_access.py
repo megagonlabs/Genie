@@ -31,7 +31,7 @@ def test_memory_implements_shared_structure_access_protocols() -> None:
 
 
 def test_memory_handle_implements_shared_structure_access_protocols() -> None:
-    """A scoped MemoryHandle can be passed to the same structure facades."""
+    """A scoped `MemoryHandle` can be passed to the same structure facades."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

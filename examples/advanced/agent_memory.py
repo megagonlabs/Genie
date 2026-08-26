@@ -1,6 +1,6 @@
 """Give an agent an application-friendly compound memory.
 
-``TaskMemory`` hides structure roots and block creation while explicitly
+`TaskMemory` hides structure roots and block creation while explicitly
 composing three generic Genie facades:
 
 - a keyed collection of task preconditions
@@ -78,7 +78,7 @@ class Preconditions:
         self._handle.update(current, value={"satisfied": satisfied})
 
     def get(self, name: str) -> Precondition | None:
-        """Return a stored value, or ``None`` when the name is unknown."""
+        """Return a stored value, or `None` when the name is unknown."""
 
         block = self._get_block(name)
         if block is None:

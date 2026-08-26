@@ -1,24 +1,26 @@
 # Policies
 
-`genie.policy` provides access rules for single blocks. A request must pass both
-the handle's scope and the block's policy.
+`genie.policy` provides access rules for single blocks. A request must pass
+both the handle's scope and the block's `MemoryPolicy`.
 
 ## Principals and rules
 
-`Principal` identifies a user, an agent, or a service by id, roles, and optional
-metadata. An `AccessRule` can allow everyone, the creator of the block, chosen
-ids, chosen roles, or a combination of these.
+`Principal` identifies a user, an agent, or a service by `id`, `roles`, and
+optional `metadata`. An `AccessRule` says who passes one operation:
+`AccessRule.allow()` for everyone, `AccessRule.deny()` for nobody,
+`AccessRule.owner()` for the block creator, and `AccessRule.only(...)` for
+chosen `principals`, chosen `roles`, or those plus `owner=True`.
 
 ```python
 principal = Principal(id="agent:writer", roles=frozenset({"researcher"}))
 ```
 
-Principal ids and role names must be non-empty strings. Invalid principal input
-raises an error. It never falls back to the default `system` identity. Policy
-rules check the types of their fields and copy any mutable input sets.
+`Principal` ids and role names must be non-empty strings. Invalid principal
+input raises an error. It never falls back to the default `system` identity.
+Policy rules check the types of their fields and copy any mutable input sets.
 
-`MemoryPolicy` controls read, write, search, upward traversal, and downward
-traversal:
+`MemoryPolicy` has one `AccessRule` field per operation family: `read`,
+`write`, `search`, `traverse_up`, and `traverse_down`:
 
 ```python
 researchers = AccessRule.only(roles={"researcher"}, owner=True)
@@ -31,10 +33,11 @@ policy = MemoryPolicy(
 )
 ```
 
-New blocks use `MemoryPolicy.owner_private()` by default. An application may
-replace that default. A common choice is `owner_or(...)`, so that creators and a
-supervisor role keep access. Use `MemoryPolicy.public()` only when every
-built-in operation should be open to everyone.
+New blocks use `MemoryPolicy.owner_private()` by default, so only the creator
+passes every built-in operation. An application may replace that default. A
+common choice is `MemoryPolicy.owner_or(...)`, so that creators and a supervisor
+role keep access. Use `MemoryPolicy.public()` only when every built-in operation
+should be open to everyone.
 
 ## Scope and policy
 
@@ -42,7 +45,7 @@ built-in operation should be open to everyone.
 inside handle scope AND allowed by block policy
 ```
 
-Reading a parent does not grant reading its descendants. Genie does not
+`read` on a parent does not grant `read` on its descendants. Genie does not
 implement policy inheritance. A handle needs `allow_policy_override=True` before
 it can attach an explicit policy to a new block. This stops ordinary agents from
 making their writes public.
@@ -75,9 +78,9 @@ step1 = memory.get_handle(root=task_root, principal="agent:step1")
 ```
 
 Upward, the orchestrator has to reach the results. `put` records the acting
-principal in `created_by`, so a sub-agent's block is owner-private to that
-sub-agent. Handle writes take their policy from `Memory.default_policy`, so set
-it there:
+principal in `created_by`, so under `MemoryPolicy.owner_private()` a
+sub-agent's block is reachable only by that sub-agent. Handle writes take their
+policy from `Memory.default_policy`, so set it there:
 
 ```python
 memory = Memory(
@@ -124,9 +127,9 @@ Custom names cannot replace the built-in ones, and an unknown operation raises
 - Give agents rooted handles, or tools built for one purpose.
 - Use explicit principals in shared systems.
 - Prefer generated block ids for untrusted input.
-- Recursive deletion needs write access to the target block only, and it stops
-  if the checked subtree changes.
-- A link result needs both endpoints to be readable.
+- Recursive deletion needs `write` on the target block only, and it stops if
+  the checked subtree changes.
+- A link result needs `read` on both endpoints.
 
 A missing grant fails in two different ways, and only one of them is loud.
 `get` on a known id raises `AccessDenied`. `children`, `ancestors`, and `search`

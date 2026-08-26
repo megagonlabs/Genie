@@ -170,7 +170,7 @@ def test_backends_receive_normalized_filter_operators() -> None:
 
 
 def test_query_accepts_tuple_types_and_string_scope() -> None:
-    """MemoryQuery normalizes string scopes and preserves tuple types."""
+    """`MemoryQuery` normalizes string scopes and preserves tuple types."""
 
     query = MemoryQuery(scope="subtree", types=("note",))
 
@@ -180,7 +180,7 @@ def test_query_accepts_tuple_types_and_string_scope() -> None:
 
 
 def test_query_validation_and_immutability() -> None:
-    """MemoryQuery rejects invalid scopes and remains immutable after creation."""
+    """`MemoryQuery` rejects invalid scopes and remains immutable after creation."""
 
     query = MemoryQuery(scope="links", types=["note", "task"])
 

@@ -560,7 +560,7 @@ class MemoryChange:
     """One decision after it was carried out.
 
     Attributes:
-        decision: Decision that produced the change.
+        decision: `Decision` that produced the change.
         memory: Memory after the write, or the deleted memory for a `DELETE`.
             Absent for a `NONE`, which writes nothing.
         previous_text: Memory text before an `UPDATE` or `DELETE`.

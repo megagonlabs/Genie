@@ -7,9 +7,9 @@ stored values mean.
 ## Blocks, ownership, and links
 
 `MemoryBlock` is the smallest value you can address on its own. It holds a
-stable id, a type and a value that your application defines, an optional
-parent, metadata, a content type, a policy, a creator, timestamps, and a
-version.
+stable `id`, a `type` and a `value` that your application defines, an optional
+`parent_id`, `metadata`, a `content_type`, a `policy`, the creator in
+`created_by`, the `created_at` and `updated_at` timestamps, and a `version`.
 
 ```python
 note = memory.put(
@@ -37,10 +37,10 @@ references, provenance, and relationships that cut across the tree.
 
 ## Trusted and restricted access
 
-`Memory` holds one backend, principal, policy engine, default policy, set of
-codecs, set of hooks, and the `attributes` it reports to hooks. It offers block
-CRUD, traversal, links, mounts, search, and handle creation. Keep it inside
-trusted application code.
+`Memory` holds one backend, `Principal`, `PolicyEngine`, `default_policy`,
+`CodecRegistry`, `HookRegistry`, and the `attributes` it reports to hooks. It
+offers block CRUD, traversal, links, mounts, search, and handle creation. Keep
+it inside trusted application code.
 
 `hooks` is read-only. You change which hooks run by editing that registry, not
 by replacing it, so nobody can detach a mandatory hook. See
@@ -92,13 +92,14 @@ mount links but does not enter their targets. Mount operations on a handle need
 
 ## Safety rules
 
-- By default, only the creator of a new block can read it.
-- Recursive deletion needs write access to the target block only.
-- A block update fails on a stale version. A deletion fails if the subtree
-  changed.
-- Links are hidden when an endpoint cannot be read.
+- New blocks use `MemoryPolicy.owner_private()` by default, so only the creator
+  can `read`, `write`, `search`, `traverse_up`, and `traverse_down` them.
+- Recursive deletion needs `write` on the target block only.
+- A block update fails on a stale `version`, and a deletion fails if the
+  subtree changed. Both raise `MemoryConflict`.
+- A link is hidden when an endpoint does not allow `read`.
 - A bounded handle rejects references outside its scope.
-- A handle needs policy override permission to choose the policy of a new
+- A handle needs `allow_policy_override=True` to choose the policy of a new
   block.
 - Block and link metadata must be strict JSON dictionaries.
 - Returned JSON values and metadata are defensive copies. You get a copy, so

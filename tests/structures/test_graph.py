@@ -323,7 +323,7 @@ def test_graph_missing_nodes_raise_clear_errors() -> None:
 
 
 def test_memory_and_handle_implement_graph_access() -> None:
-    """Both public access objects can be supplied to PropertyGraph."""
+    """Both public access objects can be supplied to `PropertyGraph`."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

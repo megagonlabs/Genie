@@ -1,4 +1,4 @@
-"""Configure default-private memory and explicit shared block policies.
+"""Use the `MemoryPolicy.owner_private()` default, then share blocks explicitly.
 
 Run from the repository root:
 
@@ -71,6 +71,8 @@ def main() -> None:
     researcher_shared = AccessRule.only(roles={"researcher"}, owner=True)
     compliance_shared = AccessRule.only(roles={"compliance"}, owner=True)
     public = owner.put(type="note", value="Public context", policy=MemoryPolicy.public())
+    # No policy argument, so this block gets the `MemoryPolicy.owner_private()`
+    # default: only `agent:owner` passes any built-in operation on it.
     private = owner.put(type="note", value="Owner-only reasoning")
     role_gated = owner.put(
         type="note",
@@ -138,9 +140,9 @@ def main() -> None:
     try:
         reader.get(private)
     except AccessDenied:
-        print("ordinary reader reading an owner-private note: blocked")
+        print("ordinary reader reading an owner_private note: blocked")
     else:
-        raise AssertionError("An ordinary reader must not read an owner-private note.")
+        raise AssertionError("An ordinary reader must not read an owner_private note.")
     try:
         reader.policy_engine.require("export", compliance_export, reader.principal)
     except AccessDenied:

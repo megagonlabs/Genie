@@ -689,7 +689,7 @@ class MemoryHandle:
         if root_id is not None and selected_scope != Scope.GLOBAL:
             self._require_in_subtree(HookOperation.SEARCH, root_id)
         # Rebuild query objects with the selected scope/root so a caller cannot
-        # pass a wider root or global scope through a prebuilt MemoryQuery.
+        # pass a wider root or global scope through a prebuilt `MemoryQuery`.
         results = self._as_principal().search(
             query,
             text=text,

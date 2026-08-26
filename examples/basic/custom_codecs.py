@@ -46,8 +46,8 @@ class Preference:
     """Custom value object stored through its own codec.
 
     Attributes:
-        topic: Preference topic.
-        value: Preference value.
+        topic: `Preference` topic.
+        value: `Preference` value.
     """
 
     topic: str
@@ -88,7 +88,7 @@ class PreferenceCodec(MemoryCodec):
         """Encode a `Preference` into a storage-safe payload.
 
         Args:
-            value: Preference instance.
+            value: `Preference` instance.
 
         Returns:
             Encoded preference payload.
@@ -133,7 +133,7 @@ class RatingCodec(MemoryCodec):
         """Encode a `Rating` into a storage-safe payload.
 
         Args:
-            value: Rating instance.
+            value: `Rating` instance.
 
         Returns:
             Encoded rating payload.

@@ -364,7 +364,7 @@ def test_owner_or_policy_allows_configured_roles() -> None:
 
 
 def test_handle_writes_preserve_configured_default_policy() -> None:
-    """MemoryHandle writes use the same default policy as their parent memory."""
+    """`MemoryHandle` writes use the same `default_policy` as their parent memory."""
 
     memory = Memory(principal="agent:owner", default_policy=MemoryPolicy.public())
     root = memory.put(type="root", value="shared root")

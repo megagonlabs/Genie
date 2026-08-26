@@ -69,8 +69,8 @@ task = tree.create_child(type="task", value="Draft proposal")
 note = tree.create_child(parent=task, type="note", value="Keep it short")
 ```
 
-It never goes above its root. Ownership controls lifecycle, so deleting a parent
-deletes its descendants.
+It never goes above its `root`. Ownership controls lifecycle, so deleting a
+parent deletes its descendants.
 
 `PropertyGraph` treats blocks as nodes and `MemoryLink` values as directed,
 typed edges:
@@ -105,9 +105,10 @@ events.append(message)
 recent = events.tail(limit=20)
 ```
 
-Key `bind` only creates. `rebind` and `unbind` compare the block id you expect.
-Log sequence numbers are unique and always increase. Deleting a block that a log
-refers to removes its entry, and the sequence number is not reused.
+`KeyedCollection.bind` only creates. `rebind` and `unbind` compare the block id
+you expect. Log sequence numbers are unique and always increase. Deleting a
+block that a log refers to removes its entry, and the sequence number is not
+reused.
 
 ```python
 timeline = TemporalCollection(handle, backend, collection=timeline_root)
@@ -119,10 +120,10 @@ timeline.add(
 ```
 
 Event ranges and validity intervals are half-open: the start time is included
-and the end time is not. `TemporalStore` gives stable
-scans, and an optional `TemporalIndex` prefilters them. Use `EventLog` for
-insertion order and `TemporalCollection` for event or validity time. One block
-may belong to both.
+and the end time is not. `TemporalStore` gives stable scans, and an optional
+`TemporalIndex` prefilters them. Use `EventLog` for insertion order and
+`TemporalCollection` for event or validity time. One block may belong to
+both.
 
 ## Versioned records
 
@@ -160,9 +161,9 @@ handle's scope.
 A composite backend such as `RoutedBackend` owns no structural state, so it
 cannot hold records itself. But it does implement `BlockRouter`, so passing it
 as the store resolves to the route that owns the container block. A route is one
-named backend inside the composite. An unknown
-container raises `MemoryNotFound` instead of reporting a missing capability.
-Structure membership stays inside the resolved route. See the [composite
+named backend inside the composite. An unknown container raises
+`MemoryNotFound` instead of reporting a missing capability. Structure membership
+stays inside the resolved route. See the [composite
 guide](../backend/composite/README.md).
 
 Facades store references rather than copies, so an application can combine any

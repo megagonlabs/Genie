@@ -344,7 +344,7 @@ def test_get_unbounded_handle_requires_explicit_root_or_global_permission_for_se
 
 
 def test_get_handle_requires_root_and_get_unbounded_handle_is_explicit() -> None:
-    """Memory.get_handle creates bounded handles; unbounded access uses get_unbounded_handle."""
+    """`Memory.get_handle` creates bounded handles; unbounded access uses `get_unbounded_handle`."""
 
     memory = Memory()
     missing_attribute = "scope"

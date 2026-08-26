@@ -222,7 +222,7 @@ def main() -> None:
         hooks=[stamper, journal, RetentionGuard()],
     )
 
-    # before_put decides what is stored, so the stored block already carries
+    # `before_put` decides what is stored, so the stored block already carries
     # the annotation the caller never supplied.
     task = memory.put(type="task", value={"title": "Draft outline", "status": "open"})
 
@@ -242,8 +242,8 @@ def main() -> None:
     assert missing is None
     assert journal.reads == [(task.id, True), ("block-that-was-never-stored", False)]
 
-    # before_update sees the stored block and the proposal together, so it can
-    # carry a counter forward. after_update sees both resulting versions.
+    # `before_update` sees the stored block and the proposal together, so it can
+    # carry a counter forward. `after_update` sees both resulting versions.
     updated = memory.update(task, value={"status": "review"})
     again = memory.update(updated, value={"status": "done"})
 
@@ -264,7 +264,7 @@ def main() -> None:
     print(f"stored link metadata: {link.metadata}")
     print(f"updated link metadata: {relinked.metadata}")
 
-    # update_link merges metadata into what the link already carried, so the
+    # `update_link` merges metadata into what the link already carried, so the
     # annotation from the original insert survives the update.
     assert link.metadata == {"confidence": 0.9, "stamped": True}
     assert relinked.metadata == {"confidence": 1.0, "stamped": True, "restamped": True}

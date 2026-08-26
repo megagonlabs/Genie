@@ -45,19 +45,21 @@ timestamps, and an update version.
 - Codecs translate application values at the storage boundary.
 
 Every public memory operation acts as a `Principal`. Access requires both an
-allowed handle scope and an allowed block policy. Child handles may narrow
-access but cannot change principal or restore disabled capabilities. New blocks
-are owner-private by default; policies do not inherit through ownership, but
-`write` on a block is authority over the existence of everything it owns. A
-policy is chosen when a block is created, from an explicit argument,
-`Memory.default_policy`, or a `before_put` hook, and stays stable across later
-updates. Delegating across principals therefore needs an explicit grant in each
-direction, and reads that a policy filters return fewer results rather than
-refusing.
+allowed handle scope and an allowed block `MemoryPolicy`. Child handles may
+narrow access but cannot change principal or restore disabled capabilities. New
+blocks use `MemoryPolicy.owner_private()` by default, so only the creator may
+`read`, `write`, `search`, `traverse_up`, and `traverse_down` them. Policies do
+not inherit through ownership, but `write` on a block is authority over the
+existence of everything it owns. A policy is chosen when a block is created,
+from an explicit argument, `Memory.default_policy`, or a `before_put` hook, and
+stays stable across later updates. Delegating across principals therefore needs
+an explicit grant in each direction, and reads that a policy filters return
+fewer results rather than refusing.
 
-Block updates use optimistic versions. Recursive deletion is authorized on the
-target block alone and verifies the exact subtree snapshot it observed. Concurrent changes raise `MemoryConflict` rather
-than committing stale work.
+Block updates use optimistic versions. Recursive deletion is authorized by
+`write` on the target block alone, and it verifies the exact subtree snapshot it
+observed. Concurrent changes raise `MemoryConflict` rather than committing stale
+work.
 
 Hooks cover block lifecycle, search, link mutations, and explicit key, log, and
 temporal changes. Every operation that starts also reports one terminal outcome
@@ -66,13 +68,13 @@ check that produced it, so denials and failures stay observable. Every event
 carries its start time and inherited string attributes, and caller-defined
 scopes group the operations of one agent run, turn, or tool call. Changed
 searches are authorized again and final results are filtered again. That
-filtering runs after a backend has already applied the query limit, so a result
-page can be shorter than the limit the caller asked for. Reentrant callbacks are
-skipped with bounded causal context. Callbacks that observe already-committed
-work are isolated from one another, so one failing sink cannot cost the others
-the record they are owed, and a sink that declares itself fail-open cannot fail
-the caller at all. Hooks run synchronously; external side effects are not
-backend transactions.
+filtering runs after a backend has already applied the query `limit`, so a
+result page can be shorter than the `limit` the caller asked for. Reentrant
+callbacks are skipped with bounded causal context. Callbacks that observe
+already-committed work are isolated from one another, so one failing sink
+cannot cost the others the record they are owed, and a sink that declares
+itself fail-open cannot fail the caller at all. Hooks run synchronously;
+external side effects are not backend transactions.
 
 ## Optional structures
 

@@ -35,7 +35,7 @@ from genie.structures import KeyBinding, MemoryAddress, TemporalEntry
 
 
 def test_sqlite_backend_implements_the_core_backend_protocol() -> None:
-    """SQLite exposes every method required by ``MemoryBackend``."""
+    """SQLite exposes every method required by `MemoryBackend`."""
 
     with SQLiteBackend() as backend:
         assert isinstance(backend, MemoryBackend)

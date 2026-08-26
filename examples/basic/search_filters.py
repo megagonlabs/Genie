@@ -50,7 +50,7 @@ def main() -> None:
         filters={"metadata.priority": {">=": 2}, "owner": {"in": ["team"]}},
     )
 
-    # MemoryQuery is the validated, backend-portable request shape. Friendly
+    # `MemoryQuery` is the validated, backend-portable request shape. Friendly
     # filter operators are normalized when the query is constructed.
     query = MemoryQuery(
         text="proposal",

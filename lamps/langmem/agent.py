@@ -364,7 +364,7 @@ class LangMemAgent:
         """Hand a conversation to the reflection queue.
 
         Args:
-            conversation: Exchange and the changes proposed from it.
+            conversation: `Exchange` and the changes proposed from it.
             at: ISO 8601 time the exchange was handed over.
             after_seconds: Debounce window before the manager may run it.
 

@@ -134,7 +134,7 @@ class BlockStoreContract(StructureBackendContract):
 
 
 class KeyedStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing ``KeyedStore``."""
+    """Contract tests reusable by backends implementing `KeyedStore`."""
 
     def test_keyed_store_contract(self) -> None:
         """Bindings are unique, ordered, conditional, and deletion-aware."""
@@ -276,7 +276,7 @@ class KeyedStoreContract(StructureBackendContract):
 
 
 class SequenceStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing ``SequenceStore``."""
+    """Contract tests reusable by backends implementing `SequenceStore`."""
 
     def test_sequence_store_contract(self) -> None:
         """Sequences are monotonic, range-readable, and deletion-aware."""
@@ -380,7 +380,7 @@ class SequenceStoreContract(StructureBackendContract):
 
 
 class TemporalStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing ``TemporalStore``."""
+    """Contract tests reusable by backends implementing `TemporalStore`."""
 
     def test_temporal_store_contract(self) -> None:
         """Membership is unique, replaceable, ordered, and deletion-aware."""
@@ -549,7 +549,7 @@ class TemporalStoreContract(StructureBackendContract):
 
 
 class TemporalIndexContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing ``TemporalIndex``."""
+    """Contract tests reusable by backends implementing `TemporalIndex`."""
 
     def test_temporal_index_contract(self) -> None:
         """Indexed filtering follows half-open time and stable paging rules."""
@@ -708,7 +708,7 @@ class TemporalIndexContract(StructureBackendContract):
 
 
 class LinkStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing ``LinkStore``."""
+    """Contract tests reusable by backends implementing `LinkStore`."""
 
     def test_link_store_delete_block_cascade_contract(self) -> None:
         """Deleting a subtree removes every link that touches a removed block."""
@@ -788,7 +788,7 @@ class LinkStoreContract(StructureBackendContract):
 
 
 class AcyclicLinkStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing ``AcyclicLinkStore``."""
+    """Contract tests reusable by backends implementing `AcyclicLinkStore`."""
 
     def test_acyclic_link_store_contract(self) -> None:
         """Protected relations reuse ordinary links and reject every cycle."""

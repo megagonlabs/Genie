@@ -99,7 +99,7 @@ class MemoryManager:
         """Apply one conversation's proposed changes and report each outcome.
 
         Args:
-            conversation: Exchange and the changes proposed from it.
+            conversation: `Exchange` and the changes proposed from it.
             base: Resolved namespace the conversation's collections sit under.
             source: Block recording the conversation, so each write can be
                 traced back to it. Hot-path writes have no such block.

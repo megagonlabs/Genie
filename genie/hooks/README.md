@@ -72,9 +72,9 @@ class ReadVolumeHook(MemoryHook):
         )
 ```
 
-Traversal results belong to the backend and are already filtered by the read
-policy of the reading principal. So these callbacks observe a read. They do not
-narrow it or widen it. A block the principal cannot read is missing from
+Traversal results belong to the backend and are already filtered by the `read`
+rule of the reading principal. So these callbacks observe a read. They do not
+narrow it or widen it. A block the principal cannot `read` is missing from
 `blocks`, and `contains` reports `contained=False` instead of refusing.
 
 Structures walk the ownership tree through these operations rather than around
@@ -101,9 +101,9 @@ operation's other callbacks, with one of three outcomes.
 
 Because it always runs, it is the right place to close a tracing span, record
 how long an operation took, and release state that a before callback saved. A
-span here is one timed unit of work in a trace. It is also
-the only callback that sees refusals and failures. A denied `set` never reaches
-`before_update`. A failed one reaches `before_update` but never `after_update`.
+span here is one timed unit of work in a trace. It is also the only callback
+that sees refusals and failures. A denied `set` never reaches `before_update`.
+A failed one reaches `before_update` but never `after_update`.
 
 ```python
 class MetricsHook(MemoryHook):
@@ -143,13 +143,13 @@ ordinary permission failure.
 
 | Capability | Refused because |
 | --- | --- |
-| `handle.subtree` | The block is outside the handle root. |
-| `handle.ancestors` | Ancestor traversal or search is disabled. |
-| `handle.global_search` | Global search is disabled. |
-| `handle.mounts` | Mount access is disabled. |
-| `handle.policy_override` | An explicit block policy was passed. |
-| `handle.root_required` | An unbounded handle has no root to infer. |
-| `handle.principal` | A child handle tried to change principal. |
+| `handle.subtree` | The block is outside the handle `root`. |
+| `handle.ancestors` | The handle has `allow_up=False`. |
+| `handle.global_search` | The handle has `allow_global=False`. |
+| `handle.mounts` | The handle has `allow_mounts=False`. |
+| `handle.policy_override` | An explicit `policy` was passed without `allow_policy_override=True`. |
+| `handle.root_required` | An unbounded handle has no `root` to infer. |
+| `handle.principal` | A child handle tried to change `principal`. |
 
 Coverage of the security boundary is complete. Policy refusals are reported for
 block operations, search, links, mounts, traversal, listing, `contains`, and
@@ -464,8 +464,9 @@ block a window either. A hook that needs the window recorded before it may
 proceed should not declare `fail_open`.
 
 Recursive deletion calls `before_delete` for every block in the observed
-snapshot, including descendants whose own policies were never consulted. A concurrent change raises `MemoryConflict`. Before hooks may already
-have run, but after hooks run only when the deletion succeeds. Every deleted
+snapshot, including descendants whose own policies were never consulted. A
+concurrent change raises `MemoryConflict`. Before hooks may already have run,
+but after hooks run only when the deletion succeeds. Every deleted
 block then reaches every hook before any failure surfaces. So deleting five
 blocks with a sink that fails on the third still records five deletions.
 Cascading backend cleanup of links and structural references is represented by

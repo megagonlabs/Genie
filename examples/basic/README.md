@@ -12,8 +12,8 @@ service:
 | `scoped_agents.py` | `MemoryHandle` | Bounded and nested handles, deliberate global access, scope enforcement |
 | `links.py` | `MemoryLink`, `LinkRelations` | Typed links, metadata updates, link search, symbolic mount discovery and lifecycle |
 | `acyclic_links.py` | `Memory.add_acyclic_link` | Atomic cycle-checked inserts, cycle detection per relation, the reserved mount relation |
-| `mounted_handles.py` | `MemoryHandle` mount capability | Mount access as an opt-in capability, explicit resolution outside the subtree, no escalation through sub-handles |
-| `policies.py` | `Principal`, `MemoryPolicy`, `AccessRule`, `PolicyEngine` | Private defaults, sharing by principal and role, custom operations, block overrides |
+| `mounted_handles.py` | `MemoryHandle` `allow_mounts` | `allow_mounts` as an opt-in capability, explicit resolution outside the subtree, no escalation through sub-handles |
+| `policies.py` | `Principal`, `MemoryPolicy`, `AccessRule`, `PolicyEngine` | The `MemoryPolicy.owner_private()` default, sharing by principal and role, custom operations, block overrides |
 | `hook_audit.py` | `MemoryHook`, `HookRegistry`, `HookContext`, `Traversal`, `Suppression` | Scopes, traversal and terminal events, refusals, mandatory hooks, suppression windows, fail-open sinks |
 | `write_hooks.py` | `MemoryHook` write callbacks | Transforming versus observing callbacks, paired before/after values, refusing an operation, link transforms limited to metadata |
 | `search_hooks.py` | `MemoryHook`, `MemoryQuery`, `SearchResult` | Rewriting a query before the search runs, reviewing results before the caller sees them, fail-fast transforms |

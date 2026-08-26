@@ -82,7 +82,7 @@ class ReflectionQueue:
         """Queue a conversation, superseding any pending one on its thread.
 
         Args:
-            conversation: Exchange and the changes proposed from it.
+            conversation: `Exchange` and the changes proposed from it.
             base: Resolved namespace its collections sit under.
             at: When the conversation was handed over.
             after_seconds: Delay before the manager may run it. Zero makes the

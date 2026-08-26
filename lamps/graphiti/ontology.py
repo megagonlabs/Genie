@@ -1,7 +1,7 @@
 """Prescribed and learned ontologies for the Graphiti-inspired lamp.
 
 Graphiti lets developers either declare entity and edge types up front with
-Pydantic models and an ``edge_type_map`` (a prescribed ontology) or let the
+Pydantic models and an `edge_type_map` (a prescribed ontology) or let the
 structure emerge from the ingested data (a learned ontology). Both choices are
 application concerns, so this module owns them: Genie stores block types,
 values, and metadata without attaching meaning to any of them.
@@ -9,7 +9,7 @@ values, and metadata without attaching meaning to any of them.
 The one piece of semantics this lamp needs beyond naming is cardinality.
 Upstream Graphiti asks a language model whether a newly extracted fact
 contradicts an existing one. A deterministic example cannot call a model, so an
-edge type declares ``single_valued=True`` when a subject may hold only one
+edge type declares `single_valued=True` when a subject may hold only one
 active object for that relation. Contradiction then becomes a rule the example
 can check instead of a judgement it has to infer.
 """
@@ -29,7 +29,7 @@ class EntityType:
     """One declared kind of entity node.
 
     Attributes:
-        name: Type name stored on entity blocks, such as ``"person"``.
+        name: Type name stored on entity blocks, such as `"person"`.
         description: Plain-language guidance for whoever extracts entities.
     """
 
@@ -47,12 +47,12 @@ class EntityType:
 class EdgeType:
     """One declared kind of relationship between entity nodes.
 
-    ``subject_types`` and ``object_types`` are this lamp's compact stand-in for
-    Graphiti's ``edge_type_map``, which lists the edge names allowed between
+    `subject_types` and `object_types` are this lamp's compact stand-in for
+    Graphiti's `edge_type_map`, which lists the edge names allowed between
     each pair of entity types.
 
     Attributes:
-        name: Relation name stored on fact blocks, such as ``"lives_in"``.
+        name: Relation name stored on fact blocks, such as `"lives_in"`.
         description: Plain-language guidance for whoever extracts facts.
         subject_types: Entity types allowed at the source of the relation.
         object_types: Entity types allowed at the target of the relation.
@@ -86,7 +86,7 @@ class EdgeType:
             object_type: Entity type at the target of the proposed fact.
 
         Returns:
-            ``True`` when both endpoint types are declared for this relation.
+            `True` when both endpoint types are declared for this relation.
         """
 
         return subject_type in self.subject_types and object_type in self.object_types
@@ -191,7 +191,7 @@ class Ontology:
             object_type: Entity type at the target of the fact.
 
         Returns:
-            The declared edge type, or ``None`` under a learned ontology.
+            The declared edge type, or `None` under a learned ontology.
 
         Raises:
             ValueError: If the relation is empty, undeclared, or connects
@@ -221,7 +221,7 @@ class Ontology:
             relation: Relation name of the incoming fact.
 
         Returns:
-            ``True`` only when a prescribed edge type declares the relation
+            `True` only when a prescribed edge type declares the relation
             single-valued.
         """
 

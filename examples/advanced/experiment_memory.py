@@ -151,7 +151,7 @@ def main() -> None:
     assert [item.entry.revision for item in versions.history(record_address)] == [1, 2]
     assert current.block == second_result
 
-    # LineageDAG uses the backend's atomic acyclic-link capability.
+    # `LineageDAG` uses the backend's atomic acyclic-link capability.
     try:
         lineage.add(second_result, experiment)
     except MemoryConflict:

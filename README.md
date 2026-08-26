@@ -16,9 +16,10 @@ framework, database, memory taxonomy, retrieval strategy, or stored value type.
 - `MemoryLink` relationships, which do not imply ownership.
 - `MemoryHandle` objects that give agents and services only the access they
   need.
-- Structure facades for trees, graphs, keys, logs, time, lineage, and versions.
-- Storage protocols, with in-memory, SQLite, and optional Neo4j
-  implementations, plus a routed backend that combines several of them.
+- Structure facades: `OwnershipTree`, `PropertyGraph`, `KeyedCollection`,
+  `EventLog`, `TemporalCollection`, `LineageDAG`, and `VersionedRecords`.
+- Storage protocols, with `InMemoryBackend`, `SQLiteBackend`, and the optional
+  `Neo4jBackend`, plus `RoutedBackend`, which combines several of them.
 - Separate policies, hooks, queries, and codecs.
 
 Genie does not run agents, plan their work, create embeddings, host a database,
@@ -57,12 +58,13 @@ results = agent_memory.search("concise")
 assert results[0].block.id == requirement.id
 ```
 
-A principal is whoever is acting: a user, an agent, or a service. Genie checks
-it against each block's policy on every operation.
+A `Principal` is whoever is acting: a user, an agent, or a service. Genie
+checks it against each block's `MemoryPolicy` on every operation.
 
-By default, only the creator of a block can read it. Keep the full `Memory`
-object and the backend inside trusted application code. Give agents handles
-rooted at one block, or tools that you write yourself.
+New blocks use `MemoryPolicy.owner_private()` by default, so only the creator
+can `read`, `write`, `search`, `traverse_up`, and `traverse_down` them. Keep the
+full `Memory` object and the backend inside trusted application code. Give
+agents handles rooted at one block, or tools that you write yourself.
 
 ## Storage
 

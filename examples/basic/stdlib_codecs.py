@@ -38,14 +38,14 @@ from genie.codecs.stdlib import (
 
 @dataclass(frozen=True)
 class AuditRecord:
-    """Small trusted dataclass that can be reconstructed by DataclassCodec."""
+    """Small trusted dataclass that can be reconstructed by `DataclassCodec`."""
 
     request_id: str
     tags: list[str]
 
 
 class Priority(str, enum.Enum):
-    """Trusted enum reconstructed by EnumCodec."""
+    """Trusted enum reconstructed by `EnumCodec`."""
 
     HIGH = "high"
     LOW = "low"

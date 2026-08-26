@@ -469,7 +469,7 @@ class Conversation:
     """A conversation submitted for memory formation.
 
     Attributes:
-        thread: Conversation thread. Submissions debounce per thread.
+        thread: `Conversation` thread. Submissions debounce per thread.
         messages: Turns in the exchange.
         patches: Changes an extractor proposed from those turns.
         profile: Profile fields the exchange revises.
@@ -488,7 +488,7 @@ class Submission:
     Attributes:
         block: Genie block recording the submission.
         sequence: Position in the append-only queue log.
-        thread: Conversation thread this submission belongs to.
+        thread: `Conversation` thread this submission belongs to.
         state: `pending`, `superseded`, or `processed`.
         submitted_at: When the conversation was handed to the queue.
         due_at: When the manager may run it.
@@ -516,7 +516,7 @@ class ManagerRun:
     """The result of running the memory manager over one conversation.
 
     Attributes:
-        thread: Conversation thread that was processed.
+        thread: `Conversation` thread that was processed.
         source_id: Block the conversation was recorded in, when the run came
             from the queue rather than from a hot-path tool call.
         ran_at: When the manager ran.

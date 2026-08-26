@@ -190,7 +190,7 @@ def test_memory_defaults_to_json_codec_only() -> None:
 
 
 def test_bytes_codec_round_trips_base64_payloads() -> None:
-    """BytesCodec stores bytes as base64 text and returns bytes to callers."""
+    """`BytesCodec` stores bytes as base64 text and returns bytes to callers."""
 
     memory = Memory(codecs=CodecRegistry([BytesCodec(), JsonCodec()]))
     payload = b"\x00hello\xff"
@@ -327,7 +327,7 @@ def test_codecs_reject_payloads_owned_by_another_content_type(codec: Any) -> Non
 
 
 def test_datetime_codec_round_trips_datetime_date_and_time() -> None:
-    """DatetimeCodec preserves concrete datetime/date/time value classes."""
+    """`DatetimeCodec` preserves concrete datetime/date/time value classes."""
 
     memory = Memory(codecs=CodecRegistry([DatetimeCodec(), JsonCodec()]))
     values = [
@@ -348,7 +348,7 @@ def test_datetime_codec_round_trips_datetime_date_and_time() -> None:
 
 
 def test_decimal_codec_round_trips_without_float_precision_loss() -> None:
-    """DecimalCodec stores decimals as strings to preserve precision."""
+    """`DecimalCodec` stores decimals as strings to preserve precision."""
 
     memory = Memory(codecs=CodecRegistry([DecimalCodec(), JsonCodec()]))
     value = decimal.Decimal("0.1000000000000000000000000001")
@@ -362,7 +362,7 @@ def test_decimal_codec_round_trips_without_float_precision_loss() -> None:
 
 
 def test_uuid_codec_round_trips_uuid_values() -> None:
-    """UUIDCodec stores UUIDs as canonical strings."""
+    """`UUIDCodec` stores UUIDs as canonical strings."""
 
     memory = Memory(codecs=CodecRegistry([UUIDCodec(), JsonCodec()]))
     value = uuid.uuid4()
@@ -376,7 +376,7 @@ def test_uuid_codec_round_trips_uuid_values() -> None:
 
 
 def test_dataclass_codec_round_trips_registered_dataclasses_defensively() -> None:
-    """DataclassCodec round-trips registered dataclasses with copied fields."""
+    """`DataclassCodec` round-trips registered dataclasses with copied fields."""
 
     codec = DataclassCodec([DataclassPreference])
     memory = Memory(codecs=CodecRegistry([codec, JsonCodec()]))
@@ -394,7 +394,7 @@ def test_dataclass_codec_round_trips_registered_dataclasses_defensively() -> Non
 
 
 def test_dataclass_codec_requires_registered_json_compatible_types() -> None:
-    """DataclassCodec rejects unregistered and non-JSON dataclass payloads."""
+    """`DataclassCodec` rejects unregistered and non-JSON dataclass payloads."""
 
     registered_codec = DataclassCodec([DataclassPreference])
     unsupported_codec = DataclassCodec([UnsupportedDataclass])
@@ -433,7 +433,7 @@ def test_dataclass_codec_omits_derived_fields_and_rejects_nonportable_nesting() 
 
 
 def test_enum_codec_round_trips_registered_enum_members() -> None:
-    """EnumCodec stores registered enum members by type and name."""
+    """`EnumCodec` stores registered enum members by type and name."""
 
     memory = Memory(codecs=CodecRegistry([EnumCodec([Priority]), JsonCodec()]))
 
@@ -449,7 +449,7 @@ def test_enum_codec_round_trips_registered_enum_members() -> None:
 
 
 def test_enum_codec_requires_registered_enum_types() -> None:
-    """EnumCodec does not encode or decode enum types that were not registered."""
+    """`EnumCodec` does not encode or decode enum types that were not registered."""
 
     codec = EnumCodec([Priority])
     encoded = codec.encode(Priority.LOW)

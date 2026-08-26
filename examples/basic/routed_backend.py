@@ -73,7 +73,7 @@ def main() -> None:
         type="note",
         value="EU launch requires data residency review.",
     )
-    # The symbolic link is the MemoryLink returned by add_mount. It is attached
+    # The symbolic link is the `MemoryLink` returned by `add_mount`. It is attached
     # to a source block and points at the EU project, but it does not create a
     # local child block and does not make the EU tree part of the US subtree.
     eu_rollout_link = memory.add_mount(
@@ -96,7 +96,7 @@ def main() -> None:
     # Public memory.add_mount() validates both endpoints, so it is used when
     # the target route is already registered. A pending mount discovered from
     # an external catalog/import can be represented by adapter code writing a
-    # mount link into a shared LinkStore. The link metadata carries route
+    # mount link into a shared `LinkStore`. The link metadata carries route
     # information; it does not carry a live database connection.
     pending_apac_mount = link_store.add_link(
         MemoryLink(

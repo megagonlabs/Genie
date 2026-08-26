@@ -447,7 +447,7 @@ def main() -> None:
     blocks = SQLiteBackend(":memory:")
     graph = GraphIndex(blocks)
     vectors = VectorIndex(blocks, graph)
-    # One MemoryBackend assembled from three components: blocks in SQL, topology
+    # One `MemoryBackend` assembled from three components: blocks in SQL, topology
     # in the graph index, ranking in the vector index.
     backend = RoutedBackend(
         {"sql": blocks},

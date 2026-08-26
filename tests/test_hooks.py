@@ -407,7 +407,7 @@ def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
 
 
 def test_hook_registry_runs_hooks_in_registration_order() -> None:
-    """HookRegistry applies transformations in deterministic order."""
+    """`HookRegistry` applies transformations in deterministic order."""
 
     class OrderedHook(MemoryHook):
         """Hook that appends a marker to block metadata."""
