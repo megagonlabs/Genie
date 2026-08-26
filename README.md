@@ -19,7 +19,8 @@ framework, database, memory taxonomy, retrieval strategy, or stored value type.
 - Structure facades: `OwnershipTree`, `PropertyGraph`, `KeyedCollection`,
   `EventLog`, `TemporalCollection`, `LineageDAG`, and `VersionedRecords`.
 - Storage protocols, with `InMemoryBackend`, `SQLiteBackend`, and the optional
-  `Neo4jBackend`, plus `RoutedBackend`, which combines several of them.
+  `Neo4jBackend` and `RedisBackend`, plus `RoutedBackend`, which combines
+  several of them.
 - Separate policies, hooks, queries, and codecs.
 
 Genie does not run agents, plan their work, create embeddings, host a database,
@@ -71,8 +72,9 @@ agents handles rooted at one block, or tools that you write yourself.
 `InMemoryBackend` is the reference backend. It needs no extra packages, so it
 suits tests, examples, and prototypes. `SQLiteBackend` adds local persistent
 storage. The optional `Neo4jBackend` adds graph storage through the official
-Neo4j driver. Both persistent backends support all seven structure facades.
-SQLite uses the driver that ships with Python:
+Neo4j driver, and the optional `RedisBackend` adds key-value storage through the
+official Redis client. All three persistent backends support all seven structure
+facades. SQLite uses the driver that ships with Python:
 
 ```python
 from genie import Memory, SQLiteBackend
@@ -86,7 +88,7 @@ with SQLiteBackend("memory.db") as backend:
 You do not need the SQLite command-line program. The [backend
 guide](genie/backend/README.md) explains the storage contracts, how each
 backend works, and what to think about in production. Install `genie[neo4j]` if
-you use Neo4j.
+you use Neo4j, or `genie[redis]` if you use Redis.
 
 ## Model and structures
 
@@ -160,5 +162,5 @@ conda run -n "genie" python -m pytest
 conda run -n "genie" python -m compileall -q genie tests examples lamps
 ```
 
-Run `./scripts/test_full.sh` to run the whole suite against a throwaway Neo4j
-container. Any extra arguments are passed on to pytest.
+Run `./scripts/test_full.sh` to run the whole suite against throwaway Neo4j and
+Redis containers. Any extra arguments are passed on to pytest.

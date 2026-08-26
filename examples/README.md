@@ -79,7 +79,8 @@ See the [advanced guide](advanced/README.md).
 - Production code can use `SQLiteBackend` for local persistence, or another
   adapter with suitable storage, search, and operational behavior.
 
-Neo4j is covered in the [backend guide](../genie/backend/README.md) instead of a
-runnable example, because it needs a separately configured service. The backend
-protocols and operational errors are APIs for adapter authors, so they are
-documented there too rather than shown as application workflows.
+Neo4j and Redis are covered in the [backend
+guide](../genie/backend/README.md) instead of runnable examples, because they
+need a separately configured service. The backend protocols and operational
+errors are APIs for adapter authors, so they are documented there too rather
+than shown as application workflows.

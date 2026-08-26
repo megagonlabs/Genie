@@ -83,6 +83,7 @@ genie/backend/
   in_memory/reference.py
   relational/sqlite.py
   graph/neo4j.py
+  key_value/redis.py
   composite/routed.py
   base.py
   capabilities.py
@@ -94,25 +95,28 @@ genie/backend/
 | In-memory | `InMemoryBackend` | [In-memory](in_memory/README.md) |
 | Relational | `SQLiteBackend` | [Relational](relational/README.md) |
 | Graph | `Neo4jBackend` | [Neo4j](graph/README.md) |
+| Key-value | `RedisBackend` | [Redis](key_value/README.md) |
 | Composite | `RoutedBackend` | [Composite](composite/README.md) |
 
 The shared protocols stay at the package root. Genie does not yet ship document,
-key-value, columnar, or time-series adapters. Every bundled class can be
-imported from `genie` and from `genie.backend`.
+columnar, or time-series adapters. Every bundled class can be imported from
+`genie` and from `genie.backend`.
 
 ## Small production deployments
 
-`SQLiteBackend` and `Neo4jBackend` are suitable for small, controlled production
-deployments. Both give you atomic writes, conflict handling, schema checks, and
-all the optional structure capabilities.
+`SQLiteBackend`, `Neo4jBackend`, and `RedisBackend` are suitable for small,
+controlled production deployments. All three give you atomic writes, conflict
+handling, schema checks, and all the optional structure capabilities.
 
 | Backend | Good fit | Deployment responsibility |
 | --- | --- | --- |
 | `SQLiteBackend` | Local applications that do not write from many places at once | Use a reliable local filesystem, and manage file access and backups |
 | `Neo4jBackend` | Applications that already run a managed Neo4j server | Configure TLS, credentials, backups, monitoring, and capacity |
+| `RedisBackend` | Applications that already run a managed Redis server and want low-latency shared memory | Configure persistence (RDB or AOF), TLS, credentials, memory limits, and backups |
 
 Write through the Genie backend instead of editing its stored records directly.
-Neo4j writes run one at a time to stay correct, and portable search scans
+Neo4j writes run one at a time to stay correct, Redis writes retry instead of
+blocking when they lose an optimistic conflict, and portable search scans
 candidate blocks. When your dataset or your traffic grows past these limits, use
 a dedicated search implementation or a larger storage design.
 

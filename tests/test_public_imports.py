@@ -16,6 +16,7 @@ def test_package_all_exports_are_importable() -> None:
         "genie.backend.composite",
         "genie.backend.graph",
         "genie.backend.in_memory",
+        "genie.backend.key_value",
         "genie.backend.relational",
         "genie.codecs",
         "genie.hooks",
@@ -43,6 +44,7 @@ def test_layered_import_styles_work_for_common_types() -> None:
         MemoryHandle,
         Neo4jBackend,
         PolicyEngine,
+        RedisBackend,
         SequenceStore,
         SQLiteBackend,
         TemporalIndex,
@@ -51,6 +53,7 @@ def test_layered_import_styles_work_for_common_types() -> None:
     from genie.backend.composite import RoutedBackend as CompositeRoutedBackend
     from genie.backend.graph import Neo4jBackend as GraphNeo4jBackend
     from genie.backend.in_memory import InMemoryBackend as GroupedInMemoryBackend
+    from genie.backend.key_value import RedisBackend as KeyValueRedisBackend
     from genie.backend.relational import SQLiteBackend as RelationalSQLiteBackend
     from genie.codecs import BytesCodec
     from genie.codecs.stdlib import BytesCodec as StdlibBytesCodec
@@ -92,6 +95,7 @@ def test_layered_import_styles_work_for_common_types() -> None:
     assert SequenceStore is not None
     assert SQLiteBackend is not None
     assert Neo4jBackend is GraphNeo4jBackend
+    assert RedisBackend is KeyValueRedisBackend
     assert CompositeRoutedBackend is not None
     assert GroupedInMemoryBackend is not None
     assert RelationalSQLiteBackend is SQLiteBackend

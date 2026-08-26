@@ -72,10 +72,10 @@ this:
 | `<`, `<=` | `$lt`, `$lte` |
 | `in` | `$in` |
 
-`InMemoryBackend`, `SQLiteBackend`, and `Neo4jBackend` all use the same portable
-matcher. The persistent adapters scan candidates inside the requested scope.
-Other adapters may use richer indexes, as long as the public meaning of a query
-stays the same.
+`InMemoryBackend`, `SQLiteBackend`, `Neo4jBackend`, and `RedisBackend` all use
+the same portable matcher. The persistent adapters scan candidates inside the
+requested scope. Other adapters may use richer indexes, as long as the public
+meaning of a query stays the same.
 
 ## Authorization flow
 
