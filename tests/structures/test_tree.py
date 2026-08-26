@@ -211,25 +211,35 @@ def test_tree_delete_subtree_uses_existing_recursive_delete() -> None:
     assert tree.children() == [sibling]
 
 
-def test_tree_delete_preserves_recursive_policy_checks() -> None:
-    """A protected descendant prevents deletion of its owner branch."""
+def test_tree_delete_authorizes_the_target_branch_only() -> None:
+    """Deleting a branch checks that branch and not its protected descendants."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
+    protected_branch = memory.put(
+        parent=root,
+        type="branch",
+        value="protected",
+        policy=MemoryPolicy(write=AccessRule.deny()),
+    )
     branch = memory.put(parent=root, type="branch", value="branch")
-    protected = memory.put(
+    leaf = memory.put(
         parent=branch,
         type="leaf",
-        value="protected",
+        value="protected leaf",
         policy=MemoryPolicy(write=AccessRule.deny()),
     )
     tree = OwnershipTree(memory, root=root)
 
-    with pytest.raises(AccessDenied):
-        tree.delete_subtree(branch)
+    tree.delete_subtree(branch)
 
-    assert memory.get(branch.id) is not None
-    assert memory.get(protected.id) is not None
+    assert memory.get(branch.id) is None
+    assert memory.get(leaf.id) is None
+
+    with pytest.raises(AccessDenied):
+        tree.delete_subtree(protected_branch)
+
+    assert memory.get(protected_branch.id) is not None
 
 
 def test_tree_requires_an_existing_visible_root() -> None:

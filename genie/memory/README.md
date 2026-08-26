@@ -93,7 +93,7 @@ mount links but does not enter their targets. Mount operations on a handle need
 ## Safety rules
 
 - By default, only the creator of a new block can read it.
-- Recursive deletion needs write access to every block it checks.
+- Recursive deletion needs write access to the target block only.
 - A block update fails on a stale version. A deletion fails if the subtree
   changed.
 - Links are hidden when an endpoint cannot be read.

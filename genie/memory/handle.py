@@ -271,14 +271,15 @@ class MemoryHandle:
         """Delete a block and its descendants inside this handle.
 
         Recursive delete is handled by the underlying `Memory` instance and
-        requires write access to every block that would be removed.
+        requires write access to the target block only. Descendant policies are
+        not consulted.
 
         Args:
             block_id: Block or id to delete.
 
         Raises:
             AccessDenied: If the block is outside the handle boundary or policy
-                denies write access for any affected block.
+                denies write access to it.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
         """

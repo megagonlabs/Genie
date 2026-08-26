@@ -309,23 +309,27 @@ class Memory:
     def delete(self, block_id: str | MemoryBlock) -> None:
         """Delete a block and its descendants.
 
-        Recursive delete requires write access to every block that would be
-        removed.
+        Deletion is authorized on the target block alone. Write access to the
+        target removes everything the target owns, and descendant policies are
+        not consulted. Ownership already carries this power: a writable parent
+        can be restructured, so treating its subtree as separately protected
+        would only let one unwritable descendant strand the whole branch. A
+        descendant that must outlive its parent belongs outside the subtree,
+        linked or mounted instead of owned.
 
         Args:
             block_id: Block or block id to delete.
 
         Raises:
-            AccessDenied: If any affected block denies write access.
+            AccessDenied: If the target block denies write access.
             MemoryConflict: If the checked subtree changes before commit.
             MemoryNotFound: If the block does not exist.
         """
 
         with self._operation(HookOperation.DELETE) as context:
             block = self._require_raw(_block_id(block_id))
+            self._require_access(context, Operation.WRITE, block)
             blocks_to_delete = self.backend.descendants(block.id, include_self=True)
-            for candidate in blocks_to_delete:
-                self._require_access(context, Operation.WRITE, candidate)
             decoded_blocks = [self._decode_block(candidate) for candidate in blocks_to_delete]
             for decoded_block in decoded_blocks:
                 self.hooks.before_delete(context, decoded_block)

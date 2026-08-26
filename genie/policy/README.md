@@ -42,10 +42,18 @@ built-in operation should be open to everyone.
 inside handle scope AND allowed by block policy
 ```
 
-Access to a parent does not grant access to its descendants. Genie does not
+Reading a parent does not grant reading its descendants. Genie does not
 implement policy inheritance. A handle needs `allow_policy_override=True` before
 it can attach an explicit policy to a new block. This stops ordinary agents from
 making their writes public.
+
+Ownership is the one exception, and it runs through `write`. Creating a child
+already needs `write` on the parent, and deleting a block removes everything it
+owns without consulting the descendants' own policies. So `write` on a block is
+authority over the existence of its subtree, not over its contents. Descendants
+still decide who reads, searches, and traverses them, but they cannot outlive
+their owner. A block that must survive its owner belongs outside the subtree,
+reached through a link or a mount instead of being owned.
 
 ## Delegating to sub-agents
 
@@ -116,8 +124,8 @@ Custom names cannot replace the built-in ones, and an unknown operation raises
 - Give agents rooted handles, or tools built for one purpose.
 - Use explicit principals in shared systems.
 - Prefer generated block ids for untrusted input.
-- Recursive deletion needs write access to every affected block, and it stops if
-  the checked subtree changes.
+- Recursive deletion needs write access to the target block only, and it stops
+  if the checked subtree changes.
 - A link result needs both endpoints to be readable.
 
 A missing grant fails in two different ways, and only one of them is loud.

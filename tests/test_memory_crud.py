@@ -47,23 +47,43 @@ def test_set_delete_and_recursive_cleanup() -> None:
     assert memory.list_links(root) == []
 
 
-def test_delete_requires_write_access_for_descendants() -> None:
-    """Recursive delete fails if any descendant denies write access."""
+def test_delete_authorizes_the_target_and_not_its_descendants() -> None:
+    """A descendant that denies write no longer strands its owner branch."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
-    child = memory.put(
+    branch = memory.put(parent=root, type="branch", value="branch")
+    locked = memory.put(
+        parent=branch,
+        type="leaf",
+        value="locked",
+        policy=MemoryPolicy(write=AccessRule.deny()),
+    )
+
+    memory.delete(root)
+
+    assert memory.get(root.id) is None
+    assert memory.get(branch.id) is None
+    assert memory.get(locked.id) is None
+
+
+def test_delete_requires_write_access_to_the_target() -> None:
+    """A target that denies write refuses deletion and leaves the tree intact."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    locked = memory.put(
         parent=root,
-        type="child",
+        type="leaf",
         value="locked",
         policy=MemoryPolicy(write=AccessRule.deny()),
     )
 
     with pytest.raises(AccessDenied):
-        memory.delete(root)
+        memory.delete(locked)
 
-    assert memory.get(root.id) is not None
-    assert memory.get(child.id) is not None
+    assert memory.get(locked.id) is not None
+    assert [child.id for child in memory.children(root)] == [locked.id]
 
 
 def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:

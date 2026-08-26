@@ -267,14 +267,15 @@ class OwnershipTree:
         """Delete a tree member and its owned descendants.
 
         The target is required so deleting the whole facade root is explicit.
-        Normal recursive-delete policy checks remain in the access object.
+        Normal recursive-delete policy checks remain in the access object, which
+        authorizes the target and not its descendants.
 
         Args:
             block: Tree member to delete.
 
         Raises:
-            AccessDenied: If the block is outside this tree or deletion is
-                denied for any affected block.
+            AccessDenied: If the block is outside this tree or the target
+                denies write access.
             MemoryNotFound: If the tree root no longer exists.
         """
 

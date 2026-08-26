@@ -2621,13 +2621,13 @@ def test_on_denied_respects_suppression() -> None:
     assert len(second.denials) == 2
 
 
-def test_recursive_delete_reports_the_first_refused_block() -> None:
-    """A denied subtree delete names the block that refused it."""
+def test_recursive_delete_reports_a_refused_target() -> None:
+    """A denied subtree delete names the target block that refused it."""
 
     hook = RecordingDenialHook()
     owner = Memory(principal="owner")
-    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
-    owner.put(parent=root, type="note", value="unwritable")
+    root = owner.put(type="root", value="root")
+    owner.put(parent=root, type="note", value="owned", policy=MemoryPolicy.public())
     deleter = Memory(
         backend=owner.backend,
         principal="deleter",
@@ -2639,7 +2639,9 @@ def test_recursive_delete_reports_the_first_refused_block() -> None:
     with pytest.raises(AccessDenied):
         deleter.delete(root)
 
-    assert [operation for operation, _, _ in hook.denials] == [HookOperation.DELETE]
+    assert [(operation, subject) for operation, _, subject in hook.denials] == [
+        (HookOperation.DELETE, root.id)
+    ]
     assert owner.get(root) is not None
 
 

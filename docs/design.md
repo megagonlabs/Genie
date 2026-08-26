@@ -47,15 +47,16 @@ timestamps, and an update version.
 Every public memory operation acts as a `Principal`. Access requires both an
 allowed handle scope and an allowed block policy. Child handles may narrow
 access but cannot change principal or restore disabled capabilities. New blocks
-are owner-private by default; policies do not inherit through ownership. A
+are owner-private by default; policies do not inherit through ownership, but
+`write` on a block is authority over the existence of everything it owns. A
 policy is chosen when a block is created, from an explicit argument,
 `Memory.default_policy`, or a `before_put` hook, and stays stable across later
 updates. Delegating across principals therefore needs an explicit grant in each
 direction, and reads that a policy filters return fewer results rather than
 refusing.
 
-Block updates use optimistic versions. Recursive deletion verifies the exact
-authorized subtree snapshot. Concurrent changes raise `MemoryConflict` rather
+Block updates use optimistic versions. Recursive deletion is authorized on the
+target block alone and verifies the exact subtree snapshot it observed. Concurrent changes raise `MemoryConflict` rather
 than committing stale work.
 
 Hooks cover block lifecycle, search, link mutations, and explicit key, log, and

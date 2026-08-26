@@ -463,8 +463,8 @@ covers `on_suppressed`, so a sink that called its own outages harmless cannot
 block a window either. A hook that needs the window recorded before it may
 proceed should not declare `fail_open`.
 
-Recursive deletion calls `before_delete` for every block in the authorized
-snapshot. A concurrent change raises `MemoryConflict`. Before hooks may already
+Recursive deletion calls `before_delete` for every block in the observed
+snapshot, including descendants whose own policies were never consulted. A concurrent change raises `MemoryConflict`. Before hooks may already
 have run, but after hooks run only when the deletion succeeds. Every deleted
 block then reaches every hook before any failure surfaces. So deleting five
 blocks with a sink that fails on the third still records five deletions.
