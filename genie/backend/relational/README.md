@@ -41,5 +41,5 @@ decide their own backup, restore, monitoring, process, and performance
 requirements.
 
 Related: [Backend contracts](../README.md), [SQLite
-tests](../../../tests/test_sqlite_backend.py), [Memory](../../memory/README.md),
+tests](../../../tests/backends/test_sqlite_backend.py), [Memory](../../memory/README.md),
 and [Structures](../../structures/README.md).

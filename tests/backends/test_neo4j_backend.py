@@ -38,7 +38,7 @@ from genie import (
 )
 from genie.backend.graph import neo4j as neo4j_module
 from genie.structures import KeyBinding, MemoryAddress, TemporalEntry
-from tests.structures.test_backend_contracts import (
+from tests.backends.test_backend_contracts import (
     AcyclicLinkStoreContract,
     BlockStoreContract,
     KeyedStoreContract,

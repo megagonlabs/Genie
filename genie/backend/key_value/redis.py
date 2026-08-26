@@ -2518,7 +2518,10 @@ def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[Bas
     """Import the optional client and return it with its exception types."""
 
     try:
-        import redis
+        # Import the submodule, not just the package. The `redis` package binds
+        # `redis.exceptions` only as a side effect of its own imports, so type
+        # checkers do not treat it as a known attribute of a plain `import redis`.
+        import redis.exceptions
     except ImportError as error:
         raise UnsupportedOperation("RedisBackend requires the optional 'redis' package; install 'genie[redis]'.") from error
     exception_types = tuple(

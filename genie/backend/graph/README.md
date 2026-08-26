@@ -68,4 +68,4 @@ authentication and the target database.
 
 Related: [Backend contracts](../README.md), [relational
 backends](../relational/README.md), and [Neo4j
-tests](../../../tests/test_neo4j_backend.py).
+tests](../../../tests/backends/test_neo4j_backend.py).

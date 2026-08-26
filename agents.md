@@ -12,12 +12,12 @@ conda run -n "genie" python -m compileall -q genie tests examples lamps
 conda run -n "genie" ruff check .
 ```
 
-A plain `pytest` run skips the live Neo4j tests unless the optional `neo4j`
-package is installed and `GENIE_NEO4J_URI`, `GENIE_NEO4J_USER`, and
-`GENIE_NEO4J_PASSWORD` are set. Report such runs as partial rather than as a
-full pass. `scripts/test_full.sh` runs the complete suite against a disposable
-Neo4j container and needs Docker. `scripts/ruff_report.sh` regenerates
-`ruff_report.txt`.
+A plain `pytest` run skips the live tests of any shipped adapter that needs a
+running server. Those tests run only when the adapter's optional driver package
+is installed and its `GENIE_*` connection variables are set. Report such runs as
+partial rather than as a full pass. `scripts/test_full.sh` runs the complete
+suite against disposable containers for those servers and needs Docker.
+`scripts/ruff_report.sh` regenerates `ruff_report.txt`.
 
 ## Library Purpose
 
@@ -57,12 +57,13 @@ subset, or all of them over the same memory blocks. Reuse existing facades when
 building higher-level structures instead of creating duplicate storage models.
 
 Genie is database-agnostic, not database-free. `InMemoryBackend` is the reference
-implementation for tests, examples, and local prototypes. `SQLiteBackend` and
-`Neo4jBackend` are shipped adapters that show how the contracts map onto real
-stores; they must keep their third-party imports optional and raise
-`UnsupportedOperation` when a driver is missing. Other production adapters may
-use SQL, graph, vector, document, object, or composed storage while preserving
-the public backend contracts.
+implementation for tests, examples, and local prototypes. The adapters shipped
+under `genie/backend/` show how the contracts map onto real stores. Every shipped
+adapter, current or new, must keep its third-party imports optional and raise
+`UnsupportedOperation` when a driver is missing. Adapters may use SQL, graph,
+key-value, vector, document, object, or composed storage, whether they ship with
+Genie or live in an application, as long as they preserve the public backend
+contracts.
 
 Search is a backend capability (`SearchIndex`) with portable query and result
 types in `genie.query`, not a separate search engine integration point.
@@ -106,6 +107,8 @@ the size, risk, and user-facing impact of the change:
 ## Repository Conventions
 
 - Keep core library tests under `tests/`.
+- Keep backend adapter tests and the reusable backend contract tests under
+  `tests/backends/`.
 - Keep each lamp's tests under `lamps/<name>/tests`.
 - Organize small runnable examples under `examples/basic/` or
   `examples/advanced/` as appropriate.

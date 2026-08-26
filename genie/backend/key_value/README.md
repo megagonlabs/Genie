@@ -116,4 +116,4 @@ variables choose the test key namespace and the authentication.
 
 Related: [Backend contracts](../README.md), [relational
 backends](../relational/README.md), [graph backends](../graph/README.md), and
-[Redis tests](../../../tests/test_redis_backend.py).
+[Redis tests](../../../tests/backends/test_redis_backend.py).
