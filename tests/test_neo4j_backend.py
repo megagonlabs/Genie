@@ -42,6 +42,7 @@ from tests.structures.test_backend_contracts import (
     AcyclicLinkStoreContract,
     BlockStoreContract,
     KeyedStoreContract,
+    LinkStoreContract,
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
@@ -500,6 +501,7 @@ class TestNeo4jStructureBackendContracts(
     SequenceStoreContract,
     TemporalStoreContract,
     TemporalIndexContract,
+    LinkStoreContract,
     AcyclicLinkStoreContract,
 ):
     """Run every reusable capability contract against a live Neo4j database."""

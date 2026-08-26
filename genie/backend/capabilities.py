@@ -79,6 +79,19 @@ class BlockStore(Protocol):
     ) -> None:
         """Delete a block and backend-owned dependent state.
 
+        Deletion covers the block and every descendant. An adapter must also
+        remove the dependent state it owns for those blocks: links in either
+        direction, key bindings, sequence entries, and temporal entries. No
+        link may survive pointing at a removed block, whether the removed block
+        was its source or its target.
+
+        `Memory` does not perform this cleanup and never calls the explicit
+        `delete_*_for_block` methods, so an adapter that skips it here leaves
+        dangling relationships behind. Shipped adapters satisfy this in
+        different ways: `InMemoryBackend` calls the explicit cleanup methods,
+        `SQLiteBackend` relies on cascading foreign keys, and `Neo4jBackend`
+        deletes the dependent nodes in the same transaction.
+
         Args:
             block_id: Memory block id.
             expected_versions: Exact id-to-version snapshot of the subtree to
@@ -254,12 +267,16 @@ class LinkStore(Protocol):
     def delete_links_for_block(self, block_id: str) -> None:
         """Delete links connected to a block.
 
-        Backend adapters should remove both incoming and outgoing links for the
-        block. `Memory.delete` uses this interface to keep link indexes from
-        retaining dangling relationships after recursive deletes.
+        Adapters must remove both incoming and outgoing links for the block.
+
+        `Memory.delete` does not call this method. Removing the links of a
+        deleted subtree is part of `delete_block`, which may use this method,
+        a cascading foreign key, or any other means. This method exists for
+        adapters and callers that need the cleanup on its own.
 
         Args:
-            block_id: Block id whose connected links should be removed.
+            block_id: Block id whose connected links should be removed. A
+                missing id is ignored.
         """
 
         ...

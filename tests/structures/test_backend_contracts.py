@@ -13,6 +13,7 @@ from genie import (
     AcyclicLinkStore,
     InMemoryBackend,
     KeyedStore,
+    LinkRelations,
     MemoryBackend,
     MemoryBlock,
     MemoryConflict,
@@ -22,6 +23,7 @@ from genie import (
     TemporalIndex,
     TemporalStore,
 )
+from genie.backend.capabilities import LinkStore
 from genie.structures import (
     KeyBinding,
     MemoryAddress,
@@ -705,6 +707,86 @@ class TemporalIndexContract(StructureBackendContract):
         ] == [second.id]
 
 
+class LinkStoreContract(StructureBackendContract):
+    """Contract tests reusable by backends implementing ``LinkStore``."""
+
+    def test_link_store_delete_block_cascade_contract(self) -> None:
+        """Deleting a subtree removes every link that touches a removed block."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, LinkStore)
+        root, branch, leaf, outside = self.put_blocks(
+            backend,
+            "mem_root",
+            "mem_branch",
+            "mem_leaf",
+            "mem_outside",
+        )
+        branch = backend.update_block(branch.with_updates(parent_id=root.id))
+        leaf = backend.update_block(leaf.with_updates(parent_id=branch.id))
+        internal = MemoryLink(root.id, leaf.id, "contains")
+        inbound = MemoryLink(outside.id, branch.id, "references")
+        outbound = MemoryLink(leaf.id, outside.id, "cites")
+        for link in (internal, inbound, outbound):
+            backend.add_link(link)
+        assert len(backend.list_links(outside.id, direction="both")) == 2
+
+        backend.delete_block(root.id)
+
+        assert backend.get_block(outside.id) is not None
+        for removed in (root, branch, leaf):
+            assert backend.get_block(removed.id) is None
+            assert backend.list_links(removed.id, direction="both") == []
+        assert backend.list_links(outside.id, direction="both") == []
+
+    def test_link_store_delete_block_cascade_covers_mounts(self) -> None:
+        """The reserved mount relation is cleaned up from either endpoint."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, LinkStore)
+        root, leaf, other = self.put_blocks(
+            backend,
+            "mem_root",
+            "mem_leaf",
+            "mem_other",
+        )
+        leaf = backend.update_block(leaf.with_updates(parent_id=root.id))
+        backend.add_link(MemoryLink(leaf.id, other.id, LinkRelations.MOUNT))
+        backend.add_link(MemoryLink(other.id, leaf.id, LinkRelations.MOUNT))
+        assert len(backend.list_links(other.id, direction="both")) == 2
+
+        backend.delete_block(root.id)
+
+        assert backend.get_block(other.id) is not None
+        assert backend.list_links(other.id, relation=LinkRelations.MOUNT, direction="both") == []
+        assert backend.list_links(other.id, direction="both") == []
+
+    def test_link_store_explicit_cleanup_capability(self) -> None:
+        """Adapters can remove one block's links without deleting the block."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, LinkStore)
+        store = cast(LinkStore, backend)
+        source, target, other = self.put_blocks(
+            backend,
+            "mem_source",
+            "mem_target",
+            "mem_other",
+        )
+        backend.add_link(MemoryLink(source.id, target.id, "cites"))
+        backend.add_link(MemoryLink(other.id, source.id, "cites"))
+        kept = MemoryLink(other.id, target.id, "cites")
+        backend.add_link(kept)
+
+        store.delete_links_for_block(source.id)
+
+        assert backend.get_block(source.id) is not None
+        assert backend.list_links(source.id, direction="both") == []
+        assert backend.list_links(target.id, direction="both") == [kept]
+        store.delete_links_for_block("mem_missing")
+        assert backend.list_links(other.id, direction="out") == [kept]
+
+
 class AcyclicLinkStoreContract(StructureBackendContract):
     """Contract tests reusable by backends implementing ``AcyclicLinkStore``."""
 
@@ -793,6 +875,7 @@ class TestInMemoryStructureBackendContracts(
     SequenceStoreContract,
     TemporalStoreContract,
     TemporalIndexContract,
+    LinkStoreContract,
     AcyclicLinkStoreContract,
 ):
     """Run every optional structure contract against the reference backend."""
@@ -809,6 +892,7 @@ class TestSQLiteStructureBackendContracts(
     SequenceStoreContract,
     TemporalStoreContract,
     TemporalIndexContract,
+    LinkStoreContract,
     AcyclicLinkStoreContract,
 ):
     """Run every optional structure contract against SQLite."""
