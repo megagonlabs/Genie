@@ -112,7 +112,7 @@ handling, schema checks, and all the optional structure capabilities.
 | --- | --- | --- |
 | `SQLiteBackend` | Local applications that do not write from many places at once | Use a reliable local filesystem, and manage file access and backups |
 | `Neo4jBackend` | Applications that already run a managed Neo4j server | Configure TLS, credentials, backups, monitoring, and capacity |
-| `RedisBackend` | Applications that already run a managed Redis server and want low-latency shared memory | Configure persistence (RDB or AOF), `maxmemory-policy noeviction`, TLS, credentials, memory limits, and backups |
+| `RedisBackend` | Applications that already run a single managed Redis server, not a Redis Cluster, and want low-latency shared memory | Configure persistence (RDB or AOF), `maxmemory-policy noeviction`, TLS, credentials, memory limits, and backups |
 
 Write through the Genie backend instead of editing its stored records directly.
 Neo4j writes run one at a time to stay correct, Redis writes retry instead of

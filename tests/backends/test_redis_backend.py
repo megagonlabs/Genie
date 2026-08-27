@@ -232,6 +232,9 @@ def test_redis_document_decoders_translate_malformed_shapes() -> None:
     ("class_name", "message", "expected"),
     [
         ("ClusterCrossSlotError", "CROSSSLOT Keys in request don't hash to the same slot", UnsupportedOperation),
+        ("ResponseError", "MOVED 3999 127.0.0.1:6381", UnsupportedOperation),
+        ("ResponseError", "ASK 3999 127.0.0.1:6381", UnsupportedOperation),
+        ("ResponseError", "ask the operator to enable scripting", BackendError),
         ("OutOfMemoryError", "OOM command not allowed when used memory > 'maxmemory'", BackendCapacityExceeded),
         ("ReadOnlyError", "READONLY You can't write against a read only replica", BackendReadOnly),
         ("AuthenticationError", "WRONGPASS invalid username-password pair", BackendError),
@@ -253,6 +256,17 @@ def test_redis_client_errors_map_to_public_errors(
     failure = type(class_name, (Exception,), {})(message)
 
     assert isinstance(redis_module._translate_redis_error(failure), expected)
+
+
+def test_redis_cluster_replies_name_the_unsupported_deployment() -> None:
+    """A cluster reply reports a wrong target instead of a retryable failure."""
+
+    failure = type("ResponseError", (Exception,), {})("MOVED 3999 127.0.0.1:6381")
+    translated = redis_module._translate_redis_error(failure)
+
+    assert isinstance(translated, UnsupportedOperation)
+    assert "Redis Cluster" in str(translated)
+    assert "standalone" in str(translated)
 
 
 def test_redis_backend_close_is_idempotent_and_enforces_lifecycle() -> None:

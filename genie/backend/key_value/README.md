@@ -222,14 +222,24 @@ collection per time range so a query touches only the ranges it needs.
 
 The adapter targets one logical Redis database, which can be a standalone
 server or a primary with replicas. Connect it to the primary in the second
-case, as the role check above requires. Redis Cluster needs every key of a
-transaction in one hash slot, so use a hash-tagged prefix such as
-`key_prefix="{genie}"` there. The read-only scripts need that prefix as well.
-They build the keys they read from `key_prefix` instead of declaring all of them
-in `KEYS`, and a script on Redis Cluster may touch only keys in the slot of the
-keys it declares. So the hash-tagged prefix is what keeps both the writes and
-the scripted reads legal there. It keeps all Genie keys in a single slot, which
-also means a single node holds them.
+case, as the role check above requires.
+
+Redis Cluster is not a supported target. `RedisBackend` opens a standalone
+client with `redis.Redis.from_url`. A standalone client does not follow the
+`MOVED` and `ASK` replies a cluster node sends for a key it does not hold, so
+the call fails instead of reaching the right node. Any cluster reply, including
+`CROSSSLOT`, is reported as `UnsupportedOperation` rather than as a retryable
+failure, because retrying cannot fix it.
+
+The hash slot rule is worth knowing anyway, because it is what a cluster would
+demand. One Redis Cluster transaction may touch only one hash slot, and a
+script may touch only keys in the slot of the keys the call declares. A Genie
+write spans many keys, and the read-only scripts build the keys they read from
+`key_prefix` instead of declaring all of them in `KEYS`. A hash-tagged prefix
+such as `key_prefix="{genie}"` would place every Genie key in one slot and meet
+both rules. That is still not support: one node would hold the whole dataset,
+and the backend would stop working as soon as a reshard or a failover moved
+that slot somewhere else. Use a standalone server or a primary instead.
 
 Genie keys, documents, and indexes belong to the backend. Write through
 `RedisBackend`. Writing to these keys directly can skip the reference,

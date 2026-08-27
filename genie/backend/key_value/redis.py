@@ -79,9 +79,13 @@ _READ_CHUNK = 1000
 _TEMPORAL_SCAN_PAGE = 500
 _FIRST_BACKOFF_SECONDS = 0.001
 _MAX_BACKOFF_SECONDS = 0.05
+# Error codes a server sends only in cluster mode. `RedisBackend` opens a
+# standalone client, so any of them means the URL points at a Redis Cluster,
+# which this adapter does not support.
+_CLUSTER_REPLY_CODES = frozenset({"ASK", "CROSSSLOT", "MOVED"})
 
-# Read-only Lua script behind `contains`. `KEYS[1]` only routes the call on
-# Redis Cluster; the script builds every key it reads from the prefix in
+# Read-only Lua script behind `contains`. `KEYS[1]` is declared so the call
+# names a key it reads. The script builds every key it reads from the prefix in
 # `ARGV[1]`, so that layout must stay in step with `RedisBackend._block_key`.
 # `ARGV[2]` is the subtree root id and `ARGV[3]` is the candidate block id. The
 # walk mirrors `RedisBackend._contains`, including its guard against a cycle in
@@ -309,11 +313,9 @@ return {edges, documents}
 # Read-only Lua scripts by name, with the digest each call sends first. Three
 # rules apply to every script added here. Build key names exactly like the
 # matching `_*_key` helper. Read only keys that start with the prefix in
-# `ARGV[1]`, because a script on Redis Cluster may touch only keys in the slot
-# of the keys the call declares, and a hash-tagged `key_prefix` is what keeps
-# every Genie key in one slot. And never put a `nil` or a `false` inside a table
-# you return: the reply conversion stops the list at the first one, which would
-# silently drop the rest of a page.
+# `ARGV[1]`, so one script never reaches outside the Genie key namespace. And
+# never put a `nil` or a `false` inside a table you return: the reply conversion
+# stops the list at the first one, which would silently drop the rest of a page.
 _LUA_SCRIPTS: dict[str, str] = {
     "ancestors": _ANCESTORS_SCRIPT,
     "children": _CHILDREN_SCRIPT,
@@ -359,6 +361,11 @@ class RedisBackend:
     Pass `verify_server_role=False` to open a backend against a replica on
     purpose.
 
+    Redis Cluster is not a supported target. The backend opens a standalone
+    client, which does not follow the `MOVED` and `ASK` replies a cluster node
+    sends for a key it does not hold. A cluster reply is reported as
+    `UnsupportedOperation`, because retrying it cannot help.
+
     Attributes:
         url: Redis URL this backend connected to.
         key_prefix: Key namespace that holds every Genie key.
@@ -389,9 +396,9 @@ class RedisBackend:
                 `rediss://` scheme for TLS.
             auth: Optional `(username, password)` pair that overrides any
                 credentials in `url`.
-            key_prefix: Key namespace that holds every Genie key. On Redis
-                Cluster use a hash-tagged prefix such as `"{genie}"` so every
-                key stays in one hash slot.
+            key_prefix: Key namespace that holds every Genie key. Several
+                Genie datasets can share one Redis database by using a
+                different prefix for each one.
             connect_timeout: Seconds allowed while establishing a connection.
                 `0` disables the timeout.
             socket_timeout: Seconds allowed while waiting for one command
@@ -418,7 +425,8 @@ class RedisBackend:
             TypeError: If an argument has the wrong type.
             ValueError: If `url`, `key_prefix`, or a timeout is invalid.
             UnsupportedOperation: If the client is unavailable, the connection
-                lands on a replica, the server may evict Genie keys, or the
+                lands on a replica or on a Redis Cluster node that does not
+                hold the Genie keys, the server may evict Genie keys, or the
                 stored schema record is incompatible.
             BackendError: If Redis cannot be reached, configured, or
                 initialized.
@@ -3280,14 +3288,35 @@ def _is_command_error(error: BaseException) -> bool:
     return "ResponseError" in {ancestor.__name__ for ancestor in type(error).__mro__}
 
 
+def _is_cluster_reply(message: str) -> bool:
+    """Return whether Redis answered with a cluster-mode error reply.
+
+    A server sends these replies only in cluster mode, and it always sends the
+    code in upper case as the first word of the message. The match is therefore
+    exact and case-sensitive, so ordinary text that happens to start with the
+    same word is not mistaken for one.
+
+    Args:
+        message: Error message the client reported.
+
+    Returns:
+        `True` when the message starts with a cluster error code.
+    """
+
+    return message.split(" ", 1)[0] in _CLUSTER_REPLY_CODES
+
+
 def _translate_redis_error(error: BaseException) -> GenieError:
     """Translate client failures into stable Genie backend errors."""
 
     names = {ancestor.__name__ for ancestor in type(error).__mro__}
     message = str(error) or type(error).__name__
     normalized = f"{message} {type(error).__name__}".casefold()
-    if "ClusterCrossSlotError" in names or "crossslot" in normalized:
-        return UnsupportedOperation(f"Redis Cluster needs every Genie key in one hash slot; use a hash-tagged key prefix such as '{{genie}}': {message}")
+    if names & {"AskError", "ClusterCrossSlotError", "MovedError"} or _is_cluster_reply(message):
+        return UnsupportedOperation(
+            f"Redis answered with a cluster reply, so this connection lands on a Redis Cluster: {message}. RedisBackend opens a standalone client, which "
+            "does not follow cluster redirections, so retrying cannot help. Point the URL at a standalone server, or at the primary of a replicated deployment."
+        )
     if names & {"OutOfMemoryError", "MaxConnectionsError"} or any(text in normalized for text in ("oom command not allowed", "maxmemory", "out of memory", "too many connections")):
         return BackendCapacityExceeded(f"Redis storage capacity was exceeded: {message}")
     if "ReadOnlyError" in names or any(text in normalized for text in ("readonly", "read only replica")):
@@ -3300,7 +3329,7 @@ def _translate_redis_error(error: BaseException) -> GenieError:
         return BackendCorruption(f"Redis returned an invalid or unsupported reply: {message}")
     if "TimeoutError" in names or "timeout" in normalized:
         return BackendBusy(f"Redis remained busy past the configured timeout: {message}")
-    if names & {"BusyLoadingError", "ConnectionError", "ClusterError", "ClusterDownError", "MasterDownError", "SlotNotCoveredError", "TryAgainError", "MovedError", "AskError", "RedisClusterException"} or any(
+    if names & {"BusyLoadingError", "ConnectionError", "ClusterError", "ClusterDownError", "MasterDownError", "SlotNotCoveredError", "TryAgainError", "RedisClusterException"} or any(
         text in normalized for text in ("misconf", "loading", "connection", "connecting", "network", "unreachable", "clusterdown", "no space", "unable to persist")
     ):
         return BackendUnavailable(f"Redis storage is unavailable: {message}")
