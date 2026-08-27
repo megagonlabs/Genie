@@ -21,6 +21,11 @@ through `EVAL_RO`. Redis runs a script from start to finish before it serves
 another client, so those reads never see half of a write and never retry. Reads
 that scan the dataset stay on the client side and keep the mutation-guard retry,
 because a long script would block every other client on a single-threaded server.
+
+Search follows the same split. A search narrowed to one block, to its subtree, or
+to its parent chain reads through the block-scoped path. A global search, and a
+search over the links of one block, keep the mutation guard, because neither has
+a bound on how much it reads.
 """
 
 from __future__ import annotations
@@ -114,9 +119,12 @@ while true do
 end
 """
 
-# Read-only Lua script behind `ancestors`. `ARGV[1]` is the key prefix and
-# `ARGV[2]` is the block to start from. The reply is the stored document of each
-# ancestor, nearest parent first. The walk mirrors
+# Read-only Lua script behind `ancestors` and behind an `ANCESTORS` scoped
+# search. `ARGV[1]` is the key prefix and `ARGV[2]` is the block to start from.
+# The reply is the stored document of that block followed by the document of each
+# ancestor, nearest parent first, and it is empty when the starting block is
+# gone. `ancestors` drops the first document and the scoped search keeps it, so
+# one script serves both reads. The walk mirrors
 # `RedisBackend._ancestor_documents`, including its guard against a cycle in
 # stored parent ids and its stop at a parent id that no longer resolves.
 _ANCESTORS_SCRIPT = """
@@ -126,6 +134,9 @@ local documents = {}
 local seen = {}
 seen[block_id] = true
 local payload = redis.call('GET', prefix .. ':block:' .. block_id)
+if payload then
+  documents[#documents + 1] = payload
+end
 while payload do
   local parent_id = cjson.decode(payload)['parent_id']
   if parent_id == nil or parent_id == cjson.null or seen[parent_id] then
@@ -336,6 +347,12 @@ class RedisBackend:
     block spans a stored document plus several index entries. Use `noeviction`,
     or pass `verify_eviction_policy=False` to accept the risk.
 
+    Point `url` at the primary. Construction refuses a connection that lands on
+    a replica, because a replica refuses every write and its reads can lag the
+    primary by any amount with no signal. A primary that has replicas passes.
+    Pass `verify_server_role=False` to open a backend against a replica on
+    purpose.
+
     Attributes:
         url: Redis URL this backend connected to.
         key_prefix: Key namespace that holds every Genie key.
@@ -355,6 +372,7 @@ class RedisBackend:
         socket_timeout: float = 30.0,
         max_retry_time: float = 30.0,
         verify_connectivity: bool = True,
+        verify_server_role: bool = True,
         verify_eviction_policy: bool = True,
         initialize_schema: bool = True,
     ) -> None:
@@ -376,6 +394,11 @@ class RedisBackend:
                 lost an optimistic conflict before `BackendBusy` is raised.
             verify_connectivity: Whether to ping the server during
                 construction.
+            verify_server_role: Whether to refuse a connection that lands on a
+                replica. The check reads `INFO replication` and fails only when
+                the server reports a replica role, so a primary that has
+                replicas passes. Set this to `False` to open a backend against
+                a replica, which refuses every write and can serve stale reads.
             verify_eviction_policy: Whether to refuse a server that may evict
                 Genie keys. The check reads `INFO memory` and fails only when
                 the server reports a memory limit together with an `allkeys-*`
@@ -388,9 +411,9 @@ class RedisBackend:
         Raises:
             TypeError: If an argument has the wrong type.
             ValueError: If `url`, `key_prefix`, or a timeout is invalid.
-            UnsupportedOperation: If the client is unavailable, the server
-                may evict Genie keys, or the stored schema record is
-                incompatible.
+            UnsupportedOperation: If the client is unavailable, the connection
+                lands on a replica, the server may evict Genie keys, or the
+                stored schema record is incompatible.
             BackendError: If Redis cannot be reached, configured, or
                 initialized.
         """
@@ -404,6 +427,8 @@ class RedisBackend:
             raise TypeError("auth must be a (username, password) tuple of strings.")
         if not isinstance(verify_connectivity, bool):
             raise TypeError("verify_connectivity must be a boolean.")
+        if not isinstance(verify_server_role, bool):
+            raise TypeError("verify_server_role must be a boolean.")
         if not isinstance(verify_eviction_policy, bool):
             raise TypeError("verify_eviction_policy must be a boolean.")
         if not isinstance(initialize_schema, bool):
@@ -437,6 +462,11 @@ class RedisBackend:
             self._client = client
             if verify_connectivity:
                 client.ping()
+            # The role check runs first. A replica that also evicts would
+            # otherwise be reported as an eviction problem, which points the
+            # caller at a setting on a server it should not be talking to.
+            if verify_server_role:
+                self._verify_server_role()
             if verify_eviction_policy:
                 self._verify_eviction_policy()
             if initialize_schema:
@@ -682,7 +712,9 @@ class RedisBackend:
         """
 
         if self._readonly_scripts:
-            return self._script_blocks(self._read_script("ancestors", keys=[self._block_key(block_id)], args=[self.key_prefix, block_id]))
+            # The shared script returns the starting block first, and that block
+            # is not one of its own ancestors.
+            return self._script_ancestors(block_id)[1:]
         return self._snapshot(lambda client: [_block_from_document(document) for document in self._ancestor_documents(client, block_id)])
 
     def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
@@ -1391,6 +1423,7 @@ class RedisBackend:
 
         Candidate blocks are narrowed by scope with Redis indexes, then matched
         in Python so results stay consistent with the reference backend.
+        `_scope_candidate_blocks` decides how each scope reads its candidates.
 
         Args:
             query: Normalized query from the public API.
@@ -1400,7 +1433,7 @@ class RedisBackend:
             `query.limit`.
         """
 
-        candidates = self._snapshot(lambda client: [_block_from_document(document) for document in self._scope_candidate_documents(client, query)])
+        candidates = self._scope_candidate_blocks(query)
         results: list[SearchResult] = []
         text = query.text.casefold() if query.text else None
         for block in candidates:
@@ -1617,6 +1650,22 @@ class RedisBackend:
             raise BackendCorruption("The Redis temporal page script returned an unpaired reply.")
         return [_temporal_from_payload(collection_id, str(reply[index]), reply[index + 1]) for index in range(0, len(reply), 2)]
 
+    def _script_ancestors(self, block_id: str) -> list[MemoryBlock]:
+        """Return one block and its ancestors from a single read-only script.
+
+        Args:
+            block_id: Block id to start from.
+
+        Returns:
+            The starting block followed by its ancestors, nearest parent first.
+            The list is empty when the starting block is gone.
+
+        Raises:
+            BackendCorruption: If a stored document is not a valid block.
+        """
+
+        return self._script_blocks(self._read_script("ancestors", keys=[self._block_key(block_id)], args=[self.key_prefix, block_id]))
+
     def _script_descendants(self, block_id: str, reply: Sequence[Any], *, include_self: bool) -> list[MemoryBlock]:
         """Rebuild one subtree from the edges and documents a script returned.
 
@@ -1651,6 +1700,59 @@ class RedisBackend:
             return blocks
         return [block for block in blocks if block.id != block_id]
 
+    def _verify_server_role(self) -> None:
+        """Refuse a connection that lands on a replica.
+
+        A replica accepts no writes, so it answers every Genie write with a
+        read-only error that reaches the caller as `BackendReadOnly`. Reads are
+        the silent case. With `initialize_schema=False` the backend opens,
+        never writes, and serves whatever the replica has replicated, which can
+        lag the primary by any amount and carries no signal at all.
+
+        The check refuses connecting to a replica, not a deployment that has
+        replicas. A primary that has replicas reports the primary role and
+        passes.
+
+        The role comes from `INFO replication` rather than `ROLE`, for the same
+        reason the eviction check avoids `CONFIG GET`: `INFO` is the command a
+        managed or restricted deployment is most likely to leave available.
+        Only a reading that proves the server is a replica fails the check. A
+        blocked `INFO`, a client without it, a missing field, an unreadable
+        value, and an unrecognized role all leave the role unknown and pass, so
+        the check never rejects a server that would otherwise work.
+
+        The check runs once against the server that answered. A failover that
+        demotes this server after construction is not caught, and its writes
+        then fail with `BackendReadOnly`. A proxy that spreads one URL over a
+        primary and its replicas is not caught either. The check rejects a
+        wrong target; it does not make reads across replicas consistent.
+
+        Raises:
+            UnsupportedOperation: If the server reports a replica role.
+        """
+
+        client = self._require_client()
+        try:
+            report = client.info("replication")
+        except AttributeError:
+            return
+        except self._exception_types as error:
+            if _is_command_error(error):
+                return
+            raise
+        if not isinstance(report, Mapping):
+            return
+        role = report.get("role")
+        # Redis reports `role:slave`, and compatible servers report `replica`.
+        # An exact match keeps `master` from ever matching by accident.
+        if not isinstance(role, str) or role.strip().casefold() not in {"slave", "replica"}:
+            return
+        raise UnsupportedOperation(
+            f"Redis reports the role {role!r}, so this connection lands on a replica. A replica refuses every write, and "
+            "its reads can lag the primary by any amount with no signal. Connect to the primary of the deployment, or "
+            "pass verify_server_role=False to accept failing writes and stale reads."
+        )
+
     def _verify_eviction_policy(self) -> None:
         """Refuse a server that may drop Genie keys to reclaim memory.
 
@@ -1683,7 +1785,7 @@ class RedisBackend:
         except AttributeError:
             return
         except self._exception_types as error:
-            if "ResponseError" in {ancestor.__name__ for ancestor in type(error).__mro__}:
+            if _is_command_error(error):
                 return
             raise
         if not isinstance(report, Mapping):
@@ -1727,7 +1829,7 @@ class RedisBackend:
         except AttributeError:
             return False
         except self._exception_types as error:
-            if "ResponseError" in {ancestor.__name__ for ancestor in type(error).__mro__}:
+            if _is_command_error(error):
                 return False
             raise
 
@@ -2200,32 +2302,77 @@ class RedisBackend:
         payloads = client.hmget(self._temporal_key(collection_id), list(block_ids))
         return [_temporal_from_payload(collection_id, block_id, payload) for block_id, payload in zip(block_ids, payloads, strict=True) if payload is not None]
 
-    def _scope_candidate_documents(self, client: Any, query: MemoryQuery) -> list[dict[str, Any]]:
-        """Return candidate block documents for one normalized query scope."""
+    def _scope_candidate_blocks(self, query: MemoryQuery) -> list[MemoryBlock]:
+        """Return the candidate blocks one normalized query scope allows.
 
-        if query.scope == Scope.GLOBAL or query.root_id is None:
-            return self._block_documents(client, [str(member) for member in client.zrange(self._blocks_key(), 0, -1)])
-        root = self._block_document(client, query.root_id)
-        if root is None:
-            return []
+        `Scope.SELF`, `Scope.SUBTREE`, and `Scope.ANCESTORS` read one block, one
+        subtree, or one parent chain, so they take the same block-scoped read
+        path as `get_block`, `descendants`, and `ancestors`. Those reads are
+        atomic on the server and never retry.
+
+        `Scope.GLOBAL` reads every stored block, and `Scope.LINKS` follows an
+        endpoint fan-out that one block can grow without a bound. Neither has a
+        size a script may safely hold the server for, so both keep the mutation
+        guard and may raise `BackendBusy` under sustained writes.
+
+        Args:
+            query: Normalized query from the public API.
+
+        Returns:
+            Candidate blocks, before type, filter, and text matching.
+        """
+
+        if query.root_id is None or query.scope == Scope.GLOBAL:
+            return self._snapshot(self._all_blocks)
+        root_id = query.root_id
         if query.scope == Scope.SELF:
-            return [root]
+            # A single GET is atomic on its own, so this read needs neither the
+            # guard nor a script, whatever the server supports.
+            block = self._direct(lambda client: self._block(client, root_id))
+            return [] if block is None else [block]
         if query.scope == Scope.SUBTREE:
-            return self._descendant_documents(client, query.root_id, include_self=True)
+            return self.descendants(root_id, include_self=True)
         if query.scope == Scope.ANCESTORS:
-            return [root, *self._ancestor_documents(client, query.root_id)]
+            if self._readonly_scripts:
+                return self._script_ancestors(root_id)
+            return self._snapshot(lambda client: self._self_and_ancestor_blocks(client, root_id))
         if query.scope == Scope.LINKS:
-            block_ids: list[str] = []
-            seen: set[str] = set()
-            for _, source_id, target_id, _ in self._connected_link_members(client, query.root_id, "both"):
-                for block_id in (source_id, target_id):
-                    if block_id not in seen:
-                        seen.add(block_id)
-                        block_ids.append(block_id)
-            documents = self._block_documents(client, block_ids)
-            documents.sort(key=lambda document: _stored_int(document.get("storage_order"), field_name="storage order"))
-            return documents
-        return self._block_documents(client, [str(member) for member in client.zrange(self._blocks_key(), 0, -1)])
+            return self._snapshot(lambda client: self._linked_blocks(client, root_id))
+        return self._snapshot(self._all_blocks)
+
+    def _all_blocks(self, client: Any) -> list[MemoryBlock]:
+        """Return every stored block in creation order."""
+
+        block_ids = [str(member) for member in client.zrange(self._blocks_key(), 0, -1)]
+        return [_block_from_document(document) for document in self._block_documents(client, block_ids)]
+
+    def _self_and_ancestor_blocks(self, client: Any, block_id: str) -> list[MemoryBlock]:
+        """Return one block followed by its ancestors, nearest parent first."""
+
+        document = self._block_document(client, block_id)
+        if document is None:
+            return []
+        return [_block_from_document(record) for record in (document, *self._ancestor_documents(client, block_id))]
+
+    def _linked_blocks(self, client: Any, block_id: str) -> list[MemoryBlock]:
+        """Return the blocks a link connects to one block, in creation order.
+
+        The starting block is included when at least one link reaches it,
+        because it is an endpoint of its own links.
+        """
+
+        if self._block_document(client, block_id) is None:
+            return []
+        endpoint_ids: list[str] = []
+        seen: set[str] = set()
+        for _, source_id, target_id, _ in self._connected_link_members(client, block_id, "both"):
+            for endpoint_id in (source_id, target_id):
+                if endpoint_id not in seen:
+                    seen.add(endpoint_id)
+                    endpoint_ids.append(endpoint_id)
+        documents = self._block_documents(client, endpoint_ids)
+        documents.sort(key=lambda document: _stored_int(document.get("storage_order"), field_name="storage order"))
+        return [_block_from_document(document) for document in documents]
 
     # ------------------------------------------------------------------
     # Staged writes
@@ -3067,6 +3214,24 @@ def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[Bas
     if not isinstance(no_script_error, type):
         no_script_error = _UnavailableNoScriptError
     return redis, exception_types, watch_error, no_script_error
+
+
+def _is_command_error(error: BaseException) -> bool:
+    """Return whether Redis rejected the command itself.
+
+    A rejected command means the server, the deployment, or the user's
+    permissions do not offer it. A construction probe treats that as an unknown
+    reading and passes. A transport failure is not this case and still reaches
+    the caller.
+
+    Args:
+        error: Client failure raised while a command ran.
+
+    Returns:
+        `True` when the failure is a command rejection.
+    """
+
+    return "ResponseError" in {ancestor.__name__ for ancestor in type(error).__mro__}
 
 
 def _translate_redis_error(error: BaseException) -> GenieError:

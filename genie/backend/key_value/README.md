@@ -72,8 +72,13 @@ datasets can share one Redis database by using different prefixes.
   script from start to finish before it serves another client, so such a read can
   never see half of a write and never retries. `contains`, `ancestors`,
   `children`, `descendants`, `list_links`, and `list_temporal_entries` use that
-  path. A read that scans the dataset, such as `search`, reads the guard before
-  and after its commands and retries when a write landed in the middle.
+  path. A read with no bound on its size reads the guard before and after its
+  commands and retries when a write landed in the middle.
+- `search` splits the same way, by scope. `Scope.SELF` is one `GET`, and
+  `Scope.SUBTREE` and `Scope.ANCESTORS` reuse the scripts behind `descendants`
+  and `ancestors`, so none of the three ever retries. `Scope.GLOBAL` reads every
+  stored block, and `Scope.LINKS` reads every block a link connects to the root,
+  which one block can grow without a bound, so both keep the guard.
 - Read-only script support is checked once during construction by running a
   trivial `EVAL_RO`. That tests the capability the reads need instead of
   guessing from a reported version string. A server older than Redis 7.0, a
@@ -141,6 +146,26 @@ this. The adapter does not use `WAIT` or `WAITAOF`, which make a write wait for
 replicas or for the AOF fsync, because both cost a round trip on every write
 and are not available on every server.
 
+Point the URL at the primary. Construction refuses a connection that lands on a
+replica, and a primary that has replicas passes; the check rejects a replica as
+the target, not a deployment that has replicas. A replica already refuses every
+write with a read-only error that reaches the caller as `BackendReadOnly`, so
+the silent case is reads: with `initialize_schema=False` a backend on a replica
+opens, never writes, and serves data that can lag the primary by any amount with
+no signal. The check reads `INFO replication` once, next to the eviction check
+below, and only fails on a reading that proves the server is a replica. A
+blocked `INFO`, a missing field, and an unrecognized role all pass. Pass
+`verify_server_role=False` to open a backend against a replica on purpose, for
+example a read-only one.
+
+The check has limits worth knowing. It runs once against the server that
+answered, so a failover that demotes that server later is not caught, and its
+writes then fail with `BackendReadOnly`. A proxy that spreads one URL over a
+primary and its replicas is not caught either. Redis has no equivalent of a
+bookmark that carries one session's writes into another session's reads, so
+nothing here makes reads across replicas consistent. Give Genie one primary, and
+read through the same backend that writes.
+
 The server must also not evict Genie keys. Set `maxmemory-policy` to
 `noeviction`, which is the Redis default. Redis evicts one key at a time, while
 one Genie block spans a stored document plus several index entries, so an
@@ -162,9 +187,10 @@ reached, so at the limit you cannot delete Genie data through the backend to
 free space.
 
 A subtree read runs inside one script when scripting is available, and walks one
-ownership level per round trip otherwise. Portable search always scans the
-candidate blocks inside the scope on the client side. Use a separate search
-implementation when you need large full-text or vector indexes.
+ownership level per round trip otherwise. Portable search reads its candidate
+blocks through the path its scope allows, then matches every candidate in
+Python. Use a separate search implementation when you need large full-text or
+vector indexes.
 
 Temporal queries scan on the client side as well. Redis cannot apply time
 filters server-side, so `query_temporal_entries` reads the collection in
@@ -180,7 +206,8 @@ are willing to scan, or let the application split one collection per time range
 so a query touches only the ranges it needs.
 
 The adapter targets one logical Redis database, which can be a standalone
-server or a primary with replicas. Redis Cluster needs every key of a
+server or a primary with replicas. Connect it to the primary in the second
+case, as the role check above requires. Redis Cluster needs every key of a
 transaction in one hash slot, so use a hash-tagged prefix such as
 `key_prefix="{genie}"` there. That keeps all Genie keys in a single slot, which
 also means a single node holds them.
@@ -190,11 +217,15 @@ Genie keys, documents, and indexes belong to the backend. Write through
 temporal, and cycle checks, and it does not bump the mutation guard that keeps
 concurrent Genie writes correct.
 
-Run `../../../scripts/test_full.sh` from the repository root to start a
-throwaway Redis container and run the whole suite. If you run the server
-yourself, live tests need `GENIE_REDIS_URL`. The optional
-`GENIE_REDIS_KEY_PREFIX`, `GENIE_REDIS_USER`, and `GENIE_REDIS_PASSWORD`
-variables choose the test key namespace and the authentication.
+Run `../../../scripts/test_full.sh` from the repository root to start throwaway
+Redis containers and run the whole suite. The script starts a primary and one
+replica that follows it, so the role check is covered against a real
+`role:slave` server. If you run the servers yourself, live tests need
+`GENIE_REDIS_URL`, and the replica tests also need `GENIE_REDIS_REPLICA_URL`
+pointing at a replica of that same primary. Without it those tests skip. The
+optional `GENIE_REDIS_KEY_PREFIX`, `GENIE_REDIS_USER`, and
+`GENIE_REDIS_PASSWORD` variables choose the test key namespace and the
+authentication, and apply to both servers.
 
 Related: [Backend contracts](../README.md), [relational
 backends](../relational/README.md), [graph backends](../graph/README.md), and

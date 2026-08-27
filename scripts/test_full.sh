@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 # Run Genie's complete test suite against disposable local Neo4j and Redis
-# servers.
+# servers. The Redis side starts a primary and one replica that follows it, so
+# the live tests can cover the adapter's replica role check as well.
 
 set -euo pipefail
 
@@ -20,6 +21,8 @@ GENIE_TEST_REDIS_HOST_PORT="${GENIE_TEST_REDIS_HOST_PORT:-16379}"
 GENIE_TEST_REDIS_DATABASE="${GENIE_TEST_REDIS_DATABASE:-0}"
 GENIE_TEST_REDIS_KEY_PREFIX="${GENIE_TEST_REDIS_KEY_PREFIX:-genie-test}"
 GENIE_TEST_REDIS_READY_ATTEMPTS="${GENIE_TEST_REDIS_READY_ATTEMPTS:-60}"
+GENIE_TEST_REDIS_REPLICA_CONTAINER="${GENIE_TEST_REDIS_REPLICA_CONTAINER:-genie-redis-replica-test}"
+GENIE_TEST_REDIS_REPLICA_HOST_PORT="${GENIE_TEST_REDIS_REPLICA_HOST_PORT:-16380}"
 
 cd "$GENIE_REPO_ROOT"
 
@@ -63,6 +66,10 @@ cleanup() {
         echo "Stopping disposable Neo4j container..."
         docker stop "$GENIE_TEST_NEO4J_CONTAINER" >/dev/null 2>&1 || true
     fi
+    if [[ "${GENIE_TEST_REDIS_REPLICA_STARTED:-false}" == "true" ]]; then
+        echo "Stopping disposable Redis replica container..."
+        docker stop "$GENIE_TEST_REDIS_REPLICA_CONTAINER" >/dev/null 2>&1 || true
+    fi
     if [[ "${GENIE_TEST_REDIS_STARTED:-false}" == "true" ]]; then
         echo "Stopping disposable Redis container..."
         docker stop "$GENIE_TEST_REDIS_CONTAINER" >/dev/null 2>&1 || true
@@ -78,6 +85,7 @@ require_command docker
 
 require_port GENIE_TEST_NEO4J_HOST_PORT "$GENIE_TEST_NEO4J_HOST_PORT"
 require_port GENIE_TEST_REDIS_HOST_PORT "$GENIE_TEST_REDIS_HOST_PORT"
+require_port GENIE_TEST_REDIS_REPLICA_HOST_PORT "$GENIE_TEST_REDIS_REPLICA_HOST_PORT"
 require_attempts GENIE_TEST_NEO4J_READY_ATTEMPTS "$GENIE_TEST_NEO4J_READY_ATTEMPTS"
 require_attempts GENIE_TEST_REDIS_READY_ATTEMPTS "$GENIE_TEST_REDIS_READY_ATTEMPTS"
 
@@ -95,6 +103,7 @@ fi
 
 require_free_container "$GENIE_TEST_NEO4J_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_CONTAINER"
+require_free_container "$GENIE_TEST_REDIS_REPLICA_CONTAINER"
 
 echo "Compiling Genie..."
 conda run -n "$GENIE_TEST_CONDA_ENV" python -m compileall -q genie tests examples lamps
@@ -128,6 +137,40 @@ for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_REDIS_READY_ATTEM
     sleep 1
 done
 
+echo "Starting disposable Redis replica container..."
+# The replica reaches the primary by its address on the Docker bridge network.
+# The default bridge gives no name resolution between containers, so read the
+# address instead of using the container name.
+GENIE_TEST_REDIS_PRIMARY_ADDRESS="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$GENIE_TEST_REDIS_CONTAINER")"
+if [[ -z "$GENIE_TEST_REDIS_PRIMARY_ADDRESS" ]]; then
+    echo "Could not read the network address of the primary Redis container." >&2
+    exit 1
+fi
+docker run --rm -d \
+    --name "$GENIE_TEST_REDIS_REPLICA_CONTAINER" \
+    -p "127.0.0.1:${GENIE_TEST_REDIS_REPLICA_HOST_PORT}:6379" \
+    "$GENIE_TEST_REDIS_IMAGE" \
+    redis-server --replicaof "$GENIE_TEST_REDIS_PRIMARY_ADDRESS" 6379 >/dev/null
+GENIE_TEST_REDIS_REPLICA_STARTED=true
+
+echo "Waiting for the Redis replica to follow the primary..."
+for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_REDIS_READY_ATTEMPTS; GENIE_TEST_ATTEMPT++)); do
+    # Read the reply into a variable instead of piping it into grep. A pipe
+    # that closes early can fail under `set -o pipefail` even on a match.
+    GENIE_TEST_REDIS_REPLICA_INFO="$(docker exec "$GENIE_TEST_REDIS_REPLICA_CONTAINER" redis-cli INFO replication 2>/dev/null || true)"
+    if [[ "$GENIE_TEST_REDIS_REPLICA_INFO" == *"role:slave"* && "$GENIE_TEST_REDIS_REPLICA_INFO" == *"master_link_status:up"* ]]; then
+        break
+    fi
+
+    if ((GENIE_TEST_ATTEMPT == GENIE_TEST_REDIS_READY_ATTEMPTS)); then
+        echo "The Redis replica did not follow the primary at ${GENIE_TEST_REDIS_PRIMARY_ADDRESS}." >&2
+        echo "Recent container logs:" >&2
+        docker logs --tail 100 "$GENIE_TEST_REDIS_REPLICA_CONTAINER" >&2 || true
+        exit 1
+    fi
+    sleep 1
+done
+
 echo "Waiting for Neo4j..."
 for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_NEO4J_READY_ATTEMPTS; GENIE_TEST_ATTEMPT++)); do
     if docker exec "$GENIE_TEST_NEO4J_CONTAINER" \
@@ -154,5 +197,6 @@ env \
     GENIE_NEO4J_PASSWORD="$GENIE_TEST_NEO4J_PASSWORD" \
     GENIE_NEO4J_DATABASE="$GENIE_TEST_NEO4J_DATABASE" \
     GENIE_REDIS_URL="redis://127.0.0.1:${GENIE_TEST_REDIS_HOST_PORT}/${GENIE_TEST_REDIS_DATABASE}" \
+    GENIE_REDIS_REPLICA_URL="redis://127.0.0.1:${GENIE_TEST_REDIS_REPLICA_HOST_PORT}/${GENIE_TEST_REDIS_DATABASE}" \
     GENIE_REDIS_KEY_PREFIX="$GENIE_TEST_REDIS_KEY_PREFIX" \
     conda run -n "$GENIE_TEST_CONDA_ENV" python -m pytest "$@"

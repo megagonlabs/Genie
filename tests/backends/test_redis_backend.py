@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Condition, Event, RLock
+from time import monotonic, sleep
 from typing import Any, Literal, Self, cast
 
 import pytest
@@ -83,6 +84,7 @@ def test_redis_backend_implements_every_backend_protocol() -> None:
         ({"url": "redis://example", "max_retry_time": "5"}, TypeError, "max_retry_time must be a number"),
         ({"url": "redis://example", "auth": ["user", "password"]}, TypeError, "auth must be"),
         ({"url": "redis://example", "verify_connectivity": 1}, TypeError, "verify_connectivity must be"),
+        ({"url": "redis://example", "verify_server_role": 1}, TypeError, "verify_server_role must be"),
         ({"url": "redis://example", "verify_eviction_policy": 1}, TypeError, "verify_eviction_policy must be"),
         ({"url": "redis://example", "initialize_schema": 1}, TypeError, "initialize_schema must be"),
     ],
@@ -388,7 +390,10 @@ def test_redis_backend_checks_the_eviction_policy_before_it_touches_the_schema(
     verify_eviction_policy: bool,
     expected_sections: list[str],
 ) -> None:
-    """The eviction check runs before schema work, and the flag can skip it."""
+    """The eviction check runs before schema work, and the flag can skip it.
+
+    The role check is off here so the recorded sections cover eviction only.
+    """
 
     steps: list[str] = []
     sections: list[str] = []
@@ -422,12 +427,68 @@ def test_redis_backend_checks_the_eviction_policy_before_it_touches_the_schema(
 
     if verify_eviction_policy:
         with pytest.raises(UnsupportedOperation, match="configured to evict keys"):
-            RedisBackend("redis://example", verify_eviction_policy=True)
+            RedisBackend("redis://example", verify_server_role=False, verify_eviction_policy=True)
         assert steps == []
     else:
-        backend = RedisBackend("redis://example", verify_eviction_policy=False)
+        backend = RedisBackend("redis://example", verify_server_role=False, verify_eviction_policy=False)
         backend.close()
         assert steps == ["schema"]
+    assert sections == expected_sections
+
+
+@pytest.mark.parametrize(
+    ("verify_server_role", "expected_sections"),
+    [(True, ["replication"]), (False, ["memory"])],
+)
+def test_redis_backend_checks_the_server_role_before_eviction_and_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    verify_server_role: bool,
+    expected_sections: list[str],
+) -> None:
+    """The role check runs first, and the flag can skip it.
+
+    A replica that also evicts must be reported as a replica. The eviction
+    message would point the caller at a setting on a server it should not be
+    talking to.
+    """
+
+    steps: list[str] = []
+    sections: list[str] = []
+
+    class EvictingReplicaClient:
+        def ping(self) -> bool:
+            return True
+
+        def info(self, section: str) -> dict[str, Any]:
+            sections.append(section)
+            if section == "replication":
+                return {"role": "slave"}
+            return {"maxmemory": 1073741824, "maxmemory_policy": "allkeys-lru"}
+
+        def close(self) -> None:
+            return None
+
+    class FakeRedis:
+        @staticmethod
+        def from_url(*args: object, **kwargs: object) -> EvictingReplicaClient:
+            return EvictingReplicaClient()
+
+    class FakeModule:
+        Redis = FakeRedis
+
+    monkeypatch.setattr(
+        redis_module,
+        "_load_redis_client",
+        lambda: (FakeModule, (), _FakeWatchError, _FakeNoScriptError),
+    )
+    monkeypatch.setattr(RedisBackend, "_initialize_schema", lambda self: steps.append("schema"))
+    monkeypatch.setattr(RedisBackend, "_detect_readonly_scripts", lambda self: False)
+
+    expected_message = "lands on a replica" if verify_server_role else "configured to evict keys"
+    with pytest.raises(UnsupportedOperation, match=expected_message):
+        RedisBackend("redis://example", verify_server_role=verify_server_role)
+
+    assert steps == []
     assert sections == expected_sections
 
 
@@ -637,6 +698,7 @@ def test_redis_ancestors_runs_as_one_read_only_script() -> None:
 
     root = MemoryBlock(id="root", type="project", value={})
     middle = MemoryBlock(id="middle", parent_id=root.id, type="step", value={})
+    leaf = MemoryBlock(id="leaf", parent_id=middle.id, type="step", value={})
 
     class ScriptedClient:
         def __init__(self) -> None:
@@ -644,7 +706,7 @@ def test_redis_ancestors_runs_as_one_read_only_script() -> None:
 
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
             self.calls.append((digest, numkeys, *arguments))
-            return [_stored_payload(middle, 1), _stored_payload(root, 0)]
+            return [_stored_payload(leaf, 2), _stored_payload(middle, 1), _stored_payload(root, 0)]
 
         def get(self, key: str) -> None:
             raise AssertionError("a scripted read must not read the mutation guard")
@@ -655,8 +717,24 @@ def test_redis_ancestors_runs_as_one_read_only_script() -> None:
     client = ScriptedClient()
     backend = _detached_backend(client, readonly_scripts=True)
 
+    # The script returns the starting block first, and `ancestors` drops it.
     assert backend.ancestors("leaf") == [middle, root]
     assert client.calls == [(redis_module._LUA_DIGESTS["ancestors"], 1, "genie:block:leaf", "genie", "leaf")]
+
+
+def test_redis_ancestors_returns_nothing_for_a_missing_block() -> None:
+    """An empty scripted reply means the starting block itself is gone."""
+
+    class ScriptedClient:
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            return []
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(ScriptedClient(), readonly_scripts=True)
+
+    assert backend.ancestors("missing") == []
 
 
 def test_redis_children_runs_as_one_read_only_script() -> None:
@@ -1183,6 +1261,207 @@ def test_redis_ancestors_falls_back_without_read_only_script_support() -> None:
     assert client.guard_reads == 2
 
 
+def test_redis_self_scope_search_reads_one_key_without_a_guard_or_a_script() -> None:
+    """A `Scope.SELF` search is a single GET, so it can never report contention."""
+
+    block = MemoryBlock(id="child", type="step", value={"text": "alpha"})
+
+    class Client:
+        def __init__(self) -> None:
+            self.keys: list[str] = []
+
+        def get(self, key: str) -> str | None:
+            assert key != "genie:mutations", "a single-key read must not read the mutation guard"
+            self.keys.append(key)
+            return _stored_payload(block, 1) if key == "genie:block:child" else None
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            raise AssertionError("a single-key read must not run a script")
+
+        def close(self) -> None:
+            return None
+
+    client = Client()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert [result.block for result in backend.search(MemoryQuery(root_id="child", scope=Scope.SELF))] == [block]
+    assert backend.search(MemoryQuery(root_id="missing", scope=Scope.SELF)) == []
+    assert client.keys == ["genie:block:child", "genie:block:missing"]
+
+
+def test_redis_subtree_scope_search_runs_as_one_read_only_script() -> None:
+    """A `Scope.SUBTREE` search reuses the scripted subtree read."""
+
+    root = MemoryBlock(id="root", type="project", value={"text": "alpha"})
+    child = MemoryBlock(id="child", parent_id="root", type="step", value={"text": "alpha"})
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[list[str]]:
+            self.calls.append((digest, numkeys, *arguments))
+            return [["root", "child"], ["root", _stored_payload(root, 0), "child", _stored_payload(child, 1)]]
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a scripted read must not read the mutation guard")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert [result.block.id for result in backend.search(MemoryQuery(root_id="root", scope=Scope.SUBTREE))] == ["root", "child"]
+    assert client.calls == [(redis_module._LUA_DIGESTS["descendants"], 2, "genie:block:root", "genie:children:root", "genie", "root")]
+
+
+def test_redis_ancestors_scope_search_keeps_the_starting_block() -> None:
+    """A `Scope.ANCESTORS` search keeps the block the shared script returns first."""
+
+    root = MemoryBlock(id="root", type="project", value={"text": "alpha"})
+    leaf = MemoryBlock(id="leaf", parent_id="root", type="step", value={"text": "alpha"})
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            self.calls.append((digest, numkeys, *arguments))
+            return [_stored_payload(leaf, 1), _stored_payload(root, 0)]
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a scripted read must not read the mutation guard")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert [result.block.id for result in backend.search(MemoryQuery(root_id="leaf", scope=Scope.ANCESTORS))] == ["leaf", "root"]
+    assert client.calls == [(redis_module._LUA_DIGESTS["ancestors"], 1, "genie:block:leaf", "genie", "leaf")]
+
+
+def test_redis_ancestors_scope_search_falls_back_to_the_guard() -> None:
+    """Without scripting the scoped search keeps the guarded parent-chain walk."""
+
+    root = MemoryBlock(id="root", type="project", value={"text": "alpha"})
+    leaf = MemoryBlock(id="leaf", parent_id="root", type="step", value={"text": "alpha"})
+    documents = {"genie:block:root": _stored_payload(root, 0), "genie:block:leaf": _stored_payload(leaf, 1)}
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.guard_reads = 0
+
+        def get(self, key: str) -> str | None:
+            if key == "genie:mutations":
+                self.guard_reads += 1
+                return "9"
+            return documents.get(key)
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client)
+
+    assert [result.block.id for result in backend.search(MemoryQuery(root_id="leaf", scope=Scope.ANCESTORS))] == ["leaf", "root"]
+    assert backend.search(MemoryQuery(root_id="missing", scope=Scope.ANCESTORS)) == []
+    assert client.guard_reads == 4
+
+
+def test_redis_global_scope_search_keeps_the_mutation_guard() -> None:
+    """A global search reads every stored block, so a script must not hold the server."""
+
+    first = MemoryBlock(id="first", type="item", value={"text": "alpha"})
+    second = MemoryBlock(id="second", type="item", value={"text": "alpha"})
+    documents = {"genie:block:first": _stored_payload(first, 0), "genie:block:second": _stored_payload(second, 1)}
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.guard_reads = 0
+
+        def get(self, key: str) -> str:
+            assert key == "genie:mutations"
+            self.guard_reads += 1
+            return "2"
+
+        def zrange(self, key: str, start: int, stop: int) -> list[str]:
+            assert (key, start, stop) == ("genie:blocks", 0, -1)
+            return ["first", "second"]
+
+        def mget(self, keys: list[str]) -> list[str | None]:
+            return [documents.get(key) for key in keys]
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            raise AssertionError("an unbounded read must not run a script")
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert [result.block.id for result in backend.search(MemoryQuery())] == ["first", "second"]
+    assert client.guard_reads == 2
+
+
+def test_redis_links_scope_search_keeps_the_mutation_guard() -> None:
+    """One block can carry any number of links, so this scope stays guarded."""
+
+    first = MemoryBlock(id="first", type="item", value={"text": "alpha"})
+    second = MemoryBlock(id="second", type="item", value={"text": "alpha"})
+    link = MemoryLink("first", "second", "relates_to", id="link")
+    documents = {"genie:block:first": _stored_payload(first, 0), "genie:block:second": _stored_payload(second, 1)}
+
+    class EndpointPipeline:
+        def __init__(self) -> None:
+            self.replies: list[list[tuple[str, float]]] = []
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def zrange(self, key: str, start: int, stop: int, withscores: bool = False) -> None:
+            assert withscores is True
+            self.replies.append([(_endpoint_member(link), 0.0)] if key == "genie:outlinks:first" else [])
+
+        def execute(self) -> list[list[tuple[str, float]]]:
+            return self.replies
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.guard_reads = 0
+
+        def get(self, key: str) -> str | None:
+            if key == "genie:mutations":
+                self.guard_reads += 1
+                return "5"
+            return documents.get(key)
+
+        def mget(self, keys: list[str]) -> list[str | None]:
+            return [documents.get(key) for key in keys]
+
+        def pipeline(self) -> EndpointPipeline:
+            return EndpointPipeline()
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            raise AssertionError("an unbounded read must not run a script")
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert [result.block.id for result in backend.search(MemoryQuery(root_id="first", scope=Scope.LINKS))] == ["first", "second"]
+    assert backend.search(MemoryQuery(root_id="missing", scope=Scope.LINKS)) == []
+    assert client.guard_reads == 4
+
+
 def test_redis_contains_reloads_a_script_the_server_dropped() -> None:
     """A flushed script cache is refilled by sending the body once."""
 
@@ -1260,6 +1539,89 @@ def test_redis_read_only_script_probe_accepts_servers_without_support() -> None:
     backend = _detached_backend(OldServerClient(), exception_types=(ResponseError,))
 
     assert backend._detect_readonly_scripts() is False
+
+
+@pytest.mark.parametrize(
+    ("report", "is_replica"),
+    [
+        pytest.param({"role": "slave"}, True, id="replica_role"),
+        pytest.param({"role": " REPLICA "}, True, id="padded_upper_case_replica_word"),
+        pytest.param({"role": "master"}, False, id="primary_role"),
+        pytest.param({"role": "sentinel"}, False, id="unrecognized_role"),
+        pytest.param({"role": "slave_read_only"}, False, id="role_that_only_starts_with_a_replica_word"),
+        pytest.param({}, False, id="missing_role"),
+        pytest.param({"role": 8}, False, id="unexpected_role_type"),
+        pytest.param("not a mapping", False, id="unexpected_reply"),
+    ],
+)
+def test_redis_role_probe_refuses_only_a_server_it_can_prove_is_a_replica(
+    report: Any,
+    is_replica: bool,
+) -> None:
+    """A proven replica role fails; every unknown reading is accepted."""
+
+    class ReportingClient:
+        def info(self, section: str) -> Any:
+            assert section == "replication"
+            return report
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(ReportingClient())
+
+    if not is_replica:
+        assert backend._verify_server_role() is None
+        return
+    with pytest.raises(UnsupportedOperation, match="lands on a replica"):
+        backend._verify_server_role()
+
+
+def test_redis_role_probe_accepts_a_server_that_blocks_the_info_command() -> None:
+    """A refused `INFO` leaves the role unknown instead of failing."""
+
+    class ResponseError(Exception):
+        """Stand-in for the client's command rejection error."""
+
+    class RestrictedClient:
+        def info(self, section: str) -> dict[str, Any]:
+            raise ResponseError("NOPERM this user has no permissions to run the 'info' command")
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(RestrictedClient(), exception_types=(ResponseError,))
+
+    assert backend._verify_server_role() is None
+
+
+def test_redis_role_probe_accepts_clients_without_support() -> None:
+    """A client library with no `info` leaves the role unknown."""
+
+    class MinimalClient:
+        def close(self) -> None:
+            return None
+
+    assert _detached_backend(MinimalClient())._verify_server_role() is None
+
+
+def test_redis_role_probe_reports_an_unreachable_server() -> None:
+    """A transport failure reaches the caller instead of passing the check."""
+
+    class ConnectionError(Exception):
+        """Stand-in for the client's transport failure."""
+
+    class UnreachableClient:
+        def info(self, section: str) -> dict[str, Any]:
+            raise ConnectionError("Connection closed by server")
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(UnreachableClient(), exception_types=(ConnectionError,))
+
+    with pytest.raises(ConnectionError):
+        backend._verify_server_role()
 
 
 @pytest.mark.parametrize(
@@ -1379,8 +1741,11 @@ def test_redis_read_only_script_probe_reports_transport_failures() -> None:
 
 _LIVE_URL = os.environ.get("GENIE_REDIS_URL")
 _LIVE_PREFIX = os.environ.get("GENIE_REDIS_KEY_PREFIX", "genie-test")
+_LIVE_REPLICA_URL = os.environ.get("GENIE_REDIS_REPLICA_URL")
 _LIVE_CLIENT_AVAILABLE = importlib.util.find_spec("redis") is not None
 _LIVE_REASON = "set GENIE_REDIS_URL and install the redis extra to run live Redis tests"
+_LIVE_REPLICA_REASON = "set GENIE_REDIS_URL and GENIE_REDIS_REPLICA_URL and install the redis extra to run live Redis replica tests"
+_LIVE_REPLICATION_TIMEOUT = 15.0
 
 
 def _live_auth() -> tuple[str, str] | None:
@@ -1401,6 +1766,53 @@ def _live_backend(*, initialize_schema: bool = True, key_prefix: str | None = No
         key_prefix=key_prefix or _LIVE_PREFIX,
         initialize_schema=initialize_schema,
     )
+
+
+def _live_replica_backend(**options: Any) -> RedisBackend:
+    """Open a backend against the live replica with the given options."""
+
+    assert _LIVE_REPLICA_URL is not None
+    return RedisBackend(
+        _LIVE_REPLICA_URL,
+        auth=_live_auth(),
+        key_prefix=_LIVE_PREFIX,
+        **options,
+    )
+
+
+def _wait_for_replicated_key(key: str, *, present: bool = True) -> None:
+    """Wait until one change made on the primary reaches the replica.
+
+    The wait uses a plain client instead of a backend, because a backend
+    opened against the replica validates the schema record during
+    construction, and that record is itself something the primary has to
+    replicate first.
+
+    Args:
+        key: Full Redis key to watch.
+        present: Whether to wait for the key to arrive or to disappear.
+
+    Raises:
+        AssertionError: If the change does not arrive before the timeout.
+    """
+
+    import redis
+
+    assert _LIVE_REPLICA_URL is not None
+    options: dict[str, Any] = {"decode_responses": True, "socket_connect_timeout": 10.0, "socket_timeout": 10.0}
+    auth = _live_auth()
+    if auth is not None:
+        options["username"], options["password"] = auth
+    client = redis.Redis.from_url(_LIVE_REPLICA_URL, **options)
+    try:
+        deadline = monotonic() + _LIVE_REPLICATION_TIMEOUT
+        while bool(client.exists(key)) is not present:
+            if monotonic() >= deadline:
+                state = "reach" if present else "leave"
+                raise AssertionError(f"Key {key!r} did not {state} the replica within {_LIVE_REPLICATION_TIMEOUT} seconds.")
+            sleep(0.05)
+    finally:
+        client.close()
 
 
 def _clear_live_data(backend: RedisBackend, *, include_schema: bool = False) -> None:
@@ -1589,7 +2001,7 @@ def test_live_redis_backend_searches_every_scope_and_filters_candidates() -> Non
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_depth_reads_are_atomic_under_concurrent_writes() -> None:
-    """Scripted depth reads stay correct and never report contention."""
+    """Scripted depth reads and block-scoped searches never report contention."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -1632,6 +2044,9 @@ def test_live_redis_depth_reads_are_atomic_under_concurrent_writes() -> None:
                     assert backend.list_temporal_entries(root.id, after_block_id=outside.id) == []
                     assert [block.id for block in backend.descendants(root.id)] == list(reversed(chain)) + [deepest.id]
                     assert [block.id for block in backend.descendants(deepest.id, include_self=True)] == [deepest.id]
+                    assert [result.block.id for result in backend.search(MemoryQuery(root_id=deepest.id, scope=Scope.SELF))] == [deepest.id]
+                    assert [result.block.id for result in backend.search(MemoryQuery(root_id=root.id, scope=Scope.SUBTREE))] == [root.id, *reversed(chain), deepest.id]
+                    assert [result.block.id for result in backend.search(MemoryQuery(root_id=deepest.id, scope=Scope.ANCESTORS))] == [deepest.id, *chain, root.id]
             finally:
                 stop.set()
             assert writer.result(timeout=30) > 0
@@ -1665,6 +2080,9 @@ def test_live_redis_scripted_and_guarded_reads_agree() -> None:
                 backend.list_links(root.id, direction="both"),
                 backend.list_links(root.id, relation="mirrors", direction="in"),
                 backend.list_temporal_entries(root.id),
+                backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.SELF)),
+                backend.search(MemoryQuery(root_id=root.id, scope=Scope.SUBTREE)),
+                backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS)),
             )
 
         scripted = read_everything()
@@ -2024,3 +2442,63 @@ def test_live_redis_backend_rejects_wrong_credentials() -> None:
             connect_timeout=2.0,
             socket_timeout=2.0,
         )
+
+
+@pytest.mark.skipif(not (_LIVE_URL and _LIVE_REPLICA_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REPLICA_REASON)
+def test_live_redis_backend_refuses_a_connection_that_lands_on_a_replica() -> None:
+    """A real replica fails construction with the role message."""
+
+    with pytest.raises(UnsupportedOperation, match="lands on a replica"):
+        _live_replica_backend()
+
+
+@pytest.mark.skipif(not (_LIVE_URL and _LIVE_REPLICA_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REPLICA_REASON)
+def test_live_redis_backend_role_check_runs_before_the_schema_check() -> None:
+    """A replica is reported as a replica, not as a missing schema record.
+
+    The empty namespace is what makes this an order test. With the role check
+    off the same connection fails on the missing schema record, so the role
+    message only appears when the role check runs first.
+    """
+
+    primary = _live_backend()
+    try:
+        _clear_live_data(primary, include_schema=True)
+        _wait_for_replicated_key(f"{_LIVE_PREFIX}:schema", present=False)
+
+        with pytest.raises(UnsupportedOperation, match="lands on a replica"):
+            _live_replica_backend(initialize_schema=False)
+        with pytest.raises(UnsupportedOperation, match="not initialized"):
+            _live_replica_backend(verify_server_role=False, initialize_schema=False)
+    finally:
+        _clear_live_data(primary, include_schema=True)
+        primary.close()
+
+
+@pytest.mark.skipif(not (_LIVE_URL and _LIVE_REPLICA_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REPLICA_REASON)
+def test_live_redis_backend_on_a_replica_reads_replicated_data_and_refuses_writes() -> None:
+    """The opt-out flag opens a replica, which reads but never writes.
+
+    This is the behavior the flag accepts, and the reason the check is on by
+    default: the replica answers reads with no signal that they may be stale,
+    while every write fails.
+    """
+
+    primary = _live_backend()
+    _clear_live_data(primary)
+    block = primary.put_block(MemoryBlock(id="replicated", type="event", value={"seen": True}))
+    # Replication keeps the order of the primary's writes, so the block key
+    # arriving also means the schema record the replica backend validates has
+    # arrived.
+    _wait_for_replicated_key(f"{_LIVE_PREFIX}:block:{block.id}")
+
+    replica = _live_replica_backend(verify_server_role=False, initialize_schema=False)
+    try:
+        assert replica.get_block(block.id) == block
+        with pytest.raises(BackendReadOnly, match="read-only"):
+            replica.put_block(MemoryBlock(id="rejected", type="event", value={}))
+        assert replica.get_block("rejected") is None
+    finally:
+        replica.close()
+        _clear_live_data(primary)
+        primary.close()
