@@ -189,6 +189,8 @@ def test_redis_serialization_rejects_invalid_versions_times_and_namespaces() -> 
         (redis_module._decode_log_member, '["one","block"]', "log entry is invalid"),
         (redis_module._decode_log_reference, '[1,2]', "log entry reference is invalid"),
         (redis_module._decode_edge_member, '["link",1,2]', "link relation edge is invalid"),
+        (redis_module._decode_endpoint_member, '["link","source","target",1]', "link endpoint member is invalid"),
+        (redis_module._decode_endpoint_member, '["link","source","target"]', "link endpoint member is invalid"),
     ],
 )
 def test_redis_member_decoders_translate_malformed_shapes(
@@ -624,6 +626,12 @@ def _stored_link_payload(link: MemoryLink, storage_order: int) -> str:
     return redis_module._dump_json({**redis_module._encode_link(link), "storage_order": storage_order}, field_name="memory link")
 
 
+def _endpoint_member(link: MemoryLink) -> str:
+    """Return the endpoint index member one link is stored under."""
+
+    return redis_module._identity(link.id, link.source_id, link.target_id, link.relation)
+
+
 def test_redis_ancestors_runs_as_one_read_only_script() -> None:
     """A supported server returns the whole parent chain from one script."""
 
@@ -738,23 +746,22 @@ def test_redis_list_links_runs_as_one_read_only_script() -> None:
     assert client.calls == []
     assert backend.list_links("root", direction="both") == [outgoing, incoming]
     assert client.calls == [
-        (redis_module._LUA_DIGESTS["list_links"], 2, "genie:outlinks:root", "genie:inlinks:root", "genie", "root", "both"),
+        (redis_module._LUA_DIGESTS["list_links"], 2, "genie:outlinks:root", "genie:inlinks:root", "genie", "root", "both", "0", ""),
     ]
 
 
-def test_redis_list_links_filters_the_relation_after_a_script() -> None:
-    """The relation filter narrows the reply without a second script call."""
+def test_redis_list_links_filters_the_relation_inside_the_script() -> None:
+    """The relation reaches the script, so it reads only matching documents."""
 
-    outgoing = MemoryLink("root", "child", "owns", id="outgoing")
     incoming = MemoryLink("other", "root", "notes", id="incoming")
 
     class ScriptedClient:
         def __init__(self) -> None:
-            self.calls = 0
+            self.calls: list[tuple[Any, ...]] = []
 
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
-            self.calls += 1
-            return [_stored_link_payload(outgoing, 0), _stored_link_payload(incoming, 1)]
+            self.calls.append((digest, numkeys, *arguments))
+            return [_stored_link_payload(incoming, 1)]
 
         def close(self) -> None:
             return None
@@ -763,13 +770,39 @@ def test_redis_list_links_filters_the_relation_after_a_script() -> None:
     backend = _detached_backend(client, readonly_scripts=True)
 
     assert backend.list_links("root", relation="notes", direction="both") == [incoming]
-    assert client.calls == 1
+    assert client.calls == [
+        (redis_module._LUA_DIGESTS["list_links"], 2, "genie:outlinks:root", "genie:inlinks:root", "genie", "root", "both", "1", "notes"),
+    ]
+
+
+def test_redis_list_links_treats_an_empty_relation_as_a_filter() -> None:
+    """An empty string is a valid relation, so the filter flag stays set."""
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            self.calls.append((digest, numkeys, *arguments))
+            return []
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert backend.list_links("root", relation="") == []
+    assert client.calls == [
+        (redis_module._LUA_DIGESTS["list_links"], 2, "genie:outlinks:root", "genie:inlinks:root", "genie", "root", "out", "1", ""),
+    ]
 
 
 def test_redis_list_links_falls_back_without_read_only_script_support() -> None:
     """A server without scripting keeps the guarded two-command read."""
 
     link = MemoryLink("root", "child", "owns", id="link")
+    removed = MemoryLink("root", "gone", "owns", id="removed")
 
     class GuardedClient:
         def __init__(self) -> None:
@@ -782,7 +815,7 @@ def test_redis_list_links_falls_back_without_read_only_script_support() -> None:
 
         def zrange(self, key: str, start: int, stop: int) -> list[str]:
             assert (key, start, stop) == ("genie:outlinks:root", 0, -1)
-            return ["link", "removed"]
+            return [_endpoint_member(link), _endpoint_member(removed)]
 
         def mget(self, keys: list[str]) -> list[str | None]:
             assert keys == ["genie:link:link", "genie:link:removed"]
@@ -796,6 +829,127 @@ def test_redis_list_links_falls_back_without_read_only_script_support() -> None:
 
     assert backend.list_links("root") == [link]
     assert client.guard_reads == 2
+
+
+def test_redis_link_cleanup_reads_only_the_endpoint_index() -> None:
+    """Removing links uses the endpoint members, so no link document is read.
+
+    A link document that is already gone would otherwise leave its index
+    entries behind, because a missing document is skipped instead of reported.
+    """
+
+    kept = MemoryLink("root", "child", "cites", id="kept")
+    shared = MemoryLink("other", "root", "cites", id="shared")
+
+    class RecordingPipeline:
+        def __init__(self, client: RecordingClient) -> None:
+            self.client = client
+            self.replies: list[Any] = []
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def watch(self, key: str) -> None:
+            return None
+
+        def multi(self) -> None:
+            return None
+
+        def get(self, key: str) -> str:
+            return "1"
+
+        def zrange(self, key: str, start: int, stop: int) -> None:
+            self.replies.append(self.client.index.get(key, []))
+
+        def mget(self, keys: list[str]) -> None:
+            raise AssertionError("link cleanup must not read link documents")
+
+        def delete(self, *keys: str) -> None:
+            self.client.commands.append(("delete", *keys))
+
+        def zrem(self, key: str, *members: str) -> None:
+            self.client.commands.append(("zrem", key, *members))
+
+        def incr(self, key: str) -> None:
+            self.client.commands.append(("incr", key))
+
+        def execute(self) -> list[Any]:
+            replies, self.replies = self.replies, []
+            return replies
+
+    class RecordingClient:
+        def __init__(self, index: dict[str, list[str]]) -> None:
+            self.index = index
+            self.commands: list[tuple[str, ...]] = []
+
+        def get(self, key: str) -> str:
+            assert key == "genie:mutations"
+            return "1"
+
+        def mget(self, keys: list[str]) -> None:
+            raise AssertionError("link cleanup must not read link documents")
+
+        def pipeline(self) -> RecordingPipeline:
+            return RecordingPipeline(self)
+
+        def close(self) -> None:
+            return None
+
+    client = RecordingClient(
+        {
+            "genie:outlinks:root": [_endpoint_member(kept)],
+            "genie:inlinks:root": [_endpoint_member(shared)],
+        }
+    )
+    backend = _detached_backend(client)
+
+    backend.delete_links_for_block("root")
+
+    # Both links share the `cites` relation, so that index loses exactly two
+    # members instead of being dropped whole.
+    assert client.commands == [
+        ("delete", "genie:outlinks:root", "genie:inlinks:root"),
+        ("delete", "genie:link:kept", "genie:link:shared"),
+        ("zrem", "genie:inlinks:child", _endpoint_member(kept)),
+        ("zrem", "genie:relation:cites", redis_module._identity("kept", "root", "child"), redis_module._identity("shared", "other", "root")),
+        ("zrem", "genie:outlinks:other", _endpoint_member(shared)),
+        ("incr", "genie:mutations"),
+    ]
+
+
+def test_redis_list_links_filters_the_relation_before_reading_documents() -> None:
+    """Without scripting the filter runs on the index, so one document is read."""
+
+    kept = MemoryLink("root", "child", "notes", id="kept")
+    skipped = MemoryLink("root", "other", "owns", id="skipped")
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.reads: list[list[str]] = []
+
+        def get(self, key: str) -> str:
+            assert key == "genie:mutations"
+            return "7"
+
+        def zrange(self, key: str, start: int, stop: int) -> list[str]:
+            assert (key, start, stop) == ("genie:outlinks:root", 0, -1)
+            return [_endpoint_member(kept), _endpoint_member(skipped)]
+
+        def mget(self, keys: list[str]) -> list[str | None]:
+            self.reads.append(keys)
+            return [_stored_link_payload(kept, 0)]
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client)
+
+    assert backend.list_links("root", relation="notes") == [kept]
+    assert client.reads == [["genie:link:kept"]]
 
 
 def test_redis_temporal_page_runs_as_one_read_only_script() -> None:
@@ -1640,6 +1794,91 @@ def test_live_redis_backend_explicit_cleanup_capabilities() -> None:
         _clear_live_data(backend)
 
 
+# Key kinds that always exist once the schema record is written. They belong to
+# the dataset rather than to any one block or link.
+_SHARED_KEY_KINDS = frozenset({"schema", "mutations", "blocks", "acyclic", "order"})
+
+# Key kinds whose last segment is the id of the block that owns them. The two
+# endpoint index kinds are owned by a block too, but they are checked on their
+# own because their members must resolve as well.
+_BLOCK_KEY_KINDS = frozenset(
+    {
+        "block",
+        "children",
+        "keys",
+        "keyowner",
+        "log",
+        "logcounter",
+        "logmember",
+        "temporal",
+        "temporalindex",
+        "temporalmember",
+    }
+)
+
+_ENDPOINT_KEY_KINDS = frozenset({"outlinks", "inlinks"})
+
+
+def _split_key(key: str) -> tuple[str, str]:
+    """Return the kind of one Genie key and the name that follows it."""
+
+    parts = key.split(":", 2)
+    return parts[1], parts[2] if len(parts) > 2 else ""
+
+
+def _stored_members(backend: RedisBackend, key: str) -> list[str]:
+    """Return every member of one stored sorted set."""
+
+    return [str(member) for member in backend._direct(lambda client: client.zrange(key, 0, -1))]
+
+
+def _orphan_keys(backend: RedisBackend) -> list[str]:
+    """Return every stored Genie key that no live block or link still owns.
+
+    The check walks the keys the server actually holds and resolves each one
+    back to a live owner, including the members an index holds. It compares
+    against no written list of expected keys, so a cleanup path that forgets a
+    key fails here even when nobody remembers to update the test. A key kind
+    this helper does not know is reported too, so a new key pattern cannot be
+    added without classifying it.
+    """
+
+    prefix = backend.key_prefix
+    stored = sorted(str(key) for key in backend._direct(lambda client: client.keys(f"{prefix}:*")))
+    parsed = [(key, *_split_key(key)) for key in stored]
+    live_blocks = {str(member) for member in backend._direct(lambda client: client.zrange(f"{prefix}:blocks", 0, -1))}
+    stored_links = {name for _, kind, name in parsed if kind == "link"}
+    endpoints = {key: _stored_members(backend, key) for key, kind, _ in parsed if kind in _ENDPOINT_KEY_KINDS}
+    linked = {
+        redis_module._decode_endpoint_member(member)[0]
+        for key, kind, name in parsed
+        if kind in _ENDPOINT_KEY_KINDS and name in live_blocks
+        for member in endpoints[key]
+    }
+    orphans: list[str] = []
+    for key, kind, name in parsed:
+        if kind in _SHARED_KEY_KINDS:
+            continue
+        if kind in _ENDPOINT_KEY_KINDS:
+            # A live block can still point at a link whose document is gone.
+            members = [redis_module._decode_endpoint_member(member)[0] for member in endpoints[key]]
+            if name not in live_blocks or any(link_id not in stored_links for link_id in members):
+                orphans.append(key)
+        elif kind in _BLOCK_KEY_KINDS:
+            if name not in live_blocks:
+                orphans.append(key)
+        elif kind == "link":
+            if name not in linked:
+                orphans.append(key)
+        elif kind == "relation":
+            edges = [redis_module._decode_identity(member, size=3, name="link relation edge") for member in _stored_members(backend, key)]
+            if any(edge[0] not in linked for edge in edges):
+                orphans.append(key)
+        else:
+            orphans.append(key)
+    return orphans
+
+
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_leaves_no_orphan_keys_after_deletion() -> None:
     """A deleted subtree removes every index and reverse-index key it owned."""
@@ -1649,8 +1888,13 @@ def test_live_redis_backend_leaves_no_orphan_keys_after_deletion() -> None:
         root = backend.put_block(MemoryBlock(id="root", type="root", value={}))
         child = backend.put_block(MemoryBlock(id="child", parent_id=root.id, type="child", value={}))
         outside = backend.put_block(MemoryBlock(id="outside", type="other", value={}))
+        neighbor = backend.put_block(MemoryBlock(id="neighbor", type="other", value={}))
         backend.add_link(MemoryLink(child.id, outside.id, "cites"))
         backend.add_link(MemoryLink(outside.id, child.id, "references"))
+        # A link between two surviving blocks shares the `cites` relation with a
+        # deleted one, so the relation index has to lose one member and keep the
+        # other instead of being dropped whole.
+        survivor = backend.add_link(MemoryLink(outside.id, neighbor.id, "cites"))
         backend.bind_key(KeyBinding(root.id, MemoryAddress((), "child"), child.id))
         backend.bind_key(KeyBinding(outside.id, MemoryAddress((), "child"), child.id))
         backend.append_log_entry(root.id, child.id)
@@ -1660,23 +1904,18 @@ def test_live_redis_backend_leaves_no_orphan_keys_after_deletion() -> None:
 
         backend.delete_block(root.id)
 
-        remaining = sorted(backend._direct(lambda client: client.keys(f"{backend.key_prefix}:*")))
-        expected = sorted(
-            [
-                f"{backend.key_prefix}:schema",
-                f"{backend.key_prefix}:mutations",
-                f"{backend.key_prefix}:order:blocks",
-                f"{backend.key_prefix}:order:links",
-                f"{backend.key_prefix}:blocks",
-                f"{backend.key_prefix}:block:{outside.id}",
-                f"{backend.key_prefix}:logcounter:{outside.id}",
-            ]
-        )
-        assert remaining == expected
-        assert backend.list_links(outside.id, direction="both") == []
+        assert _orphan_keys(backend) == []
+        assert backend.list_links(outside.id, direction="both") == [survivor]
+        assert backend.list_links(outside.id, relation="cites") == [survivor]
+        assert backend.list_links(neighbor.id, direction="in") == [survivor]
         assert backend.list_keys(outside.id) == []
         assert backend.list_log_entries(outside.id) == []
         assert backend.list_temporal_entries(outside.id) == []
+
+        # Deleting the last endpoints must also empty the relation index.
+        backend.delete_block(outside.id)
+        backend.delete_block(neighbor.id)
+        assert _orphan_keys(backend) == []
         _clear_live_data(backend)
 
 

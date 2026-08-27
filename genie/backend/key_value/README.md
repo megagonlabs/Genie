@@ -44,7 +44,7 @@ datasets can share one Redis database by using different prefixes.
 | `genie:blocks` | sorted set | Every block id in storage order |
 | `genie:children:<id>` | sorted set | Direct child ids in creation order |
 | `genie:link:<id>` | string | One link document |
-| `genie:outlinks:<id>`, `genie:inlinks:<id>` | sorted set | Link ids by endpoint |
+| `genie:outlinks:<id>`, `genie:inlinks:<id>` | sorted set | Connected links by endpoint. Each member holds the link id, both endpoint ids, and the relation |
 | `genie:relation:<relation>` | sorted set | Stored edges of one relation |
 | `genie:acyclic` | set | Relations protected as acyclic graphs |
 | `genie:keys:<collection>` | hash | Address-to-block bindings |
@@ -81,7 +81,11 @@ datasets can share one Redis database by using different prefixes.
   to the guard and its retry.
 - Deleting a block removes the whole subtree together with its links, key
   bindings, log entries, and temporal entries in the same commit. Reverse
-  indexes make that cleanup exact instead of a full scan.
+  indexes make that cleanup exact instead of a full scan. Link cleanup reads
+  only the endpoint index, never the link documents, so a link document that is
+  already gone cannot leave its index entries behind.
+- `list_links` applies its `relation` filter to the endpoint index, because each
+  member carries the relation. Only the matching link documents are read.
 - On construction the backend checks the schema record for its application id
   and version. It refuses a record owned by another application, a version
   newer than it supports, and a namespace that holds Genie keys with no record.
@@ -109,7 +113,9 @@ Script duration is the cost to watch. A scripted read moves no extra work onto
 the server, because the client-side path reads the same data, but that work now
 runs where every other client is waiting. A very deep ownership chain makes
 `ancestors` and `contains` longer, and a block with very many direct children or
-connected links makes `children` and `list_links` longer. `descendants` is the
+connected links makes `children` and `list_links` longer. A `relation` filter
+narrows `list_links` before it reads any document, but it still walks the whole
+endpoint index of that block. `descendants` is the
 longest of them, because its work follows the size of the whole subtree rather
 than one block. Keep ownership trees to a reasonable depth, fan-out, and subtree
 size, which is also what makes them useful to read.
@@ -118,6 +124,22 @@ Redis keeps the dataset in memory, and durability comes from server
 configuration (RDB snapshots, AOF, or both). The adapter cannot change that, so
 choose the persistence and replication settings your data needs. Genie never
 flushes the database, and it only touches keys under its own prefix.
+
+A crash costs recent writes, not a broken dataset. Every Genie write is one
+Redis transaction, including a subtree delete, and Redis stores and replicates
+a transaction as a unit, so a restart brings back whole writes and drops whole
+writes. A block never comes back with half of its index entries. How much you
+lose depends on the server: `appendfsync everysec` loses about one second of
+writes, `appendfsync no` leaves the timing to the operating system, and RDB
+snapshots alone lose everything written since the last snapshot. The setting
+lives on the server, so the adapter neither reads it nor changes it.
+
+Replication adds a second way to lose a write that already returned success.
+Redis replicates asynchronously, so a failover to a replica that has not
+received the last transactions drops them. No persistence setting prevents
+this. The adapter does not use `WAIT` or `WAITAOF`, which make a write wait for
+replicas or for the AOF fsync, because both cost a round trip on every write
+and are not available on every server.
 
 The server must also not evict Genie keys. Set `maxmemory-policy` to
 `noeviction`, which is the Redis default. Redis evicts one key at a time, while

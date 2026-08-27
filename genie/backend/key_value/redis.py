@@ -163,21 +163,30 @@ return documents
 
 # Read-only Lua script behind `list_links`. `ARGV[1]` is the key prefix,
 # `ARGV[2]` is the block to inspect, and `ARGV[3]` is `"out"`, `"in"`, or
-# `"both"`. The reply is the stored document of each connected link in creation
-# order. For `"both"` the script merges the two endpoint sets on link id and then
-# orders them by the stored `storage_order` score, which is what
-# `RedisBackend._connected_link_ids` does on the client. That score is a strictly
-# increasing counter, so two different links never tie. A link id whose document
-# is gone is skipped, matching `RedisBackend._link_documents`.
+# `"both"`. `ARGV[4]` is `"1"` when the relation filter applies and `"0"` when it
+# does not, and `ARGV[5]` carries that relation. The filter needs its own flag
+# because an empty string is a valid relation.
+#
+# An endpoint sorted set stores the member that `_identity(link_id, source_id,
+# target_id, relation)` builds, so the script reads the relation from the member
+# and fetches only the documents it will return. The reply is the stored document
+# of each matching link in creation order. For `"both"` the script merges the two
+# endpoint sets on the member and then orders them by the stored `storage_order`
+# score, which is what `RedisBackend._connected_link_members` does on the client.
+# That score is a strictly increasing counter, so two different links never tie.
+# A link whose document is gone is skipped, matching
+# `RedisBackend._link_documents`.
 _LIST_LINKS_SCRIPT = """
 local prefix = ARGV[1]
 local block_id = ARGV[2]
 local direction = ARGV[3]
-local link_ids
+local filtered = ARGV[4] == '1'
+local relation = ARGV[5]
+local members
 if direction == 'out' then
-  link_ids = redis.call('ZRANGE', prefix .. ':outlinks:' .. block_id, 0, -1)
+  members = redis.call('ZRANGE', prefix .. ':outlinks:' .. block_id, 0, -1)
 elseif direction == 'in' then
-  link_ids = redis.call('ZRANGE', prefix .. ':inlinks:' .. block_id, 0, -1)
+  members = redis.call('ZRANGE', prefix .. ':inlinks:' .. block_id, 0, -1)
 else
   local scores = {}
   local merged = {}
@@ -185,21 +194,24 @@ else
   for index = 1, #endpoints do
     local reply = redis.call('ZRANGE', endpoints[index], 0, -1, 'WITHSCORES')
     for position = 1, #reply, 2 do
-      local link_id = reply[position]
-      if scores[link_id] == nil then
-        merged[#merged + 1] = link_id
+      local member = reply[position]
+      if scores[member] == nil then
+        merged[#merged + 1] = member
       end
-      scores[link_id] = tonumber(reply[position + 1])
+      scores[member] = tonumber(reply[position + 1])
     end
   end
   table.sort(merged, function(left, right) return scores[left] < scores[right] end)
-  link_ids = merged
+  members = merged
 end
 local documents = {}
-for index = 1, #link_ids do
-  local payload = redis.call('GET', prefix .. ':link:' .. link_ids[index])
-  if payload then
-    documents[#documents + 1] = payload
+for index = 1, #members do
+  local record = cjson.decode(members[index])
+  if not filtered or record[4] == relation then
+    local payload = redis.call('GET', prefix .. ':link:' .. record[1])
+    if payload then
+      documents[#documents + 1] = payload
+    end
   end
 end
 return documents
@@ -1330,6 +1342,9 @@ class RedisBackend:
     ) -> list[MemoryLink]:
         """List links connected to one block.
 
+        The endpoint index carries the relation of every link it lists, so the
+        relation filter runs before any link document is read.
+
         Args:
             block_id: Block id to inspect.
             relation: Optional relation type filter.
@@ -1347,17 +1362,17 @@ class RedisBackend:
 
         if self._readonly_scripts:
             endpoints = [self._outlinks_key(block_id), self._inlinks_key(block_id)]
-            links = self._script_links(self._read_script("list_links", keys=endpoints, args=[self.key_prefix, block_id, direction]))
-        else:
+            arguments = [self.key_prefix, block_id, direction, "0" if relation is None else "1", "" if relation is None else relation]
+            return self._script_links(self._read_script("list_links", keys=endpoints, args=arguments))
 
-            def operation(client: Any) -> list[MemoryLink]:
-                link_ids = self._connected_link_ids(client, block_id, direction)
-                return [_link_from_document(document) for document in self._link_documents(client, link_ids)]
+        def operation(client: Any) -> list[MemoryLink]:
+            records = self._connected_link_members(client, block_id, direction)
+            if relation is not None:
+                records = [record for record in records if record[3] == relation]
+            link_ids = [record[0] for record in records]
+            return [_link_from_document(document) for document in self._link_documents(client, link_ids)]
 
-            links = self._snapshot(operation)
-        if relation is None:
-            return links
-        return [link for link in links if link.relation == relation]
+        return self._snapshot(operation)
 
     def delete_links_for_block(self, block_id: str) -> None:
         """Delete incoming and outgoing links for one block.
@@ -2145,23 +2160,31 @@ class RedisBackend:
         members = client.zrange(self._relation_key(relation), 0, -1)
         return [_decode_edge_member(str(member)) for member in members]
 
-    def _connected_link_ids(self, client: Any, block_id: str, direction: str) -> list[str]:
-        """Return link ids connected to one block in creation order."""
+    def _connected_link_members(self, client: Any, block_id: str, direction: str) -> list[tuple[str, str, str, str]]:
+        """Return the endpoint records connected to one block in creation order.
+
+        Each record holds the link id, its two endpoints, and its relation, so
+        a caller can filter without reading link documents.
+        """
 
         if direction == "out":
-            return [str(member) for member in client.zrange(self._outlinks_key(block_id), 0, -1)]
-        if direction == "in":
-            return [str(member) for member in client.zrange(self._inlinks_key(block_id), 0, -1)]
+            members = [str(member) for member in client.zrange(self._outlinks_key(block_id), 0, -1)]
+        elif direction == "in":
+            members = [str(member) for member in client.zrange(self._inlinks_key(block_id), 0, -1)]
+        else:
 
-        def plan(pipeline: Any) -> None:
-            pipeline.zrange(self._outlinks_key(block_id), 0, -1, withscores=True)
-            pipeline.zrange(self._inlinks_key(block_id), 0, -1, withscores=True)
+            def plan(pipeline: Any) -> None:
+                pipeline.zrange(self._outlinks_key(block_id), 0, -1, withscores=True)
+                pipeline.zrange(self._inlinks_key(block_id), 0, -1, withscores=True)
 
-        ordered: dict[str, float] = {}
-        for reply in self._batch(client, plan):
-            for member, score in reply:
-                ordered[str(member)] = float(score)
-        return sorted(ordered, key=lambda link_id: ordered[link_id])
+            # A self-link sits in both endpoint sets under the same member, so
+            # merging on the member is what removes the duplicate.
+            ordered: dict[str, float] = {}
+            for reply in self._batch(client, plan):
+                for member, score in reply:
+                    ordered[str(member)] = float(score)
+            members = sorted(ordered, key=lambda member: ordered[member])
+        return [_decode_endpoint_member(member) for member in members]
 
     def _temporal_page_ids(self, client: Any, collection_id: str, after_block_id: str | None, limit: int) -> list[str]:
         """Return one page of collection block ids in ascending order."""
@@ -2194,8 +2217,8 @@ class RedisBackend:
         if query.scope == Scope.LINKS:
             block_ids: list[str] = []
             seen: set[str] = set()
-            for document in self._link_documents(client, self._connected_link_ids(client, query.root_id, "both")):
-                for block_id in (str(document["source_id"]), str(document["target_id"])):
+            for _, source_id, target_id, _ in self._connected_link_members(client, query.root_id, "both"):
+                for block_id in (source_id, target_id):
                     if block_id not in seen:
                         seen.add(block_id)
                         block_ids.append(block_id)
@@ -2255,39 +2278,41 @@ class RedisBackend:
         source_id = str(stored["source_id"])
         target_id = str(stored["target_id"])
         relation = str(stored["relation"])
+        endpoint = _identity(link_id, source_id, target_id, relation)
         payload = _dump_json(stored, field_name="memory link")
         transaction.stage(lambda pipeline: pipeline.set(self._link_key(link_id), payload))
-        transaction.stage(lambda pipeline: pipeline.zadd(self._outlinks_key(source_id), {link_id: storage_order}))
-        transaction.stage(lambda pipeline: pipeline.zadd(self._inlinks_key(target_id), {link_id: storage_order}))
+        transaction.stage(lambda pipeline: pipeline.zadd(self._outlinks_key(source_id), {endpoint: storage_order}))
+        transaction.stage(lambda pipeline: pipeline.zadd(self._inlinks_key(target_id), {endpoint: storage_order}))
         transaction.stage(lambda pipeline: pipeline.zadd(self._relation_key(relation), {_identity(link_id, source_id, target_id): storage_order}))
         return _link_from_document(stored)
 
     def _stage_link_removal(self, transaction: _RedisTransaction, block_ids: set[str]) -> None:
-        """Stage removal of every link that touches one of the block ids."""
+        """Stage removal of every link that touches one of the block ids.
+
+        The endpoint members carry everything the cleanup needs, so this reads
+        no link documents. That matters for more than speed: a link id whose
+        document is already gone would otherwise keep its index entries alive,
+        because a missing document is skipped instead of reported.
+        """
 
         owners = sorted(block_ids)
         endpoint_keys = [self._outlinks_key(block_id) for block_id in owners] + [self._inlinks_key(block_id) for block_id in owners]
-        link_ids: list[str] = []
-        seen: set[str] = set()
-        for endpoint_link_ids in self._zrange_batch(transaction.client, endpoint_keys):
-            for link_id in endpoint_link_ids:
-                if link_id not in seen:
-                    seen.add(link_id)
-                    link_ids.append(link_id)
+        records: dict[str, tuple[str, str, str, str]] = {}
+        for members in self._zrange_batch(transaction.client, endpoint_keys):
+            for member in members:
+                record = _decode_endpoint_member(member)
+                records.setdefault(record[0], record)
         self._stage_delete(transaction, endpoint_keys)
-        if not link_ids:
+        if not records:
             return
-        self._stage_delete(transaction, [self._link_key(link_id) for link_id in link_ids])
+        self._stage_delete(transaction, [self._link_key(link_id) for link_id in records])
         removals: dict[str, list[str]] = defaultdict(list)
-        for document in self._link_documents(transaction.client, link_ids):
-            link_id = str(document["id"])
-            source_id = str(document["source_id"])
-            target_id = str(document["target_id"])
-            relation = str(document["relation"])
+        for link_id, source_id, target_id, relation in records.values():
+            endpoint = _identity(link_id, source_id, target_id, relation)
             if source_id not in block_ids:
-                removals[self._outlinks_key(source_id)].append(link_id)
+                removals[self._outlinks_key(source_id)].append(endpoint)
             if target_id not in block_ids:
-                removals[self._inlinks_key(target_id)].append(link_id)
+                removals[self._inlinks_key(target_id)].append(endpoint)
             removals[self._relation_key(relation)].append(_identity(link_id, source_id, target_id))
         for key, removed_members in removals.items():
             self._stage_zrem(transaction, key, removed_members)
@@ -2576,6 +2601,15 @@ def _decode_log_reference(member: str) -> tuple[str, int]:
     if not isinstance(log_id, str) or isinstance(sequence, bool) or not isinstance(sequence, int):
         raise BackendCorruption("Stored Redis log entry reference is invalid.")
     return log_id, sequence
+
+
+def _decode_endpoint_member(member: str) -> tuple[str, str, str, str]:
+    """Decode one stored endpoint member into its link, endpoints, and relation."""
+
+    link_id, source_id, target_id, relation = _decode_identity(member, size=4, name="link endpoint member")
+    if not all(isinstance(part, str) for part in (link_id, source_id, target_id, relation)):
+        raise BackendCorruption("Stored Redis link endpoint member is invalid.")
+    return link_id, source_id, target_id, relation
 
 
 def _decode_edge_member(member: str) -> tuple[str, str]:
