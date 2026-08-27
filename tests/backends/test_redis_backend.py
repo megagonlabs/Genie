@@ -83,6 +83,7 @@ def test_redis_backend_implements_every_backend_protocol() -> None:
         ({"url": "redis://example", "max_retry_time": "5"}, TypeError, "max_retry_time must be a number"),
         ({"url": "redis://example", "auth": ["user", "password"]}, TypeError, "auth must be"),
         ({"url": "redis://example", "verify_connectivity": 1}, TypeError, "verify_connectivity must be"),
+        ({"url": "redis://example", "verify_eviction_policy": 1}, TypeError, "verify_eviction_policy must be"),
         ({"url": "redis://example", "initialize_schema": 1}, TypeError, "initialize_schema must be"),
     ],
 )
@@ -374,6 +375,58 @@ def test_redis_backend_forwards_production_client_configuration(
         "pinged": True,
         "closed": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("verify_eviction_policy", "expected_sections"),
+    [(True, ["memory"]), (False, [])],
+)
+def test_redis_backend_checks_the_eviction_policy_before_it_touches_the_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    verify_eviction_policy: bool,
+    expected_sections: list[str],
+) -> None:
+    """The eviction check runs before schema work, and the flag can skip it."""
+
+    steps: list[str] = []
+    sections: list[str] = []
+
+    class EvictingClient:
+        def ping(self) -> bool:
+            return True
+
+        def info(self, section: str) -> dict[str, Any]:
+            sections.append(section)
+            return {"maxmemory": 1073741824, "maxmemory_policy": "allkeys-lru"}
+
+        def close(self) -> None:
+            return None
+
+    class FakeRedis:
+        @staticmethod
+        def from_url(*args: object, **kwargs: object) -> EvictingClient:
+            return EvictingClient()
+
+    class FakeModule:
+        Redis = FakeRedis
+
+    monkeypatch.setattr(
+        redis_module,
+        "_load_redis_client",
+        lambda: (FakeModule, (), _FakeWatchError, _FakeNoScriptError),
+    )
+    monkeypatch.setattr(RedisBackend, "_initialize_schema", lambda self: steps.append("schema"))
+    monkeypatch.setattr(RedisBackend, "_detect_readonly_scripts", lambda self: False)
+
+    if verify_eviction_policy:
+        with pytest.raises(UnsupportedOperation, match="configured to evict keys"):
+            RedisBackend("redis://example", verify_eviction_policy=True)
+        assert steps == []
+    else:
+        backend = RedisBackend("redis://example", verify_eviction_policy=False)
+        backend.close()
+        assert steps == ["schema"]
+    assert sections == expected_sections
 
 
 def test_redis_backend_discards_client_after_unexpected_initialization_error(
@@ -1053,6 +1106,92 @@ def test_redis_read_only_script_probe_accepts_servers_without_support() -> None:
     backend = _detached_backend(OldServerClient(), exception_types=(ResponseError,))
 
     assert backend._detect_readonly_scripts() is False
+
+
+@pytest.mark.parametrize(
+    ("report", "evicts"),
+    [
+        pytest.param({"maxmemory": 1073741824, "maxmemory_policy": "allkeys-lru"}, True, id="limit_with_allkeys_policy"),
+        pytest.param({"maxmemory": "1073741824", "maxmemory_policy": "ALLKEYS-LFU"}, True, id="string_limit_and_upper_case_policy"),
+        pytest.param({"maxmemory": 1073741824, "maxmemory_policy": "noeviction"}, False, id="limit_without_eviction"),
+        pytest.param({"maxmemory": 1073741824, "maxmemory_policy": "volatile-lru"}, False, id="expiry_only_eviction"),
+        pytest.param({"maxmemory": 0, "maxmemory_policy": "allkeys-lru"}, False, id="eviction_policy_without_a_limit"),
+        pytest.param({"maxmemory_policy": "allkeys-lru"}, False, id="missing_limit"),
+        pytest.param({"maxmemory": "unknown", "maxmemory_policy": "allkeys-lru"}, False, id="unreadable_limit"),
+        pytest.param({"maxmemory": True, "maxmemory_policy": "allkeys-lru"}, False, id="unexpected_limit_type"),
+        pytest.param({"maxmemory": 1073741824}, False, id="missing_policy"),
+        pytest.param({"maxmemory": 1073741824, "maxmemory_policy": 8}, False, id="unexpected_policy_type"),
+        pytest.param("not a mapping", False, id="unexpected_reply"),
+    ],
+)
+def test_redis_eviction_probe_refuses_only_a_server_it_can_prove_evicts(
+    report: Any,
+    evicts: bool,
+) -> None:
+    """A proven eviction setting fails; every unknown reading is accepted."""
+
+    class ReportingClient:
+        def info(self, section: str) -> Any:
+            assert section == "memory"
+            return report
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(ReportingClient())
+
+    if not evicts:
+        assert backend._verify_eviction_policy() is None
+        return
+    with pytest.raises(UnsupportedOperation, match="configured to evict keys"):
+        backend._verify_eviction_policy()
+
+
+def test_redis_eviction_probe_accepts_a_server_that_blocks_the_info_command() -> None:
+    """A refused `INFO` leaves the setting unknown instead of failing."""
+
+    class ResponseError(Exception):
+        """Stand-in for the client's command rejection error."""
+
+    class RestrictedClient:
+        def info(self, section: str) -> dict[str, Any]:
+            raise ResponseError("NOPERM this user has no permissions to run the 'info' command")
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(RestrictedClient(), exception_types=(ResponseError,))
+
+    assert backend._verify_eviction_policy() is None
+
+
+def test_redis_eviction_probe_accepts_clients_without_support() -> None:
+    """A client library with no `info` leaves the setting unknown."""
+
+    class MinimalClient:
+        def close(self) -> None:
+            return None
+
+    assert _detached_backend(MinimalClient())._verify_eviction_policy() is None
+
+
+def test_redis_eviction_probe_reports_an_unreachable_server() -> None:
+    """A transport failure reaches the caller instead of passing the check."""
+
+    class ConnectionError(Exception):
+        """Stand-in for the client's transport failure."""
+
+    class UnreachableClient:
+        def info(self, section: str) -> dict[str, Any]:
+            raise ConnectionError("Connection closed by server")
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(UnreachableClient(), exception_types=(ConnectionError,))
+
+    with pytest.raises(ConnectionError):
+        backend._verify_eviction_policy()
 
 
 def test_redis_read_only_script_probe_accepts_clients_without_support() -> None:

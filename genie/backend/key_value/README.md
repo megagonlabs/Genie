@@ -119,6 +119,26 @@ configuration (RDB snapshots, AOF, or both). The adapter cannot change that, so
 choose the persistence and replication settings your data needs. Genie never
 flushes the database, and it only touches keys under its own prefix.
 
+The server must also not evict Genie keys. Set `maxmemory-policy` to
+`noeviction`, which is the Redis default. Redis evicts one key at a time, while
+one Genie block spans a stored document plus several index entries, so an
+eviction can remove a document and leave an index entry pointing at data that is
+gone. `noeviction` turns an over-limit write into the out-of-memory error
+instead, which reaches the caller as `BackendCapacityExceeded`.
+
+Construction refuses a server that reports a memory limit together with an
+`allkeys-*` policy. The check reads `INFO memory` once, because managed services
+often block `CONFIG GET`, and it only fails on a reading that proves the server
+evicts. A blocked `INFO`, a missing field, a `volatile-*` policy (nothing has an
+expiry to evict), and `maxmemory 0` all pass. Pass
+`verify_eviction_policy=False` to skip the check and accept the risk. On a
+self-hosted server `maxmemory-policy` covers the whole process, so `SELECT` does
+not isolate Genie from a cache workload that needs `allkeys-lru`; give Genie its
+own server instead. Plan memory headroom as well: every Genie write ends with
+`INCR` on the mutation guard, and Redis refuses `INCR` once `maxmemory` is
+reached, so at the limit you cannot delete Genie data through the backend to
+free space.
+
 A subtree read runs inside one script when scripting is available, and walks one
 ownership level per round trip otherwise. Portable search always scans the
 candidate blocks inside the scope on the client side. Use a separate search

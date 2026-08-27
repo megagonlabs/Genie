@@ -318,6 +318,12 @@ class RedisBackend:
     directly can skip the reference, temporal, and cycle checks, and it does
     not bump the mutation guard that protects concurrent Genie writes.
 
+    Genie keys carry no expiry, so the server must not evict them. Construction
+    refuses a server that has a memory limit together with an `allkeys-*` value
+    for `maxmemory-policy`, because Redis evicts one key at a time while one
+    block spans a stored document plus several index entries. Use `noeviction`,
+    or pass `verify_eviction_policy=False` to accept the risk.
+
     Attributes:
         url: Redis URL this backend connected to.
         key_prefix: Key namespace that holds every Genie key.
@@ -337,6 +343,7 @@ class RedisBackend:
         socket_timeout: float = 30.0,
         max_retry_time: float = 30.0,
         verify_connectivity: bool = True,
+        verify_eviction_policy: bool = True,
         initialize_schema: bool = True,
     ) -> None:
         """Open a client and initialize or validate the Genie key namespace.
@@ -357,6 +364,11 @@ class RedisBackend:
                 lost an optimistic conflict before `BackendBusy` is raised.
             verify_connectivity: Whether to ping the server during
                 construction.
+            verify_eviction_policy: Whether to refuse a server that may evict
+                Genie keys. The check reads `INFO memory` and fails only when
+                the server reports a memory limit together with an `allkeys-*`
+                eviction policy. Set this to `False` to accept the risk of
+                losing keys.
             initialize_schema: Whether to create the missing Genie schema
                 record. Set this to `False` for runtime identities that may
                 use existing data but may not create it.
@@ -364,8 +376,9 @@ class RedisBackend:
         Raises:
             TypeError: If an argument has the wrong type.
             ValueError: If `url`, `key_prefix`, or a timeout is invalid.
-            UnsupportedOperation: If the client is unavailable or the stored
-                schema record is incompatible.
+            UnsupportedOperation: If the client is unavailable, the server
+                may evict Genie keys, or the stored schema record is
+                incompatible.
             BackendError: If Redis cannot be reached, configured, or
                 initialized.
         """
@@ -379,6 +392,8 @@ class RedisBackend:
             raise TypeError("auth must be a (username, password) tuple of strings.")
         if not isinstance(verify_connectivity, bool):
             raise TypeError("verify_connectivity must be a boolean.")
+        if not isinstance(verify_eviction_policy, bool):
+            raise TypeError("verify_eviction_policy must be a boolean.")
         if not isinstance(initialize_schema, bool):
             raise TypeError("initialize_schema must be a boolean.")
 
@@ -410,6 +425,8 @@ class RedisBackend:
             self._client = client
             if verify_connectivity:
                 client.ping()
+            if verify_eviction_policy:
+                self._verify_eviction_policy()
             if initialize_schema:
                 self._initialize_schema()
             else:
@@ -1618,6 +1635,62 @@ class RedisBackend:
         if include_self:
             return blocks
         return [block for block in blocks if block.id != block_id]
+
+    def _verify_eviction_policy(self) -> None:
+        """Refuse a server that may drop Genie keys to reclaim memory.
+
+        Genie sets no expiry on its keys, so only an `allkeys-*` value for
+        `maxmemory-policy` together with a memory limit can remove them. A
+        `volatile-*` policy finds nothing to evict and answers an over-limit
+        write with the out-of-memory error, which reaches the caller as
+        `BackendCapacityExceeded`. Eviction is worse than that error, because
+        Redis drops one key at a time while one Genie block spans a stored
+        document plus several index entries, so a dropped document leaves an
+        index entry pointing at data that is gone.
+
+        The two values come from `INFO memory` rather than `CONFIG GET`,
+        because managed Redis services often disable or rename `CONFIG` and a
+        restricted user may not be allowed to run it. Only a reading that
+        proves the server evicts fails the check. A blocked `INFO`, a client
+        without it, a missing field, and an unreadable value all leave the
+        setting unknown and pass, so the check never rejects a server that
+        would otherwise work. The check runs once, so a policy changed after
+        construction is not caught.
+
+        Raises:
+            UnsupportedOperation: If the server reports a memory limit and an
+                `allkeys-*` eviction policy.
+        """
+
+        client = self._require_client()
+        try:
+            report = client.info("memory")
+        except AttributeError:
+            return
+        except self._exception_types as error:
+            if "ResponseError" in {ancestor.__name__ for ancestor in type(error).__mro__}:
+                return
+            raise
+        if not isinstance(report, Mapping):
+            return
+        policy = report.get("maxmemory_policy")
+        if not isinstance(policy, str) or not policy.strip().casefold().startswith("allkeys-"):
+            return
+        limit = report.get("maxmemory")
+        if isinstance(limit, bool) or not isinstance(limit, int | str):
+            return
+        try:
+            limit_bytes = int(limit)
+        except ValueError:
+            return
+        if limit_bytes <= 0:
+            return
+        raise UnsupportedOperation(
+            f"Redis is configured to evict keys: maxmemory-policy is {policy!r} with a maxmemory of {limit_bytes} bytes. "
+            "Genie stores every block as a document plus index entries, so an eviction can remove data and leave the "
+            "dataset inconsistent. Set maxmemory-policy to noeviction, or pass verify_eviction_policy=False to accept "
+            "the risk of losing keys."
+        )
 
     def _detect_readonly_scripts(self) -> bool:
         """Return whether the server can run read-only Lua scripts.
