@@ -1040,9 +1040,9 @@ def test_redis_temporal_page_runs_as_one_read_only_script() -> None:
         def __init__(self) -> None:
             self.calls: list[tuple[Any, ...]] = []
 
-        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[Any]:
             self.calls.append((digest, numkeys, *arguments))
-            return [first.block_id, _stored_temporal_payload(first), second.block_id, _stored_temporal_payload(second)]
+            return [2, [first.block_id, _stored_temporal_payload(first), second.block_id, _stored_temporal_payload(second)]]
 
         def get(self, key: str) -> None:
             raise AssertionError("a scripted read must not read the mutation guard")
@@ -1089,8 +1089,8 @@ def test_redis_temporal_page_rejects_an_unpaired_script_reply() -> None:
     """A reply that lost half of a pair fails as corruption, not an index error."""
 
     class ScriptedClient:
-        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
-            return ["first"]
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[Any]:
+            return [1, ["first"]]
 
         def close(self) -> None:
             return None
@@ -1099,6 +1099,106 @@ def test_redis_temporal_page_rejects_an_unpaired_script_reply() -> None:
 
     with pytest.raises(BackendCorruption, match="unpaired reply"):
         backend.list_temporal_entries("collection")
+
+
+def test_redis_temporal_page_rejects_a_reply_without_a_scanned_count() -> None:
+    """A page reply must carry the scanned count beside its pairs."""
+
+    class ScriptedClient:
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[Any]:
+            return [["first", "{}"]]
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(ScriptedClient(), readonly_scripts=True)
+
+    with pytest.raises(BackendCorruption, match="scanned count and a page"):
+        backend.list_temporal_entries("collection")
+
+
+def test_redis_temporal_query_answers_one_page_through_the_script() -> None:
+    """A collection that fits in one page is filtered from one atomic read."""
+
+    kept = TemporalEntry("collection", "kept", occurred_at=datetime(2026, 1, 1, tzinfo=UTC))
+    later = TemporalEntry("collection", "later", occurred_at=datetime(2026, 6, 1, tzinfo=UTC))
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[Any]:
+            self.calls.append((digest, numkeys, *arguments))
+            return [2, [kept.block_id, _stored_temporal_payload(kept), later.block_id, _stored_temporal_payload(later)]]
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a query answered inside one page must not read the mutation guard")
+
+        def zrangebylex(self, *arguments: Any, **keywords: Any) -> list[str]:
+            raise AssertionError("a query answered inside one page must not fall back to the guarded scan")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert backend.query_temporal_entries("collection", occurred_stop=datetime(2026, 3, 1, tzinfo=UTC)) == [kept]
+    assert client.calls == [
+        (
+            redis_module._LUA_DIGESTS["list_temporal_entries"],
+            2,
+            "genie:temporalindex:collection",
+            "genie:temporal:collection",
+            "genie",
+            "collection",
+            "-",
+            redis_module._TEMPORAL_SCAN_PAGE,
+        ),
+    ]
+
+
+def test_redis_temporal_query_falls_back_when_one_page_is_not_the_whole_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A full first page cannot end the query, so the guarded scan takes over."""
+
+    monkeypatch.setattr(redis_module, "_TEMPORAL_SCAN_PAGE", 2)
+    early = TemporalEntry("collection", "a", occurred_at=datetime(2026, 1, 1, tzinfo=UTC))
+    late = TemporalEntry("collection", "b", occurred_at=datetime(2026, 6, 1, tzinfo=UTC))
+    middle = TemporalEntry("collection", "c", occurred_at=datetime(2026, 2, 1, tzinfo=UTC))
+    stored = {entry.block_id: _stored_temporal_payload(entry) for entry in (early, late, middle)}
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.scripts = 0
+            self.guard_reads = 0
+            self.pages: list[str] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[Any]:
+            self.scripts += 1
+            return [2, [early.block_id, stored[early.block_id], late.block_id, stored[late.block_id]]]
+
+        def get(self, key: str) -> str:
+            assert key == "genie:mutations"
+            self.guard_reads += 1
+            return "3"
+
+        def zrangebylex(self, key: str, lowest: str, highest: str, start: int, num: int) -> list[str]:
+            assert (key, highest, start, num) == ("genie:temporalindex:collection", "+", 0, 2)
+            self.pages.append(lowest)
+            return ["a", "b"] if lowest == "-" else ["c"]
+
+        def hmget(self, key: str, fields: list[str]) -> list[str]:
+            assert key == "genie:temporal:collection"
+            return [stored[field] for field in fields]
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert backend.query_temporal_entries("collection", occurred_stop=datetime(2026, 3, 1, tzinfo=UTC)) == [early, middle]
+    assert (client.scripts, client.pages, client.guard_reads) == (1, ["-", "(b"], 2)
 
 
 def test_redis_temporal_page_falls_back_without_read_only_script_support() -> None:
@@ -1873,7 +1973,8 @@ class TestRedisGuardedReadStructureBackendContracts(TestRedisStructureBackendCon
     `RedisBackend` implements `children`, `ancestors`, `descendants`,
     `contains`, `list_links`, and `list_temporal_entries` twice: as one
     read-only script where the server can run one, and as several commands
-    under the mutation guard otherwise. Which one runs is decided once during
+    under the mutation guard otherwise. `query_temporal_entries` splits the
+    same way for a collection that fits in one page. Which one runs is decided once during
     construction, so a live Redis 7 server always exercises the script path and
     would leave the guarded path untested here.
 
@@ -2109,6 +2210,7 @@ def test_live_redis_scripted_and_guarded_reads_agree() -> None:
                 backend.list_links(root.id, direction="both"),
                 backend.list_links(root.id, relation="mirrors", direction="in"),
                 backend.list_temporal_entries(root.id),
+                backend.query_temporal_entries(root.id, occurred_start=datetime(2026, 1, 1, tzinfo=UTC)),
                 backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.SELF)),
                 backend.search(MemoryQuery(root_id=root.id, scope=Scope.SUBTREE)),
                 backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS)),

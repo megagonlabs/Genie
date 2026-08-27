@@ -228,14 +228,17 @@ end
 return documents
 """
 
-# Read-only Lua script behind `list_temporal_entries`. `ARGV[1]` is the key
-# prefix, `ARGV[2]` is the collection, `ARGV[3]` is the lex range start that
-# `_temporal_lex_start` built, and `ARGV[4]` is the page limit. The reply is a
-# flat list of block id and stored payload, one pair per entry, so the caller can
-# rebuild entries that carry their own block id. An id whose payload is gone is
-# skipped, matching `RedisBackend._temporal_entries`. The page is read one field
-# at a time instead of with `HMGET`, because `limit` comes from the caller and
-# `unpack` on a very large page would overflow the Lua stack.
+# Read-only Lua script behind `list_temporal_entries` and behind the first page
+# of `query_temporal_entries`. `ARGV[1]` is the key prefix, `ARGV[2]` is the
+# collection, `ARGV[3]` is the lex range start that `_temporal_lex_start` built,
+# and `ARGV[4]` is the page limit. The reply has two parts: how many block ids
+# the page scanned, and a flat list of block id and stored payload, one pair per
+# entry, so the caller can rebuild entries that carry their own block id. An id
+# whose payload is gone is skipped, matching `RedisBackend._temporal_entries`,
+# which is why the scanned count is reported on its own: it is the only value
+# that tells the caller whether the page reached the end of the collection. The
+# page is read one field at a time instead of with `HMGET`, because `limit` comes
+# from the caller and `unpack` on a very large page would overflow the Lua stack.
 _LIST_TEMPORAL_ENTRIES_SCRIPT = """
 local prefix = ARGV[1]
 local collection_id = ARGV[2]
@@ -250,7 +253,7 @@ for index = 1, #block_ids do
     entries[#entries + 1] = payload
   end
 end
-return entries
+return {#block_ids, entries}
 """
 
 # Read-only Lua script behind `descendants`. `ARGV[1]` is the key prefix and
@@ -1151,9 +1154,7 @@ class RedisBackend:
             return []
 
         if self._readonly_scripts:
-            page_keys = [self._temporalindex_key(collection_id), self._temporal_key(collection_id)]
-            reply = self._read_script("list_temporal_entries", keys=page_keys, args=[self.key_prefix, collection_id, _temporal_lex_start(after_block_id), limit])
-            return self._script_temporal_entries(collection_id, reply)
+            return self._read_temporal_page(collection_id, after_block_id, limit)[1]
 
         def operation(client: Any) -> list[TemporalEntry]:
             block_ids = self._temporal_page_ids(client, collection_id, after_block_id, limit)
@@ -1209,6 +1210,14 @@ class RedisBackend:
         through the collection in block-id order and matches each page in
         Python until it fills `limit`.
 
+        On a server that supports read-only scripts the first page is one
+        atomic script. A query answered inside that page, because the page
+        filled `limit` or because it reached the end of the collection, is done
+        after that single read: it never takes the mutation guard and never
+        retries. A collection larger than one page falls back to the guarded
+        scan, which restarts from the start when a Genie write lands in the
+        middle of it.
+
         Args:
             collection_id: Id of the temporal collection.
             occurred_only: Whether to keep only entries that carry an event
@@ -1249,25 +1258,34 @@ class RedisBackend:
         if limit == 0:
             return []
 
+        def matches(entry: TemporalEntry) -> bool:
+            return _temporal_matches(
+                entry,
+                occurred_only=occurred_only,
+                occurred_start=occurred_start,
+                occurred_stop=occurred_stop,
+                valid_at=valid_at,
+                overlaps=overlaps,
+            )
+
+        if self._readonly_scripts:
+            scanned, page = self._read_temporal_page(collection_id, after_block_id, _TEMPORAL_SCAN_PAGE)
+            page_matches = [entry for entry in page if matches(entry)]
+            if len(page_matches) >= limit or scanned < _TEMPORAL_SCAN_PAGE:
+                return page_matches[:limit]
+
         def operation(client: Any) -> list[TemporalEntry]:
             matched: list[TemporalEntry] = []
             cursor = after_block_id
             while len(matched) < limit:
                 block_ids = self._temporal_page_ids(client, collection_id, cursor, _TEMPORAL_SCAN_PAGE)
-                if not block_ids:
-                    break
                 for entry in self._temporal_entries(client, collection_id, block_ids):
-                    if _temporal_matches(
-                        entry,
-                        occurred_only=occurred_only,
-                        occurred_start=occurred_start,
-                        occurred_stop=occurred_stop,
-                        valid_at=valid_at,
-                        overlaps=overlaps,
-                    ):
+                    if matches(entry):
                         matched.append(entry)
                         if len(matched) == limit:
                             break
+                if len(block_ids) < _TEMPORAL_SCAN_PAGE:
+                    break
                 cursor = block_ids[-1]
             return matched
 
@@ -1635,23 +1653,48 @@ class RedisBackend:
 
         return [_link_from_document(_load_document(payload, name="memory link")) for payload in payloads]
 
-    def _script_temporal_entries(self, collection_id: str, reply: Sequence[Any]) -> list[TemporalEntry]:
+    def _read_temporal_page(self, collection_id: str, after_block_id: str | None, limit: int) -> tuple[int, list[TemporalEntry]]:
+        """Read one temporal page as a single atomic read-only script.
+
+        Args:
+            collection_id: Id of the temporal collection.
+            after_block_id: Optional exclusive start block id.
+            limit: Largest number of block ids the page may scan.
+
+        Returns:
+            How many block ids the page scanned, and the entries it read. A
+            scanned count below `limit` means the page reached the end of the
+            collection. The entry list can be shorter than the scanned count,
+            because an id whose payload is gone is skipped.
+
+        Raises:
+            BackendCorruption: If the reply has the wrong shape or an entry is
+                invalid.
+        """
+
+        page_keys = [self._temporalindex_key(collection_id), self._temporal_key(collection_id)]
+        reply = self._read_script("list_temporal_entries", keys=page_keys, args=[self.key_prefix, collection_id, _temporal_lex_start(after_block_id), limit])
+        if len(reply) != 2:
+            raise BackendCorruption("The Redis temporal page script returned a reply that is not a scanned count and a page.")
+        return int(reply[0]), self._script_temporal_entries(collection_id, reply[1])
+
+    def _script_temporal_entries(self, collection_id: str, pairs: Sequence[Any]) -> list[TemporalEntry]:
         """Rebuild temporal entries from the pairs a read-only script returned.
 
         Args:
             collection_id: Id of the temporal collection that was read.
-            reply: Flat list of block id and stored payload, one pair per entry.
+            pairs: Flat list of block id and stored payload, one pair per entry.
 
         Returns:
             Entries in the order the script returned them.
 
         Raises:
-            BackendCorruption: If the reply is unpaired or an entry is invalid.
+            BackendCorruption: If the list is unpaired or an entry is invalid.
         """
 
-        if len(reply) % 2:
+        if len(pairs) % 2:
             raise BackendCorruption("The Redis temporal page script returned an unpaired reply.")
-        return [_temporal_from_payload(collection_id, str(reply[index]), reply[index + 1]) for index in range(0, len(reply), 2)]
+        return [_temporal_from_payload(collection_id, str(pairs[index]), pairs[index + 1]) for index in range(0, len(pairs), 2)]
 
     def _script_ancestors(self, block_id: str) -> list[MemoryBlock]:
         """Return one block and its ancestors from a single read-only script.

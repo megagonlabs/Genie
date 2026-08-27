@@ -72,8 +72,9 @@ datasets can share one Redis database by using different prefixes.
   script from start to finish before it serves another client, so such a read can
   never see half of a write and never retries. `contains`, `ancestors`,
   `children`, `descendants`, `list_links`, and `list_temporal_entries` use that
-  path. A read with no bound on its size reads the guard before and after its
-  commands and retries when a write landed in the middle.
+  path, and so does the first page of `query_temporal_entries`. A read with no
+  bound on its size reads the guard before and after its commands and retries
+  when a write landed in the middle.
 - `search` splits the same way, by scope. `Scope.SELF` is one `GET`, and
   `Scope.SUBTREE` and `Scope.ANCESTORS` reuse the scripts behind `descendants`
   and `ancestors`, so none of the three ever retries. `Scope.GLOBAL` reads every
@@ -206,12 +207,18 @@ block-id order, a few hundred entries per round trip, and matches each page in
 Python until it fills `limit`. A store that can express these filters in its
 own query language reads only matching rows, so plan for a different cost here:
 the work follows the size of the collection, not `limit`, and a selective
-filter over a large collection reads most of it. The whole scan is one guarded
-read, so a Genie write that lands in the middle of it restarts the scan from
-the start. On a large collection under steady writes the scan can spend its
-retry budget and raise `BackendBusy`. Keep a temporal collection to a size you
-are willing to scan, or let the application split one collection per time range
-so a query touches only the ranges it needs.
+filter over a large collection reads most of it.
+
+How far that cost hurts depends on how many pages the query needs. On a server
+with read-only scripts the first page is one atomic script, so a query that
+ends inside that page never touches the mutation guard and never retries. That
+covers a collection that fits in one page and any query the first page already
+fills. Past one page the query falls back to the guarded scan, and the whole
+scan is one guarded read, so a Genie write that lands in the middle of it
+restarts the scan from the start. On a large collection under steady writes the
+scan can spend its retry budget and raise `BackendBusy`. Keep a temporal
+collection to a size you are willing to scan, or let the application split one
+collection per time range so a query touches only the ranges it needs.
 
 The adapter targets one logical Redis database, which can be a standalone
 server or a primary with replicas. Connect it to the primary in the second
