@@ -144,6 +144,19 @@ ownership level per round trip otherwise. Portable search always scans the
 candidate blocks inside the scope on the client side. Use a separate search
 implementation when you need large full-text or vector indexes.
 
+Temporal queries scan on the client side as well. Redis cannot apply time
+filters server-side, so `query_temporal_entries` reads the collection in
+block-id order, a few hundred entries per round trip, and matches each page in
+Python until it fills `limit`. A store that can express these filters in its
+own query language reads only matching rows, so plan for a different cost here:
+the work follows the size of the collection, not `limit`, and a selective
+filter over a large collection reads most of it. The whole scan is one guarded
+read, so a Genie write that lands in the middle of it restarts the scan from
+the start. On a large collection under steady writes the scan can spend its
+retry budget and raise `BackendBusy`. Keep a temporal collection to a size you
+are willing to scan, or let the application split one collection per time range
+so a query touches only the ranges it needs.
+
 The adapter targets one logical Redis database, which can be a standalone
 server or a primary with replicas. Redis Cluster needs every key of a
 transaction in one hash slot, so use a hash-tagged prefix such as
