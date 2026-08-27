@@ -12,10 +12,20 @@ that guard under `WATCH` before it applies the staged writes in one
 attempt is retried instead of committing on stale reads. This gives the same
 serialized-writer behavior as SQLite and Neo4j, and it makes compound checks
 and writes atomic across backend instances.
+
+Multi-command reads need the opposite guarantee: one consistent view. Redis has
+no multi-key snapshot, so commands sent one after another can straddle a write.
+A read scoped to one block, meaning its parent chain, its children, its subtree,
+or one `limit` page of a collection, therefore runs as one read-only Lua script
+through `EVAL_RO`. Redis runs a script from start to finish before it serves
+another client, so those reads never see half of a write and never retry. Reads
+that scan the dataset stay on the client side and keep the mutation-guard retry,
+because a long script would block every other client on a single-threaded server.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections import defaultdict, deque
@@ -65,6 +75,226 @@ _TEMPORAL_SCAN_PAGE = 100
 _FIRST_BACKOFF_SECONDS = 0.001
 _MAX_BACKOFF_SECONDS = 0.05
 
+# Read-only Lua script behind `contains`. `KEYS[1]` only routes the call on
+# Redis Cluster; the script builds every key it reads from the prefix in
+# `ARGV[1]`, so that layout must stay in step with `RedisBackend._block_key`.
+# `ARGV[2]` is the subtree root id and `ARGV[3]` is the candidate block id. The
+# walk mirrors `RedisBackend._contains`, including its guard against a cycle in
+# stored parent ids.
+_CONTAINS_SCRIPT = """
+local prefix = ARGV[1]
+local root_id = ARGV[2]
+local block_id = ARGV[3]
+if redis.call('EXISTS', prefix .. ':block:' .. root_id) == 0 then
+  return 0
+end
+if root_id == block_id then
+  return 1
+end
+local seen = {}
+seen[block_id] = true
+local current = block_id
+while true do
+  local payload = redis.call('GET', prefix .. ':block:' .. current)
+  if not payload then
+    return 0
+  end
+  local parent_id = cjson.decode(payload)['parent_id']
+  if parent_id == nil or parent_id == cjson.null then
+    return 0
+  end
+  if parent_id == root_id then
+    return 1
+  end
+  if seen[parent_id] then
+    return 0
+  end
+  seen[parent_id] = true
+  current = parent_id
+end
+"""
+
+# Read-only Lua script behind `ancestors`. `ARGV[1]` is the key prefix and
+# `ARGV[2]` is the block to start from. The reply is the stored document of each
+# ancestor, nearest parent first. The walk mirrors
+# `RedisBackend._ancestor_documents`, including its guard against a cycle in
+# stored parent ids and its stop at a parent id that no longer resolves.
+_ANCESTORS_SCRIPT = """
+local prefix = ARGV[1]
+local block_id = ARGV[2]
+local documents = {}
+local seen = {}
+seen[block_id] = true
+local payload = redis.call('GET', prefix .. ':block:' .. block_id)
+while payload do
+  local parent_id = cjson.decode(payload)['parent_id']
+  if parent_id == nil or parent_id == cjson.null or seen[parent_id] then
+    break
+  end
+  seen[parent_id] = true
+  local parent = redis.call('GET', prefix .. ':block:' .. parent_id)
+  if not parent then
+    break
+  end
+  documents[#documents + 1] = parent
+  payload = parent
+end
+return documents
+"""
+
+# Read-only Lua script behind `children`. `ARGV[1]` is the key prefix and
+# `ARGV[2]` is the parent block. The reply is the stored document of each direct
+# child, in the creation order the child sorted set keeps. Like
+# `RedisBackend._block_documents`, a child id whose document is gone is skipped
+# instead of returned as a hole.
+_CHILDREN_SCRIPT = """
+local prefix = ARGV[1]
+local block_id = ARGV[2]
+local child_ids = redis.call('ZRANGE', prefix .. ':children:' .. block_id, 0, -1)
+local documents = {}
+for index = 1, #child_ids do
+  local payload = redis.call('GET', prefix .. ':block:' .. child_ids[index])
+  if payload then
+    documents[#documents + 1] = payload
+  end
+end
+return documents
+"""
+
+# Read-only Lua script behind `list_links`. `ARGV[1]` is the key prefix,
+# `ARGV[2]` is the block to inspect, and `ARGV[3]` is `"out"`, `"in"`, or
+# `"both"`. The reply is the stored document of each connected link in creation
+# order. For `"both"` the script merges the two endpoint sets on link id and then
+# orders them by the stored `storage_order` score, which is what
+# `RedisBackend._connected_link_ids` does on the client. That score is a strictly
+# increasing counter, so two different links never tie. A link id whose document
+# is gone is skipped, matching `RedisBackend._link_documents`.
+_LIST_LINKS_SCRIPT = """
+local prefix = ARGV[1]
+local block_id = ARGV[2]
+local direction = ARGV[3]
+local link_ids
+if direction == 'out' then
+  link_ids = redis.call('ZRANGE', prefix .. ':outlinks:' .. block_id, 0, -1)
+elseif direction == 'in' then
+  link_ids = redis.call('ZRANGE', prefix .. ':inlinks:' .. block_id, 0, -1)
+else
+  local scores = {}
+  local merged = {}
+  local endpoints = {prefix .. ':outlinks:' .. block_id, prefix .. ':inlinks:' .. block_id}
+  for index = 1, #endpoints do
+    local reply = redis.call('ZRANGE', endpoints[index], 0, -1, 'WITHSCORES')
+    for position = 1, #reply, 2 do
+      local link_id = reply[position]
+      if scores[link_id] == nil then
+        merged[#merged + 1] = link_id
+      end
+      scores[link_id] = tonumber(reply[position + 1])
+    end
+  end
+  table.sort(merged, function(left, right) return scores[left] < scores[right] end)
+  link_ids = merged
+end
+local documents = {}
+for index = 1, #link_ids do
+  local payload = redis.call('GET', prefix .. ':link:' .. link_ids[index])
+  if payload then
+    documents[#documents + 1] = payload
+  end
+end
+return documents
+"""
+
+# Read-only Lua script behind `list_temporal_entries`. `ARGV[1]` is the key
+# prefix, `ARGV[2]` is the collection, `ARGV[3]` is the lex range start that
+# `_temporal_lex_start` built, and `ARGV[4]` is the page limit. The reply is a
+# flat list of block id and stored payload, one pair per entry, so the caller can
+# rebuild entries that carry their own block id. An id whose payload is gone is
+# skipped, matching `RedisBackend._temporal_entries`. The page is read one field
+# at a time instead of with `HMGET`, because `limit` comes from the caller and
+# `unpack` on a very large page would overflow the Lua stack.
+_LIST_TEMPORAL_ENTRIES_SCRIPT = """
+local prefix = ARGV[1]
+local collection_id = ARGV[2]
+local lowest = ARGV[3]
+local limit = tonumber(ARGV[4])
+local block_ids = redis.call('ZRANGEBYLEX', prefix .. ':temporalindex:' .. collection_id, lowest, '+', 'LIMIT', 0, limit)
+local entries = {}
+for index = 1, #block_ids do
+  local payload = redis.call('HGET', prefix .. ':temporal:' .. collection_id, block_ids[index])
+  if payload then
+    entries[#entries + 1] = block_ids[index]
+    entries[#entries + 1] = payload
+  end
+end
+return entries
+"""
+
+# Read-only Lua script behind `descendants`. `ARGV[1]` is the key prefix and
+# `ARGV[2]` is the subtree root. The reply has two flat lists: the parent and
+# child of every ownership edge the walk followed, and the id and stored document
+# of every block it could read. The caller turns the edges back into depth-first
+# creation order, so that ordering lives only in `_depth_first_ids`.
+#
+# The walk mirrors `RedisBackend._descendant_documents`. It reads child ids from
+# the child sorted sets, which stay the authority on child order, and it keeps
+# following a child whose document is gone so a hole in the middle of a subtree
+# does not hide the blocks below it. A visited set stops a cycle in stored
+# parent ids. This is the one scripted read whose work follows the size of the
+# subtree rather than one block, so it is also the one that can hold the server
+# for a noticeable time.
+_DESCENDANTS_SCRIPT = """
+local prefix = ARGV[1]
+local root_id = ARGV[2]
+local root_payload = redis.call('GET', prefix .. ':block:' .. root_id)
+if not root_payload then
+  return {{}, {}}
+end
+local edges = {}
+local documents = {root_id, root_payload}
+local visited = {}
+visited[root_id] = true
+local frontier = {root_id}
+while #frontier > 0 do
+  local following = {}
+  for index = 1, #frontier do
+    local parent_id = frontier[index]
+    local child_ids = redis.call('ZRANGE', prefix .. ':children:' .. parent_id, 0, -1)
+    for position = 1, #child_ids do
+      local child_id = child_ids[position]
+      if not visited[child_id] then
+        visited[child_id] = true
+        edges[#edges + 1] = parent_id
+        edges[#edges + 1] = child_id
+        following[#following + 1] = child_id
+        local payload = redis.call('GET', prefix .. ':block:' .. child_id)
+        if payload then
+          documents[#documents + 1] = child_id
+          documents[#documents + 1] = payload
+        end
+      end
+    end
+  end
+  frontier = following
+end
+return {edges, documents}
+"""
+
+# Read-only Lua scripts by name, with the digest each call sends first. Two
+# rules apply to every script added here. Build key names exactly like the
+# matching `_*_key` helper, and never put a `nil` or a `false` inside a table
+# you return: the reply conversion stops the list at the first one, which would
+# silently drop the rest of a page.
+_LUA_SCRIPTS: dict[str, str] = {
+    "ancestors": _ANCESTORS_SCRIPT,
+    "children": _CHILDREN_SCRIPT,
+    "contains": _CONTAINS_SCRIPT,
+    "descendants": _DESCENDANTS_SCRIPT,
+    "list_links": _LIST_LINKS_SCRIPT,
+    "list_temporal_entries": _LIST_TEMPORAL_ENTRIES_SCRIPT,
+}
+_LUA_DIGESTS: dict[str, str] = {name: hashlib.sha1(body.encode("utf-8")).hexdigest() for name, body in _LUA_SCRIPTS.items()}
+
 
 class RedisBackend:
     """Persistent backend backed by the official `redis` Python client.
@@ -76,6 +306,12 @@ class RedisBackend:
     optional structure capability. It owns the client it creates so it can
     require decoded string replies, and `close()` releases that client after
     active operations finish.
+
+    A read scoped to one block, meaning its parent chain, its children, its
+    subtree, or one `limit` page of a collection, runs as one read-only Lua
+    script when the server supports `EVAL_RO`, so a write that lands beside it
+    cannot tear its view. A server without that support, and
+    a deployment that blocks scripting, fall back to the mutation-guard retry.
 
     Every Genie key starts with `key_prefix`, so several Genie datasets can
     share one Redis database. Write through the backend: writing to these keys
@@ -146,7 +382,7 @@ class RedisBackend:
         if not isinstance(initialize_schema, bool):
             raise TypeError("initialize_schema must be a boolean.")
 
-        redis_module, exception_types, watch_error = _load_redis_client()
+        redis_module, exception_types, watch_error, no_script_error = _load_redis_client()
         self.url = url
         self.key_prefix = key_prefix
         self.connect_timeout = float(connect_timeout)
@@ -154,6 +390,8 @@ class RedisBackend:
         self.max_retry_time = float(max_retry_time)
         self._exception_types = exception_types
         self._watch_error = watch_error
+        self._no_script_error = no_script_error
+        self._readonly_scripts = False
         self._lock = RLock()
         self._lifecycle = Condition(self._lock)
         self._active_operations = 0
@@ -176,6 +414,7 @@ class RedisBackend:
                 self._initialize_schema()
             else:
                 self._validate_schema()
+            self._readonly_scripts = self._detect_readonly_scripts()
         except UnsupportedOperation:
             self._discard_client()
             raise
@@ -394,6 +633,9 @@ class RedisBackend:
             Direct child blocks in creation order.
         """
 
+        if self._readonly_scripts:
+            return self._script_blocks(self._read_script("children", keys=[self._children_key(block_id)], args=[self.key_prefix, block_id]))
+
         def operation(client: Any) -> list[MemoryBlock]:
             child_ids = client.zrange(self._children_key(block_id), 0, -1)
             return [_block_from_document(document) for document in self._block_documents(client, child_ids)]
@@ -410,6 +652,8 @@ class RedisBackend:
             Ancestor blocks in nearest-parent-first order.
         """
 
+        if self._readonly_scripts:
+            return self._script_blocks(self._read_script("ancestors", keys=[self._block_key(block_id)], args=[self.key_prefix, block_id]))
         return self._snapshot(lambda client: [_block_from_document(document) for document in self._ancestor_documents(client, block_id)])
 
     def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
@@ -423,6 +667,10 @@ class RedisBackend:
             Descendant blocks in depth-first creation order.
         """
 
+        if self._readonly_scripts:
+            subtree_keys = [self._block_key(block_id), self._children_key(block_id)]
+            reply = self._read_script("descendants", keys=subtree_keys, args=[self.key_prefix, block_id])
+            return self._script_descendants(block_id, reply, include_self=include_self)
         return self._snapshot(lambda client: [_block_from_document(document) for document in self._descendant_documents(client, block_id, include_self=include_self)])
 
     def contains(self, root_id: str, block_id: str) -> bool:
@@ -436,6 +684,8 @@ class RedisBackend:
             `True` when the candidate is the root or one of its descendants.
         """
 
+        if self._readonly_scripts:
+            return bool(self._read_script("contains", keys=[self._block_key(root_id)], args=[self.key_prefix, root_id, block_id]))
         return self._snapshot(lambda client: self._contains(client, root_id, block_id))
 
     # ------------------------------------------------------------------
@@ -836,6 +1086,11 @@ class RedisBackend:
         if limit == 0:
             return []
 
+        if self._readonly_scripts:
+            page_keys = [self._temporalindex_key(collection_id), self._temporal_key(collection_id)]
+            reply = self._read_script("list_temporal_entries", keys=page_keys, args=[self.key_prefix, collection_id, _temporal_lex_start(after_block_id), limit])
+            return self._script_temporal_entries(collection_id, reply)
+
         def operation(client: Any) -> list[TemporalEntry]:
             block_ids = self._temporal_page_ids(client, collection_id, after_block_id, limit)
             return self._temporal_entries(client, collection_id, block_ids)
@@ -1073,14 +1328,19 @@ class RedisBackend:
         if direction not in {"out", "in", "both"}:
             raise ValueError("direction must be one of 'out', 'in', or 'both'.")
 
-        def operation(client: Any) -> list[MemoryLink]:
-            link_ids = self._connected_link_ids(client, block_id, direction)
-            links = [_link_from_document(document) for document in self._link_documents(client, link_ids)]
-            if relation is None:
-                return links
-            return [link for link in links if link.relation == relation]
+        if self._readonly_scripts:
+            endpoints = [self._outlinks_key(block_id), self._inlinks_key(block_id)]
+            links = self._script_links(self._read_script("list_links", keys=endpoints, args=[self.key_prefix, block_id, direction]))
+        else:
 
-        return self._snapshot(operation)
+            def operation(client: Any) -> list[MemoryLink]:
+                link_ids = self._connected_link_ids(client, block_id, direction)
+                return [_link_from_document(document) for document in self._link_documents(client, link_ids)]
+
+            links = self._snapshot(operation)
+        if relation is None:
+            return links
+        return [link for link in links if link.relation == relation]
 
     def delete_links_for_block(self, block_id: str) -> None:
         """Delete incoming and outgoing links for one block.
@@ -1239,6 +1499,149 @@ class RedisBackend:
                 raise
             except self._exception_types as error:
                 raise _translate_redis_error(error) from error
+
+    def _read_script(self, name: str, *, keys: Sequence[str], args: Sequence[object]) -> Any:
+        """Run one read-only Lua script as a single atomic server step.
+
+        Redis runs a script from start to finish before it serves another
+        client, so the script sees one consistent state. That removes both the
+        mutation guard and the retry that a multi-command read needs. Only use
+        this for a read scoped to one block or to one `limit` page, never for a
+        scan of the dataset, because the script holds the whole server for as
+        long as it runs.
+
+        Args:
+            name: Name of a script in `_LUA_SCRIPTS`.
+            keys: Keys the call declares. They only route the call.
+            args: Script arguments.
+
+        Returns:
+            The reply the script returned.
+
+        Raises:
+            BackendError: If the call fails. The subclass follows the failure.
+        """
+
+        with self._operation_client() as client:
+            try:
+                try:
+                    return client.evalsha_ro(_LUA_DIGESTS[name], len(keys), *keys, *args)
+                except self._no_script_error:
+                    # The server dropped its script cache. Sending the body runs
+                    # the script and caches it again for the next call.
+                    return client.eval_ro(_LUA_SCRIPTS[name], len(keys), *keys, *args)
+            except GenieError:
+                raise
+            except self._exception_types as error:
+                raise _translate_redis_error(error) from error
+
+    def _script_blocks(self, payloads: Sequence[Any]) -> list[MemoryBlock]:
+        """Rebuild blocks from the payloads a read-only script returned.
+
+        Args:
+            payloads: Stored block documents in the order the script returned
+                them.
+
+        Returns:
+            Blocks in the same order.
+
+        Raises:
+            BackendCorruption: If a stored document is not a valid block.
+        """
+
+        return [_block_from_document(_load_document(payload, name="memory block")) for payload in payloads]
+
+    def _script_links(self, payloads: Sequence[Any]) -> list[MemoryLink]:
+        """Rebuild links from the payloads a read-only script returned.
+
+        Args:
+            payloads: Stored link documents in the order the script returned
+                them.
+
+        Returns:
+            Links in the same order.
+
+        Raises:
+            BackendCorruption: If a stored document is not a valid link.
+        """
+
+        return [_link_from_document(_load_document(payload, name="memory link")) for payload in payloads]
+
+    def _script_temporal_entries(self, collection_id: str, reply: Sequence[Any]) -> list[TemporalEntry]:
+        """Rebuild temporal entries from the pairs a read-only script returned.
+
+        Args:
+            collection_id: Id of the temporal collection that was read.
+            reply: Flat list of block id and stored payload, one pair per entry.
+
+        Returns:
+            Entries in the order the script returned them.
+
+        Raises:
+            BackendCorruption: If the reply is unpaired or an entry is invalid.
+        """
+
+        if len(reply) % 2:
+            raise BackendCorruption("The Redis temporal page script returned an unpaired reply.")
+        return [_temporal_from_payload(collection_id, str(reply[index]), reply[index + 1]) for index in range(0, len(reply), 2)]
+
+    def _script_descendants(self, block_id: str, reply: Sequence[Any], *, include_self: bool) -> list[MemoryBlock]:
+        """Rebuild one subtree from the edges and documents a script returned.
+
+        The script walks the subtree but does not order it. This method rebuilds
+        the parent-to-children map from the returned edges and reuses
+        `_depth_first_ids`, so the scripted read and the guarded read share one
+        ordering rule.
+
+        Args:
+            block_id: Subtree root id that was read.
+            reply: Two flat lists: ownership edges, then block documents.
+            include_self: Whether to keep the root block in the result.
+
+        Returns:
+            Subtree blocks in depth-first creation order.
+
+        Raises:
+            BackendCorruption: If the reply is malformed or a document is
+                invalid.
+        """
+
+        if len(reply) != 2 or len(reply[0]) % 2 or len(reply[1]) % 2:
+            raise BackendCorruption("The Redis subtree script returned a malformed reply.")
+        edges, documents = reply
+        children: dict[str, list[str]] = defaultdict(list)
+        for index in range(0, len(edges), 2):
+            children[str(edges[index])].append(str(edges[index + 1]))
+        payloads = {str(documents[index]): documents[index + 1] for index in range(0, len(documents), 2)}
+        ordered = [identifier for identifier in _depth_first_ids(block_id, children) if identifier in payloads]
+        blocks = self._script_blocks([payloads[identifier] for identifier in ordered])
+        if include_self:
+            return blocks
+        return [block for block in blocks if block.id != block_id]
+
+    def _detect_readonly_scripts(self) -> bool:
+        """Return whether the server can run read-only Lua scripts.
+
+        The check runs a trivial `EVAL_RO` instead of comparing a reported
+        version string, because that tests the capability the reads need. A
+        server older than Redis 7.0, a client without `eval_ro`, and a
+        deployment that blocks scripting all answer with a command error, and
+        the affected reads then use the mutation guard instead. A transport
+        failure still reaches the caller.
+
+        Returns:
+            `True` when a read-only script ran.
+        """
+
+        client = self._require_client()
+        try:
+            return client.eval_ro("return 1", 0) == 1
+        except AttributeError:
+            return False
+        except self._exception_types as error:
+            if "ResponseError" in {ancestor.__name__ for ancestor in type(error).__mro__}:
+                return False
+            raise
 
     def _snapshot(self, operation: Callable[[Any], _T]) -> _T:
         """Run one multi-command read and retry when a write interleaves.
@@ -1690,8 +2093,7 @@ class RedisBackend:
     def _temporal_page_ids(self, client: Any, collection_id: str, after_block_id: str | None, limit: int) -> list[str]:
         """Return one page of collection block ids in ascending order."""
 
-        lowest = "-" if after_block_id is None else f"({after_block_id}"
-        members = client.zrangebylex(self._temporalindex_key(collection_id), lowest, "+", start=0, num=limit)
+        members = client.zrangebylex(self._temporalindex_key(collection_id), _temporal_lex_start(after_block_id), "+", start=0, num=limit)
         return [str(member) for member in members]
 
     def _temporal_entries(self, client: Any, collection_id: str, block_ids: Sequence[str]) -> list[TemporalEntry]:
@@ -2463,6 +2865,19 @@ def _validate_sequence(value: object, *, name: str) -> None:
         raise ValueError(f"{name} must be greater than or equal to zero.")
 
 
+def _temporal_lex_start(after_block_id: str | None) -> str:
+    """Return the exclusive lex range start for one temporal page.
+
+    Args:
+        after_block_id: Optional block id to start after.
+
+    Returns:
+        `"-"` for the first page, or the exclusive lex bound for later pages.
+    """
+
+    return "-" if after_block_id is None else f"({after_block_id}"
+
+
 def _validate_limit(value: object) -> None:
     """Require a non-negative integer page limit."""
 
@@ -2514,7 +2929,11 @@ class _UnavailableWatchError(Exception):
     """Placeholder used when the client exposes no watch conflict error."""
 
 
-def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[BaseException]]:
+class _UnavailableNoScriptError(Exception):
+    """Placeholder used when the client exposes no missing-script error."""
+
+
+def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[BaseException], type[BaseException]]:
     """Import the optional client and return it with its exception types."""
 
     try:
@@ -2537,7 +2956,10 @@ def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[Bas
     watch_error = getattr(redis.exceptions, "WatchError", None)
     if not isinstance(watch_error, type):
         watch_error = _UnavailableWatchError
-    return redis, exception_types, watch_error
+    no_script_error = getattr(redis.exceptions, "NoScriptError", None)
+    if not isinstance(no_script_error, type):
+        no_script_error = _UnavailableNoScriptError
+    return redis, exception_types, watch_error, no_script_error
 
 
 def _translate_redis_error(error: BaseException) -> GenieError:

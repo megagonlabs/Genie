@@ -52,6 +52,10 @@ class _FakeWatchError(Exception):
     """Stand-in for the client's optimistic conflict error."""
 
 
+class _FakeNoScriptError(Exception):
+    """Stand-in for the client's missing cached script error."""
+
+
 def test_redis_backend_implements_every_backend_protocol() -> None:
     """The class exposes the complete core and optional capability surface."""
 
@@ -105,7 +109,7 @@ def test_redis_backend_explains_its_optional_dependency(
 ) -> None:
     """Missing client installations produce an actionable public error."""
 
-    def missing() -> tuple[Any, tuple[type[BaseException], ...], type[BaseException]]:
+    def missing() -> tuple[Any, tuple[type[BaseException], ...], type[BaseException], type[BaseException]]:
         raise UnsupportedOperation("install 'genie[redis]'")
 
     monkeypatch.setattr(redis_module, "_load_redis_client", missing)
@@ -346,7 +350,7 @@ def test_redis_backend_forwards_production_client_configuration(
     monkeypatch.setattr(
         redis_module,
         "_load_redis_client",
-        lambda: (FakeModule, (), _FakeWatchError),
+        lambda: (FakeModule, (), _FakeWatchError, _FakeNoScriptError),
     )
     monkeypatch.setattr(RedisBackend, "_initialize_schema", lambda self: None)
 
@@ -397,7 +401,7 @@ def test_redis_backend_discards_client_after_unexpected_initialization_error(
     monkeypatch.setattr(
         redis_module,
         "_load_redis_client",
-        lambda: (FakeModule, (), _FakeWatchError),
+        lambda: (FakeModule, (), _FakeWatchError, _FakeNoScriptError),
     )
     monkeypatch.setattr(
         RedisBackend,
@@ -503,6 +507,7 @@ def _detached_backend(
     *,
     exception_types: tuple[type[BaseException], ...] = (),
     max_retry_time: float = 5.0,
+    readonly_scripts: bool = False,
 ) -> RedisBackend:
     """Build a backend around a fake client without touching a server."""
 
@@ -515,11 +520,568 @@ def _detached_backend(
     backend._client = client
     backend._exception_types = exception_types
     backend._watch_error = _FakeWatchError
+    backend._no_script_error = _FakeNoScriptError
+    backend._readonly_scripts = readonly_scripts
     backend._lock = RLock()
     backend._lifecycle = Condition(backend._lock)
     backend._active_operations = 0
     backend._closing = False
     return backend
+
+
+def test_redis_contains_runs_as_one_read_only_script() -> None:
+    """A supported server answers containment with a single atomic script."""
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> int:
+            self.calls.append((digest, numkeys, *arguments))
+            return 1
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a scripted read must not read the mutation guard")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert backend.contains("root", "child") is True
+    assert client.calls == [(redis_module._LUA_DIGESTS["contains"], 1, "genie:block:root", "genie", "root", "child")]
+
+
+def _stored_payload(block: MemoryBlock, storage_order: int) -> str:
+    """Return the stored document payload for one block."""
+
+    return redis_module._dump_json({**redis_module._encode_block(block), "storage_order": storage_order}, field_name="memory block")
+
+
+def _stored_temporal_payload(entry: TemporalEntry) -> str:
+    """Return the stored payload for one temporal collection entry."""
+
+    return redis_module._dump_json(redis_module._temporal_payload(entry), field_name="temporal entry")
+
+
+def _stored_link_payload(link: MemoryLink, storage_order: int) -> str:
+    """Return the stored document payload for one link."""
+
+    return redis_module._dump_json({**redis_module._encode_link(link), "storage_order": storage_order}, field_name="memory link")
+
+
+def test_redis_ancestors_runs_as_one_read_only_script() -> None:
+    """A supported server returns the whole parent chain from one script."""
+
+    root = MemoryBlock(id="root", type="project", value={})
+    middle = MemoryBlock(id="middle", parent_id=root.id, type="step", value={})
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            self.calls.append((digest, numkeys, *arguments))
+            return [_stored_payload(middle, 1), _stored_payload(root, 0)]
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a scripted read must not read the mutation guard")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert backend.ancestors("leaf") == [middle, root]
+    assert client.calls == [(redis_module._LUA_DIGESTS["ancestors"], 1, "genie:block:leaf", "genie", "leaf")]
+
+
+def test_redis_children_runs_as_one_read_only_script() -> None:
+    """A supported server returns the child page from one script."""
+
+    first = MemoryBlock(id="first", parent_id="root", type="step", value={})
+    second = MemoryBlock(id="second", parent_id="root", type="step", value={})
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            self.calls.append((digest, numkeys, *arguments))
+            return [_stored_payload(first, 1), _stored_payload(second, 2)]
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a scripted read must not read the mutation guard")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert backend.children("root") == [first, second]
+    assert client.calls == [(redis_module._LUA_DIGESTS["children"], 1, "genie:children:root", "genie", "root")]
+
+
+def test_redis_children_falls_back_without_read_only_script_support() -> None:
+    """A server without scripting keeps the guarded two-command read."""
+
+    child = MemoryBlock(id="child", parent_id="root", type="step", value={})
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.guard_reads = 0
+
+        def get(self, key: str) -> str | None:
+            assert key == "genie:mutations"
+            self.guard_reads += 1
+            return "3"
+
+        def zrange(self, key: str, start: int, stop: int) -> list[str]:
+            assert (key, start, stop) == ("genie:children:root", 0, -1)
+            return ["child", "removed"]
+
+        def mget(self, keys: list[str]) -> list[str | None]:
+            assert keys == ["genie:block:child", "genie:block:removed"]
+            return [_stored_payload(child, 1), None]
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client)
+
+    assert backend.children("root") == [child]
+    assert client.guard_reads == 2
+
+
+def test_redis_list_links_runs_as_one_read_only_script() -> None:
+    """A supported server returns connected links from one script."""
+
+    outgoing = MemoryLink("root", "child", "owns", id="outgoing")
+    incoming = MemoryLink("other", "root", "notes", id="incoming")
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            self.calls.append((digest, numkeys, *arguments))
+            return [_stored_link_payload(outgoing, 0), _stored_link_payload(incoming, 1)]
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a scripted read must not read the mutation guard")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    with pytest.raises(ValueError, match="direction must be one of"):
+        backend.list_links("root", direction=cast(Literal["out", "in", "both"], "sideways"))
+    assert client.calls == []
+    assert backend.list_links("root", direction="both") == [outgoing, incoming]
+    assert client.calls == [
+        (redis_module._LUA_DIGESTS["list_links"], 2, "genie:outlinks:root", "genie:inlinks:root", "genie", "root", "both"),
+    ]
+
+
+def test_redis_list_links_filters_the_relation_after_a_script() -> None:
+    """The relation filter narrows the reply without a second script call."""
+
+    outgoing = MemoryLink("root", "child", "owns", id="outgoing")
+    incoming = MemoryLink("other", "root", "notes", id="incoming")
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            self.calls += 1
+            return [_stored_link_payload(outgoing, 0), _stored_link_payload(incoming, 1)]
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert backend.list_links("root", relation="notes", direction="both") == [incoming]
+    assert client.calls == 1
+
+
+def test_redis_list_links_falls_back_without_read_only_script_support() -> None:
+    """A server without scripting keeps the guarded two-command read."""
+
+    link = MemoryLink("root", "child", "owns", id="link")
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.guard_reads = 0
+
+        def get(self, key: str) -> str:
+            assert key == "genie:mutations"
+            self.guard_reads += 1
+            return "5"
+
+        def zrange(self, key: str, start: int, stop: int) -> list[str]:
+            assert (key, start, stop) == ("genie:outlinks:root", 0, -1)
+            return ["link", "removed"]
+
+        def mget(self, keys: list[str]) -> list[str | None]:
+            assert keys == ["genie:link:link", "genie:link:removed"]
+            return [_stored_link_payload(link, 0), None]
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client)
+
+    assert backend.list_links("root") == [link]
+    assert client.guard_reads == 2
+
+
+def test_redis_temporal_page_runs_as_one_read_only_script() -> None:
+    """A supported server returns one entry page from one script."""
+
+    first = TemporalEntry("collection", "first", occurred_at=datetime(2026, 1, 1, tzinfo=UTC))
+    second = TemporalEntry("collection", "second", occurred_at=datetime(2026, 2, 1, tzinfo=UTC))
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            self.calls.append((digest, numkeys, *arguments))
+            return [first.block_id, _stored_temporal_payload(first), second.block_id, _stored_temporal_payload(second)]
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a scripted read must not read the mutation guard")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert backend.list_temporal_entries("collection", after_block_id="earlier", limit=20) == [first, second]
+    assert client.calls == [
+        (
+            redis_module._LUA_DIGESTS["list_temporal_entries"],
+            2,
+            "genie:temporalindex:collection",
+            "genie:temporal:collection",
+            "genie",
+            "collection",
+            "(earlier",
+            20,
+        ),
+    ]
+
+
+def test_redis_temporal_page_script_is_skipped_for_an_empty_page() -> None:
+    """A zero limit answers without any call, on either read path."""
+
+    class UnusedClient:
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            raise AssertionError("a zero limit must not reach the server")
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(UnusedClient(), readonly_scripts=True)
+
+    assert backend.list_temporal_entries("collection", limit=0) == []
+    with pytest.raises(ValueError, match="limit must be greater than or equal to zero"):
+        backend.list_temporal_entries("collection", limit=-1)
+
+
+def test_redis_temporal_page_rejects_an_unpaired_script_reply() -> None:
+    """A reply that lost half of a pair fails as corruption, not an index error."""
+
+    class ScriptedClient:
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            return ["first"]
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(ScriptedClient(), readonly_scripts=True)
+
+    with pytest.raises(BackendCorruption, match="unpaired reply"):
+        backend.list_temporal_entries("collection")
+
+
+def test_redis_temporal_page_falls_back_without_read_only_script_support() -> None:
+    """A server without scripting keeps the guarded two-command page read."""
+
+    entry = TemporalEntry("collection", "kept", occurred_at=datetime(2026, 3, 1, tzinfo=UTC))
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.guard_reads = 0
+
+        def get(self, key: str) -> str:
+            assert key == "genie:mutations"
+            self.guard_reads += 1
+            return "9"
+
+        def zrangebylex(self, key: str, lowest: str, highest: str, start: int, num: int) -> list[str]:
+            assert (key, lowest, highest, start, num) == ("genie:temporalindex:collection", "-", "+", 0, 100)
+            return ["kept", "removed"]
+
+        def hmget(self, key: str, fields: list[str]) -> list[str | None]:
+            assert (key, fields) == ("genie:temporal:collection", ["kept", "removed"])
+            return [_stored_temporal_payload(entry), None]
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client)
+
+    assert backend.list_temporal_entries("collection") == [entry]
+    assert client.guard_reads == 2
+
+
+def test_redis_descendants_orders_one_scripted_subtree_reply() -> None:
+    """Edges from the script become depth-first creation order in Python."""
+
+    root = MemoryBlock(id="root", type="project", value={})
+    first = MemoryBlock(id="first", parent_id="root", type="step", value={})
+    second = MemoryBlock(id="second", parent_id="root", type="step", value={})
+    nested = MemoryBlock(id="nested", parent_id="first", type="step", value={})
+    orphaned = MemoryBlock(id="orphaned", parent_id="gone", type="step", value={})
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[list[str]]:
+            self.calls.append((digest, numkeys, *arguments))
+            # "gone" is listed as a child of "root" but its document is missing,
+            # so the walk keeps following it and only drops it from the result.
+            edges = ["root", "first", "root", "second", "root", "gone", "first", "nested", "gone", "orphaned"]
+            documents = [
+                "root",
+                _stored_payload(root, 0),
+                "first",
+                _stored_payload(first, 1),
+                "second",
+                _stored_payload(second, 2),
+                "nested",
+                _stored_payload(nested, 3),
+                "orphaned",
+                _stored_payload(orphaned, 4),
+            ]
+            return [edges, documents]
+
+        def get(self, key: str) -> None:
+            raise AssertionError("a scripted read must not read the mutation guard")
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, readonly_scripts=True)
+
+    assert [block.id for block in backend.descendants("root", include_self=True)] == ["root", "first", "nested", "second", "orphaned"]
+    assert [block.id for block in backend.descendants("root")] == ["first", "nested", "second", "orphaned"]
+    assert client.calls[0] == (redis_module._LUA_DIGESTS["descendants"], 2, "genie:block:root", "genie:children:root", "genie", "root")
+
+
+def test_redis_descendants_returns_nothing_for_a_missing_root() -> None:
+    """An empty scripted reply answers with no blocks, as the guarded read does."""
+
+    class ScriptedClient:
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[list[str]]:
+            return [[], []]
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(ScriptedClient(), readonly_scripts=True)
+
+    assert backend.descendants("missing", include_self=True) == []
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        [[]],
+        [["root"], []],
+        [[], ["root"]],
+    ],
+)
+def test_redis_descendants_rejects_a_malformed_script_reply(reply: list[list[str]]) -> None:
+    """A reply that is not two paired lists fails as corruption."""
+
+    class ScriptedClient:
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[list[str]]:
+            return reply
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(ScriptedClient(), readonly_scripts=True)
+
+    with pytest.raises(BackendCorruption, match="malformed reply"):
+        backend.descendants("root")
+
+
+def test_redis_ancestors_reports_a_corrupt_document_from_a_script() -> None:
+    """A malformed payload fails through the corruption boundary as before."""
+
+    class ScriptedClient:
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
+            return ['{"id":"root","created_at":1}']
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(ScriptedClient(), readonly_scripts=True)
+
+    with pytest.raises(BackendCorruption, match="memory block is invalid"):
+        backend.ancestors("leaf")
+
+
+def test_redis_ancestors_falls_back_without_read_only_script_support() -> None:
+    """A server without scripting keeps the guarded parent-chain walk."""
+
+    root = MemoryBlock(id="root", type="project", value={})
+    leaf = MemoryBlock(id="leaf", parent_id=root.id, type="step", value={})
+    documents = {"genie:block:root": _stored_payload(root, 0), "genie:block:leaf": _stored_payload(leaf, 1)}
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.guard_reads = 0
+
+        def get(self, key: str) -> str | None:
+            if key == "genie:mutations":
+                self.guard_reads += 1
+                return "7"
+            return documents.get(key)
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client)
+
+    assert backend.ancestors("leaf") == [root]
+    assert client.guard_reads == 2
+
+
+def test_redis_contains_reloads_a_script_the_server_dropped() -> None:
+    """A flushed script cache is refilled by sending the body once."""
+
+    class ScriptedClient:
+        def __init__(self) -> None:
+            self.bodies: list[str] = []
+
+        def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> int:
+            raise _FakeNoScriptError("NOSCRIPT No matching script")
+
+        def eval_ro(self, body: str, numkeys: int, *arguments: str) -> int:
+            self.bodies.append(body)
+            return 0
+
+        def close(self) -> None:
+            return None
+
+    client = ScriptedClient()
+    backend = _detached_backend(client, exception_types=(_FakeNoScriptError,), readonly_scripts=True)
+
+    assert backend.contains("root", "missing") is False
+    assert client.bodies == [redis_module._LUA_SCRIPTS["contains"]]
+
+
+def test_redis_contains_falls_back_without_read_only_script_support() -> None:
+    """A server without scripting keeps the guarded multi-command read."""
+
+    class GuardedClient:
+        def __init__(self) -> None:
+            self.guard_reads = 0
+
+        def get(self, key: str) -> None:
+            self.guard_reads += 1
+
+        def exists(self, key: str) -> int:
+            return 0
+
+        def close(self) -> None:
+            return None
+
+    client = GuardedClient()
+    backend = _detached_backend(client)
+
+    assert backend.contains("root", "child") is False
+    assert client.guard_reads == 2
+
+
+def test_redis_read_only_script_probe_detects_server_support() -> None:
+    """The probe runs a trivial script instead of reading a version string."""
+
+    class ScriptingClient:
+        def eval_ro(self, body: str, numkeys: int, *arguments: str) -> int:
+            assert (body, numkeys) == ("return 1", 0)
+            return 1
+
+        def close(self) -> None:
+            return None
+
+    assert _detached_backend(ScriptingClient())._detect_readonly_scripts() is True
+
+
+def test_redis_read_only_script_probe_accepts_servers_without_support() -> None:
+    """A refused command turns the scripted reads off without failing."""
+
+    class ResponseError(Exception):
+        """Stand-in for the client's command rejection error."""
+
+    class OldServerClient:
+        def eval_ro(self, body: str, numkeys: int, *arguments: str) -> int:
+            raise ResponseError("unknown command 'EVAL_RO'")
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(OldServerClient(), exception_types=(ResponseError,))
+
+    assert backend._detect_readonly_scripts() is False
+
+
+def test_redis_read_only_script_probe_accepts_clients_without_support() -> None:
+    """A client library with no `eval_ro` turns the scripted reads off."""
+
+    class OldLibraryClient:
+        def close(self) -> None:
+            return None
+
+    assert _detached_backend(OldLibraryClient())._detect_readonly_scripts() is False
+
+
+def test_redis_read_only_script_probe_reports_transport_failures() -> None:
+    """A connection failure during the probe still reaches the caller."""
+
+    class TransportFailure(Exception):
+        pass
+
+    class BrokenClient:
+        def eval_ro(self, body: str, numkeys: int, *arguments: str) -> int:
+            raise TransportFailure("Error 61 connecting to localhost:6379")
+
+        def close(self) -> None:
+            return None
+
+    backend = _detached_backend(BrokenClient(), exception_types=(TransportFailure,))
+
+    with pytest.raises(TransportFailure):
+        backend._detect_readonly_scripts()
 
 
 _LIVE_URL = os.environ.get("GENIE_REDIS_URL")
@@ -729,6 +1291,92 @@ def test_live_redis_backend_searches_every_scope_and_filters_candidates() -> Non
             child.id,
             leaf.id,
         }
+        _clear_live_data(backend)
+
+
+@pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
+def test_live_redis_depth_reads_are_atomic_under_concurrent_writes() -> None:
+    """Scripted depth reads stay correct and never report contention."""
+
+    with _live_backend() as backend:
+        _clear_live_data(backend)
+        if not backend._readonly_scripts:
+            pytest.skip("this Redis server cannot run read-only scripts")
+        root = backend.put_block(MemoryBlock(id="root", type="project", value={}))
+        deepest = root
+        for depth in range(8):
+            deepest = backend.put_block(MemoryBlock(id=f"level-{depth}", parent_id=deepest.id, type="step", value={}))
+        outside = backend.put_block(MemoryBlock(id="outside", type="project", value={}))
+        outgoing = backend.add_link(MemoryLink(root.id, outside.id, "relates", id="outgoing"))
+        incoming = backend.add_link(MemoryLink(outside.id, root.id, "mirrors", id="incoming"))
+        timed = backend.add_temporal_entry(TemporalEntry(root.id, outside.id, occurred_at=datetime(2026, 4, 1, tzinfo=UTC)))
+        stop = Event()
+
+        def keep_writing() -> int:
+            writes = 0
+            while not stop.is_set():
+                noise = backend.put_block(MemoryBlock(id=f"noise-{writes}", parent_id=outside.id, type="noise", value={}))
+                backend.delete_block(noise.id)
+                writes += 1
+            return writes
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            writer = executor.submit(keep_writing)
+            try:
+                chain = [f"level-{depth}" for depth in reversed(range(7))]
+                for _ in range(200):
+                    assert backend.contains(root.id, deepest.id) is True
+                    assert backend.contains(outside.id, deepest.id) is False
+                    assert [block.id for block in backend.ancestors(deepest.id)] == [*chain, root.id]
+                    assert backend.ancestors(outside.id) == []
+                    assert [block.id for block in backend.children(root.id)] == ["level-0"]
+                    assert backend.children(deepest.id) == []
+                    assert backend.list_links(root.id) == [outgoing]
+                    assert backend.list_links(root.id, direction="in") == [incoming]
+                    assert backend.list_links(root.id, direction="both") == [outgoing, incoming]
+                    assert backend.list_links(root.id, relation="mirrors", direction="both") == [incoming]
+                    assert backend.list_temporal_entries(root.id) == [timed]
+                    assert backend.list_temporal_entries(root.id, after_block_id=outside.id) == []
+                    assert [block.id for block in backend.descendants(root.id)] == list(reversed(chain)) + [deepest.id]
+                    assert [block.id for block in backend.descendants(deepest.id, include_self=True)] == [deepest.id]
+            finally:
+                stop.set()
+            assert writer.result(timeout=30) > 0
+        _clear_live_data(backend)
+
+
+@pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
+def test_live_redis_scripted_and_guarded_reads_agree() -> None:
+    """Both read paths return the same values for the same stored state."""
+
+    with _live_backend() as backend:
+        _clear_live_data(backend)
+        if not backend._readonly_scripts:
+            pytest.skip("this Redis server cannot run read-only scripts")
+        root = backend.put_block(MemoryBlock(id="root", type="project", value={}))
+        first = backend.put_block(MemoryBlock(id="first", parent_id=root.id, type="step", value={}))
+        backend.put_block(MemoryBlock(id="second", parent_id=root.id, type="step", value={}))
+        leaf = backend.put_block(MemoryBlock(id="leaf", parent_id=first.id, type="step", value={}))
+        backend.add_link(MemoryLink(root.id, leaf.id, "relates", id="outgoing"))
+        backend.add_link(MemoryLink(leaf.id, root.id, "mirrors", id="incoming"))
+        backend.add_temporal_entry(TemporalEntry(root.id, leaf.id, occurred_at=datetime(2026, 5, 1, tzinfo=UTC)))
+
+        def read_everything() -> tuple[Any, ...]:
+            return (
+                backend.contains(root.id, leaf.id),
+                backend.contains(first.id, root.id),
+                backend.ancestors(leaf.id),
+                backend.children(root.id),
+                backend.descendants(root.id, include_self=True),
+                backend.descendants(leaf.id),
+                backend.list_links(root.id, direction="both"),
+                backend.list_links(root.id, relation="mirrors", direction="in"),
+                backend.list_temporal_entries(root.id),
+            )
+
+        scripted = read_everything()
+        backend._readonly_scripts = False
+        assert read_everything() == scripted
         _clear_live_data(backend)
 
 

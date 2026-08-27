@@ -65,9 +65,20 @@ datasets can share one Redis database by using different prefixes.
   atomic behavior as SQLite and Neo4j: compare-and-swap updates, conditional
   subtree deletion, unique key bindings, monotonic sequences, and cycle-checked
   DAG insertion.
-- Multi-command reads use the same guard value to detect a write that landed in
-  the middle, and they retry when one did. A read that fits in one command
-  skips that check because Redis runs each command on its own.
+- Reads come in three shapes. A read that fits in one command needs nothing
+  extra, because Redis runs each command on its own. A read scoped to one block,
+  meaning its parent chain, its children, its subtree, or one `limit` page of a
+  collection, runs as one read-only Lua script through `EVAL_RO`. Redis runs a
+  script from start to finish before it serves another client, so such a read can
+  never see half of a write and never retries. `contains`, `ancestors`,
+  `children`, `descendants`, `list_links`, and `list_temporal_entries` use that
+  path. A read that scans the dataset, such as `search`, reads the guard before
+  and after its commands and retries when a write landed in the middle.
+- Read-only script support is checked once during construction by running a
+  trivial `EVAL_RO`. That tests the capability the reads need instead of
+  guessing from a reported version string. A server older than Redis 7.0, a
+  client without `eval_ro`, and a deployment that blocks scripting all fall back
+  to the guard and its retry.
 - Deleting a block removes the whole subtree together with its links, key
   bindings, log entries, and temporal entries in the same commit. Reverse
   indexes make that cleanup exact instead of a full scan.
@@ -85,16 +96,32 @@ Optimistic writes never hold a lock, so a stalled client cannot block others.
 The cost is retries: every committed write invalidates the attempts running
 beside it, so throughput drops as write contention rises. A write that cannot
 commit inside `max_retry_time` raises `BackendBusy`, which is retryable. A
-multi-command read that keeps being interrupted by writes reports the same
-error, because it would rather retry than return a torn view.
+scanning read that keeps being interrupted by writes reports the same error,
+because it would rather retry than return a torn view.
+
+A read that runs as one read-only script cannot reach that case, so it behaves
+like a snapshot read on SQLite or Neo4j. The trade is that a script holds the
+single-threaded server for as long as it runs, so only a read scoped to one block
+uses one. A scan of the whole dataset stays on the client side, where it can lose
+a race but cannot stall every other client.
+
+Script duration is the cost to watch. A scripted read moves no extra work onto
+the server, because the client-side path reads the same data, but that work now
+runs where every other client is waiting. A very deep ownership chain makes
+`ancestors` and `contains` longer, and a block with very many direct children or
+connected links makes `children` and `list_links` longer. `descendants` is the
+longest of them, because its work follows the size of the whole subtree rather
+than one block. Keep ownership trees to a reasonable depth, fan-out, and subtree
+size, which is also what makes them useful to read.
 
 Redis keeps the dataset in memory, and durability comes from server
 configuration (RDB snapshots, AOF, or both). The adapter cannot change that, so
 choose the persistence and replication settings your data needs. Genie never
 flushes the database, and it only touches keys under its own prefix.
 
-Subtree reads walk one ownership level per round trip, and portable search
-scans the candidate blocks inside the scope. Use a separate search
+A subtree read runs inside one script when scripting is available, and walks one
+ownership level per round trip otherwise. Portable search always scans the
+candidate blocks inside the scope on the client side. Use a separate search
 implementation when you need large full-text or vector indexes.
 
 The adapter targets one logical Redis database, which can be a standalone
