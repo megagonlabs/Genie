@@ -1841,7 +1841,12 @@ class TestRedisStructureBackendContracts(
     LinkStoreContract,
     AcyclicLinkStoreContract,
 ):
-    """Run every reusable capability contract against a live Redis server."""
+    """Run every reusable capability contract against a live Redis server.
+
+    This class uses the read path the server supports. On Redis 7.0 or newer
+    that is the read-only script path, so
+    `TestRedisGuardedReadStructureBackendContracts` covers the other one.
+    """
 
     def setup_method(self) -> None:
         """Open one backend and clear the test key namespace."""
@@ -1859,6 +1864,30 @@ class TestRedisStructureBackendContracts(
         """Return the backend shared by one contract test."""
 
         return self.backend
+
+
+@pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
+class TestRedisGuardedReadStructureBackendContracts(TestRedisStructureBackendContracts):
+    """Run every capability contract against the guarded read path.
+
+    `RedisBackend` implements `children`, `ancestors`, `descendants`,
+    `contains`, `list_links`, and `list_temporal_entries` twice: as one
+    read-only script where the server can run one, and as several commands
+    under the mutation guard otherwise. Which one runs is decided once during
+    construction, so a live Redis 7 server always exercises the script path and
+    would leave the guarded path untested here.
+
+    `test_live_redis_scripted_and_guarded_reads_agree` already checks that both
+    paths return the same values for the same stored state. These contracts add
+    what that comparison cannot: paging, empty pages, ordering, and dependent
+    cleanup after a write, all against the guarded path.
+    """
+
+    def setup_method(self) -> None:
+        """Open one backend and force its reads onto the guarded path."""
+
+        super().setup_method()
+        self.backend._readonly_scripts = False
 
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)

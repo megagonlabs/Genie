@@ -303,9 +303,12 @@ end
 return {edges, documents}
 """
 
-# Read-only Lua scripts by name, with the digest each call sends first. Two
+# Read-only Lua scripts by name, with the digest each call sends first. Three
 # rules apply to every script added here. Build key names exactly like the
-# matching `_*_key` helper, and never put a `nil` or a `false` inside a table
+# matching `_*_key` helper. Read only keys that start with the prefix in
+# `ARGV[1]`, because a script on Redis Cluster may touch only keys in the slot
+# of the keys the call declares, and a hash-tagged `key_prefix` is what keeps
+# every Genie key in one slot. And never put a `nil` or a `false` inside a table
 # you return: the reply conversion stops the list at the first one, which would
 # silently drop the rest of a page.
 _LUA_SCRIPTS: dict[str, str] = {

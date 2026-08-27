@@ -189,8 +189,16 @@ free space.
 A subtree read runs inside one script when scripting is available, and walks one
 ownership level per round trip otherwise. Portable search reads its candidate
 blocks through the path its scope allows, then matches every candidate in
-Python. Use a separate search implementation when you need large full-text or
-vector indexes.
+Python. Which path a scope takes decides whether that search can fail.
+`Scope.SELF` reads one block with one command, so it is atomic whatever the
+server supports. `Scope.SUBTREE` and `Scope.ANCESTORS` read one subtree or one
+parent chain, so they take the same path as `descendants` and `ancestors`: one
+atomic script where scripting is available, and the mutation guard otherwise.
+`Scope.GLOBAL` reads every stored block, and `Scope.LINKS` follows an endpoint
+fan-out that one block can grow without a bound. Neither has a size a script may
+safely hold the server for, so both always keep the guard and can raise
+`BackendBusy` under sustained writes. Use a separate search implementation when
+you need large full-text or vector indexes.
 
 Temporal queries scan on the client side as well. Redis cannot apply time
 filters server-side, so `query_temporal_entries` reads the collection in
@@ -209,7 +217,11 @@ The adapter targets one logical Redis database, which can be a standalone
 server or a primary with replicas. Connect it to the primary in the second
 case, as the role check above requires. Redis Cluster needs every key of a
 transaction in one hash slot, so use a hash-tagged prefix such as
-`key_prefix="{genie}"` there. That keeps all Genie keys in a single slot, which
+`key_prefix="{genie}"` there. The read-only scripts need that prefix as well.
+They build the keys they read from `key_prefix` instead of declaring all of them
+in `KEYS`, and a script on Redis Cluster may touch only keys in the slot of the
+keys it declares. So the hash-tagged prefix is what keeps both the writes and
+the scripted reads legal there. It keeps all Genie keys in a single slot, which
 also means a single node holds them.
 
 Genie keys, documents, and indexes belong to the backend. Write through
