@@ -366,6 +366,21 @@ class RedisBackend:
     sends for a key it does not hold. A cluster reply is reported as
     `UnsupportedOperation`, because retrying it cannot help.
 
+    A dropped connection is retried inside the client. Connections are pooled,
+    so one can go stale while it sits idle: a server idle timeout, a load
+    balancer, a restart, or a failover closes it without telling the client.
+    `health_check_interval` makes the client check an idle connection with a
+    `PING` before it reuses it, and `transport_retries` lets a dropped
+    connection reconnect instead of reaching the caller as `BackendUnavailable`.
+    This is separate from `max_retry_time`, which covers optimistic conflicts
+    only. A retry never sends the same write command twice: every Genie write
+    runs inside `WATCH`/`MULTI`/`EXEC`, where the client reports a dropped
+    connection as a watch conflict, and the backend answers that with a fresh
+    attempt that re-reads current state. A connection that dies after `EXEC`
+    ran but before its reply arrived leaves that outcome unknown, so the fresh
+    attempt can repeat an operation with nothing to compare against, such as
+    `append_log_entry`.
+
     Attributes:
         url: Redis URL this backend connected to.
         key_prefix: Key namespace that holds every Genie key.
@@ -373,6 +388,10 @@ class RedisBackend:
         socket_timeout: Seconds allowed while waiting for one command reply.
         max_retry_time: Maximum seconds spent retrying an attempt that lost an
             optimistic conflict before `BackendBusy` is raised.
+        health_check_interval: Seconds a pooled connection may sit idle before
+            the client checks it with a `PING`.
+        transport_retries: Number of retries allowed after the connection to
+            Redis drops.
     """
 
     def __init__(
@@ -384,6 +403,8 @@ class RedisBackend:
         connect_timeout: float = 10.0,
         socket_timeout: float = 30.0,
         max_retry_time: float = 30.0,
+        health_check_interval: float = 30.0,
+        transport_retries: int = 3,
         verify_connectivity: bool = True,
         verify_server_role: bool = True,
         verify_eviction_policy: bool = True,
@@ -405,6 +426,16 @@ class RedisBackend:
                 reply. `0` disables the timeout.
             max_retry_time: Maximum seconds spent retrying an attempt that
                 lost an optimistic conflict before `BackendBusy` is raised.
+            health_check_interval: Seconds a pooled connection may sit idle
+                before the client checks it with a `PING` and reconnects when
+                the check fails. `0` disables the check.
+            transport_retries: Number of retries allowed after the connection
+                to Redis drops. `0` disables transport retry, so a dropped
+                connection reaches the caller as `BackendUnavailable`. A
+                command that timed out is not retried, because the server may
+                still be running it. Opening a connection is retried, so a
+                server that answers nothing can hold a call for
+                `connect_timeout` times `transport_retries` plus one.
             verify_connectivity: Whether to ping the server during
                 construction.
             verify_server_role: Whether to refuse a connection that lands on a
@@ -437,6 +468,8 @@ class RedisBackend:
         _validate_timeout(connect_timeout, name="connect_timeout")
         _validate_timeout(socket_timeout, name="socket_timeout")
         _validate_timeout(max_retry_time, name="max_retry_time")
+        _validate_timeout(health_check_interval, name="health_check_interval")
+        _validate_retries(transport_retries, name="transport_retries")
         if auth is not None and (not isinstance(auth, tuple) or len(auth) != 2 or not all(isinstance(item, str) for item in auth)):
             raise TypeError("auth must be a (username, password) tuple of strings.")
         if not isinstance(verify_connectivity, bool):
@@ -454,6 +487,8 @@ class RedisBackend:
         self.connect_timeout = float(connect_timeout)
         self.socket_timeout = float(socket_timeout)
         self.max_retry_time = float(max_retry_time)
+        self.health_check_interval = float(health_check_interval)
+        self.transport_retries = int(transport_retries)
         self._exception_types = exception_types
         self._watch_error = watch_error
         self._no_script_error = no_script_error
@@ -468,6 +503,8 @@ class RedisBackend:
             "decode_responses": True,
             "socket_connect_timeout": self.connect_timeout or None,
             "socket_timeout": self.socket_timeout or None,
+            "health_check_interval": self.health_check_interval,
+            **_transport_options(redis_module, self.transport_retries),
         }
         if auth is not None:
             client_options["username"], client_options["password"] = auth
@@ -1918,6 +1955,11 @@ class RedisBackend:
         The operation reads current state and stages its writes. The commit
         block watches the mutation guard, re-checks the value seen by the read
         phase, and then applies every staged write together.
+
+        Every Genie write goes through this commit block, and it must stay that
+        way. The client may retry a dropped connection, and it refuses to repeat
+        a command only while a watch is open, where it raises a watch conflict
+        instead. A write sent outside this block could be applied twice.
         """
 
         guard = self._guard_key()
@@ -3233,6 +3275,15 @@ def _validate_timeout(value: object, *, name: str) -> None:
         raise ValueError(f"{name} must be a finite number greater than or equal to zero.")
 
 
+def _validate_retries(value: object, *, name: str) -> None:
+    """Require a non-negative whole number of retries."""
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer.")
+    if value < 0:
+        raise ValueError(f"{name} must be greater than or equal to zero.")
+
+
 class _UnavailableWatchError(Exception):
     """Placeholder used when the client exposes no watch conflict error."""
 
@@ -3245,10 +3296,13 @@ def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[Bas
     """Import the optional client and return it with its exception types."""
 
     try:
-        # Import the submodule, not just the package. The `redis` package binds
-        # `redis.exceptions` only as a side effect of its own imports, so type
-        # checkers do not treat it as a known attribute of a plain `import redis`.
+        # Import the submodules, not just the package. The `redis` package binds
+        # `redis.exceptions`, `redis.retry`, and `redis.backoff` only as a side
+        # effect of its own imports, so type checkers do not treat them as known
+        # attributes of a plain `import redis`.
+        import redis.backoff
         import redis.exceptions
+        import redis.retry
     except ImportError as error:
         raise UnsupportedOperation("RedisBackend requires the optional 'redis' package; install 'genie[redis]'.") from error
     exception_types = tuple(
@@ -3268,6 +3322,32 @@ def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[Bas
     if not isinstance(no_script_error, type):
         no_script_error = _UnavailableNoScriptError
     return redis, exception_types, watch_error, no_script_error
+
+
+def _transport_options(redis_module: Any, retries: int) -> dict[str, Any]:
+    """Return the client options that reconnect after a dropped connection.
+
+    The client retries a dropped connection only when it is given both a retry
+    policy and the error types that policy applies to, so this sets the two
+    options together. Only `ConnectionError` is listed. A command that timed out
+    may still be running on the server, and sending it again would spend the
+    socket timeout a second time, so a timeout stays one budget and reaches the
+    caller as `BackendBusy`.
+
+    Args:
+        redis_module: The imported `redis` package.
+        retries: Number of retries to allow. `0` returns no options.
+
+    Returns:
+        Client options to pass to the client constructor.
+    """
+
+    if retries <= 0:
+        return {}
+    return {
+        "retry": redis_module.retry.Retry(redis_module.backoff.ExponentialBackoff(), retries),
+        "retry_on_error": [redis_module.exceptions.ConnectionError],
+    }
 
 
 def _is_command_error(error: BaseException) -> bool:

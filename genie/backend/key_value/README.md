@@ -100,6 +100,55 @@ datasets can share one Redis database by using different prefixes.
   original error stays available as `__cause__`.
 - `close()` waits for active operations before it closes the shared client.
 
+## Connection health
+
+The backend keeps one client with a connection pool, so a connection can sit
+idle between two Genie calls. An idle connection can die without telling the
+client: a server `timeout`, a load balancer, a restart, or a failover closes
+it, and the next command then fails. The client retries nothing by default, so
+that failure would reach the caller as `BackendUnavailable`.
+
+Two settings cover this. `health_check_interval`, 30 seconds by default, makes
+the client check an idle connection with a `PING` before it reuses it.
+`transport_retries`, 3 by default, lets the client reconnect and send the
+command again after the connection drops. Set either one to `0` to turn it off.
+
+A command that reached the server and then ran past `socket_timeout` is not
+retried, because the server may still be running it and a second attempt would
+spend the whole timeout again. That case reaches the caller as `BackendBusy`,
+which is retryable.
+
+Opening a connection is retried as well, so plan for it when you pick the two
+timeouts. A server that refuses the connection answers at once and is tried
+once. A server that accepts nothing and answers nothing, such as a firewalled
+address, is tried `transport_retries` more times, and each try may last
+`connect_timeout`. At the defaults that is four tries of ten seconds before the
+caller sees `BackendBusy`. Lower `connect_timeout`, `transport_retries`, or
+both if you need to fail faster than that.
+
+A retry never sends the same write command twice. Every Genie write runs inside
+`WATCH`/`MULTI`/`EXEC`, and while a watch is open the client refuses to send
+those commands again: it reports the dropped connection as a watch conflict
+instead, and the backend answers that with a fresh attempt that re-reads
+current state. Every other command the backend sends on its own is a read, so
+sending one twice changes nothing.
+
+One case is left over, and it is not new. When the connection dies after the
+server ran `EXEC` but before the client could read the reply, nobody knows
+whether the write committed. The client reports a watch conflict, and the fresh
+attempt re-reads current state and usually answers correctly: a repeated
+`put_block` finds the id taken, and a repeated conditional `update_block` finds
+the version already raised. `append_log_entry` is the one operation with
+nothing to compare against, so that exact failure can append a second entry.
+`Neo4jBackend` has the same gap, because a managed transaction whose commit
+reply is lost is retried the same way.
+
+`transport_retries` and `max_retry_time` are separate budgets.
+`transport_retries` counts reconnects after the connection drops.
+`max_retry_time` bounds how long an attempt may keep losing optimistic
+conflicts to other writers before it raises `BackendBusy`. Neither one covers
+the other.
+
 ## Concurrency and limits
 
 Optimistic writes never hold a lock, so a stalled client cannot block others.

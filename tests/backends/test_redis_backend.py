@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Condition, Event, RLock
 from time import monotonic, sleep
+from types import SimpleNamespace
 from typing import Any, Literal, Self, cast
 
 import pytest
@@ -57,6 +58,30 @@ class _FakeNoScriptError(Exception):
     """Stand-in for the client's missing cached script error."""
 
 
+class _FakeConnectionError(Exception):
+    """Stand-in for the client's dropped connection error."""
+
+
+class _FakeBackoff:
+    """Stand-in for the client's exponential backoff."""
+
+
+class _FakeRetry:
+    """Stand-in for the client's retry policy."""
+
+    def __init__(self, backoff: object, retries: int) -> None:
+        self.backoff = backoff
+        self.retries = retries
+
+
+class _FakeClientModule:
+    """Stand-in for the parts of the `redis` package the backend reads."""
+
+    retry = SimpleNamespace(Retry=_FakeRetry)
+    backoff = SimpleNamespace(ExponentialBackoff=_FakeBackoff)
+    exceptions = SimpleNamespace(ConnectionError=_FakeConnectionError)
+
+
 def test_redis_backend_implements_every_backend_protocol() -> None:
     """The class exposes the complete core and optional capability surface."""
 
@@ -82,6 +107,11 @@ def test_redis_backend_implements_every_backend_protocol() -> None:
         ({"url": "redis://example", "connect_timeout": -1}, ValueError, "connect_timeout must be a finite number"),
         ({"url": "redis://example", "socket_timeout": float("inf")}, ValueError, "socket_timeout must be a finite number"),
         ({"url": "redis://example", "max_retry_time": "5"}, TypeError, "max_retry_time must be a number"),
+        ({"url": "redis://example", "health_check_interval": "5"}, TypeError, "health_check_interval must be a number"),
+        ({"url": "redis://example", "health_check_interval": -1}, ValueError, "health_check_interval must be a finite number"),
+        ({"url": "redis://example", "transport_retries": 1.5}, TypeError, "transport_retries must be an integer"),
+        ({"url": "redis://example", "transport_retries": True}, TypeError, "transport_retries must be an integer"),
+        ({"url": "redis://example", "transport_retries": -1}, ValueError, "transport_retries must be greater than or equal to zero"),
         ({"url": "redis://example", "auth": ["user", "password"]}, TypeError, "auth must be"),
         ({"url": "redis://example", "verify_connectivity": 1}, TypeError, "verify_connectivity must be"),
         ({"url": "redis://example", "verify_server_role": 1}, TypeError, "verify_server_role must be"),
@@ -363,7 +393,7 @@ def test_redis_backend_forwards_production_client_configuration(
             calls.update(url=url, options=options)
             return FakeClient()
 
-    class FakeModule:
+    class FakeModule(_FakeClientModule):
         Redis = FakeRedis
 
     monkeypatch.setattr(
@@ -378,21 +408,67 @@ def test_redis_backend_forwards_production_client_configuration(
         auth=("genie", "secret"),
         connect_timeout=4.5,
         socket_timeout=0.0,
+        health_check_interval=15.0,
+        transport_retries=2,
     )
     backend.close()
 
-    assert calls == {
-        "url": "rediss://example.test:6379/2",
-        "options": {
-            "decode_responses": True,
-            "socket_connect_timeout": 4.5,
-            "socket_timeout": None,
-            "username": "genie",
-            "password": "secret",
-        },
-        "pinged": True,
-        "closed": True,
+    options = cast(dict[str, Any], calls.pop("options"))
+    retry = options.pop("retry")
+
+    assert calls == {"url": "rediss://example.test:6379/2", "pinged": True, "closed": True}
+    assert options == {
+        "decode_responses": True,
+        "socket_connect_timeout": 4.5,
+        "socket_timeout": None,
+        "health_check_interval": 15.0,
+        "retry_on_error": [_FakeConnectionError],
+        "username": "genie",
+        "password": "secret",
     }
+    assert isinstance(retry, _FakeRetry)
+    assert isinstance(retry.backoff, _FakeBackoff)
+    assert retry.retries == 2
+
+
+def test_redis_backend_can_disable_the_health_check_and_transport_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero for both settings leaves the client at its own defaults."""
+
+    calls: dict[str, Any] = {}
+
+    class FakeClient:
+        def ping(self) -> bool:
+            return True
+
+        def close(self) -> None:
+            pass
+
+    class FakeRedis:
+        @staticmethod
+        def from_url(url: str, **options: object) -> FakeClient:
+            calls.update(url=url, options=options)
+            return FakeClient()
+
+    class FakeModule(_FakeClientModule):
+        Redis = FakeRedis
+
+    monkeypatch.setattr(
+        redis_module,
+        "_load_redis_client",
+        lambda: (FakeModule, (), _FakeWatchError, _FakeNoScriptError),
+    )
+    monkeypatch.setattr(RedisBackend, "_initialize_schema", lambda self: None)
+
+    backend = RedisBackend("redis://example", health_check_interval=0.0, transport_retries=0)
+    backend.close()
+
+    options = cast(dict[str, Any], calls["options"])
+
+    assert options["health_check_interval"] == 0.0
+    assert "retry" not in options
+    assert "retry_on_error" not in options
 
 
 @pytest.mark.parametrize(
@@ -428,7 +504,7 @@ def test_redis_backend_checks_the_eviction_policy_before_it_touches_the_schema(
         def from_url(*args: object, **kwargs: object) -> EvictingClient:
             return EvictingClient()
 
-    class FakeModule:
+    class FakeModule(_FakeClientModule):
         Redis = FakeRedis
 
     monkeypatch.setattr(
@@ -487,7 +563,7 @@ def test_redis_backend_checks_the_server_role_before_eviction_and_schema(
         def from_url(*args: object, **kwargs: object) -> EvictingReplicaClient:
             return EvictingReplicaClient()
 
-    class FakeModule:
+    class FakeModule(_FakeClientModule):
         Redis = FakeRedis
 
     monkeypatch.setattr(
@@ -525,7 +601,7 @@ def test_redis_backend_discards_client_after_unexpected_initialization_error(
         def from_url(*args: object, **kwargs: object) -> FakeClient:
             return FakeClient()
 
-    class FakeModule:
+    class FakeModule(_FakeClientModule):
         Redis = FakeRedis
 
     monkeypatch.setattr(
@@ -1860,6 +1936,138 @@ _LIVE_CLIENT_AVAILABLE = importlib.util.find_spec("redis") is not None
 _LIVE_REASON = "set GENIE_REDIS_URL and install the redis extra to run live Redis tests"
 _LIVE_REPLICA_REASON = "set GENIE_REDIS_URL and GENIE_REDIS_REPLICA_URL and install the redis extra to run live Redis replica tests"
 _LIVE_REPLICATION_TIMEOUT = 15.0
+_CLIENT_CONTRACT_REASON = "install the redis extra to check the client retry contract"
+
+
+@pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
+def test_redis_transport_options_retry_a_dropped_connection() -> None:
+    """The retry options reach the installed client and take effect.
+
+    The client retries nothing by default, so this checks that the options the
+    backend passes replace that default. It needs the client installed but no
+    running server.
+    """
+
+    import redis
+    import redis.exceptions
+
+    assert redis_module._transport_options(redis, 0) == {}
+
+    client = redis.Redis(**redis_module._transport_options(redis, 2))
+    connection = client.connection_pool.make_connection()
+    attempts: list[int] = []
+
+    def dropped() -> None:
+        attempts.append(1)
+        raise redis.exceptions.ConnectionError("Connection closed by server.")
+
+    assert connection.retry_on_error == [redis.exceptions.ConnectionError]
+    with pytest.raises(redis.exceptions.ConnectionError):
+        connection.retry.call_with_retry(dropped, lambda error: None)
+    assert len(attempts) == 3
+
+    client.close()
+
+
+@pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
+def test_redis_client_does_not_retry_a_command_that_timed_out() -> None:
+    """A command that timed out is sent once, because it may still be running.
+
+    The retry policy catches a timeout as well, so the gate that keeps it to
+    one attempt is the client's own: it re-raises every error that
+    `retry_on_error` does not list, and `_transport_options` lists a dropped
+    connection only. This test fails if the client ever widens that gate.
+    """
+
+    import redis
+    import redis.exceptions
+
+    client = redis.Redis(**redis_module._transport_options(redis, 2))
+    connection = client.connection_pool.make_connection()
+
+    with pytest.raises(redis.exceptions.TimeoutError):
+        client._disconnect_raise(connection, redis.exceptions.TimeoutError("Timeout reading from socket."))
+    assert client._disconnect_raise(connection, redis.exceptions.ConnectionError("Connection closed by server.")) is None
+
+    client.close()
+
+
+@pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
+def test_redis_client_retries_opening_a_connection() -> None:
+    """Opening a connection is retried, which multiplies `connect_timeout`.
+
+    A server that answers nothing holds each try for the connect timeout, so
+    the documented worst case is that timeout times `transport_retries` plus
+    one. A server that refuses the connection is not in this case: it answers
+    with an `OSError` the retry policy does not cover, so it is tried once.
+    """
+
+    import redis
+    import redis.exceptions
+
+    client = redis.Redis(**redis_module._transport_options(redis, 2))
+    silent = client.connection_pool.make_connection()
+    refusing = client.connection_pool.make_connection()
+    silent_attempts: list[int] = []
+    refusing_attempts: list[int] = []
+
+    def times_out() -> None:
+        silent_attempts.append(1)
+        raise TimeoutError("timed out")
+
+    def refuses() -> None:
+        refusing_attempts.append(1)
+        raise OSError(61, "Connection refused")
+
+    silent._connect = times_out
+    refusing._connect = refuses
+
+    with pytest.raises(redis.exceptions.TimeoutError):
+        silent.connect()
+    with pytest.raises(redis.exceptions.ConnectionError):
+        refusing.connect()
+
+    assert len(silent_attempts) == 3
+    assert len(refusing_attempts) == 1
+
+    client.close()
+
+
+@pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
+def test_redis_client_turns_a_dropped_watched_connection_into_a_conflict() -> None:
+    """Transport retry cannot repeat a write, because an open watch blocks it.
+
+    Every Genie write runs inside `WATCH`/`MULTI`/`EXEC`. Transport retry is
+    safe only because the client refuses to send those commands again while a
+    watch is open, and raises a watch conflict instead. `RedisBackend._transact`
+    answers that conflict with a fresh attempt, so the write is never applied
+    twice. This test fails if the client ever drops that rule.
+    """
+
+    import redis
+    import redis.exceptions
+
+    client = redis.Redis(**redis_module._transport_options(redis, 2))
+    disconnected: list[str] = []
+
+    class WatchingConnection:
+        def __init__(self) -> None:
+            self.retry_on_error = [redis.exceptions.ConnectionError]
+
+        def disconnect(self) -> None:
+            disconnected.append("closed")
+
+    with client.pipeline() as pipeline:
+        pipeline.watching = True
+        with pytest.raises(redis.exceptions.WatchError):
+            pipeline._disconnect_raise_reset(
+                cast(Any, WatchingConnection()),
+                redis.exceptions.ConnectionError("Connection closed by server."),
+            )
+
+    assert disconnected == ["closed"]
+
+    client.close()
 
 
 def _live_auth() -> tuple[str, str] | None:
