@@ -1975,6 +1975,11 @@ class RedisBackend:
         writes a lost `EXEC` reply is retried the same way it was before, so
         this narrows the window rather than closing it. See the adapter README
         for what a repeated operation does.
+
+        The same check runs once more when the retry budget is spent, because
+        the last attempt of a write can lose its reply just like any other. A
+        commit the token still proves is reported as the success it was instead
+        of as `BackendBusy`.
         """
 
         guard = self._guard_key()
@@ -2006,7 +2011,19 @@ class RedisBackend:
                 except self._exception_types as error:
                     raise _translate_redis_error(error) from error
                 attempt += 1
-                self._wait_before_retry(attempt, deadline, action="write")
+                try:
+                    self._wait_before_retry(attempt, deadline, action="write")
+                except BackendBusy:
+                    # The budget is spent, so the loop will not come back around
+                    # to the token check at the top. Read the guard once more
+                    # rather than report a write that may have landed. A read
+                    # that fails here leaves the original error standing.
+                    if committed is None:
+                        raise
+                    with suppress(*self._exception_types):
+                        if client.get(guard) == committed[0]:
+                            return committed[1]
+                    raise
 
     def _wait_before_retry(self, attempt: int, deadline: float, *, action: str) -> None:
         """Back off before the next attempt, or fail when the budget is spent.

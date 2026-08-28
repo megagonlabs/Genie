@@ -316,7 +316,7 @@ that slot somewhere else. Use a standalone server or a primary instead.
 
 Genie keys, documents, and indexes belong to the backend. Write through
 `RedisBackend`. Writing to these keys directly can skip the reference,
-temporal, and cycle checks, and it does not bump the mutation guard that keeps
+temporal, and cycle checks, and it does not touch the mutation guard that keeps
 concurrent Genie writes correct.
 
 Run `../../../scripts/test_full.sh` from the repository root to start throwaway

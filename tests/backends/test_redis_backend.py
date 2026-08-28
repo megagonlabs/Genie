@@ -809,6 +809,38 @@ def test_redis_write_repeats_a_lost_commit_once_another_write_replaces_the_token
     assert client.applied == [["member-1"], ["member-2"]]
 
 
+def test_redis_write_returns_a_lost_commit_found_on_the_last_attempt() -> None:
+    """A spent budget still reports a commit the guard token can prove."""
+
+    client = _LostReplyClient()
+    backend = _detached_backend(client, max_retry_time=0.0)
+    runs = 0
+
+    def operation(transaction: redis_module._RedisTransaction) -> str:
+        nonlocal runs
+        runs += 1
+        transaction.stage(lambda pipeline: pipeline.sadd("genie:example", f"member-{runs}"))
+        return f"result-{runs}"
+
+    assert backend._transact(operation) == "result-1"
+    assert runs == 1
+    assert client.applied == [["member-1"]]
+
+
+def test_redis_write_reports_a_spent_budget_when_the_token_is_gone() -> None:
+    """Without that proof a spent budget still reports contention."""
+
+    client = _LostReplyClient(competing_token="written-by-another-client")
+    backend = _detached_backend(client, max_retry_time=0.0)
+
+    def operation(transaction: redis_module._RedisTransaction) -> str:
+        transaction.stage(lambda pipeline: pipeline.sadd("genie:example", "member"))
+        return "result"
+
+    with pytest.raises(BackendBusy, match="lost 1 optimistic attempt"):
+        backend._transact(operation)
+
+
 def _detached_backend(
     client: Any,
     *,
