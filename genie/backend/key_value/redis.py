@@ -8,10 +8,10 @@ and sets. No Redis module such as RedisJSON is required.
 Every write runs as one optimistic read-modify-write attempt. The read phase
 records the value of a shared mutation guard, and the commit phase re-checks
 that guard under `WATCH` before it applies the staged writes in one
-`MULTI`/`EXEC` block. Any other Genie write bumps the guard, so a conflicting
-attempt is retried instead of committing on stale reads. This gives the same
-serialized-writer behavior as SQLite and Neo4j, and it makes compound checks
-and writes atomic across backend instances.
+`MULTI`/`EXEC` block. Every commit replaces the guard with a fresh token, so an
+attempt that read an older value is retried instead of committing on stale
+reads. This gives the same serialized-writer behavior as SQLite and Neo4j, and
+it makes compound checks and writes atomic across backend instances.
 
 Multi-command reads need the opposite guarantee: one consistent view. Redis has
 no multi-key snapshot, so commands sent one after another can straddle a write.
@@ -41,6 +41,7 @@ from threading import Condition, RLock
 from time import monotonic, sleep
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
+from uuid import uuid4
 
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import (
@@ -347,7 +348,7 @@ class RedisBackend:
     Every Genie key starts with `key_prefix`, so several Genie datasets can
     share one Redis database. Write through the backend: writing to these keys
     directly can skip the reference, temporal, and cycle checks, and it does
-    not bump the mutation guard that protects concurrent Genie writes.
+    not touch the mutation guard that protects concurrent Genie writes.
 
     Genie keys carry no expiry, so the server must not evict them. Construction
     refuses a server that has a memory limit together with an `allkeys-*` value
@@ -1528,7 +1529,7 @@ class RedisBackend:
         return f"{self.key_prefix}:schema"
 
     def _guard_key(self) -> str:
-        """Return the key that counts committed Genie writes."""
+        """Return the key that identifies the last committed Genie write."""
 
         return f"{self.key_prefix}:mutations"
 
@@ -1928,8 +1929,8 @@ class RedisBackend:
         """Run one multi-command read and retry when a write interleaves.
 
         The mutation guard is read before and after the operation. Every Genie
-        write bumps that guard, so an unchanged value proves that the commands
-        in between observed one consistent state.
+        write replaces that value, so an unchanged value proves that the
+        commands in between observed one consistent state.
         """
 
         guard = self._guard_key()
@@ -1960,23 +1961,42 @@ class RedisBackend:
         way. The client may retry a dropped connection, and it refuses to repeat
         a command only while a watch is open, where it raises a watch conflict
         instead. A write sent outside this block could be applied twice.
+
+        A commit ends by writing a fresh token into the guard, which lets a
+        retry recognize its own committed work. A connection that dies during
+        `EXEC` reaches this loop as a watch conflict whether or not the server
+        applied the commit, and re-running the operation would apply it a
+        second time. So each attempt first reads the guard: when it still holds
+        the token of the previous attempt, that commit landed and its result is
+        returned unchanged.
+
+        The check proves a commit only while no other client has committed
+        since, because the next commit replaces the token. Under concurrent
+        writes a lost `EXEC` reply is retried the same way it was before, so
+        this narrows the window rather than closing it. See the adapter README
+        for what a repeated operation does.
         """
 
         guard = self._guard_key()
         with self._operation_client() as client:
             deadline = monotonic() + self.max_retry_time
             attempt = 0
+            committed: tuple[str, _T] | None = None
             while True:
                 try:
                     version = client.get(guard)
+                    if committed is not None and version == committed[0]:
+                        return committed[1]
                     transaction = _RedisTransaction(client)
                     result = operation(transaction)
                     with client.pipeline() as pipeline:
                         pipeline.watch(guard)
                         if pipeline.get(guard) == version:
+                            token = uuid4().hex
                             pipeline.multi()
                             transaction.apply(pipeline)
-                            pipeline.incr(guard)
+                            pipeline.set(guard, token)
+                            committed = (token, result)
                             pipeline.execute()
                             return result
                 except self._watch_error:

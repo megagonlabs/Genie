@@ -38,6 +38,17 @@ atomic step, which means the check and the change happen together so that no
 other writer can slip in between them. Passing `None` lets trusted
 backend-level administration make an unconditional change.
 
+### Retried commits
+
+An adapter that talks to a server over a network can lose the reply to a commit
+the server already applied. It cannot tell that apart from a commit that never
+happened, so a retry may run the same operation a second time. Write each
+operation so that a repeat is either rejected by its own uniqueness check or
+ends at the same state. `append_log_entry` is the one operation with no
+uniqueness key, so a repeat appends the same block again at a new sequence.
+State in the adapter README what its retry does, and let an application that
+needs exactly-once appends carry its own token in the block.
+
 ### Errors
 
 Raise `MemoryConflict` for expected conflicts of identity, version, or
@@ -156,6 +167,7 @@ A production adapter should:
   order;
 - atomically enforce block versions, subtree snapshots, keyed updates,
   sequences, and DAG insertion;
+- document what a retried commit repeats, if it retries at all;
 - map operational failures to `BackendError`; and
 - return normalized `SearchResult` values.
 

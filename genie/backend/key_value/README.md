@@ -38,7 +38,7 @@ datasets can share one Redis database by using different prefixes.
 | Key | Type | Holds |
 | --- | --- | --- |
 | `genie:schema` | hash | Application id and schema version |
-| `genie:mutations` | string | Counter bumped by every committed Genie write |
+| `genie:mutations` | string | Token replaced by every committed Genie write |
 | `genie:order:blocks`, `genie:order:links` | string | Next stable storage order |
 | `genie:block:<id>` | string | One block document |
 | `genie:blocks` | sorted set | Every block id in storage order |
@@ -64,7 +64,8 @@ datasets can share one Redis database by using different prefixes.
   that would commit on stale reads is retried instead. This gives the same
   atomic behavior as SQLite and Neo4j: compare-and-swap updates, conditional
   subtree deletion, unique key bindings, monotonic sequences, and cycle-checked
-  DAG insertion.
+  DAG insertion. Each commit writes a fresh token into `genie:mutations`, so a
+  retry can tell whether its own earlier commit landed.
 - Reads come in three shapes. A read that fits in one command needs nothing
   extra, because Redis runs each command on its own. A read scoped to one block,
   meaning its parent chain, its children, its subtree, or one `limit` page of a
@@ -158,11 +159,34 @@ commit inside `max_retry_time` raises `BackendBusy`, which is retryable. A
 scanning read that keeps being interrupted by writes reports the same error,
 because it would rather retry than return a torn view.
 
-A read that runs as one read-only script cannot reach that case, so it behaves
-like a snapshot read on SQLite or Neo4j. The trade is that a script holds the
-single-threaded server for as long as it runs, so only a read scoped to one block
-uses one. A scan of the whole dataset stays on the client side, where it can lose
-a race but cannot stall every other client.
+A commit whose reply never arrives is retried, and the retry can repeat work.
+When the connection dies during `EXEC`, the client cannot know whether the
+server applied the transaction, so it reports a watch conflict either way. Each
+commit therefore writes a fresh token into the mutation guard, and the next
+attempt returns its earlier result when the guard still holds that token. The
+token proves the commit only while no other client has committed since, because
+the next commit replaces it. Under concurrent writes the operation runs again.
+
+Running it again is safe for most writes and visible for one. A write that
+checks for its own result first raises `MemoryConflict` on the repeat: a block
+id, a link id, a key address, or a temporal entry that already exists, and any
+`expected_version` or `expected_block_id` write whose expected value has moved.
+The write did land, but the caller is told it conflicted. A write with no such
+check ends at the same state: `update_block` without a version, `rebind_key` to
+the same target, and every cleanup that follows a deleted block.
+`append_log_entry` is the exception. It allocates the next sequence with no
+uniqueness key, so a repeat appends the same block a second time at a new
+sequence, and the caller receives the second entry. Neo4j's managed
+transactions carry the same limit for the same reason. An application that
+needs exactly-once appends should carry its own token in the block and skip a
+duplicate on read.
+
+A read that runs as one read-only script never enters a retry loop, so it never
+reports `BackendBusy` and behaves like a snapshot read on SQLite or Neo4j. The
+trade is that a script holds the single-threaded server for as long as it runs,
+so only a read scoped to one block uses one. A scan of the whole dataset stays
+on the client side, where it can lose a race but cannot stall every other
+client.
 
 Script duration is the cost to watch. A scripted read moves no extra work onto
 the server, because the client-side path reads the same data, but that work now
@@ -232,7 +256,7 @@ expiry to evict), and `maxmemory 0` all pass. Pass
 self-hosted server `maxmemory-policy` covers the whole process, so `SELECT` does
 not isolate Genie from a cache workload that needs `allkeys-lru`; give Genie its
 own server instead. Plan memory headroom as well: every Genie write ends with
-`INCR` on the mutation guard, and Redis refuses `INCR` once `maxmemory` is
+`SET` on the mutation guard, and Redis refuses `SET` once `maxmemory` is
 reached, so at the limit you cannot delete Genie data through the backend to
 free space.
 

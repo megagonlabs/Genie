@@ -51,6 +51,21 @@ Writes run one at a time through a single `GenieGuard` node. This favors
 correctness and matches the one-writer behavior of SQLite, but it does limit
 write throughput.
 
+A commit whose reply never arrives is retried, and the retry can repeat work.
+Writes run inside a managed transaction, which retries a transaction that fails
+with a transient or connection error. When the connection dies during the
+commit, the driver cannot know whether the server applied it, so the retry
+re-runs the whole transaction function. Most writes check for their own result
+first and then raise `MemoryConflict` on the repeat: a block id, a link id, a
+key address, or a temporal entry that already exists, and any
+`expected_version` or `expected_block_id` write whose expected value has moved.
+The write did land, but the caller is told it conflicted. `append_log_entry` is
+the exception. It allocates the next sequence with no uniqueness key, so a
+repeat appends the same block a second time at a new sequence, and the caller
+receives the second entry. The Redis adapter carries the same limit for the
+same reason. An application that needs exactly-once appends should carry its
+own token in the block and skip a duplicate on read.
+
 Genie labels, relationship types, constraints, and indexes belong to the
 backend. Write through `Neo4jBackend`. Writing to the database directly can skip
 the reference, temporal, and DAG checks.

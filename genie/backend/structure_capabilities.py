@@ -185,6 +185,12 @@ class SequenceStore(Protocol):
 
     Implementations must allocate one unique, monotonically increasing
     sequence number for every append to a given log.
+
+    An append carries no uniqueness key, so an adapter that retries a commit
+    whose reply was lost can append the same block twice, at two sequences. An
+    application that needs exactly-once appends should carry its own token in
+    the appended block and skip a duplicate on read. Each adapter README states
+    what its retry repeats.
     """
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:

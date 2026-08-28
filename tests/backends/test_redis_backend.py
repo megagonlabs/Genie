@@ -640,7 +640,7 @@ def test_redis_writes_report_a_spent_optimistic_retry_budget() -> None:
         def multi(self) -> None:
             return None
 
-        def incr(self, key: str) -> None:
+        def set(self, key: str, value: str) -> None:
             return None
 
         def execute(self) -> None:
@@ -706,6 +706,107 @@ def test_redis_writes_do_not_retry_expected_memory_conflicts() -> None:
 
     with pytest.raises(MemoryConflict, match="staged conflict"):
         backend._transact(operation)
+
+
+class _LostReplyPipeline:
+    """Pipeline whose `EXEC` is applied by the server but never answered."""
+
+    def __init__(self, client: _LostReplyClient) -> None:
+        self.client = client
+        self.staged: list[str] = []
+        self.token: str | None = None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def watch(self, key: str) -> None:
+        return None
+
+    def get(self, key: str) -> str | None:
+        return self.client.guard
+
+    def multi(self) -> None:
+        return None
+
+    def sadd(self, key: str, member: str) -> None:
+        self.staged.append(member)
+
+    def set(self, key: str, value: str) -> None:
+        self.token = value
+
+    def execute(self) -> None:
+        self.client.applied.append(self.staged)
+        self.client.guard = self.token
+        if len(self.client.applied) > 1:
+            return
+        # The server committed, then the connection died before the reply
+        # arrived. The client reports that as a watch conflict.
+        self.client.guard = self.client.guard_after_first_commit(str(self.token))
+        raise _FakeWatchError("connection lost during EXEC")
+
+
+class _LostReplyClient:
+    """Client whose first commit lands without its caller ever hearing back."""
+
+    def __init__(self, *, competing_token: str | None = None) -> None:
+        self.guard: str | None = None
+        self.applied: list[list[str]] = []
+        self.competing_token = competing_token
+
+    def guard_after_first_commit(self, token: str) -> str:
+        # A competing write replaces the token, which is what hides the proof
+        # that our own commit landed.
+        return self.competing_token or token
+
+    def get(self, key: str) -> str | None:
+        assert key == "genie:mutations"
+        return self.guard
+
+    def pipeline(self) -> _LostReplyPipeline:
+        return _LostReplyPipeline(self)
+
+    def close(self) -> None:
+        return None
+
+
+def test_redis_write_does_not_repeat_a_commit_whose_reply_was_lost() -> None:
+    """The guard token proves the commit landed, so the retry returns it."""
+
+    client = _LostReplyClient()
+    backend = _detached_backend(client)
+    runs = 0
+
+    def operation(transaction: redis_module._RedisTransaction) -> str:
+        nonlocal runs
+        runs += 1
+        transaction.stage(lambda pipeline: pipeline.sadd("genie:example", f"member-{runs}"))
+        return f"result-{runs}"
+
+    assert backend._transact(operation) == "result-1"
+    assert runs == 1
+    assert client.applied == [["member-1"]]
+
+
+def test_redis_write_repeats_a_lost_commit_once_another_write_replaces_the_token() -> None:
+    """The proof only holds while no other client has committed since."""
+
+    client = _LostReplyClient(competing_token="written-by-another-client")
+    backend = _detached_backend(client)
+    runs = 0
+
+    def operation(transaction: redis_module._RedisTransaction) -> str:
+        nonlocal runs
+        runs += 1
+        transaction.stage(lambda pipeline: pipeline.sadd("genie:example", f"member-{runs}"))
+        return f"result-{runs}"
+
+    assert backend._transact(operation) == "result-2"
+    assert runs == 2
+    # The known limit: the same work is applied twice.
+    assert client.applied == [["member-1"], ["member-2"]]
 
 
 def _detached_backend(
@@ -1041,8 +1142,8 @@ def test_redis_link_cleanup_reads_only_the_endpoint_index() -> None:
         def zrem(self, key: str, *members: str) -> None:
             self.client.commands.append(("zrem", key, *members))
 
-        def incr(self, key: str) -> None:
-            self.client.commands.append(("incr", key))
+        def set(self, key: str, value: str) -> None:
+            self.client.commands.append(("set", key))
 
         def execute(self) -> list[Any]:
             replies, self.replies = self.replies, []
@@ -1084,7 +1185,7 @@ def test_redis_link_cleanup_reads_only_the_endpoint_index() -> None:
         ("zrem", "genie:inlinks:child", _endpoint_member(kept)),
         ("zrem", "genie:relation:cites", redis_module._identity("kept", "root", "child"), redis_module._identity("shared", "other", "root")),
         ("zrem", "genie:outlinks:other", _endpoint_member(shared)),
-        ("incr", "genie:mutations"),
+        ("set", "genie:mutations"),
     ]
 
 
