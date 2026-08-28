@@ -2082,12 +2082,16 @@ def test_redis_transport_options_retry_a_dropped_connection() -> None:
     """
 
     import redis
+    import redis.connection
     import redis.exceptions
 
     assert redis_module._transport_options(redis, 0) == {}
 
     client = redis.Redis(**redis_module._transport_options(redis, 2))
-    connection = client.connection_pool.make_connection()
+    # The pool declares the narrow `ConnectionInterface`, which carries no
+    # retry attributes. The pool builds a `Connection` for a `redis://` URL,
+    # and that is the class holding the settings this test reads.
+    connection = cast(redis.connection.Connection, client.connection_pool.make_connection())
     attempts: list[int] = []
 
     def dropped() -> None:
@@ -2126,7 +2130,7 @@ def test_redis_client_does_not_retry_a_command_that_timed_out() -> None:
 
 
 @pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
-def test_redis_client_retries_opening_a_connection() -> None:
+def test_redis_client_retries_opening_a_connection(monkeypatch: pytest.MonkeyPatch) -> None:
     """Opening a connection is retried, which multiplies `connect_timeout`.
 
     A server that answers nothing holds each try for the connect timeout, so
@@ -2152,8 +2156,10 @@ def test_redis_client_retries_opening_a_connection() -> None:
         refusing_attempts.append(1)
         raise OSError(61, "Connection refused")
 
-    silent._connect = times_out
-    refusing._connect = refuses
+    # Replace the one step that opens the socket, so the retry around it is
+    # what the attempt counts measure.
+    monkeypatch.setattr(silent, "_connect", times_out)
+    monkeypatch.setattr(refusing, "_connect", refuses)
 
     with pytest.raises(redis.exceptions.TimeoutError):
         silent.connect()
