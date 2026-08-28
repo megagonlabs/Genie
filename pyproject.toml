@@ -27,6 +27,9 @@ dependencies = []
 neo4j = [
   "neo4j>=5.26",
 ]
+postgres = [
+  "psycopg[binary]>=3.1",
+]
 redis = [
   "redis>=5.0",
 ]

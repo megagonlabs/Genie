@@ -93,6 +93,7 @@ or a set of root ids that the application keeps.
 genie/backend/
   in_memory/reference.py
   relational/sqlite.py
+  relational/postgres.py
   graph/neo4j.py
   key_value/redis.py
   composite/routed.py
@@ -104,7 +105,7 @@ genie/backend/
 | Group | Implementation | Guide |
 | --- | --- | --- |
 | In-memory | `InMemoryBackend` | [In-memory](in_memory/README.md) |
-| Relational | `SQLiteBackend` | [Relational](relational/README.md) |
+| Relational | `SQLiteBackend`, `PostgresBackend` | [Relational](relational/README.md) |
 | Graph | `Neo4jBackend` | [Neo4j](graph/README.md) |
 | Key-value | `RedisBackend` | [Redis](key_value/README.md) |
 | Composite | `RoutedBackend` | [Composite](composite/README.md) |
@@ -115,20 +116,21 @@ columnar, or time-series adapters. Every bundled class can be imported from
 
 ## Small production deployments
 
-`SQLiteBackend`, `Neo4jBackend`, and `RedisBackend` are suitable for small,
-controlled production deployments. All three give you atomic writes, conflict
+The shipped server-backed and file-backed adapters are suitable for small,
+controlled production deployments. Each one gives you atomic writes, conflict
 handling, schema checks, and all the optional structure capabilities.
 
 | Backend | Good fit | Deployment responsibility |
 | --- | --- | --- |
 | `SQLiteBackend` | Local applications that do not write from many places at once | Use a reliable local filesystem, and manage file access and backups |
+| `PostgresBackend` | Applications that already run a PostgreSQL server and need shared access | Configure TLS, credentials, backups, monitoring, and capacity |
 | `Neo4jBackend` | Applications that already run a managed Neo4j server | Configure TLS, credentials, backups, monitoring, and capacity |
 | `RedisBackend` | Applications that already run a single managed Redis server, not a Redis Cluster, and want low-latency shared memory | Configure persistence (RDB or AOF), `maxmemory-policy noeviction`, TLS, credentials, memory limits, and backups |
 
 Write through the Genie backend instead of editing its stored records directly.
-Neo4j writes run one at a time to stay correct, Redis writes retry instead of
-blocking when they lose an optimistic conflict, and portable search scans
-candidate blocks. When your dataset or your traffic grows past these limits, use
+PostgreSQL and Neo4j writes run one at a time to stay correct, Redis writes
+retry instead of blocking when they lose an optimistic conflict, and portable
+search scans candidate blocks. When your dataset or your traffic grows past these limits, use
 a dedicated search implementation or a larger storage design.
 
 Genie is still an alpha library. Data safety in a backend and stability of the

@@ -12,7 +12,7 @@ from genie.backend.composite import (
 from genie.backend.graph import Neo4jBackend
 from genie.backend.in_memory import InMemoryBackend
 from genie.backend.key_value import RedisBackend
-from genie.backend.relational import SQLiteBackend
+from genie.backend.relational import PostgresBackend, SQLiteBackend
 from genie.backend.structure_capabilities import (
     AcyclicLinkStore,
     KeyedStore,
@@ -31,6 +31,7 @@ __all__ = [
     "LinkStore",
     "MemoryBackend",
     "Neo4jBackend",
+    "PostgresBackend",
     "RedisBackend",
     "RouteInfo",
     "RouteKey",

@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 
-# Run Genie's complete test suite against disposable local Neo4j and Redis
-# servers. The Redis side starts a primary and one replica that follows it, so
+# Run Genie's complete test suite against disposable local PostgreSQL, Neo4j,
+# and Redis servers. The Redis side starts a primary and one replica that follows it, so
 # the live tests can cover the adapter's replica role check as well.
 
 set -euo pipefail
 
 GENIE_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 GENIE_TEST_CONDA_ENV="${GENIE_TEST_CONDA_ENV:-genie}"
+GENIE_TEST_POSTGRES_IMAGE="${GENIE_TEST_POSTGRES_IMAGE:-postgres:16-alpine}"
+GENIE_TEST_POSTGRES_CONTAINER="${GENIE_TEST_POSTGRES_CONTAINER:-genie-postgres-test}"
+GENIE_TEST_POSTGRES_HOST_PORT="${GENIE_TEST_POSTGRES_HOST_PORT:-15432}"
+GENIE_TEST_POSTGRES_USER="${GENIE_TEST_POSTGRES_USER:-genie}"
+GENIE_TEST_POSTGRES_PASSWORD="${GENIE_TEST_POSTGRES_PASSWORD:-genie-test-password}"
+GENIE_TEST_POSTGRES_DATABASE="${GENIE_TEST_POSTGRES_DATABASE:-genie}"
+GENIE_TEST_POSTGRES_SCHEMA="${GENIE_TEST_POSTGRES_SCHEMA:-genie_test}"
+GENIE_TEST_POSTGRES_READY_ATTEMPTS="${GENIE_TEST_POSTGRES_READY_ATTEMPTS:-60}"
 GENIE_TEST_NEO4J_IMAGE="${GENIE_TEST_NEO4J_IMAGE:-neo4j:5-community}"
 GENIE_TEST_NEO4J_CONTAINER="${GENIE_TEST_NEO4J_CONTAINER:-genie-neo4j-test}"
 GENIE_TEST_NEO4J_HOST_PORT="${GENIE_TEST_NEO4J_HOST_PORT:-17687}"
@@ -62,6 +70,10 @@ require_free_container() {
 }
 
 cleanup() {
+    if [[ "${GENIE_TEST_POSTGRES_STARTED:-false}" == "true" ]]; then
+        echo "Stopping disposable PostgreSQL container..."
+        docker stop "$GENIE_TEST_POSTGRES_CONTAINER" >/dev/null 2>&1 || true
+    fi
     if [[ "${GENIE_TEST_NEO4J_STARTED:-false}" == "true" ]]; then
         echo "Stopping disposable Neo4j container..."
         docker stop "$GENIE_TEST_NEO4J_CONTAINER" >/dev/null 2>&1 || true
@@ -83,11 +95,19 @@ trap 'exit 143' TERM
 require_command conda
 require_command docker
 
+require_port GENIE_TEST_POSTGRES_HOST_PORT "$GENIE_TEST_POSTGRES_HOST_PORT"
 require_port GENIE_TEST_NEO4J_HOST_PORT "$GENIE_TEST_NEO4J_HOST_PORT"
 require_port GENIE_TEST_REDIS_HOST_PORT "$GENIE_TEST_REDIS_HOST_PORT"
 require_port GENIE_TEST_REDIS_REPLICA_HOST_PORT "$GENIE_TEST_REDIS_REPLICA_HOST_PORT"
+require_attempts GENIE_TEST_POSTGRES_READY_ATTEMPTS "$GENIE_TEST_POSTGRES_READY_ATTEMPTS"
 require_attempts GENIE_TEST_NEO4J_READY_ATTEMPTS "$GENIE_TEST_NEO4J_READY_ATTEMPTS"
 require_attempts GENIE_TEST_REDIS_READY_ATTEMPTS "$GENIE_TEST_REDIS_READY_ATTEMPTS"
+
+if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import psycopg" >/dev/null 2>&1; then
+    echo "The PostgreSQL test dependency is missing from Conda environment '$GENIE_TEST_CONDA_ENV'." >&2
+    echo "Install it with: conda run -n \"$GENIE_TEST_CONDA_ENV\" python -m pip install -e \".[dev,neo4j,postgres,redis]\"" >&2
+    exit 1
+fi
 
 if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import neo4j" >/dev/null 2>&1; then
     echo "The Neo4j test dependency is missing from Conda environment '$GENIE_TEST_CONDA_ENV'." >&2
@@ -101,12 +121,38 @@ if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import redis" >/dev/null 2>
     exit 1
 fi
 
+require_free_container "$GENIE_TEST_POSTGRES_CONTAINER"
 require_free_container "$GENIE_TEST_NEO4J_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_REPLICA_CONTAINER"
 
 echo "Compiling Genie..."
 conda run -n "$GENIE_TEST_CONDA_ENV" python -m compileall -q genie tests examples lamps
+
+echo "Starting disposable PostgreSQL container..."
+docker run --rm -d \
+    --name "$GENIE_TEST_POSTGRES_CONTAINER" \
+    -p "127.0.0.1:${GENIE_TEST_POSTGRES_HOST_PORT}:5432" \
+    -e "POSTGRES_USER=${GENIE_TEST_POSTGRES_USER}" \
+    -e "POSTGRES_PASSWORD=${GENIE_TEST_POSTGRES_PASSWORD}" \
+    -e "POSTGRES_DB=${GENIE_TEST_POSTGRES_DATABASE}" \
+    "$GENIE_TEST_POSTGRES_IMAGE" >/dev/null
+GENIE_TEST_POSTGRES_STARTED=true
+
+echo "Waiting for PostgreSQL..."
+for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_POSTGRES_READY_ATTEMPTS; GENIE_TEST_ATTEMPT++)); do
+    if docker exec "$GENIE_TEST_POSTGRES_CONTAINER" \
+        pg_isready -U "$GENIE_TEST_POSTGRES_USER" -d "$GENIE_TEST_POSTGRES_DATABASE" >/dev/null 2>&1; then
+        break
+    fi
+
+    if ((GENIE_TEST_ATTEMPT == GENIE_TEST_POSTGRES_READY_ATTEMPTS)); then
+        echo "PostgreSQL did not become ready. Recent container logs:" >&2
+        docker logs --tail 100 "$GENIE_TEST_POSTGRES_CONTAINER" >&2 || true
+        exit 1
+    fi
+    sleep 1
+done
 
 echo "Starting disposable Neo4j container..."
 docker run --rm -d \
@@ -190,8 +236,10 @@ for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_NEO4J_READY_ATTEM
     sleep 1
 done
 
-echo "Running the complete Genie test suite with live Neo4j and Redis tests enabled..."
+echo "Running the complete Genie test suite with live PostgreSQL, Neo4j, and Redis tests enabled..."
 env \
+    GENIE_POSTGRES_DSN="postgresql://${GENIE_TEST_POSTGRES_USER}:${GENIE_TEST_POSTGRES_PASSWORD}@127.0.0.1:${GENIE_TEST_POSTGRES_HOST_PORT}/${GENIE_TEST_POSTGRES_DATABASE}" \
+    GENIE_POSTGRES_SCHEMA="$GENIE_TEST_POSTGRES_SCHEMA" \
     GENIE_NEO4J_URI="bolt://127.0.0.1:${GENIE_TEST_NEO4J_HOST_PORT}" \
     GENIE_NEO4J_USER="$GENIE_TEST_NEO4J_USER" \
     GENIE_NEO4J_PASSWORD="$GENIE_TEST_NEO4J_PASSWORD" \

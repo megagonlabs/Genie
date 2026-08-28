@@ -87,11 +87,11 @@ class BlockStore(Protocol):
 
         `Memory` does not perform this cleanup and never calls the explicit
         `delete_*_for_block` methods, so an adapter that skips it here leaves
-        dangling relationships behind. Shipped adapters satisfy this in
-        different ways: `InMemoryBackend` calls the explicit cleanup methods,
-        `SQLiteBackend` relies on cascading foreign keys, `Neo4jBackend`
-        deletes the dependent nodes in the same transaction, and `RedisBackend`
-        stages every dependent key removal in the same commit.
+        dangling relationships behind. How an adapter satisfies this is its own
+        choice: the explicit cleanup methods, a cascading foreign key, deleting
+        the dependent records in the same transaction, or staging every
+        dependent removal in the same commit. What matters is that the cleanup
+        lands atomically with the deletion.
 
         Args:
             block_id: Memory block id.
