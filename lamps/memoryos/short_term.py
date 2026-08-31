@@ -1,16 +1,22 @@
 """MemoryOS's fast tier: a fixed-size queue of the newest exchanges.
 
 Short-term memory is the simplest part of MemoryOS and the part that drives
-everything else. It holds the last few exchanges verbatim, it has a hard
-capacity, and when a new exchange arrives at a full queue the oldest one is
-paged out rather than dropped. Every page in mid-term memory and every fact in
-long-term memory started as an exchange that fell off this end.
+everything else:
 
-A queue is arrival order, so this tier is an `EventLog`. Appending is one call,
-the oldest entry is the first one the log reads back, and the sequence numbers
-keep climbing because a log is append-only -- an exchange leaves the queue by
-its block being deleted, not by the log forgetting it. That is the same shape as
-upstream, where the deque is a window over a conversation that keeps going.
+- It holds the last few exchanges verbatim, with a hard capacity.
+- When a new exchange arrives at a full queue, the oldest one is paged out
+  rather than dropped.
+- Every page in mid-term memory and every fact in long-term memory started as an
+  exchange that fell off this end.
+
+A queue is arrival order, so this tier is an `EventLog`:
+
+- Appending is one call, and the oldest entry is the first one the log reads
+  back.
+- The sequence numbers keep climbing, because a log is append-only. An exchange
+  leaves the queue by its block being deleted, not by the log forgetting it.
+- That is the same shape as upstream, where the deque is a window over a
+  conversation that keeps going.
 """
 
 from __future__ import annotations

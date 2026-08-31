@@ -1,23 +1,27 @@
 """The store Mem0's memories live in, addressed by id and scoped by session.
 
-Upstream this is a vector collection. Each memory is one payload holding the
-text, its digest, and the session identifiers; `get`, `update`, and `delete`
-take a memory id; `get_all` and `search` take the identifiers and turn them
-into a filter. This module is that surface, with the two lookups split across
-the two Genie structures that fit them: the id is a `KeyedCollection` address,
-and the session is a path in the ownership tree.
+Upstream this is a vector collection:
 
-The split matters most for the operations a filter cannot express. Because each
-path segment owns the memories addressed below it, `drop` retires a user, an
-agent, or a single run with one call, and a narrower session is simply a deeper
-search root.
+- Each memory is one payload holding the text, its digest, and the session
+  identifiers.
+- `get`, `update`, and `delete` take a memory id.
+- `get_all` and `search` take the identifiers and turn them into a filter.
 
-Retrieval is deliberately two different things here, as it is upstream. A
-search takes a query and returns what matches its terms. The neighbor lookup
-the update phase makes takes a whole candidate fact and returns the stored
-memories closest to it. Genie selects candidates in both cases — the scope, the
-block type, and any metadata filter are the query — and the lamp scores them,
-because Genie supplies no ranking.
+This module is that surface, with the two lookups split across the two Genie
+structures that fit them: the id is a `KeyedCollection` address, and the session
+is a path in the ownership tree.
+
+- The split matters most for the operations a filter cannot express. Each path
+  segment owns the memories addressed below it, so `drop` retires a user, an
+  agent, or a single run with one call, and a narrower session is simply a
+  deeper search root.
+- Retrieval is deliberately two different things here, as it is upstream. A
+  search takes a query and returns what matches its terms. The neighbor lookup
+  the update phase makes takes a whole candidate fact and returns the stored
+  memories closest to it.
+- Genie selects candidates in both cases - the scope, the block type, and any
+  metadata filter are the query - and the lamp scores them, because Genie
+  supplies no ranking.
 """
 
 from __future__ import annotations
@@ -261,12 +265,13 @@ class MemoryStore:
     ) -> list[SearchHit]:
         """Return the memories in scope that match a query's terms.
 
-        Genie selects the candidates: the session path becomes a subtree scope,
-        the block type and any metadata filter go into the query, and one
-        search runs per query term. Scoring is the lamp's, because Genie's
-        portable text match is a substring test rather than a similarity
-        measure — so a candidate counts a term only when it appears in the
-        memory's own text, and the score is the share of terms that do.
+        - Genie selects the candidates. The session path becomes a subtree
+          scope, the block type and any metadata filter go into the query, and
+          one search runs per query term.
+        - Scoring is the lamp's, because Genie's portable text match is a
+          substring test rather than a similarity measure. A candidate counts a
+          term only when it appears in the memory's own text, and the score is
+          the share of terms that do.
 
         Args:
             session: Scope to search below.

@@ -1,10 +1,13 @@
 """Let a bounded handle follow symbolic mounts without widening its subtree.
 
-Mount access is a separate handle capability. A handle created without
-`allow_mounts` cannot list, resolve, or create mounts at all. A handle created
-with it may resolve a mount and receive a block outside its own subtree, but
-ordinary reads, searches, and deletes stay inside the boundary, and a sub-handle
-can never grant itself a capability its parent lacks.
+Mount access is a separate handle capability.
+
+- Without `allow_mounts`, a handle cannot list, resolve, or create mounts at
+  all.
+- With it, a handle may resolve a mount and receive a block outside its own
+  subtree.
+- Ordinary reads, searches, and deletes still stay inside the boundary.
+- A sub-handle can never grant itself a capability its parent lacks.
 
 Run from the repository root:
 

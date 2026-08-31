@@ -1,18 +1,20 @@
 """Reflection: answering from the highest layer that already knows.
 
-Hindsight's `reflect` runs an agentic loop with a fixed preference order. It
-looks for a mental model first, because a fresh one is a written answer and
-costs a single read. Failing that it reads observations, which are already
-consolidated. Only then does it fall back to raw facts, which it also uses to
-verify an observation that has gone stale.
+Hindsight's `reflect` runs an agentic loop with a fixed preference order:
 
-The lamp keeps that hierarchy and drops the model call: the tiers are consulted
+1. A mental model, because a fresh one is a written answer and costs a single
+   read.
+2. Observations, which are already consolidated.
+3. Raw facts, which it also uses to verify an observation that has gone stale.
+
+The lamp keeps that hierarchy and drops the model call. The tiers are consulted
 in the same order, the highest tier with something to say writes the answer, and
-everything consulted is reported as evidence. Because provenance is a
-`LineageDAG`, each piece of evidence can name what it was derived from without
-the reflection storing anything: a fact points back at its source document, an
-observation at its supporting facts, a mental-model version at the observations
-it summarized.
+everything consulted is reported as evidence.
+
+Provenance is a `LineageDAG`, so each piece of evidence can name what it was
+derived from without the reflection storing anything: a fact points back at its
+source document, an observation at its supporting facts, and a mental-model
+version at the observations it summarized.
 """
 
 from __future__ import annotations

@@ -1,35 +1,29 @@
 # Genie
 
-Genie gives developers typed building blocks for making memory systems. It
-provides memory blocks, parent/child ownership, typed relationships, scoped
-access, and optional structure views. Genie does not depend on any agent
-framework, database, memory taxonomy, retrieval strategy, or stored value type.
+Typed building blocks for developers who build their own memory systems: memory
+blocks, parent/child ownership, typed relationships, scoped access, and optional
+structure views. Genie does not depend on any agent framework, database, memory
+taxonomy, retrieval strategy, or stored value type.
 
 > Genie is alpha software. Public APIs may still change.
 
 ## What it provides
 
-- `MemoryBlock` values. Your application chooses their type, metadata, policy,
-  and version.
-- Parent/child ownership, which controls containment, subtree scope, and
-  lifecycle.
-- `MemoryLink` relationships, which do not imply ownership.
-- `MemoryHandle` objects that give agents and services only the access they
-  need.
-- Structure facades: `OwnershipTree`, `PropertyGraph`, `KeyedCollection`,
-  `EventLog`, `TemporalCollection`, `LineageDAG`, and `VersionedRecords`.
-- Storage protocols, with `InMemoryBackend`, `SQLiteBackend`, and the optional
-  `Neo4jBackend` and `RedisBackend`, plus `RoutedBackend`, which combines
-  several of them.
-- Separate policies, hooks, queries, and codecs.
+- **`MemoryBlock` values** — your application chooses the type, value, metadata, policy, and version.
+- **Parent/child ownership** — controls containment, subtree scope, and lifecycle.
+- **`MemoryLink` relationships** — directed and typed, and they do not imply ownership.
+- **`MemoryHandle` objects** — give agents and services only the access they need.
+- **Structure facades** — `OwnershipTree`, `PropertyGraph`, `KeyedCollection`, `EventLog`, `TemporalCollection`, `LineageDAG`, and `VersionedRecords`.
+- **Storage protocols** — `InMemoryBackend` and `SQLiteBackend` need no extra package; `PostgresBackend`, `Neo4jBackend`, and `RedisBackend` are optional; `RoutedBackend` combines several of them.
+- **Separate extension points** — policies, hooks, queries, and codecs.
 
 Genie does not run agents, plan their work, create embeddings, host a database,
 or define one memory schema for everyone.
 
 ## Install
 
-Genie needs Python 3.11 or newer. It has no required runtime dependencies. From
-a cloned repository:
+- **Python 3.11 or newer**, with no required runtime dependencies.
+- **From a cloned repository:**
 
 ```bash
 conda run -n "genie" python -m pip install -e .
@@ -59,22 +53,16 @@ results = agent_memory.search("concise")
 assert results[0].block.id == requirement.id
 ```
 
-A `Principal` is whoever is acting: a user, an agent, or a service. Genie
-checks it against each block's `MemoryPolicy` on every operation.
-
-New blocks use `MemoryPolicy.owner_private()` by default, so only the creator
-can `read`, `write`, `search`, `traverse_up`, and `traverse_down` them. Keep the
-full `Memory` object and the backend inside trusted application code. Give
-agents handles rooted at one block, or tools that you write yourself.
+- **`Principal`** is whoever is acting: a user, an agent, or a service. Genie checks it against each block's `MemoryPolicy` on every operation.
+- **Default policy** is `MemoryPolicy.owner_private()`, so only the creator can `read`, `write`, `search`, `traverse_up`, and `traverse_down` a new block.
+- **Trust boundary:** keep the full `Memory` object and the backend inside trusted application code. Give agents handles rooted at one block, or tools that you write yourself.
 
 ## Storage
 
-`InMemoryBackend` is the reference backend. It needs no extra packages, so it
-suits tests, examples, and prototypes. `SQLiteBackend` adds local persistent
-storage. The optional `Neo4jBackend` adds graph storage through the official
-Neo4j driver, and the optional `RedisBackend` adds key-value storage through the
-official Redis client. All three persistent backends support all seven structure
-facades. SQLite uses the driver that ships with Python:
+- **`InMemoryBackend`** is the reference backend. No extra packages, so it suits tests, examples, and prototypes.
+- **`SQLiteBackend`** adds local persistent storage through the driver that ships with Python. You do not need the SQLite command-line program.
+- **Optional adapters** need their extra: `genie[postgres]`, `genie[neo4j]`, or `genie[redis]`.
+- **Every persistent adapter** supports all seven structure facades.
 
 ```python
 from genie import Memory, SQLiteBackend
@@ -85,10 +73,8 @@ with SQLiteBackend("memory.db") as backend:
     memory.put(type="note", value={"text": "Persist this"})
 ```
 
-You do not need the SQLite command-line program. The [backend
-guide](genie/backend/README.md) explains the storage contracts, how each
-backend works, and what to think about in production. Install `genie[neo4j]` if
-you use Neo4j, or `genie[redis]` if you use Redis.
+The [backend guide](genie/backend/README.md) explains the storage contracts, how
+each adapter works, and what to think about in production.
 
 ## Model and structures
 
@@ -102,9 +88,9 @@ MemoryLink
   requirement --supports--> observation
 ```
 
-Ownership decides scope and lifecycle. Links describe relationships without
-ownership. Your application decides what block types, values, metadata, and
-links mean.
+- **Ownership** decides scope and lifecycle.
+- **Links** describe relationships without ownership.
+- **Meaning** of block types, values, metadata, and links is your application's choice.
 
 | Facade | Purpose |
 | --- | --- |
@@ -116,8 +102,8 @@ links mean.
 | `LineageDAG` | Derivation history, protected from cycles |
 | `VersionedRecords` | Stable identities and ordered revisions |
 
-All facades point at the same blocks. You can combine them freely, and they
-keep the normal handle scope and policy checks.
+All facades point at the same blocks. Combine them freely; they keep the normal
+handle scope and policy checks.
 
 ## Architecture
 
@@ -135,13 +121,10 @@ keep the normal handle scope and policy checks.
      Stores and indexes     chosen by the backend
 ```
 
-Only two layers are required: `Memory` and one backend object. Handles and
-structure facades are optional views over the same blocks, and a facade accepts
-either a `Memory` or a `MemoryHandle`. One backend may run several databases or
-indexes behind the same contract.
-
-Keep `Memory`, backends, policy engines, hooks, and codec registries in trusted
-code. Give agents rooted handles, or smaller tools that you define.
+- **Required layers:** `Memory` and one backend object.
+- **Optional layers:** handles and structure facades, which are views over the same blocks. A facade accepts either a `Memory` or a `MemoryHandle`.
+- **One backend object** may run several databases or indexes behind the same contract.
+- **Keep trusted:** `Memory`, backends, policy engines, hooks, and codec registries. Give agents rooted handles, or smaller tools that you define.
 
 ## Learn more
 
@@ -162,5 +145,5 @@ conda run -n "genie" python -m pytest
 conda run -n "genie" python -m compileall -q genie tests examples lamps
 ```
 
-Run `./scripts/test_full.sh` to run the whole suite against throwaway Neo4j and
-Redis containers. Any extra arguments are passed on to pytest.
+`./scripts/test_full.sh` runs the whole suite against throwaway containers for
+the server-backed adapters. Extra arguments are passed on to pytest.

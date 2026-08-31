@@ -1,18 +1,18 @@
 """Ask a facade which block it is bound to, and treat that block as memory.
 
-Container-based facades hold a reference to one ordinary memory block: a tree
-root, a collection, or a log. Each exposes the id as a plain attribute and the
-block itself as a property that re-reads storage, so the id stays cheap and
-stable while the property always reflects the block's current value.
-
-Because the container is ordinary memory, it can be renamed, searched, and
-policy-protected like anything else, and deleting it makes the facade report a
-missing container rather than returning stale results. Membership records name
-blocks by id and leave ownership alone, so a block bound into a facade stays
-where its parent put it and container-scoped search follows parents, not
-membership. Link-based facades such
-as `PropertyGraph` and `LineageDAG` bind to a relation instead, so they have no
-container block.
+- Container-based facades hold a reference to one ordinary memory block: a tree
+  root, a collection, or a log.
+- Each exposes the id as a plain attribute and the block itself as a property
+  that re-reads storage, so the id stays cheap and stable while the property
+  always reflects the block's current value.
+- The container is ordinary memory, so it can be renamed, searched, and
+  policy-protected like anything else. Deleting it makes the facade report a
+  missing container rather than returning stale results.
+- Membership records name blocks by id and leave ownership alone. A block bound
+  into a facade stays where its parent put it, and container-scoped search
+  follows parents, not membership.
+- Link-based facades such as `PropertyGraph` and `LineageDAG` bind to a relation
+  instead, so they have no container block.
 
 Run from the repository root:
 

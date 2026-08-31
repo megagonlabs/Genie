@@ -1,27 +1,32 @@
 """Procedural memory: the agent's own instructions, learned from feedback.
 
-This is the LangMem idea that has no counterpart in the other lamps. Semantic
-and episodic memory change what an agent knows; procedural memory changes how it
-behaves, and LangMem stores it as the agent's prompt. Past exchanges are
-annotated with feedback, an optimizer folds that feedback into the prompt, and
-the next run of the agent is governed by the result. Memory and configuration
-stop being separate things.
+This is the LangMem idea that has no counterpart in the other lamps.
 
-`VersionedRecords` is the structure that fits. A prompt is a stable identity, so
-the agent always reads "the current code-review prompt" rather than a specific
-text. Each optimization is a revision, so a prompt that has drifted somewhere
-unhelpful can be read back to the version before it. And `LineageDAG` edges from
-the annotated exchanges to the revision they produced answer the question a
-versioned prompt otherwise cannot: not just what changed, but which piece of
-feedback changed it.
+- Semantic and episodic memory change what an agent knows. Procedural memory
+  changes how it behaves, and LangMem stores it as the agent's prompt.
+- Past exchanges are annotated with feedback, an optimizer folds that feedback
+  into the prompt, and the next run of the agent is governed by the result. So
+  memory and configuration stop being separate things.
+
+`VersionedRecords` is the structure that fits:
+
+- A prompt is a stable identity, so the agent always reads "the current
+  code-review prompt" rather than a specific text.
+- Each optimization is a revision, so a prompt that has drifted somewhere
+  unhelpful can be read back to the version before it.
+- `LineageDAG` edges from the annotated exchanges to the revision they produced
+  answer the question a versioned prompt otherwise cannot: not just what
+  changed, but which piece of feedback changed it.
 
 Upstream a language model rewrites the prompt from the feedback, in one of three
 strategies. The lamp keeps the shape of the cheapest one, `prompt_memory`, which
-carries successful patterns forward from past interactions: feedback names a
-keyed rule, rules with the same key replace each other rather than piling up,
-and the prompt is the base text plus its rules in acquisition order. A revision
-is written only when the rule set actually changes, so feedback that repeats
-what the prompt already says leaves no version behind.
+carries successful patterns forward from past interactions:
+
+- Feedback names a keyed rule, and rules with the same key replace each other
+  rather than piling up.
+- The prompt is the base text plus its rules in acquisition order.
+- A revision is written only when the rule set actually changes, so feedback
+  that repeats what the prompt already says leaves no version behind.
 """
 
 from __future__ import annotations

@@ -1,24 +1,19 @@
 # Lamps
 
-A lamp is a runnable application-level memory pattern built from Genie. Some
-lamps take their ideas from other systems, but they are architectural examples.
-They are not compatibility layers, and they are not production implementations.
+A lamp is a runnable application-level memory pattern built from Genie.
 
-Each lamp keeps the main memory idea of the project it represents, plus one
-workflow that is typical of it. These guides call that original project
-*upstream*. It may replace model calls, specialized indexes,
-or production storage with plain application code, so that the example runs
-locally. Any extra Genie structure is marked as an addition rather than an
-upstream feature.
+- **Architectural examples, not products.** Some lamps take their ideas from other systems. They are not compatibility layers, and they are not production implementations.
+- **Each lamp keeps the main memory idea** of the project it represents, plus one workflow that is typical of it. These guides call that original project *upstream*.
+- **Model calls, specialized indexes, and production storage** may be replaced with plain application code, so that the example runs locally.
+- **Any extra Genie structure is marked as an addition** rather than an upstream feature.
 
 Each `lamps/<name>` package should:
 
-- explain its model mapping and the limits it chose;
-- keep taxonomy, retrieval, agent behavior, and other business logic outside
-  Genie core;
-- use only the structure facades that fit its model;
-- run from the repository root with no hidden or random state; and
-- keep its tests under `lamps/<name>/tests`.
+- **Explain** its model mapping and the limits it chose.
+- **Keep taxonomy, retrieval, agent behavior, and other business logic** outside Genie core.
+- **Use only the structure facades** that fit its model.
+- **Run from the repository root** with no hidden or random state.
+- **Keep its tests** under `lamps/<name>/tests`.
 
 ## Run and test
 
@@ -41,21 +36,17 @@ Put each lamp name in place of `<name>`:
 | Mem0 | `conda run -n "genie" python -m lamps.mem0.demo` | `conda run -n "genie" python -m pytest lamps/mem0/tests -q` |
 | MemoryOS | `conda run -n "genie" python -m lamps.memoryos.demo` | `conda run -n "genie" python -m pytest lamps/memoryos/tests -q` |
 
-Each demo prints its whole run and then exits. No lamp reads a clock, a network,
-or an API key, so running one again prints the same output. Pytest also finds
-all lamp tests through `pyproject.toml`, so `conda run -n "genie" python -m
-pytest lamps -q` runs every lamp at once.
+- **Each demo prints its whole run and then exits.**
+- **Every run prints the same output.** No lamp reads a clock, a network, or an API key.
+- **All lamps at once:** `conda run -n "genie" python -m pytest lamps -q`, because pytest finds every lamp test through `pyproject.toml`.
 
 ## Shared agent-demo format
 
-The agent lamps are deterministic, and they need no API key and no agent
-framework. Their named tools take and return JSON-compatible values, so an agent
-backed by a model could use the same boundary. The application code chooses the
-tool calls. Genie only supplies memory access and structures.
-
-Terminal output follows one format: title and purpose, Genie structures, tool
-definitions, agent answer, ordered calls, and a count per tool. Each lamp guide
-documents only its own stored model, workflow, results, and limits.
+- **Deterministic, with no API key and no agent framework.**
+- **Named tools take and return JSON-compatible values,** so an agent backed by a model could use the same boundary.
+- **The application code chooses the tool calls.** Genie only supplies memory access and structures.
+- **Terminal output follows one format:** title and purpose, Genie structures, tool definitions, agent answer, ordered calls, and a count per tool.
+- **Each lamp guide documents only its own** stored model, workflow, results, and limits.
 
 ## Included lamps
 

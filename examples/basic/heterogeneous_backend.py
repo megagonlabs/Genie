@@ -110,10 +110,13 @@ class GraphIndex:
     """Ownership edges and typed links held outside the block store.
 
     This class implements the `TraversalIndex` and `LinkStore` capability
-    protocols. It stores ids and links only, and reads every block it returns
-    back from the store that owns it. That is what lets topology live in one
-    database while block values live in another. Link storage is delegated to
-    `InMemoryLinkStore`, which stands in for a graph database's edge storage.
+    protocols.
+
+    - It stores ids and links only, and reads every block it returns back from
+      the store that owns it. That is what lets topology live in one database
+      while block values live in another.
+    - Link storage is delegated to `InMemoryLinkStore`, which stands in for a
+      graph database's edge storage.
 
     Attributes:
         blocks: Block store used to resolve ids into blocks.
@@ -294,11 +297,13 @@ class VectorIndex:
     This class implements the `SearchIndex` capability protocol and ranks by
     cosine similarity between the query vector and one vector per block.
 
-    A vector store holds embeddings and metadata, not ownership. Genie still
-    hands it a scope and a root id, so this index asks the graph index which
-    blocks are in scope before ranking anything. Skipping that step would rank
-    the whole corpus and leave `Memory` to discard almost every result, since
-    `Memory` reapplies the scope after the backend has already applied `limit`.
+    A vector store holds embeddings and metadata, not ownership.
+
+    - Genie still hands it a scope and a root id, so this index asks the graph
+      index which blocks are in scope before ranking anything.
+    - Skipping that step would rank the whole corpus and leave `Memory` to
+      discard almost every result, since `Memory` reapplies the scope after the
+      backend has already applied `limit`.
 
     Attributes:
         blocks: Block store used to resolve ids into blocks.

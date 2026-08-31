@@ -338,18 +338,18 @@ class MemoryHook:
     def on_suppressed(self, context: HookContext, suppression: Suppression) -> None:
         """Run when trusted code disables hook dispatch.
 
-        Every registered hook is told, whatever the window's reach, including
-        the hooks it is about to silence: a hook learns that it is going to
-        stop reporting before it does. The window is bounded by the terminal
-        event of the same operation, which every hook receives once dispatch is
-        restored, and operations performed inside it report the suppression as
-        their parent operation. A mandatory hook therefore records the window,
-        what happened during it, and its end.
-
-        Unlike the other observing callbacks, this one reports work that is not
-        decided yet. A failure here leaves dispatch enabled and the suppressed
-        body unrun, because the record of a suppression is the reason the
-        suppression is allowed at all.
+        - Every registered hook is told, whatever the window's reach, including
+          the hooks it is about to silence. A hook learns that it is going to
+          stop reporting before it does.
+        - The window is bounded by the terminal event of the same operation,
+          which every hook receives once dispatch is restored.
+        - Operations performed inside it report the suppression as their parent
+          operation, so a mandatory hook records the window, what happened
+          during it, and its end.
+        - Unlike the other observing callbacks, this one reports work that is
+          not decided yet. A failure here leaves dispatch enabled and the
+          suppressed body unrun, because the record of a suppression is the
+          reason the suppression is allowed at all.
 
         Args:
             context: Context of the suppression window, shared with its
@@ -368,14 +368,14 @@ class MemoryHook:
     ) -> None:
         """Run exactly once when a logical operation finishes.
 
-        Unlike the paired callbacks, this one runs for every operation that
-        starts, whether it commits, is refused, or fails. It is the right place
-        to close a span, record latency, and release state stashed by a before
-        callback, and it is the only callback that observes refusals and
-        failures on operations whose before callbacks never ran.
-
-        The reported `error` is the exception leaving the operation. Genie
-        never lets an exception raised here replace it.
+        - It runs for every operation that starts, whether it commits, is
+          refused, or fails. The paired callbacks do not.
+        - So it is the right place to close a span, record latency, and release
+          state stashed by a before callback.
+        - It is also the only callback that observes refusals and failures on
+          operations whose before callbacks never ran.
+        - The reported `error` is the exception leaving the operation. Genie
+          never lets an exception raised here replace it.
 
         Args:
             context: Context shared with the operation's other callbacks.

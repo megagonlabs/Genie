@@ -1,18 +1,22 @@
 """Genie structure facades wired to the Hindsight lamp's ownership tiers.
 
 A Hindsight memory bank is an isolated brain: one bank never reads another
-bank's memories. Here a bank is a root block plus a bounded `MemoryHandle`, and
-its internal separation — documents, extracted facts, entities, observations,
-and mental models — becomes ownership tiers below that root. Each tier anchors
-the facades that tier needs, so deleting a bank deletes everything in it and
-deleting a tier deletes the layer it holds.
+bank's memories.
 
-Two wiring choices carry most of the model. Facts join one `TemporalCollection`
-that holds both of Hindsight's time axes at once: the event time is when the
-bank learned the fact, and the validity interval is the period the fact
-describes. And observations and mental models are `VersionedRecords`, because
-both are refined rather than overwritten and both must be able to show what they
-used to say.
+- Here a bank is a root block plus a bounded `MemoryHandle`.
+- Its internal separation - documents, extracted facts, entities, observations,
+  and mental models - becomes ownership tiers below that root.
+- Each tier anchors the facades that tier needs, so deleting a bank deletes
+  everything in it and deleting a tier deletes the layer it holds.
+
+Two wiring choices carry most of the model:
+
+- Facts join one `TemporalCollection` that holds both of Hindsight's time axes
+  at once. The event time is when the bank learned the fact, and the validity
+  interval is the period the fact describes.
+- Observations and mental models are `VersionedRecords`, because both are
+  refined rather than overwritten and both must be able to show what they used
+  to say.
 """
 
 from __future__ import annotations

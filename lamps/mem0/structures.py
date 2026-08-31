@@ -1,25 +1,30 @@
 """Genie facades wired to the Mem0 lamp's three ownership tiers.
 
-Mem0 runs on two stores that know nothing about each other. A vector store
-holds one payload per memory, scoped by whichever of `user_id`, `agent_id`, and
-`run_id` the caller supplied, and a relational history table holds one row per
-change to any of them. An optional graph store holds entities and the
-relationships between them.
+Mem0 runs on stores that know nothing about each other:
 
-That split is what the three tiers below preserve, and it is why the same
-memory is reachable two ways. Its id is a `KeyedCollection` address, because
-`get`, `update`, and `delete` take an id and no scope. Its session is an
-ownership path, because a search does take a scope, and "filter on the ids I
-supplied" selects exactly the blocks a subtree scope does — with the difference
-that ownership also answers what happens to those memories when the user is
-retired.
+- A vector store holds one payload per memory, scoped by whichever of
+  `user_id`, `agent_id`, and `run_id` the caller supplied.
+- A relational history table holds one row per change to any of them.
+- An optional graph store holds entities and the relationships between them.
 
-The history tier carries two facades over the same event blocks. Anchored on
-the tier itself, `EventLog` is the journal in arrival order, which is the
-history table read whole. Anchored on one identity per memory, `VersionedRecords`
-is that memory's own history, which is what `Memory.history(memory_id)` returns.
-Both keep working after the memory is deleted, because the events are owned by
-this tier rather than by the memory they describe.
+That split is what the three tiers below preserve, and it is why the same memory
+is reachable two ways:
+
+- Its id is a `KeyedCollection` address, because `get`, `update`, and `delete`
+  take an id and no scope.
+- Its session is an ownership path, because a search does take a scope. "Filter
+  on the ids I supplied" selects exactly the blocks a subtree scope does, with
+  the difference that ownership also answers what happens to those memories when
+  the user is retired.
+
+The history tier carries two facades over the same event blocks:
+
+- `EventLog`, anchored on the tier itself, is the journal in arrival order,
+  which is the history table read whole.
+- `VersionedRecords`, anchored on one identity per memory, is that memory's own
+  history, which is what `Memory.history(memory_id)` returns.
+- Both keep working after the memory is deleted, because the events are owned by
+  this tier rather than by the memory they describe.
 """
 
 from __future__ import annotations

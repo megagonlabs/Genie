@@ -1,31 +1,37 @@
 """Persistent Redis backend implementing every Genie storage capability.
 
-Redis is a key-value store with server-side data structures, so this adapter
-keeps one JSON document per block and per link in a plain Redis string, and it
-keeps its own ordering, ownership, and reverse indexes in sorted sets, hashes,
-and sets. No Redis module such as RedisJSON is required.
+Storage layout:
+    Redis is a key-value store with server-side data structures. This adapter
+    keeps one JSON document per block and per link in a plain Redis string, and
+    keeps its own ordering, ownership, and reverse indexes in sorted sets,
+    hashes, and sets. No Redis module such as RedisJSON is required.
 
-Every write runs as one optimistic read-modify-write attempt. The read phase
-records the value of a shared mutation guard, and the commit phase re-checks
-that guard under `WATCH` before it applies the staged writes in one
-`MULTI`/`EXEC` block. Every commit replaces the guard with a fresh token, so an
-attempt that read an older value is retried instead of committing on stale
-reads. This gives the same serialized-writer behavior as SQLite and Neo4j, and
-it makes compound checks and writes atomic across backend instances.
+Writes:
+    Every write runs as one optimistic read-modify-write attempt. The read
+    phase records the value of a shared mutation guard. The commit phase
+    re-checks that guard under `WATCH` before it applies the staged writes in
+    one `MULTI`/`EXEC` block. Every commit replaces the guard with a fresh
+    token, so an attempt that read an older value is retried instead of
+    committing on stale reads. This gives the same serialized-writer behavior
+    as the relational and graph adapters, and it makes compound checks and
+    writes atomic across backend instances.
 
-Multi-command reads need the opposite guarantee: one consistent view. Redis has
-no multi-key snapshot, so commands sent one after another can straddle a write.
-A read scoped to one block, meaning its parent chain, its children, its subtree,
-or one `limit` page of a collection, therefore runs as one read-only Lua script
-through `EVAL_RO`. Redis runs a script from start to finish before it serves
-another client, so those reads never see half of a write and never retry. Reads
-that scan the dataset stay on the client side and keep the mutation-guard retry,
-because a long script would block every other client on a single-threaded server.
+Reads:
+    Multi-command reads need the opposite guarantee: one consistent view. Redis
+    has no multi-key snapshot, so commands sent one after another can straddle
+    a write. A read scoped to one block - its parent chain, its children, its
+    subtree, or one `limit` page of a collection - therefore runs as one
+    read-only Lua script through `EVAL_RO`. Redis runs a script from start to
+    finish before it serves another client, so those reads never see half of a
+    write and never retry. Reads that scan the dataset stay on the client side
+    and keep the mutation-guard retry, because a long script would block every
+    other client on a single-threaded server.
 
-Search follows the same split. A search narrowed to one block, to its subtree, or
-to its parent chain reads through the block-scoped path. A global search, and a
-search over the links of one block, keep the mutation guard, because neither has
-a bound on how much it reads.
+Search:
+    Search follows the same split. A search narrowed to one block, to its
+    subtree, or to its parent chain reads through the block-scoped path. A
+    global search, and a search over the links of one block, keep the mutation
+    guard, because neither has a bound on how much it reads.
 """
 
 from __future__ import annotations
@@ -85,12 +91,13 @@ _MAX_BACKOFF_SECONDS = 0.05
 # which this adapter does not support.
 _CLUSTER_REPLY_CODES = frozenset({"ASK", "CROSSSLOT", "MOVED"})
 
-# Read-only Lua script behind `contains`. `KEYS[1]` is declared so the call
-# names a key it reads. The script builds every key it reads from the prefix in
-# `ARGV[1]`, so that layout must stay in step with `RedisBackend._block_key`.
-# `ARGV[2]` is the subtree root id and `ARGV[3]` is the candidate block id. The
-# walk mirrors `RedisBackend._contains`, including its guard against a cycle in
-# stored parent ids.
+# Read-only Lua script behind `contains`.
+# - `KEYS[1]` is declared so the call names a key it reads.
+# - Every key is built from the prefix in `ARGV[1]`, so that layout must stay in
+#   step with `RedisBackend._block_key`.
+# - `ARGV[2]` is the subtree root id, `ARGV[3]` the candidate block id.
+# - The walk mirrors `RedisBackend._contains`, including its guard against a
+#   cycle in stored parent ids.
 _CONTAINS_SCRIPT = """
 local prefix = ARGV[1]
 local root_id = ARGV[2]
@@ -125,13 +132,16 @@ end
 """
 
 # Read-only Lua script behind `ancestors` and behind an `ANCESTORS` scoped
-# search. `ARGV[1]` is the key prefix and `ARGV[2]` is the block to start from.
-# The reply is the stored document of that block followed by the document of each
-# ancestor, nearest parent first, and it is empty when the starting block is
-# gone. `ancestors` drops the first document and the scoped search keeps it, so
-# one script serves both reads. The walk mirrors
-# `RedisBackend._ancestor_documents`, including its guard against a cycle in
-# stored parent ids and its stop at a parent id that no longer resolves.
+# search.
+# - `ARGV[1]` is the key prefix, `ARGV[2]` the block to start from.
+# - The reply is the stored document of that block followed by the document of
+#   each ancestor, nearest parent first. It is empty when the starting block is
+#   gone.
+# - One script serves both reads: `ancestors` drops the first document and the
+#   scoped search keeps it.
+# - The walk mirrors `RedisBackend._ancestor_documents`, including its guard
+#   against a cycle in stored parent ids and its stop at a parent id that no
+#   longer resolves.
 _ANCESTORS_SCRIPT = """
 local prefix = ARGV[1]
 local block_id = ARGV[2]
@@ -158,11 +168,12 @@ end
 return documents
 """
 
-# Read-only Lua script behind `children`. `ARGV[1]` is the key prefix and
-# `ARGV[2]` is the parent block. The reply is the stored document of each direct
-# child, in the creation order the child sorted set keeps. Like
-# `RedisBackend._block_documents`, a child id whose document is gone is skipped
-# instead of returned as a hole.
+# Read-only Lua script behind `children`.
+# - `ARGV[1]` is the key prefix, `ARGV[2]` the parent block.
+# - The reply is the stored document of each direct child, in the creation order
+#   the child sorted set keeps.
+# - A child id whose document is gone is skipped instead of returned as a hole,
+#   like `RedisBackend._block_documents`.
 _CHILDREN_SCRIPT = """
 local prefix = ARGV[1]
 local block_id = ARGV[2]
@@ -177,21 +188,22 @@ end
 return documents
 """
 
-# Read-only Lua script behind `list_links`. `ARGV[1]` is the key prefix,
-# `ARGV[2]` is the block to inspect, and `ARGV[3]` is `"out"`, `"in"`, or
-# `"both"`. `ARGV[4]` is `"1"` when the relation filter applies and `"0"` when it
-# does not, and `ARGV[5]` carries that relation. The filter needs its own flag
-# because an empty string is a valid relation.
-#
-# An endpoint sorted set stores the member that `_identity(link_id, source_id,
-# target_id, relation)` builds, so the script reads the relation from the member
-# and fetches only the documents it will return. The reply is the stored document
-# of each matching link in creation order. For `"both"` the script merges the two
-# endpoint sets on the member and then orders them by the stored `storage_order`
-# score, which is what `RedisBackend._connected_link_members` does on the client.
-# That score is a strictly increasing counter, so two different links never tie.
-# A link whose document is gone is skipped, matching
-# `RedisBackend._link_documents`.
+# Read-only Lua script behind `list_links`.
+# - `ARGV[1]` is the key prefix, `ARGV[2]` the block to inspect, and `ARGV[3]` is
+#   `"out"`, `"in"`, or `"both"`.
+# - `ARGV[4]` is `"1"` when the relation filter applies and `"0"` when it does
+#   not, and `ARGV[5]` carries that relation. The filter needs its own flag
+#   because an empty string is a valid relation.
+# - An endpoint sorted set stores the member that `_identity(link_id, source_id,
+#   target_id, relation)` builds, so the script reads the relation from the
+#   member and fetches only the documents it will return.
+# - The reply is the stored document of each matching link in creation order.
+# - For `"both"` the script merges the two endpoint sets on the member, then
+#   orders them by the stored `storage_order` score, which is what
+#   `RedisBackend._connected_link_members` does on the client. That score is a
+#   strictly increasing counter, so two different links never tie.
+# - A link whose document is gone is skipped, matching
+#   `RedisBackend._link_documents`.
 _LIST_LINKS_SCRIPT = """
 local prefix = ARGV[1]
 local block_id = ARGV[2]
@@ -234,16 +246,19 @@ return documents
 """
 
 # Read-only Lua script behind `list_temporal_entries` and behind the first page
-# of `query_temporal_entries`. `ARGV[1]` is the key prefix, `ARGV[2]` is the
-# collection, `ARGV[3]` is the lex range start that `_temporal_lex_start` built,
-# and `ARGV[4]` is the page limit. The reply has two parts: how many block ids
-# the page scanned, and a flat list of block id and stored payload, one pair per
-# entry, so the caller can rebuild entries that carry their own block id. An id
-# whose payload is gone is skipped, matching `RedisBackend._temporal_entries`,
-# which is why the scanned count is reported on its own: it is the only value
-# that tells the caller whether the page reached the end of the collection. The
-# page is read one field at a time instead of with `HMGET`, because `limit` comes
-# from the caller and `unpack` on a very large page would overflow the Lua stack.
+# of `query_temporal_entries`.
+# - `ARGV[1]` is the key prefix, `ARGV[2]` the collection, `ARGV[3]` the lex
+#   range start that `_temporal_lex_start` built, and `ARGV[4]` the page limit.
+# - The reply has two parts: how many block ids the page scanned, and a flat
+#   list of block id and stored payload, one pair per entry, so the caller can
+#   rebuild entries that carry their own block id.
+# - An id whose payload is gone is skipped, matching
+#   `RedisBackend._temporal_entries`. That is why the scanned count is reported
+#   on its own: it is the only value that tells the caller whether the page
+#   reached the end of the collection.
+# - The page is read one field at a time instead of with `HMGET`, because
+#   `limit` comes from the caller and `unpack` on a very large page would
+#   overflow the Lua stack.
 _LIST_TEMPORAL_ENTRIES_SCRIPT = """
 local prefix = ARGV[1]
 local collection_id = ARGV[2]
@@ -261,19 +276,20 @@ end
 return {#block_ids, entries}
 """
 
-# Read-only Lua script behind `descendants`. `ARGV[1]` is the key prefix and
-# `ARGV[2]` is the subtree root. The reply has two flat lists: the parent and
-# child of every ownership edge the walk followed, and the id and stored document
-# of every block it could read. The caller turns the edges back into depth-first
-# creation order, so that ordering lives only in `_depth_first_ids`.
-#
-# The walk mirrors `RedisBackend._descendant_documents`. It reads child ids from
-# the child sorted sets, which stay the authority on child order, and it keeps
-# following a child whose document is gone so a hole in the middle of a subtree
-# does not hide the blocks below it. A visited set stops a cycle in stored
-# parent ids. This is the one scripted read whose work follows the size of the
-# subtree rather than one block, so it is also the one that can hold the server
-# for a noticeable time.
+# Read-only Lua script behind `descendants`.
+# - `ARGV[1]` is the key prefix, `ARGV[2]` the subtree root.
+# - The reply has two flat lists: the parent and child of every ownership edge
+#   the walk followed, and the id and stored document of every block it could
+#   read. The caller turns the edges back into depth-first creation order, so
+#   that ordering lives only in `_depth_first_ids`.
+# - The walk mirrors `RedisBackend._descendant_documents`. Child ids come from
+#   the child sorted sets, which stay the authority on child order.
+# - A child whose document is gone is still followed, so a hole in the middle of
+#   a subtree does not hide the blocks below it. A visited set stops a cycle in
+#   stored parent ids.
+# - This is the one scripted read whose work follows the size of the subtree
+#   rather than one block, so it is also the one that can hold the server for a
+#   noticeable time.
 _DESCENDANTS_SCRIPT = """
 local prefix = ARGV[1]
 local root_id = ARGV[2]
@@ -312,11 +328,13 @@ return {edges, documents}
 """
 
 # Read-only Lua scripts by name, with the digest each call sends first. Three
-# rules apply to every script added here. Build key names exactly like the
-# matching `_*_key` helper. Read only keys that start with the prefix in
-# `ARGV[1]`, so one script never reaches outside the Genie key namespace. And
-# never put a `nil` or a `false` inside a table you return: the reply conversion
-# stops the list at the first one, which would silently drop the rest of a page.
+# rules apply to every script added here.
+# - Build key names exactly like the matching `_*_key` helper.
+# - Read only keys that start with the prefix in `ARGV[1]`, so one script never
+#   reaches outside the Genie key namespace.
+# - Never put a `nil` or a `false` inside a table you return. The reply
+#   conversion stops the list at the first one, which would silently drop the
+#   rest of a page.
 _LUA_SCRIPTS: dict[str, str] = {
     "ancestors": _ANCESTORS_SCRIPT,
     "children": _CHILDREN_SCRIPT,
@@ -334,53 +352,61 @@ class RedisBackend:
     The `redis` package is an optional dependency. Install it with
     `pip install 'genie[redis]'` before constructing this backend.
 
-    The backend implements the required `MemoryBackend` behavior and every
-    optional structure capability. It owns the client it creates so it can
-    require decoded string replies, and `close()` releases that client after
-    active operations finish.
+    Capabilities:
+        - Implements the required `MemoryBackend` behavior and every optional
+          structure capability.
+        - Owns the client it creates, so it can require decoded string replies.
+          `close()` releases that client after active operations finish.
 
-    A read scoped to one block, meaning its parent chain, its children, its
-    subtree, or one `limit` page of a collection, runs as one read-only Lua
-    script when the server supports `EVAL_RO`, so a write that lands beside it
-    cannot tear its view. A server without that support, and
-    a deployment that blocks scripting, fall back to the mutation-guard retry.
+    Reads:
+        - A read scoped to one block - its parent chain, its children, its
+          subtree, or one `limit` page of a collection - runs as one read-only
+          Lua script when the server supports `EVAL_RO`, so a write that lands
+          beside it cannot tear its view.
+        - A server without that support, and a deployment that blocks
+          scripting, fall back to the mutation-guard retry.
 
-    Every Genie key starts with `key_prefix`, so several Genie datasets can
-    share one Redis database. Write through the backend: writing to these keys
-    directly can skip the reference, temporal, and cycle checks, and it does
-    not touch the mutation guard that protects concurrent Genie writes.
+    Key namespace:
+        - Every Genie key starts with `key_prefix`, so several Genie datasets
+          can share one Redis database.
+        - Write through the backend. Writing to these keys directly can skip
+          the reference, temporal, and cycle checks, and it does not touch the
+          mutation guard that protects concurrent Genie writes.
 
-    Genie keys carry no expiry, so the server must not evict them. Construction
-    refuses a server that has a memory limit together with an `allkeys-*` value
-    for `maxmemory-policy`, because Redis evicts one key at a time while one
-    block spans a stored document plus several index entries. Use `noeviction`,
-    or pass `verify_eviction_policy=False` to accept the risk.
+    Server requirements:
+        - No eviction. Genie keys carry no expiry, so construction refuses a
+          server that has a memory limit together with an `allkeys-*` value for
+          `maxmemory-policy`. Redis evicts one key at a time while one block
+          spans a stored document plus several index entries. Use `noeviction`,
+          or pass `verify_eviction_policy=False` to accept the risk.
+        - Point `url` at the primary. Construction refuses a connection that
+          lands on a replica, because a replica refuses every write and its
+          reads can lag the primary by any amount with no signal. A primary
+          that has replicas passes. Pass `verify_server_role=False` to open a
+          backend against a replica on purpose.
+        - Redis Cluster is not a supported target. The backend opens a
+          standalone client, which does not follow the `MOVED` and `ASK`
+          replies a cluster node sends for a key it does not hold. A cluster
+          reply is reported as `UnsupportedOperation`, because retrying it
+          cannot help.
 
-    Point `url` at the primary. Construction refuses a connection that lands on
-    a replica, because a replica refuses every write and its reads can lag the
-    primary by any amount with no signal. A primary that has replicas passes.
-    Pass `verify_server_role=False` to open a backend against a replica on
-    purpose.
-
-    Redis Cluster is not a supported target. The backend opens a standalone
-    client, which does not follow the `MOVED` and `ASK` replies a cluster node
-    sends for a key it does not hold. A cluster reply is reported as
-    `UnsupportedOperation`, because retrying it cannot help.
-
-    A dropped connection is retried inside the client. Connections are pooled,
-    so one can go stale while it sits idle: a server idle timeout, a load
-    balancer, a restart, or a failover closes it without telling the client.
-    `health_check_interval` makes the client check an idle connection with a
-    `PING` before it reuses it, and `transport_retries` lets a dropped
-    connection reconnect instead of reaching the caller as `BackendUnavailable`.
-    This is separate from `max_retry_time`, which covers optimistic conflicts
-    only. A retry never sends the same write command twice: every Genie write
-    runs inside `WATCH`/`MULTI`/`EXEC`, where the client reports a dropped
-    connection as a watch conflict, and the backend answers that with a fresh
-    attempt that re-reads current state. A connection that dies after `EXEC`
-    ran but before its reply arrived leaves that outcome unknown, so the fresh
-    attempt can repeat an operation with nothing to compare against, such as
-    `append_log_entry`.
+    Connection health:
+        - Connections are pooled, so one can go stale while it sits idle: a
+          server idle timeout, a load balancer, a restart, or a failover closes
+          it without telling the client.
+        - `health_check_interval` makes the client check an idle connection
+          with a `PING` before it reuses it. `transport_retries` lets a dropped
+          connection reconnect instead of reaching the caller as
+          `BackendUnavailable`. Both are separate from `max_retry_time`, which
+          covers optimistic conflicts only.
+        - A retry never sends the same write command twice. Every Genie write
+          runs inside `WATCH`/`MULTI`/`EXEC`, where the client reports a
+          dropped connection as a watch conflict, and the backend answers that
+          with a fresh attempt that re-reads current state.
+        - A connection that dies after `EXEC` ran but before its reply arrived
+          leaves that outcome unknown, so the fresh attempt can repeat an
+          operation with nothing to compare against, such as
+          `append_log_entry`.
 
     Attributes:
         url: Redis URL this backend connected to.
@@ -1252,17 +1278,18 @@ class RedisBackend:
     ) -> list[TemporalEntry]:
         """Return one temporal page matching every supplied time filter.
 
-        Redis cannot apply these filters server-side, so the backend pages
-        through the collection in block-id order and matches each page in
-        Python until it fills `limit`.
-
-        On a server that supports read-only scripts the first page is one
-        atomic script. A query answered inside that page, because the page
-        filled `limit` or because it reached the end of the collection, is done
-        after that single read: it never takes the mutation guard and never
-        retries. A collection larger than one page falls back to the guarded
-        scan, which restarts from the start when a Genie write lands in the
-        middle of it.
+        Cost:
+            - Redis cannot apply these filters server-side, so the backend
+              pages through the collection in block-id order and matches each
+              page in Python until it fills `limit`.
+            - On a server that supports read-only scripts the first page is one
+              atomic script. A query answered inside that page - because the
+              page filled `limit`, or because it reached the end of the
+              collection - is done after that single read. It never takes the
+              mutation guard and never retries.
+            - A collection larger than one page falls back to the guarded scan,
+              which restarts from the start when a Genie write lands in the
+              middle of it.
 
         Args:
             collection_id: Id of the temporal collection.
@@ -1635,12 +1662,12 @@ class RedisBackend:
     def _read_script(self, name: str, *, keys: Sequence[str], args: Sequence[object]) -> Any:
         """Run one read-only Lua script as a single atomic server step.
 
-        Redis runs a script from start to finish before it serves another
-        client, so the script sees one consistent state. That removes both the
-        mutation guard and the retry that a multi-command read needs. Only use
-        this for a read scoped to one block or to one `limit` page, never for a
-        scan of the dataset, because the script holds the whole server for as
-        long as it runs.
+        - Redis runs a script from start to finish before it serves another
+          client, so the script sees one consistent state. That removes both
+          the mutation guard and the retry that a multi-command read needs.
+        - Only use this for a read scoped to one block or to one `limit` page,
+          never for a scan of the dataset, because the script holds the whole
+          server for as long as it runs.
 
         Args:
             name: Name of a script in `_LUA_SCRIPTS`.
@@ -1795,29 +1822,36 @@ class RedisBackend:
     def _verify_server_role(self) -> None:
         """Refuse a connection that lands on a replica.
 
-        A replica accepts no writes, so it answers every Genie write with a
-        read-only error that reaches the caller as `BackendReadOnly`. Reads are
-        the silent case. With `initialize_schema=False` the backend opens,
-        never writes, and serves whatever the replica has replicated, which can
-        lag the primary by any amount and carries no signal at all.
+        Why:
+            - A replica accepts no writes, so it answers every Genie write with
+              a read-only error that reaches the caller as `BackendReadOnly`.
+            - Reads are the silent case. With `initialize_schema=False` the
+              backend opens, never writes, and serves whatever the replica has
+              replicated, which can lag the primary by any amount and carries
+              no signal at all.
+            - It refuses connecting to a replica, not a deployment that has
+              replicas. A primary that has replicas reports the primary role
+              and passes.
 
-        The check refuses connecting to a replica, not a deployment that has
-        replicas. A primary that has replicas reports the primary role and
-        passes.
+        How:
+            - The role comes from `INFO replication` rather than `ROLE`, for
+              the same reason the eviction check avoids `CONFIG GET`: `INFO` is
+              the command a managed or restricted deployment is most likely to
+              leave available.
+            - Only a reading that proves the server is a replica fails. A
+              blocked `INFO`, a client without it, a missing field, an
+              unreadable value, and an unrecognized role all leave the role
+              unknown and pass, so the check never rejects a server that would
+              otherwise work.
 
-        The role comes from `INFO replication` rather than `ROLE`, for the same
-        reason the eviction check avoids `CONFIG GET`: `INFO` is the command a
-        managed or restricted deployment is most likely to leave available.
-        Only a reading that proves the server is a replica fails the check. A
-        blocked `INFO`, a client without it, a missing field, an unreadable
-        value, and an unrecognized role all leave the role unknown and pass, so
-        the check never rejects a server that would otherwise work.
-
-        The check runs once against the server that answered. A failover that
-        demotes this server after construction is not caught, and its writes
-        then fail with `BackendReadOnly`. A proxy that spreads one URL over a
-        primary and its replicas is not caught either. The check rejects a
-        wrong target; it does not make reads across replicas consistent.
+        Limits:
+            - The check runs once against the server that answered. A failover
+              that demotes this server after construction is not caught, and
+              its writes then fail with `BackendReadOnly`.
+            - A proxy that spreads one URL over a primary and its replicas is
+              not caught either.
+            - The check rejects a wrong target. It does not make reads across
+              replicas consistent.
 
         Raises:
             UnsupportedOperation: If the server reports a replica role.
@@ -1848,23 +1882,27 @@ class RedisBackend:
     def _verify_eviction_policy(self) -> None:
         """Refuse a server that may drop Genie keys to reclaim memory.
 
-        Genie sets no expiry on its keys, so only an `allkeys-*` value for
-        `maxmemory-policy` together with a memory limit can remove them. A
-        `volatile-*` policy finds nothing to evict and answers an over-limit
-        write with the out-of-memory error, which reaches the caller as
-        `BackendCapacityExceeded`. Eviction is worse than that error, because
-        Redis drops one key at a time while one Genie block spans a stored
-        document plus several index entries, so a dropped document leaves an
-        index entry pointing at data that is gone.
+        Why:
+            - Genie sets no expiry on its keys, so only an `allkeys-*` value
+              for `maxmemory-policy` together with a memory limit can remove
+              them.
+            - A `volatile-*` policy finds nothing to evict and answers an
+              over-limit write with the out-of-memory error, which reaches the
+              caller as `BackendCapacityExceeded`.
+            - Eviction is worse than that error, because Redis drops one key at
+              a time while one Genie block spans a stored document plus several
+              index entries. A dropped document leaves an index entry pointing
+              at data that is gone.
 
-        The two values come from `INFO memory` rather than `CONFIG GET`,
-        because managed Redis services often disable or rename `CONFIG` and a
-        restricted user may not be allowed to run it. Only a reading that
-        proves the server evicts fails the check. A blocked `INFO`, a client
-        without it, a missing field, and an unreadable value all leave the
-        setting unknown and pass, so the check never rejects a server that
-        would otherwise work. The check runs once, so a policy changed after
-        construction is not caught.
+        How:
+            - The two values come from `INFO memory` rather than `CONFIG GET`,
+              because managed Redis services often disable or rename `CONFIG`
+              and a restricted user may not be allowed to run it.
+            - Only a reading that proves the server evicts fails. A blocked
+              `INFO`, a client without it, a missing field, and an unreadable
+              value all leave the setting unknown and pass.
+            - The check runs once, so a policy changed after construction is
+              not caught.
 
         Raises:
             UnsupportedOperation: If the server reports a memory limit and an
@@ -1904,12 +1942,12 @@ class RedisBackend:
     def _detect_readonly_scripts(self) -> bool:
         """Return whether the server can run read-only Lua scripts.
 
-        The check runs a trivial `EVAL_RO` instead of comparing a reported
-        version string, because that tests the capability the reads need. A
-        server older than Redis 7.0, a client without `eval_ro`, and a
-        deployment that blocks scripting all answer with a command error, and
-        the affected reads then use the mutation guard instead. A transport
-        failure still reaches the caller.
+        - The check runs a trivial `EVAL_RO` instead of comparing a reported
+          version string, because that tests the capability the reads need.
+        - A server older than Redis 7.0, a client without `eval_ro`, and a
+          deployment that blocks scripting all answer with a command error. The
+          affected reads then use the mutation guard instead.
+        - A transport failure still reaches the caller.
 
         Returns:
             `True` when a read-only script ran.
@@ -1953,33 +1991,34 @@ class RedisBackend:
     def _transact(self, operation: Callable[[_RedisTransaction], _T]) -> _T:
         """Run one optimistic read-modify-write attempt until it commits.
 
-        The operation reads current state and stages its writes. The commit
-        block watches the mutation guard, re-checks the value seen by the read
-        phase, and then applies every staged write together.
+        Flow:
+            - The operation reads current state and stages its writes.
+            - The commit block watches the mutation guard, re-checks the value
+              seen by the read phase, then applies every staged write together.
 
-        Every Genie write goes through this commit block, and it must stay that
-        way. The client may retry a dropped connection, and it refuses to repeat
-        a command only while a watch is open, where it raises a watch conflict
-        instead. A write sent outside this block could be applied twice.
+        Every Genie write must go through this commit block. The client may
+        retry a dropped connection, and it refuses to repeat a command only
+        while a watch is open, where it raises a watch conflict instead. A
+        write sent outside this block could be applied twice.
 
-        A commit ends by writing a fresh token into the guard, which lets a
-        retry recognize its own committed work. A connection that dies during
-        `EXEC` reaches this loop as a watch conflict whether or not the server
-        applied the commit, and re-running the operation would apply it a
-        second time. So each attempt first reads the guard: when it still holds
-        the token of the previous attempt, that commit landed and its result is
-        returned unchanged.
-
-        The check proves a commit only while no other client has committed
-        since, because the next commit replaces the token. Under concurrent
-        writes a lost `EXEC` reply is retried the same way it was before, so
-        this narrows the window rather than closing it. See the adapter README
-        for what a repeated operation does.
-
-        The same check runs once more when the retry budget is spent, because
-        the last attempt of a write can lose its reply just like any other. A
-        commit the token still proves is reported as the success it was instead
-        of as `BackendBusy`.
+        Recognizing a lost commit reply:
+            - A commit ends by writing a fresh token into the guard, which lets
+              a retry recognize its own committed work.
+            - A connection that dies during `EXEC` reaches this loop as a watch
+              conflict whether or not the server applied the commit, and
+              re-running the operation would apply it a second time. So each
+              attempt first reads the guard: when it still holds the token of
+              the previous attempt, that commit landed and its result is
+              returned unchanged.
+            - The token proves a commit only while no other client has
+              committed since, because the next commit replaces it. Under
+              concurrent writes a lost `EXEC` reply is retried the same way it
+              was before, so this narrows the window rather than closing it.
+              See the adapter README for what a repeated operation does.
+            - The same check runs once more when the retry budget is spent,
+              because the last attempt of a write can lose its reply just like
+              any other. A commit the token still proves is reported as the
+              success it was instead of as `BackendBusy`.
         """
 
         guard = self._guard_key()
@@ -3364,12 +3403,13 @@ def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[Bas
 def _transport_options(redis_module: Any, retries: int) -> dict[str, Any]:
     """Return the client options that reconnect after a dropped connection.
 
-    The client retries a dropped connection only when it is given both a retry
-    policy and the error types that policy applies to, so this sets the two
-    options together. Only `ConnectionError` is listed. A command that timed out
-    may still be running on the server, and sending it again would spend the
-    socket timeout a second time, so a timeout stays one budget and reaches the
-    caller as `BackendBusy`.
+    - The client retries a dropped connection only when it is given both a
+      retry policy and the error types that policy applies to, so this sets the
+      two options together.
+    - Only `ConnectionError` is listed. A command that timed out may still be
+      running on the server, and sending it again would spend the socket
+      timeout a second time. So a timeout stays one budget and reaches the
+      caller as `BackendBusy`.
 
     Args:
         redis_module: The imported `redis` package.

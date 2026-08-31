@@ -1,15 +1,19 @@
 """One read across all four tiers, which is what MemoryOS hands a prompt.
 
 MemoryOS retrieves before it answers, and it retrieves from everywhere at once:
-the whole short-term queue verbatim, the mid-term pages whose segments match the
-query, and the matching entries from each knowledge base, with the current
-profile alongside. Upstream runs the three searching halves in a thread pool,
-which changes the latency and not the result; here they run in order.
 
-The one thing to keep in mind reading this is that retrieval is not read-only.
-Reaching a mid-term segment counts as a visit, which raises its heat, which is
-what eventually promotes it. So the queries an agent asks are part of what its
-memory decides to keep -- and that is the mechanism, not a side effect.
+- the whole short-term queue verbatim;
+- the mid-term pages whose segments match the query; and
+- the matching entries from each knowledge base, with the current profile
+  alongside.
+
+Upstream runs the three searching halves in a thread pool, which changes the
+latency and not the result. Here they run in order.
+
+Retrieval is not read-only. Reaching a mid-term segment counts as a visit, which
+raises its heat, which is what eventually promotes it. So the queries an agent
+asks are part of what its memory decides to keep, and that is the mechanism, not
+a side effect.
 
 Retrieval is also where the lamp stops. The step after it upstream is the
 generation module, which formats all of this into a prompt and calls a model.

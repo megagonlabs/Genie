@@ -1,24 +1,29 @@
 """MemoryOS's slow tier: the profile and the two knowledge bases.
 
 Long-term memory is the only tier that is not a window. Nothing lands here
-because it arrived; it lands here because a mid-term segment got hot enough for
+because it arrived. It lands here because a mid-term segment got hot enough for
 an analysis to read it, and the analysis decided that something in it was worth
-keeping after the dialogue itself is gone. MemoryOS keeps three things: a profile
-of who the user is, a capped base of facts about them, and a separate capped base
-of what the assistant learned about doing its job.
+keeping after the dialogue itself is gone.
 
-The two knowledge bases are `EventLog`s with a capacity, which is the deque with
-`maxlen` upstream: writing past the cap drops the oldest entry. The profile is a
-`VersionedRecords` identity instead, and that is a deliberate difference worth
-naming. Upstream calls `update_user_profile(..., merge=False)`, so each analysis
-overwrites the profile and the reading it replaced is gone. A revision log costs
-nothing extra here and keeps them, so the question "what did it think about her
-before this?" has an answer.
+MemoryOS keeps three things here:
 
-Every fact also carries the pages it was extracted from, both as ids in its own
-record and as `memoryos.extracted_from` edges. Upstream stores a knowledge entry
-as text, a timestamp, and an embedding, so it cannot answer where a fact came
-from at all.
+- a profile of who the user is;
+- a capped base of facts about them; and
+- a separate capped base of what the assistant learned about doing its job.
+
+How they map:
+
+- The two knowledge bases are `EventLog`s with a capacity, which is the deque
+  with `maxlen` upstream. Writing past the cap drops the oldest entry.
+- The profile is a `VersionedRecords` identity instead, and that is a deliberate
+  difference. Upstream calls `update_user_profile(..., merge=False)`, so each
+  analysis overwrites the profile and the reading it replaced is gone. A
+  revision log costs nothing extra here and keeps them, so "what did it think
+  before this?" has an answer.
+- Every fact carries the pages it was extracted from, both as ids in its own
+  record and as `memoryos.extracted_from` edges. Upstream stores a knowledge
+  entry as text, a timestamp, and an embedding, so it cannot answer where a fact
+  came from at all.
 """
 
 from __future__ import annotations
@@ -247,11 +252,12 @@ class LongTermMemory:
     def sources_of(self, block: MemoryBlock) -> list[MemoryBlock]:
         """Return the pages a stored fact or profile revision was taken from.
 
-        The record keeps the page ids it read, and the graph keeps edges to the
-        pages themselves. The two can disagree, because a page evicted from
-        mid-term memory takes its edges with it while the ids stay written down.
-        That difference is the useful part: the ids say what the analysis read,
-        the edges say what can still be read back.
+        - The record keeps the page ids it read, and the graph keeps edges to
+          the pages themselves.
+        - The two can disagree, because a page evicted from mid-term memory
+          takes its edges with it while the ids stay written down.
+        - That difference is the useful part. The ids say what the analysis
+          read, and the edges say what can still be read back.
 
         Args:
             block: A knowledge entry or profile revision block.

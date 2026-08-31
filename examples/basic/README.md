@@ -1,8 +1,8 @@
 # Basic examples
 
 Each script introduces one core feature. Together they cover the main
-application-facing API, and none of them needs an agent framework or an external
-service:
+application-facing API. None of them needs an agent framework or an external
+service.
 
 | Example | Components | Capabilities shown |
 | --- | --- | --- |
@@ -24,13 +24,8 @@ service:
 | `heterogeneous_backend.py` | `RoutedBackend`, `SQLiteBackend`, `TraversalIndex`/`SearchIndex`/`LinkStore` | One backend assembled from SQL blocks, a graph topology index, and a vector search index; resolving query scope inside a search index; keeping derived indexes current from a hook |
 | `basic_usage.py` | Core components together | Application-owned memory and bounded agent tools, working together |
 
-`hook_audit.py`, `write_hooks.py`, and `search_hooks.py` cover the hook
-callbacks that the core package sends. The last pair,
-`before_structure_change` and `after_structure_change`, is sent only by the
-optional `genie.structures` facades, so it is covered in
-[`advanced/structure_hooks.py`](../advanced/structure_hooks.py).
-
-Every script contains assertions. Most use `InMemoryBackend`. The storage
-examples use routed stores, SQLite, or traversal and search components supplied
-by the application, on purpose. Run commands and shared conventions are in the
-[examples guide](../README.md).
+- **Core hook callbacks** are covered by `hook_audit.py`, `write_hooks.py`, and `search_hooks.py`.
+- **The structural pair** `before_structure_change` and `after_structure_change` is sent only by the optional `genie.structures` facades, so it is covered in [`advanced/structure_hooks.py`](../advanced/structure_hooks.py).
+- **Every script contains assertions,** and most use `InMemoryBackend`.
+- **The storage examples deliberately differ.** They use routed stores, SQLite, or traversal and search components supplied by the application.
+- **Run commands and shared conventions** are in the [examples guide](../README.md).

@@ -1,17 +1,20 @@
 """Prescribed and learned ontologies for the Graphiti-inspired lamp.
 
-Graphiti lets developers either declare entity and edge types up front with
-Pydantic models and an `edge_type_map` (a prescribed ontology) or let the
-structure emerge from the ingested data (a learned ontology). Both choices are
-application concerns, so this module owns them: Genie stores block types,
-values, and metadata without attaching meaning to any of them.
+Graphiti offers two ways to define structure:
 
-The one piece of semantics this lamp needs beyond naming is cardinality.
-Upstream Graphiti asks a language model whether a newly extracted fact
-contradicts an existing one. A deterministic example cannot call a model, so an
-edge type declares `single_valued=True` when a subject may hold only one
-active object for that relation. Contradiction then becomes a rule the example
-can check instead of a judgement it has to infer.
+- Prescribed ontology: entity and edge types declared up front with Pydantic
+  models and an `edge_type_map`.
+- Learned ontology: the structure emerges from the ingested data.
+
+Both are application concerns, so this module owns them. Genie stores block
+types, values, and metadata without attaching meaning to any of them.
+
+Cardinality is the one piece of semantics this lamp needs beyond naming.
+Upstream asks a language model whether a newly extracted fact contradicts an
+existing one. A deterministic example cannot call a model, so an edge type
+declares `single_valued=True` when a subject may hold only one active object for
+that relation. Contradiction then becomes a rule the example can check instead
+of a judgement it has to infer.
 """
 
 from __future__ import annotations

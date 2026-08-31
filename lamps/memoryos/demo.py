@@ -183,11 +183,12 @@ def build_agent() -> MemoryOSAgent:
 def run_conversation(agent: MemoryOSAgent) -> dict[str, Any]:
     """Talk to the agent until every tier boundary has been crossed.
 
-    The three seat exchanges page into one session, one retrieval visits it, and
-    the third page takes its heat to exactly the threshold, so the promotion is
-    the hierarchy's own decision rather than a call the agent made. Later the
-    hotel session is evicted before it was ever hot enough to be read, which is
-    the other half of what a heat rule means.
+    - The three seat exchanges page into one session, one retrieval visits it,
+      and the third page takes its heat to exactly the threshold. So the
+      promotion is the hierarchy's own decision rather than a call the agent
+      made.
+    - Later the hotel session is evicted before it was ever hot enough to be
+      read, which is the other half of what a heat rule means.
 
     Args:
         agent: Agent to talk to.

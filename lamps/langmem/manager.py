@@ -1,21 +1,27 @@
 """The memory manager: a conversation in, a set of permitted changes out.
 
-This is the piece that makes LangMem a memory system rather than a store. A
-manager reads an exchange, looks at what is already on file, and returns the
-changes it wants: insert this, patch that in place, remove the one that is now
-wrong. Whether each kind of change is allowed is configuration — LangMem gates
-them with `enable_inserts`, `enable_updates`, and `enable_deletes`, and defaults
-deletes to off — so a manager can be given a store it may add to but never
-erase from.
+This is the piece that makes LangMem a memory system rather than a store.
+
+- A manager reads an exchange, looks at what is already on file, and returns the
+  changes it wants: insert this, patch that in place, remove the one that is now
+  wrong.
+- Whether each kind of change is allowed is configuration. LangMem gates them
+  with `enable_inserts`, `enable_updates`, and `enable_deletes`, and defaults
+  deletes to off, so a manager can be given a store it may add to but never
+  erase from.
 
 The lamp keeps that separation and the reconciliation that goes with it, and
 substitutes only the judgment. Upstream a language model reads the messages and
-decides the changes; here each conversation arrives with its changes already
+decides the changes. Here each conversation arrives with its changes already
 proposed, which is the same substitution the Graphiti lamp makes when it accepts
-structured triplets instead of natural-language extraction. What still happens
-here is the part that has to touch storage: reading the address to see whether a
-proposed insert is really an update, refusing what the permissions do not allow,
-applying the rest, and recording which conversation each write came from.
+structured triplets instead of natural-language extraction.
+
+What still happens here is the part that has to touch storage:
+
+- reading the address to see whether a proposed insert is really an update;
+- refusing what the permissions do not allow;
+- applying the rest; and
+- recording which conversation each write came from.
 
 That last step is a `LineageDAG` edge rather than a stored field, so asking
 "what taught the agent this?" is a graph read, and a memory patched by three

@@ -9,7 +9,7 @@ function-calling loop without changing the graph model underneath.
 The agent here decides which tools to call from explicit inputs rather than from
 a model, which keeps the example runnable with no API key. Entity and fact
 extraction is the one upstream step that genuinely needs a language model, so
-the agent receives already-extracted triplets — the same shape Graphiti's own
+the agent receives already-extracted triplets, the same shape Graphiti's own
 `add_triplet` entry point accepts.
 """
 

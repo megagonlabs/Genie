@@ -1,21 +1,25 @@
 """Semantic memory in its profile shape: one document, revised in place.
 
-LangMem offers two shapes for semantic memory. A collection accumulates many
-small documents and retrieval picks the relevant ones. A profile is a single
-document per namespace, following a strict schema, that is *updated* rather
-than added to — the right shape for "what does this user prefer", where a
-second answer should replace the first rather than sit beside it.
+LangMem offers two shapes for semantic memory:
+
+- A collection accumulates many small documents, and retrieval picks the
+  relevant ones.
+- A profile is a single document per namespace, following a strict schema, that
+  is *updated* rather than added to. That is the right shape for "what does this
+  user prefer", where a second answer should replace the first rather than sit
+  beside it.
 
 The two shapes want different Genie structures, which is the point of keeping
-this module separate from `store.py`. A collection is `KeyedCollection`: many
-addresses, each holding one block. A profile is `VersionedRecords`: one address
-holding one identity, with an ordered revision behind it for every update. That
-gives the upstream behavior — one current document, replaced on write — and
-adds what a single mutable document cannot show, which is what it used to say.
+this module separate from `store.py`:
 
-Updates merge fields rather than replacing the whole document, and a revision
-is written only when the merged value actually differs. So a conversation that
-repeats what the profile already records leaves no version behind.
+- A collection is `KeyedCollection`: many addresses, each holding one block.
+- A profile is `VersionedRecords`: one address holding one identity, with an
+  ordered revision behind it for every update. That gives the upstream behavior
+  - one current document, replaced on write - and adds what a single mutable
+  document cannot show, which is what it used to say.
+- Updates merge fields rather than replacing the whole document, and a revision
+  is written only when the merged value actually differs. So a conversation that
+  repeats what the profile already records leaves no version behind.
 """
 
 from __future__ import annotations

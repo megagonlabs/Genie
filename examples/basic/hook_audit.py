@@ -1,15 +1,18 @@
 """Build an audit trail from the events a memory system reports.
 
 `genie.hooks` is the observability surface. This example walks it end to end:
-scopes that name work Genie does not model, traversal events that report what one
-read disclosed, refusals recorded as observations, terminal events that close
-every operation, a registry whose mandatory hook can be neither detached nor
-silenced, suppression windows announced before dispatch stops, and `fail_open`
-for a sink whose own outages must not reach callers.
 
-Transforming hooks that rewrite what is stored or returned live in
-`write_hooks.py` and `search_hooks.py`. Structural membership events are
-reported only by `genie.structures` facades, so they are covered in
+- scopes that name work Genie does not model;
+- traversal events that report what one read disclosed;
+- refusals recorded as observations;
+- terminal events that close every operation;
+- a registry whose mandatory hook can be neither detached nor silenced;
+- suppression windows announced before dispatch stops; and
+- `fail_open` for a sink whose own outages must not reach callers.
+
+Covered elsewhere: transforming hooks that rewrite what is stored or returned
+live in `write_hooks.py` and `search_hooks.py`. Structural membership events are
+reported only by `genie.structures` facades, so they are in
 `../advanced/structure_hooks.py`.
 
 Run from the repository root:

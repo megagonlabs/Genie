@@ -37,13 +37,14 @@ if TYPE_CHECKING:
 class Memory:
     """Main interface for a Genie memory system.
 
-    `Memory` configures the backend, codecs, hooks, policy engine, default
-    principal, default policy, and the attributes hooks observe. Trusted
-    application code usually keeps this object and passes bounded
-    `MemoryHandle` objects to agents. It coordinates parent/child ownership,
-    scoped access, links, mounts, search, hooks, and codecs without owning
-    application business logic, memory structure, storage layout, retrieval
-    strategy, or value meaning.
+    - Configures the backend, codecs, hooks, policy engine, default principal,
+      default policy, and the attributes hooks observe.
+    - Coordinates parent/child ownership, scoped access, links, mounts, search,
+      hooks, and codecs.
+    - Owns none of the application business logic, memory structure, storage
+      layout, retrieval strategy, or value meaning.
+    - Trusted application code usually keeps this object and passes bounded
+      `MemoryHandle` objects to agents.
 
     Attributes:
         backend: Adapter that persists blocks and links.
@@ -309,13 +310,14 @@ class Memory:
     def delete(self, block_id: str | MemoryBlock) -> None:
         """Delete a block and its descendants.
 
-        Deletion is authorized on the target block alone. Write access to the
-        target removes everything the target owns, and descendant policies are
-        not consulted. Ownership already carries this power: a writable parent
-        can be restructured, so treating its subtree as separately protected
-        would only let one unwritable descendant strand the whole branch. A
-        descendant that must outlive its parent belongs outside the subtree,
-        linked or mounted instead of owned.
+        - Authorization checks the target block alone. Write access to the
+          target removes everything the target owns, and descendant policies
+          are not consulted.
+        - Ownership already carries this power. A writable parent can be
+          restructured, so treating its subtree as separately protected would
+          only let one unwritable descendant strand the whole branch.
+        - A descendant that must outlive its parent belongs outside the
+          subtree, linked or mounted instead of owned.
 
         Args:
             block_id: Block or block id to delete.

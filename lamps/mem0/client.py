@@ -1,19 +1,24 @@
 """Mem0's public surface, assembled from the four pieces below it.
 
-Upstream this is one class. `add` runs the two phases and writes what they
-decide, `search` returns the matching memories with the relationships beside
-them, `get` and `update` and `delete` work on a memory id, `get_all` and
-`delete_all` work on a session, and `history` reads what happened to one memory.
-Keeping that shape in one place is the point of this module: the store, the
+Upstream this is one class:
+
+- `add` runs the two phases and writes what they decide.
+- `search` returns the matching memories with the relationships beside them.
+- `get`, `update`, and `delete` work on a memory id.
+- `get_all` and `delete_all` work on a session.
+- `history` reads what happened to one memory.
+
+Keeping that shape in one place is the point of this module. The store, the
 history log, the graph, and the pipeline each know one thing, and this is where
 a call becomes all four.
 
-Two behaviors are worth naming because they follow from the composition rather
-than from any one piece. The neighbor lookup is redone for every candidate in a
-call, so two candidates saying the same thing become an add and then a repeat
-instead of two adds. And a memory removed here keeps its history, because the
-recorded events are owned by the history tier — so a deletion is the last thing
-you can read about a memory rather than the end of reading about it.
+Two behaviors follow from the composition rather than from any one piece:
+
+- The neighbor lookup is redone for every candidate in a call, so two candidates
+  saying the same thing become an add and then a repeat instead of two adds.
+- A memory removed here keeps its history, because the recorded events are owned
+  by the history tier. A deletion is the last thing you can read about a memory
+  rather than the end of reading about it.
 """
 
 from __future__ import annotations
@@ -92,12 +97,14 @@ class Mem0Memory:
     ) -> AddResult:
         """Run one exchange through the pipeline and write what it decides.
 
-        Three paths lead through here, and they are the three Mem0 offers. With
-        `infer` set, the extracted candidates go through the update phase and
-        may add, replace, or remove memories. With `infer` cleared, the turns
-        are stored as they were said and every one of them is new. And a
-        procedural write stores one summary of the whole exchange without
-        consulting what is already on file, because a trajectory summary is not
+        Three paths lead through here, and they are the three Mem0 offers.
+
+        - `infer` set: the extracted candidates go through the update phase and
+          may add, replace, or remove memories.
+        - `infer` cleared: the turns are stored as they were said, and every one
+          of them is new.
+        - A procedural write stores one summary of the whole exchange without
+          consulting what is already on file, because a trajectory summary is not
         a competing wording of anything.
 
         Args:
@@ -278,7 +285,7 @@ class Mem0Memory:
         This is the operation a payload filter cannot give you. Because each
         session segment owns the memories addressed below it, retiring a user,
         an agent, or a single run is one subtree delete rather than a scan and a
-        delete per record — and every removed memory still has a history saying
+        delete per record, and every removed memory still has a history saying
         it was deleted.
 
         Args:

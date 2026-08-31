@@ -1,10 +1,14 @@
 """Genie facades wired to the MemoryOS lamp's four tiers.
 
 MemoryOS runs on four stores that are written to and evicted from on different
-rules: a short-term FIFO queue, a mid-term store of topic segments, and one
-long-term store each for what the user knows and what the assistant knows. The
-tier anchors below keep that separation, because the interesting behavior of a
-memory operating system is what happens at the boundaries between them.
+rules:
+
+- a short-term FIFO queue;
+- a mid-term store of topic segments; and
+- one long-term store each for what the user knows and what the assistant knows.
+
+The tier anchors below keep that separation, because the interesting behavior of
+a memory operating system is what happens at the boundaries between them.
 
 Each tier gets the structure that matches how it is read:
 

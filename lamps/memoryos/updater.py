@@ -3,29 +3,32 @@
 Everything interesting in MemoryOS happens at a tier boundary, and there are
 only two boundaries to cross.
 
-The first is paging out. When short-term memory is full, the oldest exchanges
-leave it and are filed in mid-term memory under a themed summary, joining a
-segment about the same thing when one is open. Consecutive exchanges that
-continue each other are linked, so the dialogue chain survives the queue that
-held them -- including across two separate page-outs, which is why the updater
-remembers the last page it wrote.
+**Paging out.** When short-term memory is full, the oldest exchanges leave it
+and are filed in mid-term memory under a themed summary, joining a segment about
+the same thing when one is open. Consecutive exchanges that continue each other
+are linked, so the dialogue chain survives the queue that held them - including
+across two separate page-outs, which is why the updater remembers the last page
+it wrote.
 
-The second is promotion. After every write, the hottest segment is checked
-against a heat threshold, and if it is over the line its unread pages are
-analyzed: what they say about the user goes into the profile, what they say about
-the world goes into the two knowledge bases, and the pages are marked so they
-stop counting toward the segment's length. The segment then cools, and something
-else gets a turn.
+**Promotion.** After every write, the hottest segment is checked against a heat
+threshold. If it is over the line its unread pages are analyzed:
 
-Both moves are copy-then-drop rather than a move, because Genie has no reparent
-operation: a page is written under its new owner and removed from its old one.
-That is also what upstream does, since the two tiers are two different stores.
+- what they say about the user goes into the profile;
+- what they say about the world goes into the two knowledge bases; and
+- the pages are marked so they stop counting toward the segment's length.
 
-The analysis itself is two model calls upstream -- one to rewrite the profile and
-one to split what was learned into user and assistant knowledge. `DeclaredAnalyst`
-replaces both by collecting what each exchange said it would contribute when it
-was recorded, which keeps the model's judgment at the boundary and makes every
-stored fact name the page it came from.
+The segment then cools, and something else gets a turn.
+
+Two notes on both moves:
+
+- They are copy-then-drop rather than a move, because Genie has no reparent
+  operation. A page is written under its new owner and removed from its old one.
+  That is also what upstream does, since the two tiers are two different stores.
+- The analysis itself is two model calls upstream - one to rewrite the profile
+  and one to split what was learned into user and assistant knowledge.
+  `DeclaredAnalyst` replaces both by collecting what each exchange said it would
+  contribute when it was recorded. That keeps the model's judgment at the
+  boundary and makes every stored fact name the page it came from.
 """
 
 from __future__ import annotations
@@ -80,12 +83,15 @@ class DeclaredAnalyst:
     rewrite the user profile against the profile already on file, and once to
     split what the pages revealed into private user knowledge and assistant
     knowledge. Neither judgment can be reproduced without a model, so each
-    exchange declares its own contribution when it is recorded and this analyst
+    exchange declares its own contribution when it is recorded, and this analyst
     collects the contributions of the pages being analyzed.
 
-    The collection is not nothing: the order decides which of two traits wins,
-    repeated facts are written once, and every fact keeps the page that declared
-    it, which is the provenance upstream discards.
+    The collection is not nothing:
+
+    - the order decides which of two traits wins;
+    - repeated facts are written once; and
+    - every fact keeps the page that declared it, which is the provenance
+      upstream discards.
     """
 
     def analyze(self, segment: Segment, pages: Sequence[Page]) -> Analysis:

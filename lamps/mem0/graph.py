@@ -1,22 +1,26 @@
 """Mem0's graph memory: the entities in a conversation and how they relate.
 
 With a graph store configured, Mem0 runs a second extraction over the same
-messages. It pulls out entities, resolves each one against the nodes already
-stored for that user so two spellings do not become two nodes, and writes typed
-relationships between them. A search then returns both halves: the memories
-that match the query text, and the relationships attached to the entities the
-query names. The graph phase can also retract a relationship that a later turn
-contradicts.
+messages:
 
-`PropertyGraph` carries the relationships and a second `KeyedCollection`
-carries entity resolution: an entity is addressed by its folded name inside the
-session's outermost identifier, which is the level upstream scopes graph nodes
-at. So resolving an extracted name is one keyed lookup rather than a scan, and
-listing a user's entities is one namespaced read.
+- It pulls out entities and resolves each one against the nodes already stored
+  for that user, so two spellings do not become two nodes.
+- It writes typed relationships between them.
+- A search then returns both halves: the memories that match the query text, and
+  the relationships attached to the entities the query names.
+- The graph phase can also retract a relationship that a later turn contradicts.
 
-Genie has no operation that removes a single link, so a retracted relationship
-is marked rather than deleted. That fits the rest of the lamp, where a change is
-something you can still read afterwards.
+The Genie side:
+
+- `PropertyGraph` carries the relationships.
+- A second `KeyedCollection` carries entity resolution. An entity is addressed
+  by its folded name inside the session's outermost identifier, which is the
+  level upstream scopes graph nodes at. So resolving an extracted name is one
+  keyed lookup rather than a scan, and listing a user's entities is one
+  namespaced read.
+- Genie has no operation that removes a single link, so a retracted relationship
+  is marked rather than deleted. That fits the rest of the lamp, where a change
+  is something you can still read afterwards.
 """
 
 from __future__ import annotations

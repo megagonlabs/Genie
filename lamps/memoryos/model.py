@@ -1,18 +1,21 @@
 """Value types, constants, and the arithmetic the MemoryOS lamp shares.
 
-MemoryOS borrows its shape from an operating system. A dialogue page is the unit
-that moves, short-term memory is the fast tier that holds only the newest few,
-mid-term memory is the paged tier where pages are grouped into topic segments,
-and long-term memory is the slow tier that keeps what turned out to matter. What
-decides whether something is promoted is not age but *heat*: a segment's score
-rises when a retrieval visits it, when it gains pages, and falls as it is left
-alone.
+MemoryOS borrows its shape from an operating system:
 
-Three things in this module are the reason the rest of the lamp can be small.
-The block types keep the four tiers' contents apart. The records are what the
-tiers hand back, each with a JSON form so the same values can cross a tool
-boundary. And `segment_heat` and `time_decay` are MemoryOS's own formulas,
-written once here so both the updater and the retriever read heat the same way.
+- A dialogue page is the unit that moves.
+- Short-term memory is the fast tier that holds only the newest few.
+- Mid-term memory is the paged tier where pages are grouped into topic segments.
+- Long-term memory is the slow tier that keeps what turned out to matter.
+- Promotion is decided by *heat*, not age. A segment's score rises when a
+  retrieval visits it and when it gains pages, and falls as it is left alone.
+
+Three things in this module are the reason the rest of the lamp can be small:
+
+- The block types keep the four tiers' contents apart.
+- The records are what the tiers hand back, each with a JSON form so the same
+  values can cross a tool boundary.
+- `segment_heat` and `time_decay` are MemoryOS's own formulas, written once here
+  so both the updater and the retriever read heat the same way.
 
 Nothing in this module touches Genie, so every other module can depend on it.
 """
@@ -442,12 +445,15 @@ def segment_heat(
     """Return `H_segment`, the score that decides what reaches long-term memory.
 
     This is MemoryOS's formula unchanged:
-    `H = alpha * N_visit + beta * L_interaction + gamma * R_recency`. What the
-    lamp changes is where the three terms come from. Visits are counted on the
-    segment, recency comes from the temporal index, and length is the number of
-    pages the segment owns that no analysis has read yet -- which is the same
-    quantity upstream keeps in `L_interaction` and resets to zero the moment it
-    marks a segment's pages analyzed.
+    `H = alpha * N_visit + beta * L_interaction + gamma * R_recency`.
+
+    What the lamp changes is where the three terms come from:
+
+    - Visits are counted on the segment.
+    - Recency comes from the temporal index.
+    - Length is the number of pages the segment owns that no analysis has read
+      yet. That is the same quantity upstream keeps in `L_interaction` and
+      resets to zero the moment it marks a segment's pages analyzed.
 
     Args:
         visits: `N_visit`, how often retrieval has reached this segment.
@@ -468,13 +474,14 @@ def segment_heat(
 class Insight:
     """What one exchange would tell an analysis about the user.
 
-    Upstream, promotion runs two model calls over a hot segment's pages: one
-    rewrites the user profile and one splits what was learned into private user
-    knowledge and assistant knowledge. The lamp has no model, so each exchange
-    declares its own contribution when it is recorded, and the analysis is the
-    collection of the contributions belonging to the pages being analyzed. That
-    keeps the model's judgment at the boundary and makes the provenance edges
-    exact, because every stored fact names the page that declared it.
+    - Upstream, promotion runs two model calls over a hot segment's pages: one
+      rewrites the user profile, and one splits what was learned into private
+      user knowledge and assistant knowledge.
+    - The lamp has no model, so each exchange declares its own contribution when
+      it is recorded, and the analysis is the collection of the contributions
+      belonging to the pages being analyzed.
+    - That keeps the model's judgment at the boundary and makes the provenance
+      edges exact, because every stored fact names the page that declared it.
 
     Attributes:
         profile: Profile traits this exchange would set or overwrite.

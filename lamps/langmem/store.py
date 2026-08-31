@@ -1,18 +1,24 @@
 """The namespaced store LangMem's memories are addressed in.
 
-LangMem writes through a LangGraph `BaseStore`: an item lives at a namespace
-plus a key, retrieval is either an exact address lookup or a vector search
-below a namespace prefix, and a metadata filter can narrow the search. That is
-the whole storage contract, and `KeyedCollection` covers the addressing part of
-it directly.
+LangMem writes through a LangGraph `BaseStore`:
+
+- An item lives at a namespace plus a key.
+- Retrieval is either an exact address lookup or a vector search below a
+  namespace prefix.
+- A metadata filter can narrow the search.
+
+That is the whole storage contract, and `KeyedCollection` covers the addressing
+part of it directly.
 
 The part worth reading is what happens to the namespace. A namespace is a bare
 name upstream. Here each segment is also a block that owns what is addressed
-below it, which is why `search` can hand Genie a subtree scope instead of
-filtering candidates itself, and why `forget` can retire a whole user with one
-call. Ranking stays in this module, because Genie deliberately has no ranking:
-the backend decides which blocks are candidates, and the application decides
-which candidate is best.
+below it:
+
+- `search` hands Genie a subtree scope instead of filtering candidates itself.
+- `forget` retires a whole user with one call.
+- Ranking stays in this module, because Genie deliberately has no ranking. The
+  backend decides which blocks are candidates, and the application decides which
+  candidate is best.
 """
 
 from __future__ import annotations
@@ -237,12 +243,13 @@ class MemoryStore:
     ) -> list[SearchHit]:
         """Search below a namespace prefix, optionally narrowed by metadata.
 
-        Genie selects the candidates: the namespace prefix becomes a subtree
-        scope, the item type and any metadata filter go into the query, and one
-        search runs per query term. Scoring is the lamp's, because Genie's
-        portable text match is a substring test over the whole block rather
-        than a similarity measure — so a candidate only counts a term that
-        appears in its own value, and the score is the share of terms that do.
+        - Genie selects the candidates. The namespace prefix becomes a subtree
+          scope, the item type and any metadata filter go into the query, and
+          one search runs per query term.
+        - Scoring is the lamp's, because Genie's portable text match is a
+          substring test over the whole block rather than a similarity measure.
+          A candidate only counts a term that appears in its own value, and the
+          score is the share of terms that do.
 
         Args:
             prefix: Namespace prefix to search below.

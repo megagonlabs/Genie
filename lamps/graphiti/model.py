@@ -1,11 +1,13 @@
 """Value types, constants, and time helpers for the Graphiti lamp.
 
-Graphiti keeps its own node and edge models in dedicated modules; this module
-plays the same role for the lamp. It holds the block types and relation names
-the example writes, the timestamp helpers every layer shares, and the read-only
-records the graph hands back: an ingested episode, an entity with its current
-summary, one summary revision, a fact on both time axes, and the outcome of
-writing a triplet.
+Graphiti keeps its own node and edge models in dedicated modules. This module
+plays the same role for the lamp, and holds:
+
+- the block types and relation names the example writes;
+- the timestamp helpers every layer shares; and
+- the read-only records the graph hands back: an ingested episode, an entity
+  with its current summary, one summary revision, a fact on both time axes, and
+  the outcome of writing a triplet.
 
 Nothing here touches Genie beyond reading blocks that were already stored, so
 every other module in the lamp can depend on it without a cycle.

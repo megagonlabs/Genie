@@ -1,13 +1,15 @@
 """The bi-temporal knowledge graph behavior of the Graphiti lamp.
 
-Graphiti ingests a stream of episodes, extracts entities and relationship facts
-from them, and keeps every fact on a bi-temporal timeline: two timestamps say
-when the fact was true in the world, and two more say when the system believed
-it. Contradicted facts are invalidated rather than deleted, so the graph can
-answer both "what was true then" and "what did we know then".
+Graphiti ingests a stream of episodes and extracts entities and relationship
+facts from them.
+
+- Every fact sits on a bi-temporal timeline: two timestamps say when it was true
+  in the world, and two more say when the system believed it.
+- A contradicted fact is invalidated rather than deleted, so the graph can
+  answer both "what was true then" and "what did we know then".
 
 This module owns those rules. Genie supplies blocks, ownership, scoped access,
-links, search, and the structure facades; the graph class decides what an
+links, search, and the structure facades. The graph class decides what an
 episode, entity, fact, provenance edge, mention, and validity interval mean, and
 in what order a write resolves entities, dedupes, and invalidates.
 """

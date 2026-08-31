@@ -2331,18 +2331,18 @@ class TestRedisStructureBackendContracts(
 class TestRedisGuardedReadStructureBackendContracts(TestRedisStructureBackendContracts):
     """Run every capability contract against the guarded read path.
 
-    `RedisBackend` implements `children`, `ancestors`, `descendants`,
-    `contains`, `list_links`, and `list_temporal_entries` twice: as one
-    read-only script where the server can run one, and as several commands
-    under the mutation guard otherwise. `query_temporal_entries` splits the
-    same way for a collection that fits in one page. Which one runs is decided once during
-    construction, so a live Redis 7 server always exercises the script path and
-    would leave the guarded path untested here.
-
-    `test_live_redis_scripted_and_guarded_reads_agree` already checks that both
-    paths return the same values for the same stored state. These contracts add
-    what that comparison cannot: paging, empty pages, ordering, and dependent
-    cleanup after a write, all against the guarded path.
+    - `RedisBackend` implements `children`, `ancestors`, `descendants`,
+      `contains`, `list_links`, and `list_temporal_entries` twice: as one
+      read-only script where the server can run one, and as several commands
+      under the mutation guard otherwise. `query_temporal_entries` splits the
+      same way for a collection that fits in one page.
+    - Which one runs is decided once during construction, so a live Redis 7
+      server always exercises the script path and would leave the guarded path
+      untested here.
+    - `test_live_redis_scripted_and_guarded_reads_agree` already checks that
+      both paths return the same values for the same stored state. These
+      contracts add what that comparison cannot: paging, empty pages, ordering,
+      and dependent cleanup after a write, all against the guarded path.
     """
 
     def setup_method(self) -> None:
@@ -2745,12 +2745,13 @@ def _stored_members(backend: RedisBackend, key: str) -> list[str]:
 def _orphan_keys(backend: RedisBackend) -> list[str]:
     """Return every stored Genie key that no live block or link still owns.
 
-    The check walks the keys the server actually holds and resolves each one
-    back to a live owner, including the members an index holds. It compares
-    against no written list of expected keys, so a cleanup path that forgets a
-    key fails here even when nobody remembers to update the test. A key kind
-    this helper does not know is reported too, so a new key pattern cannot be
-    added without classifying it.
+    - The check walks the keys the server actually holds and resolves each one
+      back to a live owner, including the members an index holds.
+    - It compares against no written list of expected keys, so a cleanup path
+      that forgets a key fails here even when nobody remembers to update the
+      test.
+    - A key kind this helper does not know is reported too, so a new key pattern
+      cannot be added without classifying it.
     """
 
     prefix = backend.key_prefix

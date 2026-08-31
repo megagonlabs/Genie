@@ -1,10 +1,14 @@
 """MemoryOS's public surface over the four tiers and the two movers.
 
-Upstream this is the `Memoryos` class, and its interface is small enough to fit
-in a paragraph: hand it an exchange with `add_memory`, ask it for context with
-`retrieve_memory`, read the profile it inferred, and look at what each store
-holds. Everything else -- paging out, segment grouping, heat, promotion,
-eviction -- happens because you called `add_memory`, not because you asked for it.
+Upstream this is the `Memoryos` class, and its interface is small:
+
+- Hand it an exchange with `add_memory`.
+- Ask it for context with `retrieve_memory`.
+- Read the profile it inferred.
+- Look at what each store holds.
+
+Everything else - paging out, segment grouping, heat, promotion, eviction -
+happens because you called `add_memory`, not because you asked for it.
 
 That is the part worth preserving, so `add_memory` here returns what it set in
 motion rather than nothing. One call can page the oldest exchange out of the

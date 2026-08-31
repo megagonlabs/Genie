@@ -7,21 +7,20 @@ encodings, so the two relational backends store the same data in the same shape.
 
 Three PostgreSQL details are handled on purpose.
 
-Every write takes one transaction-scoped advisory lock before it reads or
-changes Genie state. PostgreSQL allows concurrent writers, so without the lock a
-compound "read, check, then write" step could interleave with another writer.
-The lock gives the serialized-writer model that `SQLiteBackend` gets from
-`BEGIN IMMEDIATE` and `Neo4jBackend` gets from its guard node.
-
-Every text column is declared `COLLATE "C"`. PostgreSQL otherwise compares text
-with the database collation, which depends on the server locale, can ignore
-punctuation, and can change when the operating system upgrades its locale data.
-Genie needs plain byte order, because stored timestamps are compared as strings
-and paging uses `block_id > ...`.
-
-JSON is stored as `text`, not `jsonb`. `jsonb` normalizes what it stores and
-rejects the NUL character inside strings, so it would not round-trip Genie
-values byte for byte.
+- Advisory lock per write. Every write takes one transaction-scoped advisory
+  lock before it reads or changes Genie state. PostgreSQL allows concurrent
+  writers, so without the lock a compound "read, check, then write" step could
+  interleave with another writer. The lock gives the serialized-writer model
+  that `SQLiteBackend` gets from `BEGIN IMMEDIATE` and `Neo4jBackend` gets from
+  its guard node.
+- `COLLATE "C"` on every text column. PostgreSQL otherwise compares text with
+  the database collation, which depends on the server locale, can ignore
+  punctuation, and can change when the operating system upgrades its locale
+  data. Genie needs plain byte order, because stored timestamps are compared as
+  strings and paging uses `block_id > ...`.
+- JSON stored as `text`, not `jsonb`. `jsonb` normalizes what it stores and
+  rejects the NUL character inside strings, so it would not round-trip Genie
+  values byte for byte.
 """
 
 from __future__ import annotations

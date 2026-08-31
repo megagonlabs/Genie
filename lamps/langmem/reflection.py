@@ -2,19 +2,24 @@
 
 LangMem can form memories on the hot path, while the agent is answering, or in
 the background afterwards. The background path is what `ReflectionExecutor`
-runs, and its interesting behavior is the delay: work is submitted with an
-`after_seconds` window, and if another turn arrives on the same thread before
-that window closes, the pending task is cancelled and rescheduled with the new
-messages folded in. A three-turn exchange therefore produces one reflection over
-the whole exchange rather than three over fragments of it.
+runs, and its interesting behavior is the delay:
 
-Two Genie facades anchored on the same tier carry that behavior. `EventLog` is
-the order submissions arrived; `TemporalCollection` holds each submission's due
-time as its event time, so "what is ready to run?" is a bounded time query and
-not a scan the lamp writes. Cancelling is dropping the temporal entry — the log
-entry stays, so a superseded submission remains readable with the id of the one
-that replaced it. Deferred work that never ran is usually the hardest thing to
-see in a memory system; here it is the same read as everything else.
+- Work is submitted with an `after_seconds` window.
+- If another turn arrives on the same thread before that window closes, the
+  pending task is cancelled and rescheduled with the new messages folded in.
+- So a three-turn exchange produces one reflection over the whole exchange
+  rather than three over fragments of it.
+
+Two Genie facades anchored on the same tier carry that behavior:
+
+- `EventLog` is the order submissions arrived.
+- `TemporalCollection` holds each submission's due time as its event time, so
+  "what is ready to run?" is a bounded time query and not a scan the lamp
+  writes.
+- Cancelling is dropping the temporal entry. The log entry stays, so a
+  superseded submission remains readable with the id of the one that replaced
+  it. Deferred work that never ran is usually the hardest thing to see in a
+  memory system. Here it is the same read as everything else.
 """
 
 from __future__ import annotations

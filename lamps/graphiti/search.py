@@ -1,20 +1,22 @@
 """Hybrid fact retrieval for the Graphiti-inspired lamp.
 
 Graphiti retrieves by running several retrievers over the graph and fusing their
-ranked results rather than by hitting one index. Its default recipe,
+ranked results, rather than by hitting one index. Its default recipe,
 `EDGE_HYBRID_SEARCH_RRF`, combines full-text search, embedding similarity, and
 breadth-first graph traversal over facts under reciprocal rank fusion. This
 module implements that one recipe.
 
 Ranking is exactly what Genie leaves to applications, so only the retrievers
-reach into the library: `keyword` issues one `MemoryHandle.search` per query
-term, and `graph` walks `PropertyGraph` outward from a center entity. Similarity
-is token-set cosine overlap, a visible stand-in for embeddings. The bi-temporal
-filters are the other Genie-facing part, since they narrow the candidate set
-through the same temporal collections the graph stores facts in.
+reach into the library:
+
+- `keyword` issues one `MemoryHandle.search` per query term.
+- `graph` walks `PropertyGraph` outward from a center entity.
+- `similarity` is token-set cosine overlap, a visible stand-in for embeddings.
+- The bi-temporal filters are the other Genie-facing part. They narrow the
+  candidate set through the same temporal collections the graph stores facts in.
 
 Graphiti's other recipes and its MMR, node-distance, episode-mention, and
-cross-encoder rerankers are deliberately not reproduced; the lamp README lists
+cross-encoder rerankers are deliberately not reproduced. The lamp README lists
 them as omissions.
 """
 

@@ -1,21 +1,29 @@
 """The Hindsight-inspired memory bank: documents in, resolved facts out.
 
-`retain` is Hindsight's write path. A caller hands the bank a source payload —
-a chat turn, a document, an agent run — and the bank keeps that payload as
-ground truth, stores the facts extracted from it, resolves the names those
-facts mention to canonical entities, and records where every fact came from.
+`retain` is Hindsight's write path. A caller hands the bank a source payload -
+a chat turn, a document, an agent run - and the bank:
+
+- keeps that payload as ground truth;
+- stores the facts extracted from it;
+- resolves the names those facts mention to canonical entities; and
+- records where every fact came from.
+
 Extraction itself is the one step that genuinely needs a language model
 upstream, so the lamp accepts already-extracted `FactDraft` values, the same way
 the Graphiti lamp accepts already-extracted triplets.
 
-The Genie side of that path is worth naming. Provenance is a `LineageDAG`, so
-"what is this belief based on?" is a walk rather than a stored list. Entity
-resolution ends in a `KeyedCollection` bind, so every surface form that has ever
-resolved to an entity is an address pointing at that entity's block and the
-second lookup of a name is a keyed read. Retention order is an `EventLog`, which
-is also the cursor consolidation reads from. And both of Hindsight's time axes
-live in one `TemporalCollection` entry per fact: event time is when the bank
-learned it, validity is the period the fact describes.
+The Genie side of that path:
+
+- Provenance is a `LineageDAG`, so "what is this belief based on?" is a walk
+  rather than a stored list.
+- Entity resolution ends in a `KeyedCollection` bind, so every surface form that
+  has ever resolved to an entity is an address pointing at that entity's block,
+  and the second lookup of a name is a keyed read.
+- Retention order is an `EventLog`, which is also the cursor consolidation reads
+  from.
+- Both of Hindsight's time axes live in one `TemporalCollection` entry per fact:
+  event time is when the bank learned it, validity is the period the fact
+  describes.
 """
 
 from __future__ import annotations
@@ -170,11 +178,12 @@ class HindsightMemoryBank:
     def resolve_entity(self, name: str, *, kind: str = DEFAULT_ENTITY_KIND) -> Entity:
         """Return the entity a written name refers to, resolving surface forms.
 
-        A name already bound to an entity is a keyed read. An unseen name is
-        matched against the canonical names on file: every one of its words
-        must begin a distinct word of the canonical name, in order, so `Alice`
-        and `Alice C.` both reach `Alice Chen` while `Alice Cooper` does not.
-        An ambiguous name starts a new entity rather than guessing.
+        - A name already bound to an entity is a keyed read.
+        - An unseen name is matched against the canonical names on file. Every
+          one of its words must begin a distinct word of the canonical name, in
+          order, so `Alice` and `Alice C.` both reach `Alice Chen` while
+          `Alice Cooper` does not.
+        - An ambiguous name starts a new entity rather than guessing.
 
         Args:
             name: Entity name as written in a fact.

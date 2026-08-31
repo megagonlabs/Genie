@@ -1,20 +1,26 @@
 """Genie facades wired to the LangMem lamp's five ownership tiers.
 
-LangMem stores memories in a namespaced key-value store with vector search.
-The namespace is only a name there: nothing owns it, so nothing happens to the
-memories inside it when a user goes away. This lamp mirrors every namespace as
-an ownership path instead, which buys two things a plain key-value store cannot
-give. Prefix search becomes a Genie subtree scope rather than a filter the lamp
-applies afterwards, and deleting a namespace deletes the memories addressed
-inside it.
+LangMem stores memories in a namespaced key-value store with vector search. The
+namespace is only a name there: nothing owns it, so nothing happens to the
+memories inside it when a user goes away.
 
-Two other wiring choices carry most of the model. Profiles and prompts are both
-`VersionedRecords`, because both are single documents that are revised rather
-than accumulated, and both must be able to show what they used to say. And the
-deferred reflection queue anchors an `EventLog` and a `TemporalCollection` on
-the same tier: the log is the order submissions arrived, the temporal entry is
-when each one comes due, so LangMem's debounce window becomes a time query and
-a cancelled submission stays on the log.
+This lamp mirrors every namespace as an ownership path instead, which buys two
+things a plain key-value store cannot give:
+
+- Prefix search becomes a Genie subtree scope rather than a filter the lamp
+  applies afterwards.
+- Deleting a namespace deletes the memories addressed inside it.
+
+Two other wiring choices carry most of the model:
+
+- Profiles and prompts are both `VersionedRecords`, because both are single
+  documents that are revised rather than accumulated, and both must be able to
+  show what they used to say.
+- The deferred reflection queue anchors an `EventLog` and a
+  `TemporalCollection` on the same tier. The log is the order submissions
+  arrived, and the temporal entry is when each one comes due, so LangMem's
+  debounce window becomes a time query and a cancelled submission stays on the
+  log.
 """
 
 from __future__ import annotations

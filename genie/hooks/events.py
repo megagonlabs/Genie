@@ -320,11 +320,14 @@ class SuppressionScope(StrEnum):
 class Suppression:
     """One window in which hook dispatch is deliberately disabled.
 
-    Suppression is a trusted escape hatch, so the escape is itself an event: a
+    Suppression is a trusted escape hatch, so the escape is itself an event. A
     hook learns that it is about to stop reporting before it does. The window
-    is announced by `on_suppressed`, closed by the terminal event of the same
-    `HookOperation.SUPPRESS` operation, and named as the parent of every
-    operation performed inside it.
+    is:
+
+    - announced by `on_suppressed`;
+    - closed by the terminal event of the same `HookOperation.SUPPRESS`
+      operation; and
+    - named as the parent of every operation performed inside it.
 
     Attributes:
         scope: Whether the window names its hooks or covers the registry.

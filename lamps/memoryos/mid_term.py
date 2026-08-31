@@ -14,17 +14,19 @@ one that never comes up cools, and is eventually the one evicted when the tier
 runs out of room.
 
 Two of those three terms are read out of the store here rather than kept in step
-with it by hand. `L_interaction` is the number of pages the segment owns that no
-analysis has read yet -- which is exactly what upstream's counter holds, since it
-resets to zero at the same moment it marks every page analyzed. `R_recency`
-decays the last-visit time held in a `TemporalCollection`. So heat cannot drift
-away from the pages it is supposed to describe: there is no cached number to go
-stale, only a formula over what is stored.
+with it by hand:
+
+- `L_interaction` is the number of pages the segment owns that no analysis has
+  read yet. That is exactly what upstream's counter holds, since it resets to
+  zero at the same moment it marks every page analyzed.
+- `R_recency` decays the last-visit time held in a `TemporalCollection`.
+- So heat cannot drift away from the pages it is supposed to describe. There is
+  no cached number to go stale, only a formula over what is stored.
 
 The pages are the segment's children, which is the other thing ownership buys.
-Evicting a segment is one `delete_subtree`, and its pages and their dialogue-chain
-edges go with it. Upstream has to walk the pages it is about to drop and clear the
-`pre_page`/`next_page` fields that point at them.
+Evicting a segment is one `delete_subtree`, and its pages and their
+dialogue-chain edges go with it. Upstream has to walk the pages it is about to
+drop and clear the `pre_page`/`next_page` fields that point at them.
 """
 
 from __future__ import annotations
@@ -334,12 +336,13 @@ class MidTermMemory:
     ) -> list[PageHit]:
         """Return the pages that match a query, visiting the segments on the way.
 
-        Candidate selection is Genie's: the mid-term tier becomes a subtree
-        scope, the block type narrows it to segments, and one search runs per
-        query term. Scoring is the lamp's, because Genie has no similarity
-        measure -- a segment scores the share of query terms that appear in its
-        summary plus MemoryOS's keyword Jaccard term, and a page inside a
-        qualifying segment scores the share of query terms in its own dialogue.
+        - Candidate selection is Genie's. The mid-term tier becomes a subtree
+          scope, the block type narrows it to segments, and one search runs per
+          query term.
+        - Scoring is the lamp's, because Genie has no similarity measure. A
+          segment scores the share of query terms that appear in its summary,
+          plus MemoryOS's keyword Jaccard term. A page inside a qualifying
+          segment scores the share of query terms in its own dialogue.
 
         Args:
             query: Free text to retrieve for.
@@ -393,12 +396,13 @@ class MidTermMemory:
     def evict_coldest(self, *, exclude: str | None = None) -> Eviction | None:
         """Drop the least frequently used segment, with everything it owns.
 
-        This is upstream's LFU rule: the segment with the lowest access count
-        goes, and the count is the one that promotion never resets. The delete
-        is a single subtree call, so the pages and their dialogue-chain edges go
-        with the segment. What has to be cleaned up by hand is the id space,
-        because a binding names a block rather than copying it, and a name left
-        pointing at a deleted block is worse than a name that is free.
+        - This is upstream's LFU rule. The segment with the lowest access count
+          goes, and the count is the one that promotion never resets.
+        - The delete is a single subtree call, so the pages and their
+          dialogue-chain edges go with the segment.
+        - The id space has to be cleaned up by hand, because a binding names a
+          block rather than copying it, and a name left pointing at a deleted
+          block is worse than a name that is free.
 
         Args:
             exclude: Block id that must survive, normally the segment a batch
@@ -467,11 +471,14 @@ class MidTermMemory:
     def link_pages(self, previous: Page, current: Page) -> None:
         """Record that one page continues the conversation of another.
 
-        Upstream keeps this as a `pre_page` and a `next_page` id on the two page
-        dicts, writes both ends itself, and clears them when a page is dropped.
-        One lineage edge replaces all of that: it is a single write, it is
-        readable from either end, it refuses an edge that would close a loop,
-        and it disappears when either page does.
+        Upstream keeps this as a `pre_page` and a `next_page` id on the two
+        page dicts, writes both ends itself, and clears them when a page is
+        dropped. One lineage edge replaces all of that:
+
+        - it is a single write;
+        - it is readable from either end;
+        - it refuses an edge that would close a loop; and
+        - it disappears when either page does.
 
         Args:
             previous: Page that came earlier.

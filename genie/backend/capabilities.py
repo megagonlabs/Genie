@@ -79,19 +79,19 @@ class BlockStore(Protocol):
     ) -> None:
         """Delete a block and backend-owned dependent state.
 
-        Deletion covers the block and every descendant. An adapter must also
-        remove the dependent state it owns for those blocks: links in either
-        direction, key bindings, sequence entries, and temporal entries. No
-        link may survive pointing at a removed block, whether the removed block
-        was its source or its target.
-
-        `Memory` does not perform this cleanup and never calls the explicit
-        `delete_*_for_block` methods, so an adapter that skips it here leaves
-        dangling relationships behind. How an adapter satisfies this is its own
-        choice: the explicit cleanup methods, a cascading foreign key, deleting
-        the dependent records in the same transaction, or staging every
-        dependent removal in the same commit. What matters is that the cleanup
-        lands atomically with the deletion.
+        - Deletion covers the block and every descendant.
+        - The adapter must also remove the dependent state it owns for those
+          blocks: links in either direction, key bindings, sequence entries,
+          and temporal entries. No link may survive pointing at a removed
+          block, whether the removed block was its source or its target.
+        - `Memory` does not perform this cleanup and never calls the explicit
+          `delete_*_for_block` methods, so an adapter that skips it here leaves
+          dangling relationships behind.
+        - How the adapter does it is its own choice: the explicit cleanup
+          methods, a cascading foreign key, deleting the dependent records in
+          the same transaction, or staging every dependent removal in the same
+          commit. What matters is that the cleanup lands atomically with the
+          deletion.
 
         Args:
             block_id: Memory block id.
@@ -117,11 +117,14 @@ class TraversalIndex(Protocol):
     from stored parents.
 
     `Memory` resolves every ownership question through this interface and never
-    reads `parent_id` itself. A separately supplied traversal index therefore
-    decides subtree scope, traversal, and recursive deletion, and must stay
-    consistent with the block store. An index that omits descendants makes
-    `Memory.delete` send an incomplete subtree snapshot, which a correct
-    `BlockStore` rejects with `MemoryConflict`.
+    reads `parent_id` itself.
+
+    - So a separately supplied traversal index decides subtree scope,
+      traversal, and recursive deletion, and must stay consistent with the
+      block store.
+    - An index that omits descendants makes `Memory.delete` send an incomplete
+      subtree snapshot, which a correct `BlockStore` rejects with
+      `MemoryConflict`.
     """
 
     def children(self, block_id: str) -> list[MemoryBlock]:

@@ -1,22 +1,21 @@
 """A tool interface and deterministic agent for the MemoryOS lamp.
 
-MemoryOS is used through a handful of calls, and what makes it interesting to
-put behind a tool boundary is how much happens that the caller did not ask for.
-`add_memory` takes one exchange, and on the way out it may have paged the oldest
-exchange into a segment, opened that segment, evicted a colder one, promoted the
-hottest one into the profile, and dropped the oldest fact from a knowledge base
-to make room. So every tool here returns what the tiers did rather than a
-success flag: the call log is where the hierarchy becomes visible.
+MemoryOS is used through a handful of calls. What makes it interesting to put
+behind a tool boundary is how much happens that the caller did not ask for.
 
-The other thing worth noticing at this boundary is that retrieving is not free.
-`retrieve_memory` raises the heat of every segment it reaches, which is what
-eventually promotes one. An agent that keeps asking about seats is an agent that
-ends up with a profile that mentions seats.
-
-Every tool set is bound to one user's memory at construction, so no tool
-argument can name another user's tiers. The example agent chooses its calls from
-explicit inputs rather than from a model, which keeps the demo runnable with no
-API key.
+- `add_memory` takes one exchange, and on the way out it may have paged the
+  oldest exchange into a segment, opened that segment, evicted a colder one,
+  promoted the hottest one into the profile, and dropped the oldest fact from a
+  knowledge base to make room.
+- So every tool here returns what the tiers did rather than a success flag. The
+  call log is where the hierarchy becomes visible.
+- Retrieving is not free. `retrieve_memory` raises the heat of every segment it
+  reaches, which is what eventually promotes one. An agent that keeps asking
+  about seats is an agent that ends up with a profile that mentions seats.
+- Every tool set is bound to one user's memory at construction, so no tool
+  argument can name another user's tiers.
+- The example agent chooses its calls from explicit inputs rather than from a
+  model, which keeps the demo runnable with no API key.
 """
 
 from __future__ import annotations

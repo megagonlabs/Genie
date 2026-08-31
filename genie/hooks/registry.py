@@ -55,30 +55,36 @@ class HookRegistry:
     Dispatch methods require the explicit context yielded by `operation`.
     `Memory` and structure facades manage this lifecycle for normal use.
 
-    Observing callbacks are isolated from one another. Every hook receives
-    `after_put`, `after_update`, `after_get`, `after_traverse`,
-    `after_add_link`, `after_update_link`, `after_structure_change`,
-    `after_delete`, `on_denied`, and `on_operation_end` even when another
-    hook raises, and a recursive delete reports every removed block before any
-    failure surfaces. What these callbacks report is already decided, so
-    stopping at the first failure would only destroy the records the remaining
-    hooks and blocks are owed. Collected failures are still reported: they are
-    attached as notes to an exception the caller is already receiving, raised
-    when there is none, and merely logged for hooks that declare `fail_open`.
+    Isolated callbacks:
+        - Every hook receives `after_put`, `after_update`, `after_get`,
+          `after_traverse`, `after_add_link`, `after_update_link`,
+          `after_structure_change`, `after_delete`, `on_denied`, and
+          `on_operation_end` even when another hook raises. A recursive delete
+          reports every removed block before any failure surfaces.
+        - What these callbacks report is already decided, so stopping at the
+          first failure would only destroy the records the remaining hooks and
+          blocks are owed.
+        - Collected failures are still reported: attached as notes to an
+          exception the caller is already receiving, raised when there is none,
+          and merely logged for hooks that declare `fail_open`.
 
-    Callbacks that can still change what the caller stores or receives, meaning
-    every `before_` callback and `after_search`, fail fast and ignore
-    `fail_open`.
+    Fail-fast callbacks:
+        - Every `before_` callback and `after_search` can still change what the
+          caller stores or receives, so they fail fast and ignore `fail_open`.
 
-    Which hooks are installed is itself auditable. Registration is by object
-    identity and rejects a repeat, so a hook cannot be dispatched twice and
-    report one operation as two. `hooks` lists what is installed, so startup
-    can assert that an audit hook is present. A hook registered as mandatory
-    can be neither unregistered nor suppressed.
+    Auditable membership:
+        - Registration is by object identity and rejects a repeat, so a hook
+          cannot be dispatched twice and report one operation as two.
+        - `hooks` lists what is installed, so startup can assert that an audit
+          hook is present.
+        - A hook registered as mandatory can be neither unregistered nor
+          suppressed.
 
-    Suppressing anything is an operation. `on_suppressed` is isolated like the
-    other observing callbacks, but it reports work that has not happened yet, so
-    a failure there refuses the window rather than being reported after it.
+    Suppression:
+        - Suppressing anything is an operation.
+        - `on_suppressed` is isolated like the other observing callbacks, but
+          it reports work that has not happened yet, so a failure there refuses
+          the window rather than being reported after it.
     """
 
     def __init__(
@@ -271,12 +277,13 @@ class HookRegistry:
     ) -> Generator[HookContext, None, None]:
         """Group the memory operations of one caller-defined logical span.
 
-        A scope names work Genie does not model, such as an agent run, a turn,
-        or a tool call. It opens causal context without dispatching any
-        callback: operations started inside it become children of the scope and
-        inherit its attributes at any nesting depth. Hooks therefore receive
-        the grouping key on every event without the scope itself appearing as
-        an operation.
+        - A scope names work Genie does not model, such as an agent run, a
+          turn, or a tool call.
+        - It opens causal context without dispatching any callback. Operations
+          started inside it become children of the scope and inherit its
+          attributes at any nesting depth.
+        - So hooks receive the grouping key on every event without the scope
+          itself appearing as an operation.
 
         Args:
             name: Caller-defined span name, such as `"agent.turn"`. Scope
@@ -327,16 +334,19 @@ class HookRegistry:
         """Temporarily suppress this registry or selected hooks.
 
         This trusted escape hatch is intended for migrations and carefully
-        controlled hook-internal writes. Normal recursive callbacks are
-        handled automatically and do not require suppression.
+        controlled hook-internal writes. Normal recursive callbacks are handled
+        automatically and do not require suppression.
 
         Turning hooks off is the one thing a trail cannot afford to lose, so a
-        window is an operation rather than a silent gap. Every hook receives
-        `on_suppressed` before dispatch stops, including the hooks being
-        suppressed; the operations performed inside report the window as their
-        parent; and every hook receives the window's terminal event once
-        dispatch is restored. A mandatory hook keeps reporting throughout, so
-        it witnesses the window and its contents rather than only its edges.
+        window is an operation rather than a silent gap:
+
+        - Every hook receives `on_suppressed` before dispatch stops, including
+          the hooks being suppressed.
+        - The operations performed inside report the window as their parent.
+        - Every hook receives the window's terminal event once dispatch is
+          restored.
+        - A mandatory hook keeps reporting throughout, so it witnesses the
+          window and its contents rather than only its edges.
 
         Args:
             *hooks: Specific hooks to suppress. Omit to suppress the complete

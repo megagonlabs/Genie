@@ -1,22 +1,24 @@
 """A tool interface and deterministic agent for the LangMem lamp.
 
-LangMem gives an agent two ways to write memory and expects both to be used.
-The hot path is a tool the agent calls mid-conversation, when it notices
-something worth keeping. The background path is a queued reflection that reads
-the whole exchange afterwards and proposes changes to what is already on file.
-They are different tools with different guardrails: the hot-path tool is
+LangMem gives an agent two ways to write memory and expects both to be used:
+
+- The hot path is a tool the agent calls mid-conversation, when it notices
+  something worth keeping.
+- The background path is a queued reflection that reads the whole exchange
+  afterwards and proposes changes to what is already on file.
+
+They are different tools with different guardrails. The hot-path tool is
 restricted by `actions_permitted`, the manager by `enable_inserts` and its
-siblings, and this module keeps both gates so the difference is visible in the
-call log.
+siblings. This module keeps both gates, so the difference is visible in the call
+log.
 
-Every tool is bound to a namespace template resolved once, at construction, from
-request-scoped values. So no tool argument names a user, and a tool set built for
-one user cannot address another's memories.
-
-The agent decides which tools to call from explicit inputs rather than from a
-model, which keeps the example runnable with no API key. Extraction and prompt
-rewriting are the two steps that genuinely need a model upstream, so the agent
-receives proposed changes and keyed feedback rules already formed.
+- Every tool is bound to a namespace template resolved once, at construction,
+  from request-scoped values. So no tool argument names a user, and a tool set
+  built for one user cannot address another's memories.
+- The agent decides which tools to call from explicit inputs rather than from a
+  model, which keeps the example runnable with no API key. Extraction and prompt
+  rewriting are the two steps that genuinely need a model upstream, so the agent
+  receives proposed changes and keyed feedback rules already formed.
 """
 
 from __future__ import annotations

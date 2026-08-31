@@ -27,33 +27,22 @@ receives one backend object.
 
 ### Conditional writes
 
-- `update_block(..., expected_version=...)` succeeds only when the stored
-  version matches. The replacement must raise the version by one.
-- `delete_block(..., expected_versions=...)` succeeds only when the mapping
-  matches the current subtree exactly.
-
-`Memory.set`, `Memory.update`, and `Memory.delete` pass these expectations
-after they authorize the request. A backend must check and change state in one
-atomic step, which means the check and the change happen together so that no
-other writer can slip in between them. Passing `None` lets trusted
-backend-level administration make an unconditional change.
+- **`update_block(..., expected_version=...)`** succeeds only when the stored version matches. The replacement must raise the version by one.
+- **`delete_block(..., expected_versions=...)`** succeeds only when the mapping matches the current subtree exactly.
+- **`Memory.set`, `Memory.update`, and `Memory.delete`** pass these expectations after they authorize the request.
+- **Atomicity is required.** A backend must check and change state in one atomic step, which means the check and the change happen together so that no other writer can slip in between them.
+- **`None` skips the check,** which lets trusted backend-level administration make an unconditional change.
 
 ### Retried commits
 
-An adapter that talks to a server over a network can lose the reply to a commit
-the server already applied. It cannot tell that apart from a commit that never
-happened, so a retry may run the same operation a second time. Write each
-operation so that a repeat is either rejected by its own uniqueness check or
-ends at the same state. `append_log_entry` is the one operation with no
-uniqueness key, so a repeat appends the same block again at a new sequence.
-State in the adapter README what its retry does, and let an application that
-needs exactly-once appends carry its own token in the block.
+- **A lost reply is indistinguishable from a lost commit.** An adapter that talks to a server over a network can lose the reply to a commit the server already applied, so a retry may run the same operation a second time.
+- **Write every operation so a repeat is safe:** either rejected by its own uniqueness check, or ending at the same state.
+- **`append_log_entry` is the exception.** It has no uniqueness key, so a repeat appends the same block again at a new sequence.
 
 ### Errors
 
-Raise `MemoryConflict` for expected conflicts of identity, version, or
-structure. Map storage failures to a `BackendError` subclass, and keep the
-original driver error as `__cause__`:
+- **`MemoryConflict`** for expected conflicts of identity, version, or structure.
+- **A `BackendError` subclass** for storage failures. Keep the original driver error as `__cause__`.
 
 | Error | Meaning |
 | --- | --- |
@@ -65,27 +54,20 @@ original driver error as `__cause__`:
 
 ## Stores and indexes
 
-A store owns the source of truth and can change it. `BlockStore` owns blocks,
-`LinkStore` owns links, and the optional structure capabilities own keyed,
-sequence, and temporal state. `TraversalIndex` and `SearchIndex` are read-only
-views over that state, so they have no write methods.
+- **A store owns the source of truth** and can change it: `BlockStore` owns blocks, `LinkStore` owns links, and the optional structure capabilities own keyed, sequence, and temporal state.
+- **An index is a read-only view** over that state, so `TraversalIndex` and `SearchIndex` have no write methods.
 
 | Index | Derived from |
 | --- | --- |
 | `TraversalIndex` | `MemoryBlock.parent_id` in the block store |
 | `SearchIndex` | Block state, plus link state for `Scope.LINKS` |
 
-One database may act as both a store and an index. The split describes who owns
-the data, not how you must deploy it. When a single adapter holds both the
-stores and its own indexes, keeping them in step is that adapter's own business.
+- **One database may act as both.** The split describes who owns the data, not how you must deploy it. When a single adapter holds both the stores and its own indexes, keeping them in step is that adapter's own business.
 
-Supplying an index separately adds two responsibilities. First, `Memory` works
-out ownership only through `TraversalIndex` and never reads `parent_id` itself.
-So a supplied traversal index decides subtree scope, traversal, and recursive
-deletion, and it must agree with the block store. Second, these contracts have
-no method that lists every block. Rebuilding an index from the stores is
-therefore a job you do outside these contracts. It needs native storage access,
-or a set of root ids that the application keeps.
+**Supplying an index separately adds two responsibilities:**
+
+1. **Traversal defines scope.** `Memory` works out ownership only through `TraversalIndex` and never reads `parent_id` itself. So a supplied traversal index decides subtree scope, traversal, and recursive deletion, and it must agree with the block store.
+2. **Rebuilding happens outside these contracts.** They have no method that lists every block, so a rebuild needs native storage access, or a set of root ids that the application keeps.
 
 ## Implementations
 
@@ -110,9 +92,9 @@ genie/backend/
 | Key-value | `RedisBackend` | [Redis](key_value/README.md) |
 | Composite | `RoutedBackend` | [Composite](composite/README.md) |
 
-The shared protocols stay at the package root. Genie does not yet ship document,
-columnar, or time-series adapters. Every bundled class can be imported from
-`genie` and from `genie.backend`.
+- **Shared protocols stay at the package root.**
+- **Not shipped yet:** document, columnar, and time-series adapters.
+- **Imports:** every bundled class can be imported from `genie` and from `genie.backend`.
 
 ## Small production deployments
 
@@ -127,14 +109,10 @@ handling, schema checks, and all the optional structure capabilities.
 | `Neo4jBackend` | Applications that already run a managed Neo4j server | Configure TLS, credentials, backups, monitoring, and capacity |
 | `RedisBackend` | Applications that already run a single managed Redis server, not a Redis Cluster, and want low-latency shared memory | Configure persistence (RDB or AOF), `maxmemory-policy noeviction`, TLS, credentials, memory limits, and backups |
 
-Write through the Genie backend instead of editing its stored records directly.
-PostgreSQL and Neo4j writes run one at a time to stay correct, Redis writes
-retry instead of blocking when they lose an optimistic conflict, and portable
-search scans candidate blocks. When your dataset or your traffic grows past these limits, use
-a dedicated search implementation or a larger storage design.
-
-Genie is still an alpha library. Data safety in a backend and stability of the
-public API are two separate questions.
+- **Write through the Genie backend** instead of editing its stored records directly.
+- **Known throughput limits:** server-backed relational and graph writes run one at a time to stay correct, key-value writes retry instead of blocking when they lose an optimistic conflict, and portable search scans candidate blocks.
+- **Past those limits,** use a dedicated search implementation or a larger storage design.
+- **Alpha status is a separate question.** Data safety in a backend and stability of the public API are not the same thing.
 
 ## Optional structure capabilities
 
@@ -146,32 +124,24 @@ public API are two separate questions.
 | `TemporalStore` | Temporal membership and stable paging |
 | `TemporalIndex` | Optional prefiltering for temporal queries |
 
-These are not part of `MemoryBackend`. An adapter implements only the ones it
-supports. A structure facade takes the store separately from the access object,
-so it can bind to whichever adapter holds the records.
-
-`BlockRouter` is the one capability that a composite backend adds. It reports
-which backend owns a block. When a facade is given a router, it resolves the
-block through the router before it checks for a structure capability. Routing is
-not a claim about storage: a composite that implements `BlockRouter` still
-advertises only what it implements itself. `VersionedRecords` combines
-`KeyedStore` and `SequenceStore` and adds no new backend method. An
-implementation that is split internally must coordinate cleanup and transactions
-so that it never leaves structure records pointing at nothing.
+- **Not part of `MemoryBackend`.** An adapter implements only the ones it supports.
+- **A facade takes the store separately** from the access object, so it can bind to whichever adapter holds the records.
+- **`BlockRouter`** is the one capability a composite backend adds. It reports which backend owns a block. When a facade is given a router, it resolves the block through the router before it checks for a structure capability.
+- **Routing is not a claim about storage.** A composite that implements `BlockRouter` still advertises only what it implements itself.
+- **`VersionedRecords`** combines `KeyedStore` and `SequenceStore` and adds no new backend method.
+- **An internally split implementation** must coordinate cleanup and transactions so that it never leaves structure records pointing at nothing.
 
 ## Adapter checklist
 
 A production adapter should:
 
-- reject duplicate ids and parent cycles;
-- keep ownership correct, and clean up dependent state on deletion;
-- return copies rather than internal objects, and page results in a stable
-  order;
-- atomically enforce block versions, subtree snapshots, keyed updates,
-  sequences, and DAG insertion;
-- document what a retried commit repeats, if it retries at all;
-- map operational failures to `BackendError`; and
-- return normalized `SearchResult` values.
+- **Reject** duplicate ids and parent cycles.
+- **Keep ownership correct,** and clean up dependent state on deletion.
+- **Return copies** rather than internal objects, and page results in a stable order.
+- **Enforce atomically:** block versions, subtree snapshots, keyed updates, sequences, and DAG insertion.
+- **Document what a retried commit repeats,** if it retries at all.
+- **Map operational failures** to `BackendError`.
+- **Return normalized `SearchResult` values.**
 
 The reusable [backend
 contracts](../../tests/backends/test_backend_contracts.py) cover the optional

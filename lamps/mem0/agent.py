@@ -1,21 +1,23 @@
 """A tool interface and deterministic agent for the Mem0 lamp.
 
 Mem0 is used through a small set of calls, and the interesting thing about them
-is how little the caller controls. An agent hands over an exchange; what gets
-stored, replaced, or removed is decided by the pipeline, and the agent finds out
-afterwards by reading the events it returns. That asymmetry is why the tools
-here return the decisions rather than a success flag: the call log is where the
-agent's memory writes become inspectable.
+is how little the caller controls.
 
-The user and agent identifiers are bound once, at construction, so no tool
-argument can name another user's memories. A run is a tool argument, because a
-run is one conversation and upstream passes it per call — but it can only narrow
-the bound scope, never leave it.
-
-The example agent chooses its calls from explicit inputs rather than from a
-model, which keeps the demo runnable with no API key. Extraction and the
-add-or-replace-or-forget judgment are the two steps that genuinely need a model
-upstream, so the agent receives candidate facts and relationships already formed.
+- An agent hands over an exchange. What gets stored, replaced, or removed is
+  decided by the pipeline, and the agent finds out afterwards by reading the
+  events it returns.
+- That asymmetry is why the tools here return the decisions rather than a
+  success flag. The call log is where the agent's memory writes become
+  inspectable.
+- The user and agent identifiers are bound once, at construction, so no tool
+  argument can name another user's memories.
+- A run is a tool argument, because a run is one conversation and upstream
+  passes it per call. It can only narrow the bound scope, never leave it.
+- The example agent chooses its calls from explicit inputs rather than from a
+  model, which keeps the demo runnable with no API key. Extraction and the
+  add-or-replace-or-forget judgment are the two steps that genuinely need a
+  model upstream, so the agent receives candidate facts and relationships
+  already formed.
 """
 
 from __future__ import annotations

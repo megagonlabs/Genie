@@ -1,17 +1,23 @@
 """The change history Mem0 keeps beside its memories.
 
-Mem0 runs a second store purely for provenance. Every write the pipeline
-applies appends a row saying which memory changed, what it said before, what it
-says now, which of `ADD`, `UPDATE`, or `DELETE` happened, and who the turn came
-from. `Memory.history(memory_id)` reads the rows for one memory. A decision of
-`NONE` writes nothing, so the history records changes rather than attempts.
+Mem0 runs a second store purely for provenance.
 
-Two Genie facades over the same event blocks give both readings. Anchored on
-one identity per memory, `VersionedRecords` is that memory's own history in
-order. Anchored on the tier, `EventLog` is the journal across every memory in
-the order changes were applied. The events are owned by the history tier rather
-than by the memory they describe, which is the point: a deleted memory still
-has a readable history, and its final row is the deletion.
+- Every write the pipeline applies appends a row saying which memory changed,
+  what it said before, what it says now, which of `ADD`, `UPDATE`, or `DELETE`
+  happened, and who the turn came from.
+- `Memory.history(memory_id)` reads the rows for one memory.
+- A decision of `NONE` writes nothing, so the history records changes rather
+  than attempts.
+
+Two Genie facades over the same event blocks give both readings:
+
+- `VersionedRecords`, anchored on one identity per memory, is that memory's own
+  history in order.
+- `EventLog`, anchored on the tier, is the journal across every memory in the
+  order changes were applied.
+- The events are owned by the history tier rather than by the memory they
+  describe, which is the point: a deleted memory still has a readable history,
+  and its final row is the deletion.
 """
 
 from __future__ import annotations

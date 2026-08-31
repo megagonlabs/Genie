@@ -1,20 +1,25 @@
 """The two phases every Mem0 write goes through.
 
 Mem0 does not store what you tell it. A call to `add` hands it messages, and it
-runs them through two model passes before anything is written. The first pass
-reads the exchange and emits candidate facts. The second pass takes each
-candidate, fetches the stored memories most similar to it, and returns one of
-four operations: `ADD` it beside them, `UPDATE` one of them in place, `DELETE`
-one they contradict, or `NONE`. That second pass is what makes Mem0 a memory
-system rather than a store, because it is the part that decides what to forget.
+runs them through two model passes before anything is written:
+
+1. Extraction reads the exchange and emits candidate facts.
+2. The update phase takes each candidate, fetches the stored memories most
+   similar to it, and returns one of four operations: `ADD` it beside them,
+   `UPDATE` one of them in place, `DELETE` one they contradict, or `NONE`.
+
+The second pass is what makes Mem0 a memory system rather than a store, because
+it is the part that decides what to forget.
 
 Both passes are model calls upstream, and the lamp runs with no model, so both
-are replaced by something deterministic. Extraction takes candidates the caller
-already formed, the way the other lamps take declared changes. The decision is
-computed from the same two inputs the model gets — the candidate and the stored
-memories nearest to it — using an exact-repeat check on Mem0's own digest, a
-similarity floor, and the extractor's statement of whether the candidate
-contradicts what came before.
+are replaced by something deterministic:
+
+- Extraction takes candidates the caller already formed, the way the other lamps
+  take declared changes.
+- The decision is computed from the same two inputs the model gets - the
+  candidate and the stored memories nearest to it - using an exact-repeat check
+  on Mem0's own digest, a similarity floor, and the extractor's statement of
+  whether the candidate contradicts what came before.
 
 Nothing here writes to Genie. The decisions are returned so the caller applies
 them, which is also why they can be printed and asserted on.
@@ -142,11 +147,16 @@ class MemoryUpdater:
     def decide(self, fact: Fact, neighbors: Sequence[tuple[StoredMemory, float]]) -> Decision:
         """Return the operation one candidate fact calls for.
 
-        The four outcomes are the ones Mem0's update prompt chooses between, and
-        they are decided in the same order it describes. A candidate already on
-        file word for word is a `NONE`, because a repeat is not a change. One
-        close enough to a stored memory either replaces its wording or, when the
-        extractor says it contradicts it, removes it. Anything else is new.
+        The four outcomes are the ones Mem0's update prompt chooses between,
+        decided in the same order it describes:
+
+        - `NONE` when the candidate is already on file word for word, because a
+          repeat is not a change.
+        - `UPDATE` when it is close enough to a stored memory to replace its
+          wording.
+        - `DELETE` when it is that close and the extractor says it contradicts
+          it.
+        - `ADD` for anything else.
 
         Args:
             fact: Candidate from the extraction phase.

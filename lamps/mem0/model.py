@@ -2,14 +2,17 @@
 
 Mem0 stores one thing: a short natural-language memory, addressed by an id and
 scoped by the identifiers of the session it came from. Everything else in the
-system is a decision about that record — whether a new fact should be added
-beside it, folded into it, or allowed to remove it — and a row in the history
+system is a decision about that record - whether a new fact should be added
+beside it, folded into it, or allowed to remove it - and a row in the history
 table saying which of those happened.
 
-This module holds the four things the rest of the lamp shares: the block types
-that keep memories, history events, and graph entities apart, the session type
-that carries `user_id`, `agent_id`, and `run_id`, the read-only records the
-stores hand back, and the text helpers the deterministic pipeline scores with.
+This module holds the four things the rest of the lamp shares:
+
+- the block types that keep memories, history events, and graph entities apart;
+- the session type that carries `user_id`, `agent_id`, and `run_id`;
+- the read-only records the stores hand back; and
+- the text helpers the deterministic pipeline scores with.
+
 Nothing here writes to Genie, so every other module can depend on it without a
 cycle.
 """
@@ -316,12 +319,14 @@ def relation_label(relation: str) -> str:
 class Session:
     """The identifiers Mem0 scopes a memory by.
 
-    Upstream these are flat payload fields and a search filters on whichever of
-    them the caller supplied. This lamp mirrors the supplied ones as an
-    ownership path instead, in the fixed order below, because "filter on the ids
-    I gave you" and "look below the block those ids name" select exactly the
-    same memories — and the second one also answers what a filter cannot, which
-    is what happens to those memories when the user goes away.
+    - Upstream these are flat payload fields, and a search filters on whichever
+      of them the caller supplied.
+    - This lamp mirrors the supplied ones as an ownership path instead, in the
+      fixed order below.
+    - Why: "filter on the ids I gave you" and "look below the block those ids
+      name" select exactly the same memories. The second also answers what a
+      filter cannot, which is what happens to those memories when the user goes
+      away.
 
     Attributes:
         user_id: Person the memories belong to.
@@ -832,11 +837,13 @@ def memory_value(
 def memory_metadata(session: Session, memory_id: str, text: str, *, kind: str, metadata: Mapping[str, Any]) -> dict[str, Any]:
     """Return the portable index metadata stored beside a memory.
 
-    Mem0 keeps the session identifiers in the vector payload so a search can
-    filter on them. The same fields are duplicated into block metadata here so
-    Genie can narrow a search without the lamp decoding every candidate first.
-    Application metadata is copied in as well, because upstream a search filter
-    may name any payload field; the indexed fields win a name collision.
+    - Mem0 keeps the session identifiers in the vector payload so a search can
+      filter on them.
+    - The same fields are duplicated into block metadata here, so Genie can
+      narrow a search without the lamp decoding every candidate first.
+    - Application metadata is copied in as well, because upstream a search
+      filter may name any payload field. The indexed fields win a name
+      collision.
 
     Args:
         session: Scope the memory was formed in.

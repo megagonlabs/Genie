@@ -1,17 +1,16 @@
 """Community nodes for the Graphiti-inspired lamp.
 
-Graphiti's third subgraph groups related entities into community nodes whose
-summaries collate the summaries of their members, giving a view above the
-granular facts stored on edges. Upstream finds those groups with label
-propagation so that they can be extended one entity at a time.
-
-This lamp keeps the community subgraph but not the clustering algorithm. A
-community here is a connected component of the entities linked by the facts
-valid on one bi-temporal slice, which is coarser than label propagation and
-needs no scoring: the grouping falls out of the graph Genie already stores. What
-the lamp does demonstrate is that community nodes are ordinary owned blocks with
-typed `has_member` edges, so a rebuild is a subtree delete and membership is a
-graph read.
+- Upstream: Graphiti's third subgraph groups related entities into community
+  nodes whose summaries collate the summaries of their members, giving a view
+  above the granular facts stored on edges. It finds those groups with label
+  propagation, so a group can be extended one entity at a time.
+- Here: the lamp keeps the community subgraph but not the clustering algorithm.
+  A community is a connected component of the entities linked by the facts valid
+  on one bi-temporal slice. That is coarser than label propagation and needs no
+  scoring, because the grouping falls out of the graph Genie already stores.
+- What it demonstrates: community nodes are ordinary owned blocks with typed
+  `has_member` edges, so a rebuild is a subtree delete and membership is a graph
+  read.
 """
 
 from __future__ import annotations

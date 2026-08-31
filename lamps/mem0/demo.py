@@ -119,17 +119,17 @@ def build_agent() -> Mem0Agent:
 def teach_agent(agent: Mem0Agent) -> str:
     """Run every write path Mem0 offers and return the seat memory's id.
 
-    The first exchange has nothing to reconcile against, so all five candidates
-    are added. The second is where the update phase earns its keep: the new seat
-    preference replaces the old one in place, the repeated diet fact is a
-    no-write, and the layover retraction removes the memory it contradicts. The
-    same turn retracts one graph relationship and adds another.
-
-    After that come the paths that skip the pipeline. One procedural summary
-    records how the task was carried out, a later conversation is transcribed
-    verbatim in its own run, and two memories are changed by the caller rather
-    than by the pipeline: one corrected in place and one deleted outright.
-    Finally the transcript run is retired in a single call.
+    - First exchange: nothing to reconcile against, so all five candidates are
+      added.
+    - Second exchange: the update phase earns its keep. The new seat preference
+      replaces the old one in place, the repeated diet fact is a no-write, and
+      the layover retraction removes the memory it contradicts. The same turn
+      retracts one graph relationship and adds another.
+    - Then the paths that skip the pipeline: one procedural summary of how the
+      task was carried out, a later conversation transcribed verbatim in its own
+      run, and two memories changed by the caller rather than by the pipeline -
+      one corrected in place and one deleted outright.
+    - Finally the transcript run is retired in a single call.
 
     Args:
         agent: Agent to teach.

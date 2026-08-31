@@ -6,16 +6,19 @@ count, gets stronger when more evidence arrives, gets extended when the evidence
 adds nuance, and records the whole journey rather than being overwritten when
 the evidence reverses.
 
-Three Genie structures carry that behavior. `VersionedRecords` gives each belief
-a stable identity and an ordered history, so "what did we used to think?" is a
-read rather than an audit table the lamp has to keep. `LineageDAG` holds the
-evidence edges, so the proof count is counted off the graph instead of stored
-and kept in sync. And the retention `EventLog` supplies the cursor: consolidation
-processes the facts appended since it last ran, which is also how an observation
-knows it has gone stale.
+Three Genie structures carry that behavior:
 
-What the lamp supplies is the judgment Hindsight asks a language model for.
-Each extracted fact names the belief it speaks to and whether it supports or
+- `VersionedRecords` gives each belief a stable identity and an ordered history,
+  so "what did we used to think?" is a read rather than an audit table the lamp
+  has to keep.
+- `LineageDAG` holds the evidence edges, so the proof count is counted off the
+  graph instead of stored and kept in sync.
+- The retention `EventLog` supplies the cursor. Consolidation processes the
+  facts appended since it last ran, which is also how an observation knows it
+  has gone stale.
+
+What the lamp supplies is the judgment Hindsight asks a language model for. Each
+extracted fact names the belief it speaks to and whether it supports or
 contradicts it, so grouping and reconciliation stay deterministic.
 """
 

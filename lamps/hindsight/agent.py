@@ -1,17 +1,18 @@
 """A tool interface and deterministic agent for the Hindsight lamp.
 
-Hindsight is a service an agent calls. It retains payloads, consolidates them
-in the background, keeps standing answers current, and serves recall and
+Hindsight is a service an agent calls. It retains payloads, consolidates them in
+the background, keeps standing answers current, and serves recall and
 reflection. This module exposes that surface as named tools with
 JSON-compatible arguments and results, so an application could hand the same
 definitions to a function-calling loop without changing the bank underneath.
 
-The agent decides which tools to call from explicit inputs rather than from a
-model, which keeps the example runnable with no API key. Fact extraction is the
-step that genuinely needs a language model upstream, so the agent receives
-already-extracted facts. Consolidation, which upstream runs automatically after
-every `retain`, is an explicit call here for the same reason: the example should
-show when it happened.
+Two deliberate simplifications keep the example runnable with no API key:
+
+- The agent decides which tools to call from explicit inputs rather than from a
+  model, and receives already-extracted facts. Fact extraction is the step that
+  genuinely needs a language model upstream.
+- Consolidation is an explicit call, though upstream runs it automatically after
+  every `retain`, so the example can show when it happened.
 """
 
 from __future__ import annotations

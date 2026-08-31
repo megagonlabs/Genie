@@ -1,23 +1,26 @@
 """Four-way recall over facts and observations, fused and capped at a budget.
 
 Hindsight does not answer a query from one index. It runs four retrievers at
-once — semantic, keyword, graph, and temporal — fuses their ranked lists with
-reciprocal rank fusion, and then fills a token budget rather than returning a
-fixed number of rows. Observations ride along with raw facts, so a consolidated
-belief can outrank the sentences it was built from.
+once - semantic, keyword, graph, and temporal - fuses their ranked lists with
+reciprocal rank fusion, then fills a token budget rather than returning a fixed
+number of rows. Observations ride along with raw facts, so a consolidated belief
+can outrank the sentences it was built from.
 
 Three of the four retrievers are Genie calls, which is the point of showing this
-recipe at all. `keyword` issues one `MemoryHandle.search` per query term, so the
-portable query layer does the matching. `graph` walks the `PropertyGraph`
-outward from an entity, which reaches the facts that mention it, the facts those
-are linked to, and the observations derived from them. `temporal` reads the
-`TemporalCollection` on both of its axes: facts learned inside the window, and
-facts describing a period that overlaps it. Only `similarity` is hand-written,
-as a visible stand-in for embeddings.
+recipe at all:
+
+- `keyword` issues one `MemoryHandle.search` per query term, so the portable
+  query layer does the matching.
+- `graph` walks the `PropertyGraph` outward from an entity, which reaches the
+  facts that mention it, the facts those are linked to, and the observations
+  derived from them.
+- `temporal` reads the `TemporalCollection` on both of its axes: facts learned
+  inside the window, and facts describing a period that overlaps it.
+- Only `similarity` is hand-written, as a visible stand-in for embeddings.
 
 Fusion and the budget are the lamp's own code, because ranking is exactly what
 Genie leaves to applications. Hindsight's cross-encoder reranker and its
-recency, temporal-proximity, and proof-count boosts are not reproduced; the
+recency, temporal-proximity, and proof-count boosts are not reproduced. The
 README lists them as omissions.
 """
 

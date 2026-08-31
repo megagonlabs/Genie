@@ -1,18 +1,20 @@
 """Mental models: standing questions with an answer already written down.
 
-An observation is discovered; a mental model is commissioned. A caller names a
-question once — "what should I know before changing this service?" — and the
-bank keeps an answer to it current in the background, so reading it at request
-time is a lookup instead of a retrieval and a synthesis. Hindsight rebuilds a
-model only when memories inside its scope actually change, and it keeps the
-previous versions so the drift is inspectable.
+An observation is discovered. A mental model is commissioned.
+
+- A caller names a question once - "what should I know before changing this
+  service?" - and the bank keeps an answer to it current in the background. So
+  reading it at request time is a lookup instead of a retrieval and a synthesis.
+- Hindsight rebuilds a model only when memories inside its scope actually
+  change, and it keeps the previous versions so the drift is inspectable.
 
 This is `VersionedRecords` almost verbatim: the standing question is the stable
 identity, each rebuild is a revision, `current` is the fast read, and `history`
-is the drift. The lamp adds two rules of its own — which memories are in scope,
-and how the answer is composed from them — and Genie supplies the rest,
-including the `LineageDAG` edges that say which observations a given version was
-written from.
+is the drift.
+
+The lamp adds two rules of its own - which memories are in scope, and how the
+answer is composed from them. Genie supplies the rest, including the
+`LineageDAG` edges that say which observations a given version was written from.
 """
 
 from __future__ import annotations
