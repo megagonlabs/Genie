@@ -9,6 +9,7 @@ from genie.backend.composite import (
     RouteKey,
     RouteSelector,
 )
+from genie.backend.document import MongoDBBackend
 from genie.backend.graph import Neo4jBackend
 from genie.backend.in_memory import InMemoryBackend
 from genie.backend.key_value import RedisBackend
@@ -30,6 +31,7 @@ __all__ = [
     "KeyedStore",
     "LinkStore",
     "MemoryBackend",
+    "MongoDBBackend",
     "Neo4jBackend",
     "PostgresBackend",
     "RedisBackend",

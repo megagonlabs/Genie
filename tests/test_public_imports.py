@@ -14,6 +14,7 @@ def test_package_all_exports_are_importable() -> None:
         "genie",
         "genie.backend",
         "genie.backend.composite",
+        "genie.backend.document",
         "genie.backend.graph",
         "genie.backend.in_memory",
         "genie.backend.key_value",
@@ -42,6 +43,7 @@ def test_layered_import_styles_work_for_common_types() -> None:
         Memory,
         MemoryBlock,
         MemoryHandle,
+        MongoDBBackend,
         Neo4jBackend,
         PolicyEngine,
         RedisBackend,
@@ -51,6 +53,7 @@ def test_layered_import_styles_work_for_common_types() -> None:
         TemporalStore,
     )
     from genie.backend.composite import RoutedBackend as CompositeRoutedBackend
+    from genie.backend.document import MongoDBBackend as DocumentMongoDBBackend
     from genie.backend.graph import Neo4jBackend as GraphNeo4jBackend
     from genie.backend.in_memory import InMemoryBackend as GroupedInMemoryBackend
     from genie.backend.key_value import RedisBackend as KeyValueRedisBackend
@@ -95,6 +98,7 @@ def test_layered_import_styles_work_for_common_types() -> None:
     assert SequenceStore is not None
     assert SQLiteBackend is not None
     assert Neo4jBackend is GraphNeo4jBackend
+    assert MongoDBBackend is DocumentMongoDBBackend
     assert RedisBackend is KeyValueRedisBackend
     assert CompositeRoutedBackend is not None
     assert GroupedInMemoryBackend is not None

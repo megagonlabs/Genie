@@ -45,7 +45,7 @@ datasets can share one Redis database by using different prefixes.
 
 - **Portable encodings** are used for values, metadata, policies, namespaces, and timestamps, instead of Redis-specific value types.
 - **Optimistic concurrency.** The read phase records the value of `genie:mutations`. The commit phase re-checks that value under `WATCH` before it applies every staged change in one `MULTI`/`EXEC` block. A write that would commit on stale reads is retried instead.
-- **Same atomic behavior as the relational and graph adapters:** compare-and-swap updates, conditional subtree deletion, unique key bindings, monotonic sequences, and cycle-checked DAG insertion.
+- **Same atomic behavior as `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, and `MongoDBBackend`:** compare-and-swap updates, conditional subtree deletion, unique key bindings, monotonic sequences, and cycle-checked DAG insertion.
 - **Every commit writes a fresh token** into `genie:mutations`, so a retry can tell whether its own earlier commit landed.
 - **Deleting a block removes the whole subtree** together with its links, key bindings, log entries, and temporal entries in the same commit. Reverse indexes make that cleanup exact instead of a full scan.
 - **Link cleanup reads only the endpoint index,** never the link documents, so a link document that is already gone cannot leave its index entries behind.
@@ -91,7 +91,7 @@ Set either one to `0` to turn it off.
 - **A command that timed out on the server is not retried.** It reached the server and then ran past `socket_timeout`, so the server may still be running it and a second attempt would spend the whole timeout again. That case reaches the caller as `BackendBusy`, which is retryable.
 - **Opening a connection is retried too,** so plan for it when you pick the two timeouts. A server that refuses the connection answers at once and is tried once. A server that accepts nothing and answers nothing, such as a firewalled address, is tried `transport_retries` more times, and each try may last `connect_timeout`. At the defaults that is four tries of ten seconds before the caller sees `BackendBusy`. Lower `connect_timeout`, `transport_retries`, or both if you need to fail faster.
 - **A retry never sends the same write command twice.** Every Genie write runs inside `WATCH`/`MULTI`/`EXEC`, and while a watch is open the client refuses to send those commands again: it reports the dropped connection as a watch conflict instead, and the backend answers that with a fresh attempt that re-reads current state. Every other command the backend sends on its own is a read, so sending one twice changes nothing.
-- **One case is left over, and it is not new.** When the connection dies after the server ran `EXEC` but before the client could read the reply, nobody knows whether the write committed. The client reports a watch conflict, and the fresh attempt re-reads current state and usually answers correctly: a repeated `put_block` finds the id taken, and a repeated conditional `update_block` finds the version already raised. `append_log_entry` is the one operation with nothing to compare against, so that exact failure can append a second entry. The graph adapter has the same gap, because a managed transaction whose commit reply is lost is retried the same way.
+- **One case is left over, and it is not new.** When the connection dies after the server ran `EXEC` but before the client could read the reply, nobody knows whether the write committed. The client reports a watch conflict, and the fresh attempt re-reads current state and usually answers correctly: a repeated `put_block` finds the id taken, and a repeated conditional `update_block` finds the version already raised. `append_log_entry` is the one operation with nothing to compare against, so that exact failure can append a second entry. `Neo4jBackend` and `MongoDBBackend` have the same gap, because a write whose commit reply is lost is retried the same way there.
 - **`transport_retries` and `max_retry_time` are separate budgets.** `transport_retries` counts reconnects after the connection drops. `max_retry_time` bounds how long an attempt may keep losing optimistic conflicts to other writers before it raises `BackendBusy`. Neither one covers the other.
 
 ## Concurrency
@@ -106,11 +106,11 @@ Set either one to `0` to turn it off.
 - **The guard token helps first.** Each commit writes a fresh token into the mutation guard, and the next attempt returns its earlier result when the guard still holds that token. The token proves the commit only while no other client has committed since, because the next commit replaces it. Under concurrent writes the operation runs again.
 - **Most repeats raise `MemoryConflict`,** because the write checks for its own result first: a block id, a link id, a key address, or a temporal entry that already exists, and any `expected_version` or `expected_block_id` write whose expected value has moved. The write did land, but the caller is told it conflicted.
 - **Some repeats end at the same state:** `update_block` without a version, `rebind_key` to the same target, and every cleanup that follows a deleted block.
-- **`append_log_entry` is the exception.** It allocates the next sequence with no uniqueness key, so a repeat appends the same block a second time at a new sequence, and the caller receives the second entry. The graph adapter carries the same limit for the same reason. An application that needs exactly-once appends should carry its own token in the block and skip a duplicate on read.
+- **`append_log_entry` is the exception.** It allocates the next sequence with no uniqueness key, so a repeat appends the same block a second time at a new sequence, and the caller receives the second entry. `Neo4jBackend` and `MongoDBBackend` carry the same limit for the same reason. An application that needs exactly-once appends should carry its own token in the block and skip a duplicate on read.
 
 ### Script duration is the cost to watch
 
-- **A scripted read never retries,** so it never reports `BackendBusy` and behaves like a snapshot read on the relational and graph adapters.
+- **A scripted read never retries,** so it never reports `BackendBusy` and behaves like a snapshot read on `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, and `MongoDBBackend`.
 - **The trade:** a script holds the single-threaded server for as long as it runs, so only a read scoped to one block uses one. A scan of the whole dataset stays on the client side, where it can lose a race but cannot stall every other client.
 - **A scripted read moves no extra work onto the server** — the client-side path reads the same data — but that work now runs where every other client is waiting.
 - **What makes a script longer:** a very deep ownership chain for `ancestors` and `contains`; a block with very many direct children or connected links for `children` and `list_links`. A `relation` filter narrows `list_links` before it reads any document, but it still walks the whole endpoint index of that block.
@@ -186,5 +186,6 @@ which is the Redis default.**
 - **Optional variables:** `GENIE_REDIS_KEY_PREFIX`, `GENIE_REDIS_USER`, and `GENIE_REDIS_PASSWORD` choose the test key namespace and the authentication, and apply to both servers.
 
 Related: [Backend contracts](../README.md), [relational
-backends](../relational/README.md), [graph backends](../graph/README.md), and
-[Redis tests](../../../tests/backends/test_redis_backend.py).
+backends](../relational/README.md), [graph backends](../graph/README.md),
+[document backends](../document/README.md), and [Redis
+tests](../../../tests/backends/test_redis_backend.py).

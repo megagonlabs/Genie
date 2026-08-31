@@ -77,6 +77,7 @@ genie/backend/
   relational/sqlite.py
   relational/postgres.py
   graph/neo4j.py
+  document/mongodb.py
   key_value/redis.py
   composite/routed.py
   base.py
@@ -89,11 +90,12 @@ genie/backend/
 | In-memory | `InMemoryBackend` | [In-memory](in_memory/README.md) |
 | Relational | `SQLiteBackend`, `PostgresBackend` | [Relational](relational/README.md) |
 | Graph | `Neo4jBackend` | [Neo4j](graph/README.md) |
+| Document | `MongoDBBackend` | [MongoDB](document/README.md) |
 | Key-value | `RedisBackend` | [Redis](key_value/README.md) |
 | Composite | `RoutedBackend` | [Composite](composite/README.md) |
 
 - **Shared protocols stay at the package root.**
-- **Not shipped yet:** document, columnar, and time-series adapters.
+- **Not shipped yet:** columnar and time-series adapters.
 - **Imports:** every bundled class can be imported from `genie` and from `genie.backend`.
 
 ## Small production deployments
@@ -107,10 +109,11 @@ handling, schema checks, and all the optional structure capabilities.
 | `SQLiteBackend` | Local applications that do not write from many places at once | Use a reliable local filesystem, and manage file access and backups |
 | `PostgresBackend` | Applications that already run a PostgreSQL server and need shared access | Configure TLS, credentials, backups, monitoring, and capacity |
 | `Neo4jBackend` | Applications that already run a managed Neo4j server | Configure TLS, credentials, backups, monitoring, and capacity |
+| `MongoDBBackend` | Applications that already run a MongoDB replica set and want document storage | Configure the replica set, TLS, credentials, backups, monitoring, and capacity |
 | `RedisBackend` | Applications that already run a single managed Redis server, not a Redis Cluster, and want low-latency shared memory | Configure persistence (RDB or AOF), `maxmemory-policy noeviction`, TLS, credentials, memory limits, and backups |
 
 - **Write through the Genie backend** instead of editing its stored records directly.
-- **Known throughput limits:** server-backed relational and graph writes run one at a time to stay correct, key-value writes retry instead of blocking when they lose an optimistic conflict, and portable search scans candidate blocks.
+- **Known throughput limits:** `SQLiteBackend`, `PostgresBackend`, and `Neo4jBackend` run writes one at a time to stay correct, so the second writer waits. `RedisBackend` and `MongoDBBackend` retry the writer that lost instead of blocking it. Portable search scans candidate blocks either way.
 - **Past those limits,** use a dedicated search implementation or a larger storage design.
 - **Alpha status is a separate question.** Data safety in a backend and stability of the public API are not the same thing.
 

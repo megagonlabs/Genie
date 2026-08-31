@@ -70,7 +70,7 @@ already proves the server is reachable. There is no separate connectivity flag.
 ### Connection health
 
 - **One connection, no retries.** A commit whose reply never arrives reaches the caller as `BackendUnavailable`, and the caller decides what to do.
-- **So `append_log_entry` never appends the same block twice here,** because nothing is replayed on your behalf. This matches `SQLiteBackend`. The adapters that do retry carry that caveat instead.
+- **So `append_log_entry` never appends the same block twice here,** because nothing is replayed on your behalf. This matches `SQLiteBackend`. `Neo4jBackend`, `RedisBackend`, and `MongoDBBackend` do retry, and they carry that caveat instead.
 
 ### Server role check
 
@@ -94,7 +94,8 @@ already proves the server is reachable. There is no separate connectivity flag.
 - **`GENIE_POSTGRES_SCHEMA`** is optional and chooses the schema. It defaults to `genie_test`.
 - **Full suite:** run `../../../scripts/test_full.sh` from the repository root to start a throwaway PostgreSQL container and run everything.
 
-Related: [Backend contracts](../README.md), [SQLite
+Related: [Backend contracts](../README.md), [document
+backends](../document/README.md), [SQLite
 tests](../../../tests/backends/test_sqlite_backend.py), [PostgreSQL
 tests](../../../tests/backends/test_postgres_backend.py),
 [Memory](../../memory/README.md), and [Structures](../../structures/README.md).

@@ -14,7 +14,7 @@ taxonomy, retrieval strategy, or stored value type.
 - **`MemoryLink` relationships** — directed and typed, and they do not imply ownership.
 - **`MemoryHandle` objects** — give agents and services only the access they need.
 - **Structure facades** — `OwnershipTree`, `PropertyGraph`, `KeyedCollection`, `EventLog`, `TemporalCollection`, `LineageDAG`, and `VersionedRecords`.
-- **Storage protocols** — `InMemoryBackend` and `SQLiteBackend` need no extra package; `PostgresBackend`, `Neo4jBackend`, and `RedisBackend` are optional; `RoutedBackend` combines several of them.
+- **Storage protocols** — `InMemoryBackend` and `SQLiteBackend` need no extra package; `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, and `RedisBackend` are optional; `RoutedBackend` combines several of them.
 - **Separate extension points** — policies, hooks, queries, and codecs.
 
 Genie does not run agents, plan their work, create embeddings, host a database,
@@ -61,7 +61,7 @@ assert results[0].block.id == requirement.id
 
 - **`InMemoryBackend`** is the reference backend. No extra packages, so it suits tests, examples, and prototypes.
 - **`SQLiteBackend`** adds local persistent storage through the driver that ships with Python. You do not need the SQLite command-line program.
-- **Optional adapters** need their extra: `genie[postgres]`, `genie[neo4j]`, or `genie[redis]`.
+- **Optional adapters** need their extra: `genie[postgres]`, `genie[neo4j]`, `genie[mongodb]`, or `genie[redis]`.
 - **Every persistent adapter** supports all seven structure facades.
 
 ```python

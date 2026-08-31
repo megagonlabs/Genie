@@ -13,8 +13,9 @@ Writes:
     one `MULTI`/`EXEC` block. Every commit replaces the guard with a fresh
     token, so an attempt that read an older value is retried instead of
     committing on stale reads. This gives the same serialized-writer behavior
-    as the relational and graph adapters, and it makes compound checks and
-    writes atomic across backend instances.
+    as `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, and
+    `MongoDBBackend`, and it makes compound checks and writes atomic across
+    backend instances.
 
 Reads:
     Multi-command reads need the opposite guarantee: one consistent view. Redis

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
 # Run Genie's complete test suite against disposable local PostgreSQL, Neo4j,
-# and Redis servers. The Redis side starts a primary and one replica that follows it, so
-# the live tests can cover the adapter's replica role check as well.
+# MongoDB, and Redis servers. The Redis side starts a primary and one replica that
+# follows it, so the live tests can cover the adapter's replica role check as well.
+# MongoDB starts as a single-member replica set, because every Genie write is one
+# multi-document transaction and a standalone server cannot run those.
 
 set -euo pipefail
 
@@ -23,6 +25,12 @@ GENIE_TEST_NEO4J_USER="${GENIE_TEST_NEO4J_USER:-neo4j}"
 GENIE_TEST_NEO4J_PASSWORD="${GENIE_TEST_NEO4J_PASSWORD:-genie-test-password}"
 GENIE_TEST_NEO4J_DATABASE="${GENIE_TEST_NEO4J_DATABASE:-neo4j}"
 GENIE_TEST_NEO4J_READY_ATTEMPTS="${GENIE_TEST_NEO4J_READY_ATTEMPTS:-60}"
+GENIE_TEST_MONGODB_IMAGE="${GENIE_TEST_MONGODB_IMAGE:-mongo:7}"
+GENIE_TEST_MONGODB_CONTAINER="${GENIE_TEST_MONGODB_CONTAINER:-genie-mongodb-test}"
+GENIE_TEST_MONGODB_HOST_PORT="${GENIE_TEST_MONGODB_HOST_PORT:-17017}"
+GENIE_TEST_MONGODB_DATABASE="${GENIE_TEST_MONGODB_DATABASE:-genie_test}"
+GENIE_TEST_MONGODB_REPLICA_SET="${GENIE_TEST_MONGODB_REPLICA_SET:-rs0}"
+GENIE_TEST_MONGODB_READY_ATTEMPTS="${GENIE_TEST_MONGODB_READY_ATTEMPTS:-60}"
 GENIE_TEST_REDIS_IMAGE="${GENIE_TEST_REDIS_IMAGE:-redis:7-alpine}"
 GENIE_TEST_REDIS_CONTAINER="${GENIE_TEST_REDIS_CONTAINER:-genie-redis-test}"
 GENIE_TEST_REDIS_HOST_PORT="${GENIE_TEST_REDIS_HOST_PORT:-16379}"
@@ -78,6 +86,10 @@ cleanup() {
         echo "Stopping disposable Neo4j container..."
         docker stop "$GENIE_TEST_NEO4J_CONTAINER" >/dev/null 2>&1 || true
     fi
+    if [[ "${GENIE_TEST_MONGODB_STARTED:-false}" == "true" ]]; then
+        echo "Stopping disposable MongoDB container..."
+        docker stop "$GENIE_TEST_MONGODB_CONTAINER" >/dev/null 2>&1 || true
+    fi
     if [[ "${GENIE_TEST_REDIS_REPLICA_STARTED:-false}" == "true" ]]; then
         echo "Stopping disposable Redis replica container..."
         docker stop "$GENIE_TEST_REDIS_REPLICA_CONTAINER" >/dev/null 2>&1 || true
@@ -97,10 +109,12 @@ require_command docker
 
 require_port GENIE_TEST_POSTGRES_HOST_PORT "$GENIE_TEST_POSTGRES_HOST_PORT"
 require_port GENIE_TEST_NEO4J_HOST_PORT "$GENIE_TEST_NEO4J_HOST_PORT"
+require_port GENIE_TEST_MONGODB_HOST_PORT "$GENIE_TEST_MONGODB_HOST_PORT"
 require_port GENIE_TEST_REDIS_HOST_PORT "$GENIE_TEST_REDIS_HOST_PORT"
 require_port GENIE_TEST_REDIS_REPLICA_HOST_PORT "$GENIE_TEST_REDIS_REPLICA_HOST_PORT"
 require_attempts GENIE_TEST_POSTGRES_READY_ATTEMPTS "$GENIE_TEST_POSTGRES_READY_ATTEMPTS"
 require_attempts GENIE_TEST_NEO4J_READY_ATTEMPTS "$GENIE_TEST_NEO4J_READY_ATTEMPTS"
+require_attempts GENIE_TEST_MONGODB_READY_ATTEMPTS "$GENIE_TEST_MONGODB_READY_ATTEMPTS"
 require_attempts GENIE_TEST_REDIS_READY_ATTEMPTS "$GENIE_TEST_REDIS_READY_ATTEMPTS"
 
 if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import psycopg" >/dev/null 2>&1; then
@@ -115,6 +129,12 @@ if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import neo4j" >/dev/null 2>
     exit 1
 fi
 
+if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import pymongo" >/dev/null 2>&1; then
+    echo "The MongoDB test dependency is missing from Conda environment '$GENIE_TEST_CONDA_ENV'." >&2
+    echo "Install it with: conda run -n \"$GENIE_TEST_CONDA_ENV\" python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
+    exit 1
+fi
+
 if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import redis" >/dev/null 2>&1; then
     echo "The Redis test dependency is missing from Conda environment '$GENIE_TEST_CONDA_ENV'." >&2
     echo "Install it with: conda run -n \"$GENIE_TEST_CONDA_ENV\" python -m pip install -e \".[dev,neo4j,redis]\"" >&2
@@ -123,6 +143,7 @@ fi
 
 require_free_container "$GENIE_TEST_POSTGRES_CONTAINER"
 require_free_container "$GENIE_TEST_NEO4J_CONTAINER"
+require_free_container "$GENIE_TEST_MONGODB_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_REPLICA_CONTAINER"
 
@@ -161,6 +182,17 @@ docker run --rm -d \
     -e "NEO4J_AUTH=${GENIE_TEST_NEO4J_USER}/${GENIE_TEST_NEO4J_PASSWORD}" \
     "$GENIE_TEST_NEO4J_IMAGE" >/dev/null
 GENIE_TEST_NEO4J_STARTED=true
+
+echo "Starting disposable MongoDB container..."
+# The replica set member is configured with its in-container address, so the
+# driver must not follow that topology from the host. Connecting with
+# `directConnection=true` talks straight to the published port instead.
+docker run --rm -d \
+    --name "$GENIE_TEST_MONGODB_CONTAINER" \
+    -p "127.0.0.1:${GENIE_TEST_MONGODB_HOST_PORT}:27017" \
+    "$GENIE_TEST_MONGODB_IMAGE" \
+    mongod --replSet "$GENIE_TEST_MONGODB_REPLICA_SET" --bind_ip_all >/dev/null
+GENIE_TEST_MONGODB_STARTED=true
 
 echo "Starting disposable Redis container..."
 docker run --rm -d \
@@ -217,6 +249,43 @@ for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_REDIS_READY_ATTEM
     sleep 1
 done
 
+echo "Waiting for MongoDB..."
+for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_MONGODB_READY_ATTEMPTS; GENIE_TEST_ATTEMPT++)); do
+    if docker exec "$GENIE_TEST_MONGODB_CONTAINER" \
+        mongosh --quiet --eval "db.adminCommand({ping: 1})" >/dev/null 2>&1; then
+        break
+    fi
+
+    if ((GENIE_TEST_ATTEMPT == GENIE_TEST_MONGODB_READY_ATTEMPTS)); then
+        echo "MongoDB did not become ready. Recent container logs:" >&2
+        docker logs --tail 100 "$GENIE_TEST_MONGODB_CONTAINER" >&2 || true
+        exit 1
+    fi
+    sleep 1
+done
+
+echo "Initiating the single-member MongoDB replica set..."
+docker exec "$GENIE_TEST_MONGODB_CONTAINER" mongosh --quiet --eval \
+    "try { rs.status() } catch (error) { rs.initiate({_id: '${GENIE_TEST_MONGODB_REPLICA_SET}', members: [{_id: 0, host: '127.0.0.1:27017'}]}) }" >/dev/null
+
+echo "Waiting for the MongoDB primary..."
+for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_MONGODB_READY_ATTEMPTS; GENIE_TEST_ATTEMPT++)); do
+    # Read the reply into a variable instead of piping it into grep. A pipe
+    # that closes early can fail under `set -o pipefail` even on a match.
+    GENIE_TEST_MONGODB_HELLO="$(docker exec "$GENIE_TEST_MONGODB_CONTAINER" mongosh --quiet --eval "db.hello().isWritablePrimary" 2>/dev/null || true)"
+    if [[ "$GENIE_TEST_MONGODB_HELLO" == *"true"* ]]; then
+        break
+    fi
+
+    if ((GENIE_TEST_ATTEMPT == GENIE_TEST_MONGODB_READY_ATTEMPTS)); then
+        echo "The MongoDB replica set did not elect a primary." >&2
+        echo "Recent container logs:" >&2
+        docker logs --tail 100 "$GENIE_TEST_MONGODB_CONTAINER" >&2 || true
+        exit 1
+    fi
+    sleep 1
+done
+
 echo "Waiting for Neo4j..."
 for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_NEO4J_READY_ATTEMPTS; GENIE_TEST_ATTEMPT++)); do
     if docker exec "$GENIE_TEST_NEO4J_CONTAINER" \
@@ -236,7 +305,7 @@ for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_NEO4J_READY_ATTEM
     sleep 1
 done
 
-echo "Running the complete Genie test suite with live PostgreSQL, Neo4j, and Redis tests enabled..."
+echo "Running the complete Genie test suite with live PostgreSQL, Neo4j, MongoDB, and Redis tests enabled..."
 env \
     GENIE_POSTGRES_DSN="postgresql://${GENIE_TEST_POSTGRES_USER}:${GENIE_TEST_POSTGRES_PASSWORD}@127.0.0.1:${GENIE_TEST_POSTGRES_HOST_PORT}/${GENIE_TEST_POSTGRES_DATABASE}" \
     GENIE_POSTGRES_SCHEMA="$GENIE_TEST_POSTGRES_SCHEMA" \
@@ -244,6 +313,8 @@ env \
     GENIE_NEO4J_USER="$GENIE_TEST_NEO4J_USER" \
     GENIE_NEO4J_PASSWORD="$GENIE_TEST_NEO4J_PASSWORD" \
     GENIE_NEO4J_DATABASE="$GENIE_TEST_NEO4J_DATABASE" \
+    GENIE_MONGODB_URI="mongodb://127.0.0.1:${GENIE_TEST_MONGODB_HOST_PORT}/?directConnection=true" \
+    GENIE_MONGODB_DATABASE="$GENIE_TEST_MONGODB_DATABASE" \
     GENIE_REDIS_URL="redis://127.0.0.1:${GENIE_TEST_REDIS_HOST_PORT}/${GENIE_TEST_REDIS_DATABASE}" \
     GENIE_REDIS_REPLICA_URL="redis://127.0.0.1:${GENIE_TEST_REDIS_REPLICA_HOST_PORT}/${GENIE_TEST_REDIS_DATABASE}" \
     GENIE_REDIS_KEY_PREFIX="$GENIE_TEST_REDIS_KEY_PREFIX" \

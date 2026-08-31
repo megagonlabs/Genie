@@ -92,6 +92,7 @@ databases or indexes.
 | `SQLiteBackend` | Persistent local backend using built-in `sqlite3`; all optional capabilities |
 | `PostgresBackend` | Optional official-driver PostgreSQL backend; all optional capabilities |
 | `Neo4jBackend` | Optional official-driver graph backend; all optional capabilities |
+| `MongoDBBackend` | Optional official-driver document backend; all optional capabilities |
 | `RedisBackend` | Optional official-client key-value backend; all optional capabilities |
 | `RoutedBackend` | Composite backend with application-defined storage routes |
 

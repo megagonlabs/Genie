@@ -24,6 +24,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+mongodb = [
+  "pymongo>=4.7",
+]
 neo4j = [
   "neo4j>=5.26",
 ]
