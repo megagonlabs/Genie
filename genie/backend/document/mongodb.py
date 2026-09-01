@@ -1604,7 +1604,7 @@ class MongoDBBackend:
                 raise UnsupportedOperation(f"The Genie MongoDB collection {name!r} declares a locale collation, which changes string order; recreate it without one.")
 
         for name, indexes in _SCHEMA_COLLECTIONS.items():
-            expected = {"_id_": ((("_id", _ASCENDING),), False)}
+            expected: dict[str, tuple[tuple[tuple[str, int], ...], bool]] = {"_id_": ((("_id", _ASCENDING),), False)}
             for index in indexes:
                 expected[index.name] = (index.keys, index.unique)
             actual = {
@@ -1783,7 +1783,12 @@ class MongoDBBackend:
             `True` when MongoDB labelled the failure as transient.
         """
 
-        return isinstance(error, self._errors.PyMongoError) and error.has_error_label("TransientTransactionError")
+        if not isinstance(error, self._errors.PyMongoError):
+            return False
+        # The driver types are resolved at runtime, so the label check
+        # goes through an untyped alias.
+        failure: Any = error
+        return bool(failure.has_error_label("TransientTransactionError"))
 
     def _abort_quietly(self, session: Any) -> None:
         """Abort an open transaction, ignoring a failure while aborting.

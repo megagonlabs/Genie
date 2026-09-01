@@ -393,31 +393,34 @@ class _ProbeClient:
         self.closed = True
 
 
-def _probe_backend(answers: dict[str, Any]) -> MongoDBBackend:
+def _probe_backend(answers: dict[str, Any]) -> tuple[MongoDBBackend, _ProbeClient]:
+    """Return a backend wired to a probe client, plus that client."""
+
     from threading import Condition, RLock
 
+    client = _ProbeClient(answers)
     backend = object.__new__(MongoDBBackend)
-    backend._client = _ProbeClient(answers)
+    backend._client = client
     backend._closing = False
     backend._lock = RLock()
     backend._lifecycle = Condition(backend._lock)
     backend._exception_types = (_FakeMongoError,)
-    return backend
+    return backend, client
 
 
 def test_mongodb_server_description_falls_back_to_the_older_command() -> None:
     """A server without `hello` is still described through `ismaster`."""
 
-    backend = _probe_backend({"ismaster": {"ismaster": True, "setName": "rs0"}})
+    backend, client = _probe_backend({"ismaster": {"ismaster": True, "setName": "rs0"}})
 
     assert backend._read_server_description() == {"ismaster": True, "setName": "rs0"}
-    assert backend._client.admin.seen == ["hello", "ismaster"]
+    assert client.admin.seen == ["hello", "ismaster"]
 
 
 def test_mongodb_server_description_is_unknown_when_both_commands_fail() -> None:
     """A blocked command leaves the deployment unknown instead of refused."""
 
-    backend = _probe_backend({})
+    backend, _ = _probe_backend({})
 
     assert backend._read_server_description() is None
 
@@ -425,7 +428,7 @@ def test_mongodb_server_description_is_unknown_when_both_commands_fail() -> None
 def test_mongodb_server_description_lets_a_connection_failure_through() -> None:
     """An unreachable deployment is reported instead of treated as unknown."""
 
-    backend = _probe_backend({"hello": ServerSelectionTimeoutError(None, "no server")})
+    backend, _ = _probe_backend({"hello": ServerSelectionTimeoutError(None, "no server")})
 
     with pytest.raises(ServerSelectionTimeoutError):
         backend._read_server_description()
