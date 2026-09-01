@@ -7,7 +7,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -510,11 +510,16 @@ _LIVE_REASON = "set GENIE_MONGODB_URI and install the mongodb extra to run live 
 _LIVE_DATABASE = os.environ.get("GENIE_MONGODB_DATABASE", "genie_test")
 
 
-def _live_backend(*, initialize_schema: bool = True) -> MongoDBBackend:
+def _live_backend(
+    *,
+    initialize_schema: bool = True,
+    durability: Literal["full", "normal"] = "full",
+) -> MongoDBBackend:
     assert _LIVE_URI is not None
     return MongoDBBackend(
         _LIVE_URI,
         database=_LIVE_DATABASE,
+        durability=durability,
         initialize_schema=initialize_schema,
     )
 
@@ -557,6 +562,78 @@ class TestMongoDBStructureBackendContracts(
 
     def make_backend(self) -> MongoDBBackend:
         return self.backend
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+class TestMongoDBNormalDurabilityStructureBackendContracts(TestMongoDBStructureBackendContracts):
+    """Run every capability contract against `durability="normal"`.
+
+    - **A different pair of concerns.** `"normal"` acknowledges a write on the
+      primary alone (`w=1`) and reads with the `local` read concern. The base
+      class uses the `"full"` default, so it never exercises this path.
+    - **What the contracts catch here is read-your-own-writes.** A `w=1` write
+      is not majority-committed yet, so reading it back under the wrong concern
+      could miss it. Every contract writes and then reads the result back.
+    """
+
+    def setup_method(self) -> None:
+        """Open one backend that acknowledges writes on the primary alone."""
+
+        self.backend = _live_backend(durability="normal")
+        _clear_live_data(self.backend)
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+@pytest.mark.parametrize(
+    ("durability", "write_concern", "read_concern", "transaction_read_concern"),
+    [
+        ("full", {"w": "majority", "j": True}, "majority", "snapshot"),
+        ("normal", {"w": 1}, "local", "local"),
+    ],
+)
+def test_live_mongodb_durability_selects_its_concerns(
+    durability: Literal["full", "normal"],
+    write_concern: dict[str, Any],
+    read_concern: str,
+    transaction_read_concern: str,
+) -> None:
+    """Each durability mode hands the driver the concerns it documents."""
+
+    backend = _live_backend(durability=durability)
+    try:
+        assert backend.durability == durability
+        assert backend._write_concern.document == write_concern
+        assert backend._read_concern.level == read_concern
+        assert backend._transaction_read_concern.level == transaction_read_concern
+        # Every command inherits from the database handle, so the concerns must
+        # reach it and not only the backend attributes.
+        assert backend._database_handle.write_concern.document == write_concern
+        assert backend._database_handle.read_concern.level == read_concern
+    finally:
+        backend.close()
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_mongodb_normal_durability_reads_back_its_own_write() -> None:
+    """A `w=1` write is visible to the `local` read that follows it."""
+
+    backend = _live_backend(durability="normal")
+    _clear_live_data(backend)
+    try:
+        block = backend.put_block(MemoryBlock(id="fast", type="note", value={"text": "primary only"}))
+
+        assert backend.get_block(block.id) == block
+
+        # A second connection must see the commit too, so the visibility does
+        # not depend on reusing the session that wrote it.
+        reader = _live_backend(initialize_schema=False, durability="normal")
+        try:
+            assert reader.get_block(block.id) == block
+        finally:
+            reader.close()
+    finally:
+        _clear_live_data(backend)
+        backend.close()
 
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)

@@ -29,7 +29,8 @@ supported.**
 - **A single-member replica set is enough** for a local application, and it is one flag on the server: `mongod --replSet rs0`, then `rs.initiate()` once.
 - **Construction refuses a standalone server,** and only on proof: the reply must name no replica set, must not come from a `mongos`, and must report a writable server. A blocked command, a missing field, and an unreadable value all pass.
 - **`verify_transaction_support=False`** skips that check and accepts failing writes.
-- **MongoDB 4.4 or newer** is the supported target. Transactions need 4.0, and 4.4 is where the rest of what the adapter relies on settled: `hello`, unlimited index keys, and transactions on a sharded cluster.
+- **MongoDB 4.4 or newer** is the version the adapter is written against. Transactions need 4.0, and 4.4 is where the rest of what it relies on settled: `hello`, unlimited index keys, and transactions on a sharded cluster.
+- **Only `mongo:7` is tested.** `scripts/test_full.sh` starts one image, chosen by `GENIE_TEST_MONGODB_IMAGE`. A server between 4.4 and 7 meets the requirements above but has no test run behind it, so check your own version before you depend on it.
 
 ## Collection layout
 
@@ -91,6 +92,7 @@ database names, the same way `PostgresBackend` uses a schema.
 | `"normal"` | Primary only (`w=1`) | `local` | Faster, but a failover can roll back the most recent commits |
 
 - **`"normal"` reads with `local` on purpose.** A `w=1` write is not majority-committed yet, so a majority read would not see the write that just returned.
+- **Both modes run the full capability contracts,** so `"normal"` is covered end to end and not only by its concern settings.
 - **Server configuration still decides the rest:** replica set size, oplog size, backups, and monitoring.
 
 ## Retried commits
@@ -141,7 +143,8 @@ work.**
 
 - **Full suite:** run `../../../scripts/test_full.sh` from the repository root to start a throwaway single-member MongoDB replica set and run everything.
 - **Your own server:** live tests need `GENIE_MONGODB_URI`.
-- **Optional variables:** `GENIE_MONGODB_DATABASE` chooses the test database. It defaults to `genie_test`.
+- **Optional variables:** `GENIE_MONGODB_DATABASE` chooses the test database and defaults to `genie_test`. `GENIE_TEST_MONGODB_IMAGE` chooses the server image and defaults to `mongo:7`.
+- **What one member cannot reach.** The throwaway replica set has a single member, so no live test drives a failover, an election, an unknown commit result, or a retry that runs out of `max_retry_time`. Those paths are covered with simulated driver failures instead. Read the durability trade above as a description of the design, not as a tested result.
 
 Related: [Backend contracts](../README.md), [relational
 backends](../relational/README.md), [graph backends](../graph/README.md),
