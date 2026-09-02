@@ -73,7 +73,7 @@ with SQLiteBackend("memory.db") as backend:
     memory.put(type="note", value={"text": "Persist this"})
 ```
 
-The [backend guide](genie/backend/README.md) explains the storage contracts, how
+The [backend guide](lib/src/genie/backend/README.md) explains the storage contracts, how
 each adapter works, and what to think about in production.
 
 ## Model and structures
@@ -129,21 +129,21 @@ handle scope and policy checks.
 ## Learn more
 
 - [Architecture](docs/design.md)
-- [Memory and handles](genie/memory/README.md)
-- [Structures](genie/structures/README.md)
-- [Backends](genie/backend/README.md)
-- [Queries](genie/query/README.md)
-- [Policies](genie/policy/README.md)
-- [Hooks](genie/hooks/README.md)
-- [Codecs](genie/codecs/README.md)
+- [Memory and handles](lib/src/genie/memory/README.md)
+- [Structures](lib/src/genie/structures/README.md)
+- [Backends](lib/src/genie/backend/README.md)
+- [Queries](lib/src/genie/query/README.md)
+- [Policies](lib/src/genie/policy/README.md)
+- [Hooks](lib/src/genie/hooks/README.md)
+- [Codecs](lib/src/genie/codecs/README.md)
 - [Examples](examples/README.md) and [Lamps](lamps/README.md)
 
 ## Develop
 
 ```bash
 conda run -n "genie" python -m pytest
-conda run -n "genie" python -m compileall -q genie tests examples lamps
+conda run -n "genie" python -m compileall -q lib/src/genie lib/tests examples lamps
 ```
 
-`./scripts/test_full.sh` runs the whole suite against throwaway containers for
+`./lib/scripts/test_full.sh` runs the whole suite against throwaway containers for
 the server-backed adapters. Extra arguments are passed on to pytest.

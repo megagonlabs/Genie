@@ -105,8 +105,8 @@ databases or indexes.
 
 ## Detailed guides
 
-- [Memory](../genie/memory/README.md) — blocks and handles
-- [Structures](../genie/structures/README.md) — composition
-- [Backends](../genie/backend/README.md) — adapter contracts
-- [Queries](../genie/query/README.md), [Policies](../genie/policy/README.md), [Hooks](../genie/hooks/README.md), [Codecs](../genie/codecs/README.md)
+- [Memory](../lib/src/genie/memory/README.md) — blocks and handles
+- [Structures](../lib/src/genie/structures/README.md) — composition
+- [Backends](../lib/src/genie/backend/README.md) — adapter contracts
+- [Queries](../lib/src/genie/query/README.md), [Policies](../lib/src/genie/policy/README.md), [Hooks](../lib/src/genie/hooks/README.md), [Codecs](../lib/src/genie/codecs/README.md)
 - [Examples](../examples/README.md) and [Lamps](../lamps/README.md) — runnable patterns

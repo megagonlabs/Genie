@@ -8,16 +8,16 @@ Use:
 ```bash
 conda run -n "genie" python file_name.py
 conda run -n "genie" python -m pytest
-conda run -n "genie" python -m compileall -q genie tests examples lamps
+conda run -n "genie" python -m compileall -q lib/src/genie lib/tests examples lamps
 conda run -n "genie" ruff check .
 ```
 
 A plain `pytest` run skips the live tests of any shipped adapter that needs a
 running server. Those tests run only when the adapter's optional driver package
 is installed and its `GENIE_*` connection variables are set. Report such runs as
-partial rather than as a full pass. `scripts/test_full.sh` runs the complete
+partial rather than as a full pass. `lib/scripts/test_full.sh` runs the complete
 suite against disposable containers for those servers and needs Docker.
-`scripts/ruff_report.sh` regenerates `ruff_report.txt`.
+`lib/scripts/ruff_report.sh` regenerates `ruff_report.txt`.
 
 ## Library Purpose
 
@@ -58,7 +58,7 @@ building higher-level structures instead of creating duplicate storage models.
 
 Genie is database-agnostic, not database-free. `InMemoryBackend` is the reference
 implementation for tests, examples, and local prototypes. The adapters shipped
-under `genie/backend/` show how the contracts map onto real stores. Every shipped
+under `lib/src/genie/backend/` show how the contracts map onto real stores. Every shipped
 adapter, current or new, must keep its third-party imports optional and raise
 `UnsupportedOperation` when a driver is missing. Adapters may use SQL, graph,
 key-value, vector, document, object, or composed storage, whether they ship with
@@ -106,15 +106,15 @@ the size, risk, and user-facing impact of the change:
 
 ## Repository Conventions
 
-- Keep core library tests under `tests/`.
+- Keep core library tests under `lib/tests/`.
 - Keep backend adapter tests and the reusable backend contract tests under
-  `tests/backends/`.
+  `lib/tests/backends/`.
 - Keep each lamp's tests under `lamps/<name>/tests`.
 - Organize small runnable examples under `examples/basic/` or
   `examples/advanced/` as appropriate.
 - Keep `docs/design.md` in sync with the public memory model, architecture, and
   safety boundaries when they change.
-- Keep repository-wide developer scripts under `scripts/`.
+- Keep repository-wide developer scripts under `lib/scripts/`.
 - Treat lamps as architectural demonstrations, not compatibility layers or
   production implementations. Document their concept mappings and deliberate
   limits.

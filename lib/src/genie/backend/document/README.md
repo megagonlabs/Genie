@@ -30,7 +30,7 @@ supported.**
 - **Construction refuses a standalone server,** and only on proof: the reply must name no replica set, must not come from a `mongos`, and must report a writable server. A blocked command, a missing field, and an unreadable value all pass.
 - **`verify_transaction_support=False`** skips that check and accepts failing writes.
 - **MongoDB 4.4 or newer** is the version the adapter is written against. Transactions need 4.0, and 4.4 is where the rest of what it relies on settled: `hello`, unlimited index keys, and transactions on a sharded cluster.
-- **Only `mongo:7` is tested.** `scripts/test_full.sh` starts one image, chosen by `GENIE_TEST_MONGODB_IMAGE`. A server between 4.4 and 7 meets the requirements above but has no test run behind it, so check your own version before you depend on it.
+- **Only `mongo:7` is tested.** `lib/scripts/test_full.sh` starts one image, chosen by `GENIE_TEST_MONGODB_IMAGE`. A server between 4.4 and 7 meets the requirements above but has no test run behind it, so check your own version before you depend on it.
 
 ## Collection layout
 

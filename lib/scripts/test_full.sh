@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-GENIE_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+GENIE_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 GENIE_TEST_CONDA_ENV="${GENIE_TEST_CONDA_ENV:-genie}"
 GENIE_TEST_POSTGRES_IMAGE="${GENIE_TEST_POSTGRES_IMAGE:-postgres:16-alpine}"
 GENIE_TEST_POSTGRES_CONTAINER="${GENIE_TEST_POSTGRES_CONTAINER:-genie-postgres-test}"
@@ -148,7 +148,7 @@ require_free_container "$GENIE_TEST_REDIS_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_REPLICA_CONTAINER"
 
 echo "Compiling Genie..."
-conda run -n "$GENIE_TEST_CONDA_ENV" python -m compileall -q genie tests examples lamps
+conda run -n "$GENIE_TEST_CONDA_ENV" python -m compileall -q lib/src/genie lib/tests examples lamps
 
 echo "Starting disposable PostgreSQL container..."
 docker run --rm -d \

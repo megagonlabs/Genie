@@ -11,7 +11,7 @@ import pytest
 from examples.advanced.agent_memory import TaskAgent, TaskMemory
 from genie import InMemoryBackend, Memory
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNABLE_EXAMPLES = [
     ("basic/crud_blocks.py", "CRUD and ownership"),
     ("basic/block_presence.py", "Block presence"),

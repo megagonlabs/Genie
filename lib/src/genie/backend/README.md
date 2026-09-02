@@ -72,7 +72,7 @@ receives one backend object.
 ## Implementations
 
 ```text
-genie/backend/
+lib/src/genie/backend/
   in_memory/reference.py
   relational/sqlite.py
   relational/postgres.py
