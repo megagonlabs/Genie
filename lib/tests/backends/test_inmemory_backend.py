@@ -125,6 +125,150 @@ def test_backend_contains_requires_existing_root() -> None:
     assert backend.contains("missing", "missing") is False
 
 
+# `id: parent_id` for a tree with two roots, a fork, and three depths.
+_TREE = {
+    "root": None,
+    "a": "root",
+    "a1": "a",
+    "a2": "a",
+    "a2x": "a2",
+    "b": "root",
+    "b1": "b",
+    "other": None,
+    "other1": "other",
+}
+
+
+def _build_tree(backend: InMemoryBackend) -> None:
+    """Write `_TREE` parents first, so a block never precedes its parent."""
+
+    for block_id, parent_id in _TREE.items():
+        backend.put_block(MemoryBlock(id=block_id, parent_id=parent_id, type="node", value={}))
+
+
+def _descendant_scan(backend: InMemoryBackend, root_id: str, block_id: str) -> bool:
+    """Answer containment by scanning the subtree, the slow but obvious way."""
+
+    if backend.get_block(root_id) is None:
+        return False
+    if root_id == block_id:
+        return True
+    return any(block.id == block_id for block in backend.descendants(root_id))
+
+
+def test_backend_contains_agrees_with_a_descendant_scan_on_every_pair() -> None:
+    """The upward walk answers exactly what a full subtree scan would answer."""
+
+    backend = InMemoryBackend()
+    _build_tree(backend)
+    candidates = [*_TREE, "missing"]
+
+    for root_id in candidates:
+        for block_id in candidates:
+            assert backend.contains(root_id, block_id) is _descendant_scan(
+                backend, root_id, block_id
+            ), f"disagreed on contains({root_id!r}, {block_id!r})"
+
+
+def test_backend_contains_answers_in_one_direction_only() -> None:
+    """Containment follows ownership downward, never back up the tree."""
+
+    backend = InMemoryBackend()
+    _build_tree(backend)
+
+    assert backend.contains("root", "a2x") is True
+    assert backend.contains("a", "a2x") is True
+    assert backend.contains("a2", "a2x") is True
+    assert backend.contains("a2x", "a2x") is True
+
+    assert backend.contains("a2x", "root") is False
+    assert backend.contains("a2", "a") is False
+
+
+def test_backend_contains_keeps_separate_trees_apart() -> None:
+    """A second root owns nothing in the first root's subtree."""
+
+    backend = InMemoryBackend()
+    _build_tree(backend)
+
+    assert backend.contains("other", "other1") is True
+    assert backend.contains("other", "a1") is False
+    assert backend.contains("root", "other1") is False
+    assert backend.contains("a", "b1") is False
+
+
+def test_backend_contains_walks_a_deep_chain() -> None:
+    """Depth is the cost of the check, so a long chain must still be answered."""
+
+    backend = InMemoryBackend()
+    parent_id = None
+    ids = []
+    for depth in range(200):
+        block_id = f"level_{depth:03d}"
+        backend.put_block(MemoryBlock(id=block_id, parent_id=parent_id, type="node", value={}))
+        ids.append(block_id)
+        parent_id = block_id
+
+    assert backend.contains(ids[0], ids[-1]) is True
+    assert backend.contains(ids[-1], ids[0]) is False
+    assert backend.contains(ids[100], ids[-1]) is True
+    assert backend.contains(ids[-1], ids[100]) is False
+
+
+def test_backend_contains_reports_a_missing_candidate_as_absent() -> None:
+    """An id that was never stored is not inside any subtree."""
+
+    backend = InMemoryBackend()
+    _build_tree(backend)
+
+    assert backend.contains("root", "missing") is False
+    assert backend.contains("missing", "root") is False
+
+
+def test_backend_contains_follows_a_reparented_block() -> None:
+    """Moving a block moves the whole branch it owns to the new subtree."""
+
+    backend = InMemoryBackend()
+    _build_tree(backend)
+    moving = backend.get_block("a2")
+    assert moving is not None
+
+    backend.update_block(moving.with_updates(parent_id="b", version=moving.version + 1))
+
+    assert backend.contains("b", "a2") is True
+    assert backend.contains("b", "a2x") is True
+    assert backend.contains("a", "a2") is False
+    assert backend.contains("a", "a2x") is False
+    assert backend.contains("root", "a2x") is True
+
+
+def test_backend_rejects_moving_a_block_under_its_own_descendant() -> None:
+    """`contains` is the cycle guard, so the rejection must keep working."""
+
+    backend = InMemoryBackend()
+    _build_tree(backend)
+    parent = backend.get_block("a")
+    assert parent is not None
+
+    with pytest.raises(MemoryConflict, match="cannot be moved under one of its descendants"):
+        backend.update_block(parent.with_updates(parent_id="a2x", version=parent.version + 1))
+
+    assert backend.contains("a", "a2x") is True
+    assert backend.contains("a2x", "a") is False
+
+
+def test_backend_rejects_making_a_block_its_own_parent() -> None:
+    """A self parent would be a one-block cycle."""
+
+    backend = InMemoryBackend()
+    _build_tree(backend)
+    block = backend.get_block("a")
+    assert block is not None
+
+    with pytest.raises(MemoryConflict, match="cannot be its own parent"):
+        backend.update_block(block.with_updates(parent_id="a", version=block.version + 1))
+
+
 def test_backend_links_return_defensive_metadata_copies() -> None:
     """Backend link reads cannot mutate stored link metadata."""
 

@@ -29,8 +29,8 @@ conda run -n "genie" python lib/benchmarks/run.py --layer backend --layer memory
 conda run -n "genie" python lib/benchmarks/run.py --json reports/latest.json
 ```
 
-- **A default run takes about a minute** and needs no server and no extra
-  package.
+- **A default run takes about thirty seconds** and needs no server and no
+  extra package.
 - **Exit status is `1` when any measured call raised,** and `0` otherwise.
   Timing is never a pass or fail signal, because a shared machine is too noisy
   for that.
@@ -235,7 +235,7 @@ the JSON file stay clean and a slow case is visibly working.
 - **In a terminal, one line updates in place** with the variant number, the
   calls finished, the seconds spent, and a rough time remaining:
 
-      [27/61] in_memory memory: search_subtree_text  60/110 calls  14.2s  about 12s left
+      [58/61] sqlite memory: search_subtree_text  60/110 calls  3.1s  about 3s left
 
 - **In a pipe or a log file, whole lines are written far apart** — every five
   seconds instead of five times a second — because nothing there can erase a
@@ -243,7 +243,7 @@ the JSON file stay clean and a slow case is visibly working.
 - **Each variant closes with what it measured,** so the scrollback keeps a
   record:
 
-      [27/61] in_memory memory: search_subtree_text  100 calls in 23.9s  p50 236.477 ms
+      [58/61] sqlite memory: search_subtree_text  100 calls in 5.8s  p50 52.290 ms
 
 - **Progress is never written inside a timed call.** The reporter is told about
   a call only after its duration has been read, so a progress line cannot
@@ -259,25 +259,29 @@ the JSON file stay clean and a slow case is visibly working.
   than the budget. Each search case records `returned` next to
   `candidate_budget` for exactly this reason.
 - **`in_memory` is not automatically the fastest target.** It is the reference
-  implementation, written for clarity. Some operations cost more there than on
-  a persistent adapter, because `InMemoryBackend.contains` walks the subtree
-  while `SQLiteBackend` answers the same question with one recursive query. A
-  surprising number is a result, not a harness bug.
-- **A large gap usually means extra calls, not slow code.** Three cases in the
-  current report show this, and each one is worth knowing about before it
-  surprises you:
-  - **`list_links`** returns links only when the principal can read both
-    endpoints, so `Memory.list_links` reads two blocks per link. At
-    `--links-per-block 50` that is 100 extra point reads behind one call.
-  - **`handle_get`** checks that the block is inside the handle's subtree, so
-    it pays one `contains` on top of the read.
-  - **`search_subtree_text`** filters results against the query scope, which
-    costs one `contains` per returned block, and the filter runs both before
-    and after the `after_search` hooks.
-- **Read `core` against the overhead table.** On the current report the three
-  `core` helpers add up to roughly the `get` overhead, which is a good sign
-  that the gap on a simple read is the codec, the policy check, and the hook
-  envelope and nothing hidden.
+  implementation, written for clarity, so an operation can cost more there than
+  on a persistent adapter. A surprising number is a result, not a harness bug.
+  It is worth chasing, though: the first run of this suite found that
+  `InMemoryBackend.contains` materialized the whole subtree, which made
+  `contains` about 3900 times more expensive than it needed to be and dragged
+  `handle_get` and `search_subtree_text` down with it. It now walks up from the
+  candidate, like the MongoDB and Redis adapters.
+- **Read a percentage next to the absolute numbers, never on its own.** The
+  `contains` row is the clearest example: the overhead table reports well over
+  1000% while `+ms` is about 0.02 ms. The backend call became so cheap that
+  the whole gap is the fixed `Memory` envelope. A large share of a tiny number
+  is not a problem.
+- **A large gap usually means extra calls, not slow code.** The clearest case
+  left in the report is **`list_links`**, which returns links only when the
+  principal can read both endpoints, so `Memory.list_links` reads two blocks
+  per link. At `--links-per-block 50` that is 100 extra point reads behind one
+  call, and it is why the row costs about twelve times the raw call on
+  `in_memory` and twenty-four times on `sqlite`.
+- **Read `core` against the overhead table.** The three `core` helpers add up
+  to about 0.013 ms, and the `get` overhead is about 0.015 ms. That agreement
+  is a good sign: the gap on a simple read is the codec, the policy check, and
+  the hook envelope, and nothing hidden. Where a gap is much larger than that
+  floor, look for extra calls.
 
 ## Not here yet
 

@@ -217,6 +217,14 @@ class InMemoryBackend:
     def contains(self, root_id: str, block_id: str) -> bool:
         """Return whether `block_id` is in `root_id`'s subtree.
 
+        The check walks up from the candidate, which reads one block per level
+        instead of materializing the whole subtree. `MongoDBBackend` and
+        `RedisBackend` answer the question the same way, and the SQL adapters
+        stop their recursive query at the first hit. The cost is therefore
+        proportional to tree depth rather than to subtree size, which matters
+        because `Memory` calls this once per search result and `MemoryHandle`
+        calls it on every bounded read.
+
         Args:
             root_id: Potential subtree root id.
             block_id: Candidate block id.
@@ -230,7 +238,19 @@ class InMemoryBackend:
                 return False
             if root_id == block_id:
                 return True
-            return any(block.id == block_id for block in self.descendants(root_id))
+            block = self._blocks.get(block_id)
+            seen = {block_id}
+            while block is not None and block.parent_id is not None:
+                if block.parent_id == root_id:
+                    return True
+                if block.parent_id in seen:
+                    # Unreachable while the no-cycle invariant holds, which
+                    # `_move_parent` enforces using this very method. The guard
+                    # keeps a damaged index from looping forever.
+                    return False
+                seen.add(block.parent_id)
+                block = self._blocks.get(block.parent_id)
+            return False
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
         """Atomically bind an unused collection address to a block.
