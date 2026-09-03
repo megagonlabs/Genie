@@ -147,3 +147,11 @@ conda run -n "genie" python -m compileall -q lib/src/genie lib/tests examples la
 
 `./lib/scripts/test_full.sh` runs the whole suite against throwaway containers for
 the server-backed adapters. Extra arguments are passed on to pytest.
+
+```bash
+conda run -n "genie" python lib/benchmarks/run.py
+```
+
+The [benchmark suite](lib/benchmarks/README.md) measures what one operation
+costs on each backend, and how much of that cost Genie itself adds over the raw
+store call.

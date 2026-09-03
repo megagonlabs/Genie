@@ -115,6 +115,10 @@ the size, risk, and user-facing impact of the change:
 - Keep `docs/design.md` in sync with the public memory model, architecture, and
   safety boundaries when they change.
 - Keep repository-wide developer scripts under `lib/scripts/`.
+- Keep the performance benchmark harness under `lib/benchmarks/`. It stays out
+  of `lib/tests/` so a plain `pytest` run does not time operations, and it uses
+  the standard library only, like the core package. Its own tests live in
+  `lib/tests/test_benchmarks.py`.
 - Treat lamps as architectural demonstrations, not compatibility layers or
   production implementations. Document their concept mappings and deliberate
   limits.
