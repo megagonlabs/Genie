@@ -59,16 +59,83 @@ of the suite.
 
 ## Targets
 
-| Target | Storage |
-| --- | --- |
-| `in_memory` | `InMemoryBackend`, one process, nothing persisted |
-| `sqlite` | `SQLiteBackend` on a file in a throwaway directory, `durability="full"` |
+| Target | Storage | Needs |
+| --- | --- | --- |
+| `in_memory` | `InMemoryBackend`, one process, nothing persisted | nothing |
+| `sqlite` | `SQLiteBackend` on a file in a throwaway directory, `durability="full"` | nothing |
+| `postgres` | `PostgresBackend`, schema `genie_benchmark`, `durability="full"` | `postgres` extra, `GENIE_POSTGRES_DSN` |
+| `mongodb` | `MongoDBBackend`, database `genie_benchmark`, `durability="full"` | `mongodb` extra, `GENIE_MONGODB_URI` |
+| `neo4j` | `Neo4jBackend`, database `neo4j` | `neo4j` extra, `GENIE_NEO4J_URI` |
+| `redis` | `RedisBackend`, key prefix `genie-benchmark` | `redis` extra, `GENIE_REDIS_URL` |
 
-- **Both always run.** `InMemoryBackend` needs nothing and `SQLiteBackend` uses
-  the driver that ships with Python.
-- **`skip_reason` is already part of the target shape,** so the server-backed
-  adapters can report a reason instead of a number once they are added.
-- **A skipped target is reported as skipped,** never folded into a pass.
+- **The two local targets always run.** `InMemoryBackend` needs nothing and
+  `SQLiteBackend` uses the driver that ships with Python.
+- **The four server targets read the same `GENIE_*` variables the live adapter
+  tests read,** so one environment serves both. `GENIE_POSTGRES_SCHEMA`,
+  `GENIE_MONGODB_DATABASE`, `GENIE_NEO4J_DATABASE`, and
+  `GENIE_REDIS_KEY_PREFIX` override the namespace. Neo4j and Redis credentials
+  are `GENIE_NEO4J_USER` / `GENIE_NEO4J_PASSWORD` and `GENIE_REDIS_USER` /
+  `GENIE_REDIS_PASSWORD`, and each pair must be set together or not at all.
+- **A skipped target is reported as skipped,** never folded into a pass, and
+  the reason names exactly what is missing: which extra to install, which
+  variable to set, or both.
+- **The namespace defaults are deliberately not the test ones.** A variant
+  empties its store before it writes, so `genie_benchmark` and
+  `genie-benchmark` keep a benchmark run from clearing data the live tests are
+  using. Point a target at a store you do not mind losing.
+
+### Running against servers
+
+```bash
+./lib/scripts/benchmark_full.sh
+./lib/scripts/benchmark_full.sh --iterations 50 --blocks 500
+./lib/scripts/benchmark_full.sh --group read --json reports/servers.json
+```
+
+- **It needs Docker,** and it starts throwaway PostgreSQL, Neo4j, MongoDB, and
+  Redis containers, runs the benchmarks, and disposes of them.
+- **It does not repeat the container setup.** `test_full.sh` already does that
+  work, so `benchmark_full.sh` sets `GENIE_TEST_COMMAND` and hands over. The
+  containers use their own names and ports, so a benchmark run and a test run
+  can be in flight together.
+- **Container startup alone is about a minute** before the first measurement,
+  and the script prints each step while it waits.
+
+### Why a server run takes so long
+
+**Writing corpora, not measuring.** A run at `--iterations 20 --blocks 200`
+spent 82.7s of its 103.8s on setup:
+
+| Target | Variants | Setup | Measuring |
+| --- | --- | --- | --- |
+| `in_memory` | 29 | 0.1s | 0.1s |
+| `sqlite` | 29 | 0.9s | 0.7s |
+| `postgres` | 29 | 15.5s | 5.2s |
+| `mongodb` | 29 | 18.7s | 5.6s |
+| `neo4j` | 29 | 37.6s | 7.3s |
+| `redis` | 29 | 9.8s | 2.2s |
+
+- **The cause is the methodology, not the adapters.** Every variant gets a
+  fresh store and a fresh corpus, so no variant can move the next one's
+  numbers. That means 29 variants each write `--blocks` + 2 blocks, one round
+  trip per block. At the default `--blocks 1000` that is about 29,000 writes
+  per server target, and `neo4j` pays 5.1 ms for each one.
+- **So budget eight to ten minutes for a default six-target run,** against
+  under two minutes for the reduced settings above. `--blocks` moves this far
+  more than `--iterations`, because it sets the corpus every variant rewrites.
+- **A quick pass while you work:**
+
+      ./lib/scripts/benchmark_full.sh --iterations 20 --warmup 5 --blocks 200 \
+          --sections 5 --links-per-block 10
+
+- **Keep the defaults for a report you intend to compare against later,** and
+  only compare runs whose `settings` line matches.
+- **A server store cannot be thrown away like a temporary file,** so each
+  variant empties it on open instead. The reset uses only `search` and
+  `delete_block`: deleting a root cascades to its subtree and to the links,
+  key bindings, sequence entries, and temporal entries the adapter owns for
+  those blocks. That is why it works on any adapter without reaching into one,
+  and why a new adapter needs no reset code of its own.
 
 ## Cases
 
@@ -271,12 +338,30 @@ the JSON file stay clean and a slow case is visibly working.
   1000% while `+ms` is about 0.02 ms. The backend call became so cheap that
   the whole gap is the fixed `Memory` envelope. A large share of a tiny number
   is not a problem.
-- **A large gap usually means extra calls, not slow code.** The clearest case
-  left in the report is **`list_links`**, which returns links only when the
-  principal can read both endpoints, so `Memory.list_links` reads two blocks
-  per link. At `--links-per-block 50` that is 100 extra point reads behind one
-  call, and it is why the row costs about twelve times the raw call on
-  `in_memory` and twenty-four times on `sqlite`.
+- **A large gap almost always means extra round trips, not slow code.** This is
+  the most useful thing the suite reports, and the server targets make it
+  obvious. `Memory` re-reads blocks the backend has already returned, so the
+  cost grows with the number of results rather than staying flat:
+  - **`Memory.list_links`** returns a link only when the principal can read
+    both endpoints, so it reads two blocks per link. With ten links on
+    `postgres` that is twenty extra point reads, and the row goes from 0.89 ms
+    to 17.24 ms.
+  - **`Memory.search`** re-fetches every result to evaluate policy against
+    stored state rather than the indexed copy, and it filters twice, before and
+    after the `after_search` hooks. That is two extra reads per result, plus a
+    containment check per result at `Scope.SUBTREE`. With twenty results on
+    `postgres`, `search_subtree_text` goes from 6.14 ms to 91.61 ms.
+  - **The pattern is the same on every server target,** at roughly eighteen to
+    twenty-five times the raw call for `list_links` and four to fifteen times
+    for search. It is not an adapter problem.
+  - **The re-read is deliberate,** because a search index is derived state and
+    may be stale, so policy has to be checked against the stored block. The
+    question the numbers raise is the round-trip count, not whether to check.
+- **A small negative overhead is noise, not a speedup.** The `memory` layer
+  cannot be faster than the raw call it wraps. A few percent below zero means
+  the two variants ran far enough apart for the machine to drift, which shows
+  up most on the slowest targets. Treat anything inside a few percent of zero
+  as "no measurable difference".
 - **Read `core` against the overhead table.** The three `core` helpers add up
   to about 0.013 ms, and the `get` overhead is about 0.015 ms. That agreement
   is a good sign: the gap on a simple read is the codec, the policy check, and
@@ -287,11 +372,8 @@ the JSON file stay clean and a slow case is visibly working.
 
 Planned next, in order:
 
-1. **Server-backed targets.** `PostgresBackend`, `MongoDBBackend`,
-   `Neo4jBackend`, and `RedisBackend`, gated on the same `GENIE_*` variables
-   the live tests already read, plus a script that starts throwaway containers
-   the way `lib/scripts/test_full.sh` does.
+1. **Saved baselines** plus a comparison command, so a run can actually fail a
+   release check instead of only reporting numbers.
 2. **Concurrency and contention.** Worker levels, wall-clock throughput next to
    the single-caller rate, and hot-block cases.
 3. **Structure facades.** One operation per facade family.
-4. **Saved baselines** plus a comparison command for release checks.

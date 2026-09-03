@@ -79,8 +79,15 @@ class Progress:
         self._started = monotonic()
         self._last_write = 0.0
         self._line_width = 0
-        if self.enabled and not self.rewrite:
-            self._write_line(f"{self._prefix} started")
+        if not self.enabled:
+            return
+        # Setup writes the whole corpus before the first call is timed, and on a
+        # server target that is most of the variant's wall time. Announcing the
+        # variant now means the slowest part of a run is never silent.
+        if self.rewrite:
+            self._rewrite_line(f"{self._prefix}  preparing")
+        else:
+            self._write_line(f"{self._prefix} preparing")
 
     def call_done(self, finished: int, total: int) -> None:
         """Report that one call finished and its duration was recorded.

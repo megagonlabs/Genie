@@ -20,7 +20,8 @@ from benchmarks.progress import PLAIN_INTERVAL_SECONDS, TERMINAL_INTERVAL_SECOND
 from benchmarks.report import LATENCY_DROP_ORDER
 from benchmarks.runner import CORE_SECTION, REPORT_SCHEMA, WorkItem
 from benchmarks.settings import BACKEND, CORE, LAYERS, MEMORY, BenchmarkSettings
-from benchmarks.targets import BackendTarget, default_targets
+from benchmarks.targets import BackendTarget, clear_store, default_targets, server_targets
+from genie import InMemoryBackend, Memory, MemoryQuery, Scope
 
 TINY = BenchmarkSettings(
     iterations=2,
@@ -62,7 +63,9 @@ def test_every_case_runs_at_every_layer_it_declares() -> None:
         for case in section["cases"]
         for layer in case["variants"]
     }
-    for target in default_targets():
+    available = [target for target in default_targets() if target.available]
+    assert [target.name for target in available[:2]] == ["in_memory", "sqlite"]
+    for target in available:
         for case in default_cases():
             for layer in (BACKEND, MEMORY):
                 if case.prepare_for(layer) is not None:
@@ -141,11 +144,43 @@ def test_core_cases_run_once_in_their_own_section() -> None:
     """A core helper has no store, so repeating it per target says nothing new."""
 
     cases = select(default_cases(), groups=("overhead",))
-    items, skipped = runner.plan_run(default_targets(), cases, LAYERS)
+    available = tuple(target for target in default_targets() if target.available)
+    items, skipped = runner.plan_run(available, cases, LAYERS)
 
     assert not skipped
     assert {item.section for item in items} == {CORE_SECTION}
     assert len(items) == len(cases)
+
+
+def test_unavailable_targets_are_planned_as_skipped() -> None:
+    """A server with no connection variables is reported, not left out."""
+
+    cases = select(default_cases(), names=("get",))
+    items, skipped = runner.plan_run(default_targets(), cases, LAYERS)
+
+    assert [target.name for target in skipped] == [
+        target.name for target in default_targets() if not target.available
+    ]
+    for target in skipped:
+        assert target.skip_reason
+        assert all(item.section != target.name for item in items)
+
+
+def test_server_targets_name_exactly_what_is_missing() -> None:
+    """A skip reason has to be actionable, so it names the variable to set."""
+
+    reasons = {target.name: target.skip_reason for target in server_targets()}
+
+    assert set(reasons) == {"postgres", "mongodb", "neo4j", "redis"}
+    for name, variable in (
+        ("postgres", "GENIE_POSTGRES_DSN"),
+        ("mongodb", "GENIE_MONGODB_URI"),
+        ("neo4j", "GENIE_NEO4J_URI"),
+        ("redis", "GENIE_REDIS_URL"),
+    ):
+        reason = reasons[name]
+        if reason is not None and "install" not in reason:
+            assert variable in reason
 
 
 def test_a_skipped_target_reports_its_reason_and_runs_no_case() -> None:
@@ -170,6 +205,40 @@ def test_a_skipped_target_reports_its_reason_and_runs_no_case() -> None:
     assert section["skipped"] == "set GENIE_POSTGRES_DSN to measure it"
     assert section["cases"] == []
     assert "skipped" in report.format_report(result)
+
+
+def test_clear_store_empties_a_store_through_the_public_protocol() -> None:
+    """A server cannot be thrown away between variants, so it is emptied.
+
+    The reset uses only `search`, `delete_block`, and the cascade the delete
+    contract requires, so it works on any adapter without reaching into one.
+    """
+
+    backend = InMemoryBackend()
+    memory = Memory(backend=backend, principal="benchmark")
+    root = memory.put(type="root", value="root")
+    child = memory.put(type="child", value="child", parent=root.id)
+    grandchild = memory.put(type="leaf", value="leaf", parent=child.id)
+    other_root = memory.put(type="root", value="other")
+    memory.add_link(grandchild.id, other_root.id, "bench.related")
+
+    clear_store(backend)
+
+    assert backend.search(MemoryQuery(scope=Scope.GLOBAL, limit=1000)) == []
+    for block in (root, child, grandchild, other_root):
+        assert backend.get_block(block.id) is None
+    assert backend.list_links(grandchild.id, direction="both") == []
+
+
+def test_clear_store_accepts_a_store_that_is_already_empty() -> None:
+    """Resetting on open must not depend on what the last run left behind."""
+
+    backend = InMemoryBackend()
+
+    clear_store(backend)
+    clear_store(backend)
+
+    assert backend.search(MemoryQuery(scope=Scope.GLOBAL, limit=10)) == []
 
 
 def test_a_failing_call_is_counted_and_not_timed() -> None:
@@ -374,7 +443,7 @@ def test_progress_writes_whole_lines_when_the_stream_is_not_a_terminal() -> None
     written = stream.getvalue()
 
     assert "\r" not in written
-    assert "sqlite backend: get started" in written
+    assert "sqlite backend: get preparing" in written
     assert "2 calls in 1.5s  p50 0.250 ms" in written
 
 
@@ -398,6 +467,9 @@ def test_progress_updates_one_line_when_the_stream_is_a_terminal() -> None:
     assert written.count("\n") == 1
     assert "1/2 calls" in written
     assert written.rstrip().endswith("p50 300.126 ms")
+    # Setup runs before the first timed call and dominates a server variant, so
+    # a terminal must see the variant announced rather than nothing at all.
+    assert "preparing" in written.split("1/2 calls")[0]
 
 
 def test_progress_writes_nothing_when_quiet() -> None:

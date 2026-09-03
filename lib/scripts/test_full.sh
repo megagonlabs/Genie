@@ -5,11 +5,21 @@
 # follows it, so the live tests can cover the adapter's replica role check as well.
 # MongoDB starts as a single-member replica set, because every Genie write is one
 # multi-document transaction and a standalone server cannot run those.
+#
+# `GENIE_TEST_COMMAND` chooses what runs once the servers are ready, so the same
+# container setup can serve something other than pytest. `benchmark_full.sh` uses
+# it to run the benchmarks. Extra arguments are passed on to that command.
+#
+# The command runs under `conda run --no-capture-output`. Without that flag conda
+# holds stdout and stderr until the process exits, which makes a long run look
+# like a hang.
 
 set -euo pipefail
 
 GENIE_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 GENIE_TEST_CONDA_ENV="${GENIE_TEST_CONDA_ENV:-genie}"
+GENIE_TEST_COMMAND="${GENIE_TEST_COMMAND:-python -m pytest}"
+GENIE_TEST_LABEL="${GENIE_TEST_LABEL:-the complete Genie test suite}"
 GENIE_TEST_POSTGRES_IMAGE="${GENIE_TEST_POSTGRES_IMAGE:-postgres:16-alpine}"
 GENIE_TEST_POSTGRES_CONTAINER="${GENIE_TEST_POSTGRES_CONTAINER:-genie-postgres-test}"
 GENIE_TEST_POSTGRES_HOST_PORT="${GENIE_TEST_POSTGRES_HOST_PORT:-15432}"
@@ -148,7 +158,7 @@ require_free_container "$GENIE_TEST_REDIS_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_REPLICA_CONTAINER"
 
 echo "Compiling Genie..."
-conda run -n "$GENIE_TEST_CONDA_ENV" python -m compileall -q lib/src/genie lib/tests examples lamps
+conda run -n "$GENIE_TEST_CONDA_ENV" python -m compileall -q lib/src/genie lib/tests lib/benchmarks examples lamps
 
 echo "Starting disposable PostgreSQL container..."
 docker run --rm -d \
@@ -305,7 +315,7 @@ for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_NEO4J_READY_ATTEM
     sleep 1
 done
 
-echo "Running the complete Genie test suite with live PostgreSQL, Neo4j, MongoDB, and Redis tests enabled..."
+echo "Running $GENIE_TEST_LABEL with live PostgreSQL, Neo4j, MongoDB, and Redis enabled..."
 env \
     GENIE_POSTGRES_DSN="postgresql://${GENIE_TEST_POSTGRES_USER}:${GENIE_TEST_POSTGRES_PASSWORD}@127.0.0.1:${GENIE_TEST_POSTGRES_HOST_PORT}/${GENIE_TEST_POSTGRES_DATABASE}" \
     GENIE_POSTGRES_SCHEMA="$GENIE_TEST_POSTGRES_SCHEMA" \
@@ -318,4 +328,4 @@ env \
     GENIE_REDIS_URL="redis://127.0.0.1:${GENIE_TEST_REDIS_HOST_PORT}/${GENIE_TEST_REDIS_DATABASE}" \
     GENIE_REDIS_REPLICA_URL="redis://127.0.0.1:${GENIE_TEST_REDIS_REPLICA_HOST_PORT}/${GENIE_TEST_REDIS_DATABASE}" \
     GENIE_REDIS_KEY_PREFIX="$GENIE_TEST_REDIS_KEY_PREFIX" \
-    conda run -n "$GENIE_TEST_CONDA_ENV" python -m pytest "$@"
+    conda run --no-capture-output -n "$GENIE_TEST_CONDA_ENV" $GENIE_TEST_COMMAND "$@"

@@ -154,4 +154,5 @@ conda run -n "genie" python lib/benchmarks/run.py
 
 The [benchmark suite](lib/benchmarks/README.md) measures what one operation
 costs on each backend, and how much of that cost Genie itself adds over the raw
-store call.
+store call. `./lib/scripts/benchmark_full.sh` runs it against throwaway
+containers for the server-backed adapters.
