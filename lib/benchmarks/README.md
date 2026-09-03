@@ -328,11 +328,8 @@ the JSON file stay clean and a slow case is visibly working.
 - **`in_memory` is not automatically the fastest target.** It is the reference
   implementation, written for clarity, so an operation can cost more there than
   on a persistent adapter. A surprising number is a result, not a harness bug.
-  It is worth chasing, though: the first run of this suite found that
-  `InMemoryBackend.contains` materialized the whole subtree, which made
-  `contains` about 3900 times more expensive than it needed to be and dragged
-  `handle_get` and `search_subtree_text` down with it. It now walks up from the
-  candidate, like the MongoDB and Redis adapters.
+  Chase it anyway: a row far slower than its siblings is as likely to be a real
+  defect as a quirk of the reference.
 - **Read a percentage next to the absolute numbers, never on its own.** The
   `contains` row is the clearest example: the overhead table reports well over
   1000% while `+ms` is about 0.02 ms. The backend call became so cheap that
@@ -347,13 +344,17 @@ the JSON file stay clean and a slow case is visibly working.
     `postgres` that is twenty extra point reads, and the row goes from 0.89 ms
     to 17.24 ms.
   - **`Memory.search`** re-fetches every result to evaluate policy against
-    stored state rather than the indexed copy, and it filters twice, before and
-    after the `after_search` hooks. That is two extra reads per result, plus a
-    containment check per result at `Scope.SUBTREE`. With twenty results on
-    `postgres`, `search_subtree_text` goes from 6.14 ms to 91.61 ms.
-  - **The pattern is the same on every server target,** at roughly eighteen to
-    twenty-five times the raw call for `list_links` and four to fifteen times
-    for search. It is not an adapter problem.
+    stored state rather than the indexed copy, plus a containment check per
+    result at `Scope.SUBTREE`. Visibility is filtered both before and after the
+    `after_search` hooks, and the two passes share one verdict per block id, so
+    a result costs one read for the whole call. On `sqlite`,
+    `search_subtree_text` costs 42.79 ms against 32.39 ms for the raw call.
+  - **One read per result is still the shape,** so search cost grows with the
+    page size. Removing it would need a batched read in the backend contract,
+    which is not there today.
+  - **The pattern is the same on every server target,** and it is not an
+    adapter problem: the cost grows with the number of results returned, not
+    with the store.
   - **The re-read is deliberate,** because a search index is derived state and
     may be stale, so policy has to be checked against the stored block. The
     question the numbers raise is the round-trip count, not whether to check.

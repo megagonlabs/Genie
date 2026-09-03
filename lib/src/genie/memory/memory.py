@@ -873,13 +873,21 @@ class Memory:
                 replace(result, block=self._decode_block(result.block))
                 for result in raw_results
             ]
-            visible_results = self._filter_visible_results(memory_query, decoded_results)
+            # One visibility verdict per block id for the whole call, shared by
+            # both filter passes, so a block is read once however many passes
+            # look at it.
+            verdicts: dict[str, bool] = {}
+            visible_results = self._filter_visible_results(
+                memory_query,
+                decoded_results,
+                verdicts,
+            )
             hooked_results = self.hooks.after_search(
                 context,
                 memory_query,
                 visible_results,
             )
-            return self._filter_visible_results(memory_query, hooked_results)
+            return self._filter_visible_results(memory_query, hooked_results, verdicts)
 
     def get_handle(
         self,
@@ -1257,10 +1265,36 @@ class Memory:
         self,
         query: MemoryQuery,
         results: list[SearchResult],
+        verdicts: dict[str, bool] | None = None,
     ) -> list[SearchResult]:
-        """Filter search results by stored block visibility and query scope."""
+        """Filter search results by stored block visibility and query scope.
 
-        return [result for result in results if self._can_return_search_result(query, result)]
+        Args:
+            query: Query the results came from.
+            results: Results to filter.
+            verdicts: Visibility decisions already made during this operation,
+                keyed by block id. `search` passes one mapping to both of its
+                filter passes, which is what keeps the pass after
+                `after_search` from reading every block a second time. Reusing
+                a verdict is as strict as asking again, because every decision
+                in `_can_return_search_result` is derived from the block id and
+                the stored block it names, never from the rest of a result. One
+                consequence: a hook that deletes a result's block inside
+                `after_search` does not remove that result from the page.
+
+        Returns:
+            The results the acting principal may receive.
+        """
+
+        decisions = {} if verdicts is None else verdicts
+        visible: list[SearchResult] = []
+        for result in results:
+            block_id = result.block.id
+            if block_id not in decisions:
+                decisions[block_id] = self._can_return_search_result(query, result)
+            if decisions[block_id]:
+                visible.append(result)
+        return visible
 
     def _can_return_search_result(self, query: MemoryQuery, result: SearchResult) -> bool:
         """Return whether a result is visible for the current query/principal."""

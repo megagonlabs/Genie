@@ -312,3 +312,68 @@ def test_search_results_validate_backend_facing_record_fields() -> None:
         SearchResult(block, score=math.nan)
     with pytest.raises(TypeError, match="reason must be a string"):
         SearchResult(block, reason=cast(str, 1))
+
+
+class _CountingBackend(InMemoryBackend):
+    """In-memory backend that records every point read it serves."""
+
+    def __init__(self) -> None:
+        """Start with an empty read log."""
+
+        super().__init__()
+        self.reads: list[str] = []
+
+    def get_block(self, block_id: str) -> MemoryBlock | None:
+        """Record the read, then answer it normally."""
+
+        self.reads.append(block_id)
+        return super().get_block(block_id)
+
+
+def test_search_reads_each_result_block_once() -> None:
+    """`Memory.search` checks a result's stored block once, not once per pass.
+
+    Visibility is filtered twice, before and after the `after_search` hooks,
+    because a hook may add results. Both passes share one verdict per block id,
+    so the second pass costs no extra reads. On a server-backed adapter that
+    halves the round trips a search spends, and the cost grew with the number
+    of results.
+    """
+
+    backend = _CountingBackend()
+    memory = Memory(backend=backend, principal="owner")
+    root = memory.put(type="root", value="workspace")
+    notes = [
+        memory.put(parent=root, type="note", value=f"needle {index}")
+        for index in range(5)
+    ]
+    backend.reads.clear()
+
+    results = memory.search("needle", root=root, scope=Scope.SUBTREE)
+    returned = [result.block.id for result in results]
+
+    assert sorted(returned) == sorted(note.id for note in notes)
+    # Exactly one read per returned block. Reads of the query root are the
+    # authorization path, not result filtering, so they are excluded.
+    result_reads = [block_id for block_id in backend.reads if block_id in set(returned)]
+    assert sorted(result_reads) == sorted(returned)
+
+
+def test_search_visibility_is_decided_again_for_every_search() -> None:
+    """A shared verdict lives for one search only, never across two.
+
+    Reusing it further would answer from a stale store, so a block deleted
+    between two searches has to disappear from the second one.
+    """
+
+    memory = Memory(principal="owner")
+    root = memory.put(type="root", value="workspace")
+    note = memory.put(parent=root, type="note", value="needle")
+
+    first = memory.search("needle", root=root, scope=Scope.SUBTREE)
+    assert [result.block.id for result in first] == [note.id]
+
+    memory.delete(note)
+    second = memory.search("needle", root=root, scope=Scope.SUBTREE)
+
+    assert second == []
