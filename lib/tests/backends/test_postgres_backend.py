@@ -45,6 +45,7 @@ from tests.backends.test_backend_contracts import (
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
+    TraversalIndexContract,
 )
 
 
@@ -386,6 +387,7 @@ def _clear_live_data(backend: PostgresBackend) -> None:
 @pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 class TestPostgresStructureBackendContracts(
     BlockStoreContract,
+    TraversalIndexContract,
     KeyedStoreContract,
     SequenceStoreContract,
     TemporalStoreContract,

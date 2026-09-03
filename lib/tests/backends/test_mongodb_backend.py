@@ -44,6 +44,7 @@ from tests.backends.test_backend_contracts import (
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
+    TraversalIndexContract,
 )
 
 
@@ -543,6 +544,7 @@ def _clear_live_data(backend: MongoDBBackend) -> None:
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 class TestMongoDBStructureBackendContracts(
     BlockStoreContract,
+    TraversalIndexContract,
     KeyedStoreContract,
     SequenceStoreContract,
     TemporalStoreContract,

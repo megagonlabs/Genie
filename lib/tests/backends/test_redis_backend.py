@@ -47,6 +47,7 @@ from tests.backends.test_backend_contracts import (
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
+    TraversalIndexContract,
 )
 
 
@@ -2295,6 +2296,7 @@ def _clear_live_data(backend: RedisBackend, *, include_schema: bool = False) -> 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 class TestRedisStructureBackendContracts(
     BlockStoreContract,
+    TraversalIndexContract,
     KeyedStoreContract,
     SequenceStoreContract,
     TemporalStoreContract,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier
@@ -23,7 +24,7 @@ from genie import (
     TemporalIndex,
     TemporalStore,
 )
-from genie.backend.capabilities import LinkStore
+from genie.backend.capabilities import BlockStore, LinkStore, TraversalIndex
 from genie.structures import (
     KeyBinding,
     MemoryAddress,
@@ -51,6 +52,30 @@ class StructureBackendContract:
             backend.put_block(MemoryBlock(id=block_id, type="test", value=block_id))
             for block_id in block_ids
         ]
+
+    def put_tree(self, backend: MemoryBackend, tree: Mapping[str, str | None]) -> None:
+        """Create blocks for an id-to-parent map, parents before children.
+
+        Args:
+            backend: Backend to write into.
+            tree: Block id to parent block id, with `None` for a root.
+        """
+
+        written: set[str] = set()
+
+        def write(block_id: str) -> None:
+            if block_id in written:
+                return
+            parent_id = tree[block_id]
+            if parent_id is not None:
+                write(parent_id)
+            backend.put_block(
+                MemoryBlock(id=block_id, type="test", value=block_id, parent_id=parent_id)
+            )
+            written.add(block_id)
+
+        for block_id in tree:
+            write(block_id)
 
 
 class BlockStoreContract(StructureBackendContract):
@@ -131,6 +156,207 @@ class BlockStoreContract(StructureBackendContract):
 
         assert backend.get_block(root.id) is not None
         assert backend.get_block(child.id) is not None
+
+
+# Two separate trees, one of them three levels deep with a fork, so traversal
+# has a shape to get wrong: a branch to move, siblings to keep apart, and a
+# second root that owns none of the first one's blocks.
+_TRAVERSAL_TREE: Mapping[str, str | None] = {
+    "mem_root": None,
+    "mem_a": "mem_root",
+    "mem_a1": "mem_a",
+    "mem_a2": "mem_a",
+    "mem_a2x": "mem_a2",
+    "mem_b": "mem_root",
+    "mem_b1": "mem_b",
+    "mem_far": None,
+    "mem_far1": "mem_far",
+}
+
+_MISSING_ID = "mem_never_stored"
+"""An id no test writes, so every method has to report it as absent."""
+
+
+def _expected_children(tree: Mapping[str, str | None], parent_id: str) -> set[str]:
+    """Return the ids whose recorded parent is `parent_id`."""
+
+    return {block_id for block_id, parent in tree.items() if parent == parent_id}
+
+
+def _expected_descendants(tree: Mapping[str, str | None], root_id: str) -> set[str]:
+    """Return every id below `root_id`, by walking children downward."""
+
+    found: set[str] = set()
+    frontier = [root_id]
+    while frontier:
+        for child_id in _expected_children(tree, frontier.pop()):
+            if child_id not in found:
+                found.add(child_id)
+                frontier.append(child_id)
+    return found
+
+
+def _expected_ancestors(tree: Mapping[str, str | None], block_id: str) -> list[str]:
+    """Return the parent chain of `block_id`, nearest parent first."""
+
+    chain: list[str] = []
+    parent_id = tree.get(block_id)
+    while parent_id is not None:
+        chain.append(parent_id)
+        parent_id = tree.get(parent_id)
+    return chain
+
+
+class TraversalIndexContract(StructureBackendContract):
+    """Contract tests reusable by backends implementing `TraversalIndex`.
+
+    Ownership is recorded by `MemoryBlock.parent_id` in the block store, and
+    `Memory` never reads that field: it asks these four methods instead. So an
+    adapter that fills both roles has to answer them consistently with the
+    parents it stored and consistently with each other.
+
+    - **Relationships, never a strategy.** The shipped adapters answer with a
+      recursive query, a graph path match, or a walk up the parent chain, and
+      `children` is a different query from `contains` in every one of them.
+      Nothing here prefers one.
+    - **Order only where the protocol promises it.** `ancestors` documents
+      nearest-parent-first order, so that is asserted. `children` and
+      `descendants` are compared as sets, because their order is
+      backend-defined.
+    - **One adapter, not a composition.** A separately supplied
+      `RoutedBackend(traversal_index=...)` is allowed to assert ownership the
+      block store does not record. That freedom belongs to the composition, so
+      it never reaches these tests.
+    """
+
+    def traversal_backend(self) -> MemoryBackend:
+        """Return a backend holding `_TRAVERSAL_TREE`, both roles checked."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, BlockStore)
+        assert isinstance(backend, TraversalIndex)
+        self.put_tree(backend, _TRAVERSAL_TREE)
+        return backend
+
+    def test_traversal_children_contract(self) -> None:
+        """`children` returns exactly the blocks recording that block as parent."""
+
+        backend = self.traversal_backend()
+
+        for block_id in _TRAVERSAL_TREE:
+            returned = backend.children(block_id)
+            ids = [block.id for block in returned]
+            assert len(ids) == len(set(ids)), f"children({block_id!r}) repeated a block"
+            assert set(ids) == _expected_children(_TRAVERSAL_TREE, block_id)
+            for block in returned:
+                assert block.parent_id == block_id
+
+        assert backend.children(_MISSING_ID) == []
+
+    def test_traversal_descendants_contract(self) -> None:
+        """`descendants` is the transitive closure of `children`."""
+
+        backend = self.traversal_backend()
+
+        for block_id in _TRAVERSAL_TREE:
+            expected = _expected_descendants(_TRAVERSAL_TREE, block_id)
+            returned = backend.descendants(block_id)
+            ids = [block.id for block in returned]
+            assert len(ids) == len(set(ids)), f"descendants({block_id!r}) repeated a block"
+            assert set(ids) == expected
+            with_self = backend.descendants(block_id, include_self=True)
+            assert {block.id for block in with_self} == expected | {block_id}
+
+        assert backend.descendants(_MISSING_ID) == []
+
+    def test_traversal_contains_contract(self) -> None:
+        """`contains` agrees with `descendants` on every ordered pair.
+
+        This is the assertion that separates a wrong containment answer from a
+        merely slow one, and it covers the two-tree case in passing.
+        """
+
+        backend = self.traversal_backend()
+        candidates = [*_TRAVERSAL_TREE, _MISSING_ID]
+
+        for root_id in candidates:
+            subtree = _expected_descendants(_TRAVERSAL_TREE, root_id)
+            for block_id in candidates:
+                expected = root_id in _TRAVERSAL_TREE and (
+                    block_id == root_id or block_id in subtree
+                )
+                assert (
+                    backend.contains(root_id, block_id) is expected
+                ), f"contains({root_id!r}, {block_id!r})"
+
+    def test_traversal_ancestors_contract(self) -> None:
+        """`ancestors` walks nearest parent first and the chain holds together."""
+
+        backend = self.traversal_backend()
+
+        for block_id in _TRAVERSAL_TREE:
+            returned = backend.ancestors(block_id)
+            assert [block.id for block in returned] == _expected_ancestors(
+                _TRAVERSAL_TREE, block_id
+            )
+            # Each returned block must record the next one as its own parent,
+            # so the list is a real chain and not a set in some order.
+            for position, ancestor in enumerate(returned):
+                following = returned[position + 1].id if position + 1 < len(returned) else None
+                assert ancestor.parent_id == following
+
+        assert backend.ancestors(_MISSING_ID) == []
+
+    def test_traversal_reparent_contract(self) -> None:
+        """Moving a block moves the branch it owns in every traversal view."""
+
+        backend = self.traversal_backend()
+        moving = backend.get_block("mem_a2")
+        assert moving is not None
+        backend.update_block(
+            moving.with_updates(parent_id="mem_b", version=moving.version + 1),
+            expected_version=moving.version,
+        )
+        moved: Mapping[str, str | None] = {**_TRAVERSAL_TREE, "mem_a2": "mem_b"}
+
+        for parent_id in ("mem_a", "mem_b"):
+            assert {block.id for block in backend.children(parent_id)} == _expected_children(
+                moved, parent_id
+            )
+        for root_id in ("mem_a", "mem_b", "mem_root"):
+            assert {
+                block.id for block in backend.descendants(root_id)
+            } == _expected_descendants(moved, root_id)
+        assert backend.contains("mem_b", "mem_a2x") is True
+        assert backend.contains("mem_a", "mem_a2x") is False
+        assert backend.contains("mem_root", "mem_a2x") is True
+        assert [block.id for block in backend.ancestors("mem_a2x")] == _expected_ancestors(
+            moved, "mem_a2x"
+        )
+
+    def test_traversal_delete_contract(self) -> None:
+        """Deleting a block removes its whole subtree from every view."""
+
+        backend = self.traversal_backend()
+        removed = {"mem_a", "mem_a1", "mem_a2", "mem_a2x"}
+        backend.delete_block("mem_a")
+        remaining: Mapping[str, str | None] = {
+            block_id: parent
+            for block_id, parent in _TRAVERSAL_TREE.items()
+            if block_id not in removed
+        }
+
+        assert {block.id for block in backend.children("mem_root")} == _expected_children(
+            remaining, "mem_root"
+        )
+        assert {block.id for block in backend.descendants("mem_root")} == _expected_descendants(
+            remaining, "mem_root"
+        )
+        for block_id in removed:
+            assert backend.contains("mem_root", block_id) is False
+            assert backend.ancestors(block_id) == []
+            assert backend.children(block_id) == []
+        assert backend.contains("mem_root", "mem_b1") is True
 
 
 class KeyedStoreContract(StructureBackendContract):
@@ -871,6 +1097,7 @@ class AcyclicLinkStoreContract(StructureBackendContract):
 
 class TestInMemoryStructureBackendContracts(
     BlockStoreContract,
+    TraversalIndexContract,
     KeyedStoreContract,
     SequenceStoreContract,
     TemporalStoreContract,
@@ -888,6 +1115,7 @@ class TestInMemoryStructureBackendContracts(
 
 class TestSQLiteStructureBackendContracts(
     BlockStoreContract,
+    TraversalIndexContract,
     KeyedStoreContract,
     SequenceStoreContract,
     TemporalStoreContract,
