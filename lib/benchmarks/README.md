@@ -326,7 +326,6 @@ The `contention` group has three rules of its own:
 | `--group` | Measure one group only. Repeatable |
 | `--case` | Measure cases whose name contains this text. Repeatable |
 | `--json` | Also write the full report to this path |
-| `--width` | Characters to fit the tables into. `0` prints every column |
 | `--list` | Print the targets and cases, then exit |
 | `--quiet` | Write no progress lines and no tables |
 
@@ -427,46 +426,6 @@ At more than one worker, four more choices apply:
 - **Progress is polled, never pushed.** Each worker writes its own finished-call
   count into its own slot and the calling thread sums those slots, so no lock
   enters a worker's hot path and reporting cannot distort throughput.
-
-## Output
-
-Up to three tables per section: a latency table with one row per measured
-variant, an overhead table with one row per case measured at both store layers,
-and, when a run measured more than one worker, a concurrency table with one row
-per worker level of each case and layer.
-
-- **The target is a section heading,** not a column. Repeating it on every row
-  costs width and reads worse.
-- **Numbers are right aligned** and names are left aligned, so decimal points
-  line up.
-- **Latency is printed with four decimals,** because the `core` helpers are
-  sub-microsecond and three decimals of a millisecond would round them to zero.
-- **A table too wide for the terminal drops a column,** `p99 ms` first and then
-  `p95 ms`, and the overhead table gives up `+%` because its two `p50` columns
-  already carry it. The concurrency table can only give up `p95 ms`. A closing
-  line names everything left out.
-- **`case`, `layer`, `p50 ms`, `ops/s`, and `errors` are never dropped,** and
-  the concurrency table also keeps `workers`, `wall ops/s`, `speedup`, and
-  `conflicts`, which are the reason it exists. Without them a row cannot be
-  identified or read. That sets a floor: below it the table stays wider than
-  the window.
-- **`wall ops/s` is not the latency table's `ops/s`.** One is the rate every
-  caller together achieved, the other the rate one caller saw.
-- **Each layer of the concurrency table opens with its single-caller row,** so
-  what the extra workers changed is visible without looking at another table.
-- **A pipe or a file is never trimmed.** Only a terminal has a width to
-  respect, so redirected output keeps every column. `--width` still applies if
-  you ask for it.
-
-Two escape hatches:
-
-```bash
-# Print every column, no trimming, however narrow the window
-conda run -n "genie" python lib/benchmarks/run.py --width 0
-
-# Fit a width you choose, such as a code block in a document
-conda run -n "genie" python lib/benchmarks/run.py --width 72
-```
 
 ## Progress
 

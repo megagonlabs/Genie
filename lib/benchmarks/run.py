@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import shutil
 import sys
 from pathlib import Path
 
@@ -90,7 +89,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--group", action="append", choices=GROUPS, default=None, help="Measure one group only. Repeatable")
     parser.add_argument("--case", action="append", default=None, help="Measure cases whose name contains this text. Repeatable")
     parser.add_argument("--json", default=None, help="Also write the full report to this path")
-    parser.add_argument("--width", type=int, default=None, help="Characters to fit the tables into. 0 prints every column")
     parser.add_argument("--list", action="store_true", help="Print the targets and cases, then exit")
     parser.add_argument("--quiet", action="store_true", help="Write no progress lines and no table")
     return parser
@@ -182,28 +180,8 @@ def main(argv: list[str] | None = None) -> int:
         written = report.write_json(result, arguments.json)
         print(f"wrote {written}", file=sys.stderr)
     if not arguments.quiet:
-        print(report.format_report(result, width=_table_width(arguments.width)))
+        print(report.format_report(result))
     return EXIT_CALL_FAILED if result["errors"] else EXIT_OK
-
-
-def _table_width(requested: int | None) -> int | None:
-    """Decide the width the tables are fitted into.
-
-    A pipe or a file has no width to respect, so redirected output keeps every
-    column unless `--width` asks otherwise.
-
-    Args:
-        requested: Value of `--width`, or `None` when it was not given.
-
-    Returns:
-        The width to fit into, or `None` to keep every column.
-    """
-
-    if requested is not None:
-        return requested or None
-    if not sys.stdout.isatty():
-        return None
-    return shutil.get_terminal_size().columns
 
 
 def _listing(

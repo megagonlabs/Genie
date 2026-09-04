@@ -19,7 +19,7 @@ from benchmarks import report, run, runner
 from benchmarks.cases import HOT_PARENT_ID, CaseContext, PreparedCase, default_cases, select
 from benchmarks.metrics import percentile, summarize
 from benchmarks.progress import PLAIN_INTERVAL_SECONDS, TERMINAL_INTERVAL_SECONDS, for_stream
-from benchmarks.report import CONCURRENCY_DROP_ORDER, LATENCY_DROP_ORDER
+from benchmarks.report import CONCURRENCY_HEADERS, LATENCY_HEADERS
 from benchmarks.runner import CORE_SECTION, REPORT_SCHEMA, WorkItem
 from benchmarks.settings import BACKEND, CORE, LAYERS, MEMORY, BenchmarkSettings
 from benchmarks.targets import BackendTarget, clear_store, default_targets, server_targets
@@ -722,53 +722,11 @@ def test_report_renders_as_a_table_and_round_trips_as_json(tmp_path: Path) -> No
     text = report.format_report(result)
     assert "Genie benchmarks" in text
     assert "in_memory" in text
-    assert "p50 ms" in text
+    assert all(header in text for header in LATENCY_HEADERS)
     assert "overhead: what the Memory call adds" in text
 
     written = report.write_json(result, tmp_path / "nested" / "report.json")
     assert json.loads(written.read_text(encoding="utf-8")) == result
-
-
-def _latency_headers(text: str) -> list[str]:
-    """Return the header row of every latency table in a rendered report."""
-
-    return [line for line in text.splitlines() if line.startswith("case ") and "layer" in line]
-
-
-def test_a_narrow_width_drops_the_least_useful_column_first() -> None:
-    """A narrow window loses `p99 ms` before `p95 ms`, and says what it lost."""
-
-    cases = select(default_cases(), names=("get",))
-    result = runner.run(
-        settings=TINY,
-        targets=default_targets()[:1],
-        cases=cases,
-        progress=_quiet(),
-    )
-
-    full = report.format_report(result, width=0)
-    assert all("p99 ms" in line and "p95 ms" in line for line in _latency_headers(full))
-    assert "left out to fit the width" not in full
-
-    # One character short of fitting, so only the first column in the drop order
-    # has to go.
-    natural_width = len(_latency_headers(full)[0])
-    medium = report.format_report(result, width=natural_width - 1)
-    assert LATENCY_DROP_ORDER == ("p99 ms", "p95 ms")
-    assert all("p99 ms" not in line and "p95 ms" in line for line in _latency_headers(medium))
-    assert "left out to fit the width: p99 ms" in medium
-
-    # Narrower still: both latency percentiles go, and the overhead table gives
-    # up its share column too, because the two p50 columns already carry it.
-    narrow = report.format_report(result, width=40)
-    assert all("p99 ms" not in line and "p95 ms" not in line for line in _latency_headers(narrow))
-    assert "left out to fit the width: +%, p95 ms, p99 ms" in narrow
-
-
-def _concurrency_headers(text: str) -> list[str]:
-    """Return the header row of every concurrency table in a report."""
-
-    return [line for line in text.splitlines() if line.startswith("case ") and "workers" in line]
 
 
 def test_the_concurrency_table_opens_each_layer_with_its_single_caller_row() -> None:
@@ -783,40 +741,16 @@ def test_the_concurrency_table_opens_each_layer_with_its_single_caller_row() -> 
         progress=_quiet(),
     )
 
-    text = report.format_report(result, width=0)
+    text = report.format_report(result)
     lines = text.splitlines()
     heading = lines.index("concurrency: how the same call behaves with more callers")
     rows = [line for line in lines[heading:] if line.startswith("get ")]
 
-    assert "wall ops/s" in text
+    assert all(header in text for header in CONCURRENCY_HEADERS)
     assert len(rows) == 2
     # case, layer, workers, p50, p95, wall ops/s, speedup, conflicts, errors
     assert [row.split()[2] for row in rows] == ["1", str(WORKERS)]
     assert rows[0].split()[6] == "1.00"
-
-
-def test_a_narrow_concurrency_table_gives_up_p95_first() -> None:
-    """`speedup` and `conflicts` are why the table exists, so they never go."""
-
-    cases = select(default_cases(), names=("get",))
-    result = runner.run(
-        settings=TINY_CONCURRENT,
-        targets=default_targets()[:1],
-        cases=cases,
-        layers=(BACKEND,),
-        progress=_quiet(),
-    )
-
-    full = report.format_report(result, width=0)
-    natural_width = len(_concurrency_headers(full)[0])
-    narrow = report.format_report(result, width=natural_width - 1)
-
-    assert CONCURRENCY_DROP_ORDER == ("p95 ms",)
-    for line in _concurrency_headers(narrow):
-        assert "p95 ms" not in line
-        assert "speedup" in line
-        assert "conflicts" in line
-        assert "wall ops/s" in line
 
 
 def test_progress_writes_whole_lines_when_the_stream_is_not_a_terminal() -> None:
