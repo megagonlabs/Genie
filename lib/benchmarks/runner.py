@@ -15,14 +15,28 @@ What one measured variant costs:
    `time.perf_counter_ns`. A call that raises is counted, not timed.
 4. **Disposal.** The backend is closed and its files are removed, so nothing
    one variant wrote can move the next variant's numbers.
+
+At more than one worker the same four steps run, with three differences:
+
+- **Setup still runs in the calling thread,** once per worker and one worker at
+  a time, so preparation can never race and is never timed.
+- **A barrier starts the measured window for every worker at the same instant.**
+  Warmup happens before it, so a slow first call cannot land inside another
+  worker's measurement.
+- **Progress is polled, not pushed.** Each worker writes its own finished-call
+  count into its own slot and the calling thread sums those slots. No lock
+  enters a worker's hot path, so reporting cannot distort throughput.
 """
 
 from __future__ import annotations
 
 import gc
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from threading import Barrier
 from time import perf_counter, perf_counter_ns
 from typing import Any
 
@@ -30,11 +44,11 @@ from benchmarks import dataset, environment
 from benchmarks.cases import BenchmarkCase, CaseContext, PreparedCase, default_cases
 from benchmarks.metrics import NANOSECONDS_PER_MILLISECOND, Summary, summarize
 from benchmarks.progress import Progress
-from benchmarks.settings import BACKEND, CORE, LAYERS, MEMORY, BenchmarkSettings
+from benchmarks.settings import BACKEND, CORE, LAYERS, MEMORY, SINGLE_CALLER, BenchmarkSettings
 from benchmarks.targets import BackendTarget, default_targets
 from genie import InMemoryBackend, Memory
 
-REPORT_SCHEMA = 1
+REPORT_SCHEMA = 2
 """Version of the report shape. Raised when the JSON layout changes."""
 
 CORE_SECTION = "core"
@@ -46,6 +60,9 @@ CORE_STORAGE = "core library only, no store behind it"
 PRINCIPAL_ID = "benchmark"
 """Principal that owns every block, so no case measures a denial path."""
 
+Results = dict[str, dict[str, dict[str, dict[int, dict[str, Any]]]]]
+"""Measured summaries, keyed by section, case name, layer, and worker count."""
+
 
 @dataclass(frozen=True, slots=True)
 class WorkItem:
@@ -56,41 +73,55 @@ class WorkItem:
         target: Store to open, or `None` for a core-only variant.
         case: Case to measure.
         layer: Layer of the case to measure.
+        workers: Callers that run the case at the same time, sharing one store
+            and one `Memory`.
     """
 
     section: str
     target: BackendTarget | None
     case: BenchmarkCase
     layer: str
+    workers: int = SINGLE_CALLER
 
     @property
     def label(self) -> str:
-        """Progress label naming the section, layer, and case."""
+        """Progress label naming the section, layer, case, and worker count."""
 
-        return f"{self.section} {self.layer}: {self.case.name}"
+        label = f"{self.section} {self.layer}: {self.case.name}"
+        if self.workers > SINGLE_CALLER:
+            return f"{label} x{self.workers}"
+        return label
 
 
 def plan_run(
     targets: Sequence[BackendTarget],
     cases: Sequence[BenchmarkCase],
     layers: Sequence[str],
+    workers: Sequence[int] = (SINGLE_CALLER,),
 ) -> tuple[list[WorkItem], list[BackendTarget]]:
     """Work out every variant a run will measure.
 
-    Store-backed layers run once per available target. The `core` layer runs
-    once in its own section, because a core helper has no store behind it and
-    repeating it under every target would only duplicate the same number.
+    Store-backed layers run once per available target and once per worker
+    level. The worker levels of one case and layer are planned next to each
+    other, so the runs being compared happen close together and a drifting
+    machine cannot move `speedup` on its own.
+
+    The `core` layer runs once in its own section at a single caller. A core
+    helper has no store behind it, so repeating it under every target would
+    only duplicate the same number, and contention cannot mean anything there.
 
     Args:
         targets: Targets to measure.
         cases: Cases to measure.
         layers: Layers to measure.
+        workers: Worker levels to measure, smallest first.
 
     Returns:
         The variants to measure and the targets that were skipped.
     """
 
     store_layers = tuple(layer for layer in layers if layer in (BACKEND, MEMORY))
+    levels = tuple(workers) or (SINGLE_CALLER,)
     items: list[WorkItem] = []
     skipped: list[BackendTarget] = []
     for target in targets:
@@ -99,8 +130,10 @@ def plan_run(
             continue
         for case in cases:
             for layer in store_layers:
-                if case.prepare_for(layer) is not None:
-                    items.append(WorkItem(target.name, target, case, layer))
+                if case.prepare_for(layer) is None:
+                    continue
+                for level in levels:
+                    items.append(WorkItem(target.name, target, case, layer, level))
     if CORE in layers:
         for case in cases:
             if case.prepare_for(CORE) is not None:
@@ -118,6 +151,10 @@ def run(
 ) -> dict[str, Any]:
     """Measure every selected variant and return the report.
 
+    A case marked `concurrent_only` is measured only when the settings ask for
+    more than one worker, so a default run keeps the length and the shape it
+    always had.
+
     Args:
         settings: Run settings. Defaults to `BenchmarkSettings()`.
         targets: Targets to measure. Defaults to `default_targets()`.
@@ -133,15 +170,18 @@ def run(
     run_settings = settings or BenchmarkSettings()
     run_targets = tuple(targets if targets is not None else default_targets())
     run_cases = tuple(cases if cases is not None else default_cases())
-    items, skipped = plan_run(run_targets, run_cases, tuple(layers))
+    if not run_settings.measures_concurrency:
+        run_cases = tuple(case for case in run_cases if not case.concurrent_only)
+    items, skipped = plan_run(run_targets, run_cases, tuple(layers), run_settings.workers)
     started_at = datetime.now(UTC)
     started = perf_counter()
-    results: dict[str, dict[str, dict[str, Any]]] = {}
+    results: Results = {}
     for position, item in enumerate(items, start=1):
         if progress is not None:
             progress.start_variant(position, len(items), item.label)
         summary = measure_variant(item, settings=run_settings, progress=progress)
-        results.setdefault(item.section, {}).setdefault(item.case.name, {})[item.layer] = (
+        section = results.setdefault(item.section, {})
+        section.setdefault(item.case.name, {}).setdefault(item.layer, {})[item.workers] = (
             summary.as_dict()
         )
     if progress is not None:
@@ -153,14 +193,31 @@ def run(
         "environment": environment.describe(),
         "settings": run_settings.as_dict(),
         "layers": list(layers),
+        "workers": list(run_settings.workers),
         "sections": _build_sections(run_targets, run_cases, tuple(layers), results, skipped),
-        "errors": sum(
-            layer_result["errors"]
-            for section in results.values()
-            for case_result in section.values()
-            for layer_result in case_result.values()
-        ),
+        "errors": _total(results, "errors"),
+        "conflicts": _total(results, "conflicts"),
     }
+
+
+def _total(results: Results, field: str) -> int:
+    """Add up one counter over every measured variant.
+
+    Args:
+        results: Measured summaries.
+        field: Summary field to add up, such as `"errors"`.
+
+    Returns:
+        The total.
+    """
+
+    return sum(
+        level_result[field]
+        for section in results.values()
+        for case_result in section.values()
+        for layer_result in case_result.values()
+        for level_result in layer_result.values()
+    )
 
 
 def measure_variant(
@@ -170,6 +227,10 @@ def measure_variant(
     progress: Progress | None = None,
 ) -> Summary:
     """Set up one variant, measure it, and dispose of its store.
+
+    Every worker is prepared in this thread, one at a time, so setup can never
+    race and is never timed. Worker `0` performs the setup the workers share,
+    such as creating the block a contention case fights over.
 
     Args:
         item: Variant to measure.
@@ -187,15 +248,25 @@ def measure_variant(
         dispose()
         raise ValueError(f"Case {item.case.name!r} has no {item.layer!r} layer.")
     try:
-        prepared = prepare(context)
+        prepared = [prepare(replace(context, worker_index=worker)) for worker in range(item.workers)]
         setup_seconds = perf_counter() - setup_started
-        summary = measure(
-            prepared,
-            settings=settings,
-            progress=progress,
-            setup_seconds=setup_seconds,
-            scale=_scale_notes(item, context),
-        )
+        scale = _scale_notes(item, context)
+        if item.workers > SINGLE_CALLER:
+            summary = measure_concurrent(
+                prepared,
+                settings=settings,
+                progress=progress,
+                setup_seconds=setup_seconds,
+                scale=scale,
+            )
+        else:
+            summary = measure(
+                prepared[0],
+                settings=settings,
+                progress=progress,
+                setup_seconds=setup_seconds,
+                scale=scale,
+            )
     finally:
         dispose()
     return summary
@@ -243,6 +314,7 @@ def build_context(
         backend=backend,
         memory=memory,
         principal_id=PRINCIPAL_ID,
+        worker_count=item.workers,
     )
     return context, dispose
 
@@ -272,45 +344,277 @@ def measure(
     """
 
     gc.collect()
-    durations: list[int] = []
-    errors = 0
-    first_error: str | None = None
-    last_result: Any = None
+    outcome = _Outcome(prepared.conflict_errors)
     total = settings.total_calls
     loop_started = perf_counter()
+    measured_started = loop_started
     for index in range(total):
         measured = index >= settings.warmup
+        if index == settings.warmup:
+            measured_started = perf_counter()
         started = perf_counter_ns()
         try:
             result = prepared.call(index)
         except Exception as error:  # noqa: BLE001 - a failing call is a result, not a crash
             if measured:
-                errors += 1
-                if first_error is None:
-                    first_error = f"{type(error).__name__}: {error}"
+                outcome.record_failure(error)
         else:
             elapsed = perf_counter_ns() - started
             if measured:
-                durations.append(elapsed)
-                last_result = result
+                outcome.record_success(elapsed, result)
         # Progress is reported only after the duration has been read, so writing
         # a line can never inflate a measurement.
         if progress is not None:
             progress.call_done(index + 1, total)
-    loop_seconds = perf_counter() - loop_started
+    finished = perf_counter()
+    summary = _summarize_outcomes(
+        [outcome],
+        prepared=prepared,
+        workers=SINGLE_CALLER,
+        wall_seconds=finished - measured_started,
+        setup_seconds=setup_seconds,
+        scale=scale,
+    )
+    if progress is not None:
+        progress.finish_variant(summary.samples, finished - loop_started, summary.p50_ms)
+    return summary
+
+
+def measure_concurrent(
+    prepared: Sequence[PreparedCase],
+    *,
+    settings: BenchmarkSettings,
+    progress: Progress | None = None,
+    setup_seconds: float = 0.0,
+    scale: dict[str, Any] | None = None,
+) -> Summary:
+    """Time one prepared case with several workers calling it at once.
+
+    Every worker shares the store and the `Memory` above it, which is the shape
+    an application has. Each worker runs its own prepared case, so an ordinary
+    case writes ids nothing else touches while a `contention` case aims every
+    worker at one target.
+
+    How the measured window is defined:
+
+    - **Warmup happens before a barrier.** Once every worker has warmed up, the
+      barrier releases them together and stamps the window's start, so no
+      worker's first call lands inside another worker's measurement.
+    - **Wall time runs to the last worker's last return,** and
+      `throughput_per_second` is the calls that returned divided by it. That is
+      the rate every worker together achieved, next to the per-caller rate
+      `ops_per_second` still reports.
+    - **Latency percentiles come from every worker's durations merged,** so one
+      slow worker widens the tail rather than hiding in an average.
+
+    Args:
+        prepared: One prepared case per worker.
+        settings: Run settings. `iterations` and `warmup` count per worker.
+        progress: Reporter polled by this thread while the workers run.
+        setup_seconds: Wall time already spent preparing this variant.
+        scale: Notes describing the data the calls ran against.
+
+    Returns:
+        The variant's summary.
+
+    Raises:
+        RuntimeError: If a worker fails outside a measured call, which leaves
+            the run with no honest number to report.
+    """
+
+    gc.collect()
+    workers = len(prepared)
+    per_worker = settings.total_calls
+    finished_calls = [0] * workers
+    outcomes = [_Outcome(case.conflict_errors) for case in prepared]
+    window: list[float] = []
+    warmed = Barrier(workers)
+    measuring = Barrier(workers, action=lambda: window.append(perf_counter()))
+
+    def work(worker: int) -> float:
+        """Run one worker's calls and return when it finished the last one."""
+
+        call = prepared[worker].call
+        outcome = outcomes[worker]
+        try:
+            for index in range(settings.warmup):
+                # Warmup results are thrown away, failures included, so the
+                # first call of a connection or a query plan cannot enter the
+                # percentiles either way.
+                with suppress(Exception):
+                    call(index)
+                finished_calls[worker] = index + 1
+            warmed.wait()
+            measuring.wait()
+            for index in range(settings.warmup, per_worker):
+                started = perf_counter_ns()
+                try:
+                    result = call(index)
+                except Exception as error:  # noqa: BLE001 - a failing call is a result
+                    outcome.record_failure(error)
+                else:
+                    outcome.record_success(perf_counter_ns() - started, result)
+                # The count is this worker's own slot, so reporting never takes
+                # a lock the other workers could queue behind.
+                finished_calls[worker] = index + 1
+            return perf_counter()
+        except BaseException:
+            # A worker that dies before a barrier would leave the others waiting
+            # forever, so both gates are broken on the way out.
+            warmed.abort()
+            measuring.abort()
+            raise
+
+    loop_started = perf_counter()
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(work, worker) for worker in range(workers)]
+        _follow_progress(progress, futures, finished_calls, per_worker * workers)
+        try:
+            last_return = max(future.result() for future in futures)
+        except Exception as error:
+            raise RuntimeError(f"A benchmark worker failed outside a measured call: {error}") from error
+    summary = _summarize_outcomes(
+        outcomes,
+        prepared=prepared[0],
+        workers=workers,
+        wall_seconds=last_return - window[0] if window else 0.0,
+        setup_seconds=setup_seconds,
+        scale=scale,
+    )
+    if progress is not None:
+        progress.finish_variant(summary.samples, perf_counter() - loop_started, summary.p50_ms)
+    return summary
+
+
+class _Outcome:
+    """What one caller's measured calls did.
+
+    A conflict is separated from an error here, because a `contention` case
+    expects to lose races and a lost race must never fail a run.
+
+    Attributes:
+        conflict_errors: Exception types counted as conflicts.
+        durations: Nanosecond durations of the calls that returned.
+        errors: Calls that raised something unexpected.
+        conflicts: Calls that lost a documented race.
+        first_error: Type and message of the first unexpected failure.
+        last_result: Last result that returned, used for the notes.
+    """
+
+    __slots__ = ("conflict_errors", "conflicts", "durations", "errors", "first_error", "last_result")
+
+    def __init__(self, conflict_errors: tuple[type[BaseException], ...]) -> None:
+        """Create an empty outcome.
+
+        Args:
+            conflict_errors: Exception types counted as conflicts.
+        """
+
+        self.conflict_errors = conflict_errors
+        self.durations: list[int] = []
+        self.errors = 0
+        self.conflicts = 0
+        self.first_error: str | None = None
+        self.last_result: Any = None
+
+    def record_success(self, duration_ns: int, result: Any) -> None:
+        """Keep a call that returned.
+
+        Args:
+            duration_ns: How long it took.
+            result: What it returned.
+        """
+
+        self.durations.append(duration_ns)
+        self.last_result = result
+
+    def record_failure(self, error: Exception) -> None:
+        """Count a call that raised, as a conflict or as an error.
+
+        The duration is dropped either way, so a call that did not finish its
+        work cannot enter the latency percentiles.
+
+        Args:
+            error: What the call raised.
+        """
+
+        if self.conflict_errors and isinstance(error, self.conflict_errors):
+            self.conflicts += 1
+            return
+        self.errors += 1
+        if self.first_error is None:
+            self.first_error = f"{type(error).__name__}: {error}"
+
+
+def _summarize_outcomes(
+    outcomes: Sequence[_Outcome],
+    *,
+    prepared: PreparedCase,
+    workers: int,
+    wall_seconds: float,
+    setup_seconds: float,
+    scale: dict[str, Any] | None,
+) -> Summary:
+    """Merge every worker's outcome into one summary.
+
+    Args:
+        outcomes: One outcome per worker.
+        prepared: Prepared case, read for its `describe` function.
+        workers: Callers that ran at the same time.
+        wall_seconds: Wall time of the measured window.
+        setup_seconds: Wall time spent preparing the variant.
+        scale: Notes describing the data the calls ran against.
+
+    Returns:
+        The variant's summary.
+    """
+
+    durations = [duration for outcome in outcomes for duration in outcome.durations]
+    first_error = next((outcome.first_error for outcome in outcomes if outcome.first_error), None)
+    last_result = next(
+        (outcome.last_result for outcome in outcomes if outcome.last_result is not None), None
+    )
     notes: dict[str, Any] = dict(scale or {})
     if prepared.describe is not None and last_result is not None:
         notes.update(prepared.describe(last_result))
-    summary = summarize(
+    return summarize(
         durations,
-        errors=errors,
+        errors=sum(outcome.errors for outcome in outcomes),
+        conflicts=sum(outcome.conflicts for outcome in outcomes),
         first_error=first_error,
+        workers=workers,
+        wall_seconds=wall_seconds,
         setup_seconds=setup_seconds,
         notes=notes,
     )
-    if progress is not None:
-        progress.finish_variant(summary.samples, loop_seconds, summary.p50_ms)
-    return summary
+
+
+def _follow_progress(
+    progress: Progress | None,
+    futures: Sequence[Future[float]],
+    finished_calls: Sequence[int],
+    total: int,
+) -> None:
+    """Report what the workers have finished until every one of them is done.
+
+    The workers never call the reporter themselves. This thread reads their
+    counters instead, so no lock enters a worker's hot path and reporting
+    cannot distort throughput.
+
+    Args:
+        progress: Reporter, or `None` to wait quietly.
+        futures: One future per worker.
+        finished_calls: One counter per worker, written by that worker only.
+        total: Calls the whole variant will make, warmup included.
+    """
+
+    if progress is None:
+        return
+    pending = list(futures)
+    while pending:
+        _, not_done = wait(pending, timeout=progress.interval)
+        progress.call_done(sum(finished_calls), total)
+        pending = list(not_done)
 
 
 def _scale_notes(item: WorkItem, context: CaseContext) -> dict[str, Any]:
@@ -328,7 +632,7 @@ def _build_sections(
     targets: Sequence[BackendTarget],
     cases: Sequence[BenchmarkCase],
     layers: Sequence[str],
-    results: dict[str, dict[str, dict[str, Any]]],
+    results: Results,
     skipped: Sequence[BackendTarget],
 ) -> list[dict[str, Any]]:
     """Assemble the report sections in target order, core last."""
@@ -371,15 +675,32 @@ def _build_sections(
 
 def _section_cases(
     cases: Sequence[BenchmarkCase],
-    measured: dict[str, dict[str, Any]],
+    measured: dict[str, dict[str, dict[int, dict[str, Any]]]],
 ) -> list[dict[str, Any]]:
-    """Assemble one section's cases in registry order, with the layer gap."""
+    """Assemble one section's cases in registry order.
+
+    Each case carries its single-caller variants, the gap between the two store
+    layers, and one concurrency entry per worker level above one.
+
+    Args:
+        cases: Cases in registry order.
+        measured: Summaries for this section, keyed by case, layer, and worker
+            count.
+
+    Returns:
+        One entry per measured case.
+    """
 
     section_cases: list[dict[str, Any]] = []
     for case in cases:
-        variants = measured.get(case.name)
-        if not variants:
+        levels = measured.get(case.name)
+        if not levels:
             continue
+        variants = {
+            layer: by_worker[SINGLE_CALLER]
+            for layer, by_worker in levels.items()
+            if SINGLE_CALLER in by_worker
+        }
         entry: dict[str, Any] = {
             "name": case.name,
             "group": case.group,
@@ -387,6 +708,7 @@ def _section_cases(
             "variants": variants,
             "overhead_ms": None,
             "overhead_percent": None,
+            "concurrency": _concurrency_entries(levels),
         }
         backend_result = variants.get(BACKEND)
         memory_result = variants.get(MEMORY)
@@ -396,6 +718,41 @@ def _section_cases(
                 entry["overhead_percent"] = entry["overhead_ms"] / backend_result["p50_ms"] * 100.0
         section_cases.append(entry)
     return section_cases
+
+
+def _concurrency_entries(
+    levels: dict[str, dict[int, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Describe one case's worker levels above a single caller.
+
+    `speedup` divides the level's wall-clock throughput by the single caller's.
+    It is `None` when the single-caller rate is missing or zero, because there
+    is then nothing honest to divide by.
+
+    Args:
+        levels: Summaries for one case, keyed by layer and worker count.
+
+    Returns:
+        One entry per layer and worker level above one, in report order.
+    """
+
+    entries: list[dict[str, Any]] = []
+    for layer in (BACKEND, MEMORY, CORE):
+        by_worker = levels.get(layer)
+        if not by_worker:
+            continue
+        baseline = by_worker.get(SINGLE_CALLER, {}).get("throughput_per_second", 0.0)
+        for workers in sorted(worker for worker in by_worker if worker > SINGLE_CALLER):
+            result = by_worker[workers]
+            entries.append(
+                {
+                    "layer": layer,
+                    "workers": workers,
+                    "speedup": result["throughput_per_second"] / baseline if baseline > 0 else None,
+                    "result": result,
+                }
+            )
+    return entries
 
 
 def milliseconds(duration_ns: int) -> float:

@@ -1,10 +1,12 @@
 """Turns a report into a table a person can read, or a JSON file.
 
-Two tables per section, not one wide one:
+Up to three tables per section, not one wide one:
 
 - **A latency table** with one row per measured variant.
 - **An overhead table** with one row per case that was measured at both
   layers, saying what the public `Memory` call adds over the raw backend call.
+- **A concurrency table,** printed only when a run measured more than one
+  worker, with one row per worker level of each case and layer.
 
 The target is a section heading rather than a repeated column, numbers are
 right aligned so decimal points line up, and a table too wide for the terminal
@@ -31,8 +33,40 @@ OVERHEAD_HEADERS = ("case", "backend p50", "memory p50", "+ms", "+%")
 OVERHEAD_DROP_ORDER = ("+%",)
 """The share is given up first, because the two p50 columns already carry it."""
 
+CONCURRENCY_HEADERS = (
+    "case",
+    "layer",
+    "workers",
+    "p50 ms",
+    "p95 ms",
+    "wall ops/s",
+    "speedup",
+    "conflicts",
+    "errors",
+)
+"""Concurrency table columns. `wall ops/s` is the rate every worker together
+achieved, which is not the per-caller `ops/s` of the latency table."""
+
+CONCURRENCY_DROP_ORDER = ("p95 ms",)
+"""The only column this table can give up. Without the rest a row cannot be
+identified, and `speedup` and `conflicts` are the reason the table exists."""
+
 NUMERIC_HEADERS = frozenset(
-    {"p50 ms", "p95 ms", "p99 ms", "ops/s", "errors", "backend p50", "memory p50", "+ms", "+%"}
+    {
+        "p50 ms",
+        "p95 ms",
+        "p99 ms",
+        "ops/s",
+        "wall ops/s",
+        "workers",
+        "speedup",
+        "conflicts",
+        "errors",
+        "backend p50",
+        "memory p50",
+        "+ms",
+        "+%",
+    }
 )
 """Columns right aligned so their decimal points line up."""
 
@@ -102,14 +136,18 @@ def _header_lines(report: Mapping[str, Any], *, width: int | None = None) -> lis
     settings = report.get("settings", {})
     sections = list(report.get("sections", ()))
     variants = sum(
-        len(case.get("variants", {})) for section in sections for case in section.get("cases", ())
+        len(case.get("variants", {})) + len(case.get("concurrency", ()))
+        for section in sections
+        for case in section.get("cases", ())
     )
     cases = len({case["name"] for section in sections for case in section.get("cases", ())})
     lines = ["Genie benchmarks"]
     if environment:
         lines.append(
             "{python_implementation} {python_version} on {operating_system} "
-            "({machine}, {cpu_count} CPU)".format(**environment)
+            "({machine}, {cpu_count} CPU, {switch_interval_ms:.1f} ms switch interval)".format(
+                **environment
+            )
         )
         lines.append("genie {genie_version} at commit {commit}".format(**environment))
     if settings:
@@ -119,14 +157,17 @@ def _header_lines(report: Mapping[str, Any], *, width: int | None = None) -> lis
                 width,
             )
         )
-    lines.extend(
-        _wrap(
-            f"run: {_plural(cases, 'case')}, {_plural(variants, 'variant')} "
-            f"in {_plural(len(sections), 'section')}, "
-            f"{report.get('duration_seconds', 0.0):.1f}s, {_plural(report.get('errors', 0), 'error')}",
-            width,
-        )
+    run_line = (
+        f"run: {_plural(cases, 'case')}, {_plural(variants, 'variant')} "
+        f"in {_plural(len(sections), 'section')}, "
+        f"{report.get('duration_seconds', 0.0):.1f}s, {_plural(report.get('errors', 0), 'error')}"
     )
+    conflicts = report.get("conflicts", 0)
+    if conflicts:
+        # A conflict is the answer a contention case asked for, so it is named
+        # next to the errors rather than folded into them.
+        run_line = f"{run_line}, {_plural(conflicts, 'conflict')}"
+    lines.extend(_wrap(run_line, width))
     return lines
 
 
@@ -183,6 +224,18 @@ def _section_lines(
         )
         dropped.update(overhead_gone)
         lines.extend(overhead_table)
+    concurrency_rows = _concurrency_rows(section)
+    if concurrency_rows:
+        lines.append("")
+        lines.extend(_wrap("concurrency: how the same call behaves with more callers", width))
+        concurrency_table, concurrency_gone = _render_table(
+            CONCURRENCY_HEADERS,
+            concurrency_rows,
+            width=width,
+            drop_order=CONCURRENCY_DROP_ORDER,
+        )
+        dropped.update(concurrency_gone)
+        lines.extend(concurrency_table)
     return lines
 
 
@@ -225,6 +278,69 @@ def _overhead_rows(section: Mapping[str, Any]) -> list[dict[str, str]]:
             }
         )
     return rows
+
+
+def _concurrency_rows(section: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Build the worker-level rows of one section.
+
+    Each layer opens with its single-caller row, taken from the case's
+    `variants`, so a reader can see what the extra workers changed without
+    looking at another table.
+
+    Args:
+        section: One report section.
+
+    Returns:
+        One row per worker level, or an empty list when the run measured a
+        single caller only.
+    """
+
+    rows: list[dict[str, str]] = []
+    for case in section.get("cases", ()):
+        entries = case.get("concurrency") or ()
+        variants = case.get("variants", {})
+        seen: set[str] = set()
+        for entry in entries:
+            layer = entry["layer"]
+            if layer not in seen:
+                seen.add(layer)
+                baseline = variants.get(layer)
+                if baseline:
+                    rows.append(_concurrency_row(case["name"], layer, baseline, 1.0))
+            rows.append(_concurrency_row(case["name"], layer, entry["result"], entry["speedup"]))
+    return rows
+
+
+def _concurrency_row(
+    name: str,
+    layer: str,
+    result: Mapping[str, Any],
+    speedup: float | None,
+) -> dict[str, str]:
+    """Render one worker level of one case and layer.
+
+    Args:
+        name: Case name.
+        layer: Layer the level was measured at.
+        result: Summary of that level.
+        speedup: Wall-clock throughput divided by the single caller's, or
+            `None` when there is nothing to divide by.
+
+    Returns:
+        The row values keyed by column name.
+    """
+
+    return {
+        "case": name,
+        "layer": layer,
+        "workers": str(result.get("workers", 1)),
+        "p50 ms": format(result["p50_ms"], MILLISECOND_FORMAT),
+        "p95 ms": format(result["p95_ms"], MILLISECOND_FORMAT),
+        "wall ops/s": f"{result.get('throughput_per_second', 0.0):.1f}",
+        "speedup": "-" if speedup is None else f"{speedup:.2f}",
+        "conflicts": str(result.get("conflicts", 0)),
+        "errors": str(result["errors"]),
+    }
 
 
 def _render_table(

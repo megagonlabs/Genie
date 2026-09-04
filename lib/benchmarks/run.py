@@ -7,15 +7,18 @@ Run it from the repository root:
     conda run -n "genie" python lib/benchmarks/run.py --iterations 500 --blocks 10000
     conda run -n "genie" python lib/benchmarks/run.py --target sqlite --group read
     conda run -n "genie" python lib/benchmarks/run.py --layer backend --layer memory
+    conda run -n "genie" python lib/benchmarks/run.py --workers 4 --workers 8
     conda run -n "genie" python lib/benchmarks/run.py --json reports/latest.json
 
 Exit status is `1` when any measured call raised, and `0` otherwise. Timing is
-never a pass or fail signal, because a shared machine is too noisy for that.
+never a pass or fail signal, because a shared machine is too noisy for that,
+and a conflict a `contention` case expected is not an error.
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 import shutil
 import sys
 from pathlib import Path
@@ -30,7 +33,7 @@ if __package__ in (None, ""):  # pragma: no cover - only when run as a plain scr
 from benchmarks import report, runner
 from benchmarks.cases import GROUPS, default_cases, select
 from benchmarks.progress import for_stream
-from benchmarks.settings import LAYERS, BenchmarkSettings
+from benchmarks.settings import LAYERS, SINGLE_CALLER, BenchmarkSettings
 from benchmarks.targets import default_targets
 
 EXIT_OK = 0
@@ -41,6 +44,24 @@ EXIT_CALL_FAILED = 1
 
 EXIT_BAD_SELECTION = 2
 """A target, group, or case name on the command line matched nothing."""
+
+NOISY_DRIVER_LOGGERS = ("neo4j.notifications",)
+"""Driver loggers that write one record per query.
+
+Neo4j reports a notification whenever a query names a label, property, or
+relationship type the database has not stored yet. Every query against a store
+a variant has just emptied does that, so the notification arrives on nearly
+every call. The driver logs it while it streams the result, which is inside the
+call this harness is timing, and Python's last-resort handler writes it to
+standard error, which is where the progress line lives. Left alone it both
+buries the progress line and inflates every `neo4j` number in the report.
+"""
+
+CONCURRENT_ONLY_HINT = (
+    "the contention cases share one target between workers, so they need more than one caller. "
+    "add --workers 4, or drop --group contention"
+)
+"""Said when a contention case was asked for without a worker level above one."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--links-per-block", type=int, default=defaults.links_per_block, help="Outgoing links attached to the corpus hub block")
     parser.add_argument("--search-limit", type=int, default=defaults.search_limit, help="Candidate budget passed to search")
     parser.add_argument("--seed", type=int, default=defaults.seed, help="Seed for the corpus generator")
+    parser.add_argument("--workers", type=int, action="append", default=None, help="Callers running one case at the same time. Repeatable. Level 1 is always measured")
     parser.add_argument("--layer", action="append", choices=LAYERS, default=None, help="Measure one layer only. Repeatable")
     parser.add_argument("--target", action="append", default=None, help="Measure one target only. Repeatable")
     parser.add_argument("--group", action="append", choices=GROUPS, default=None, help="Measure one group only. Repeatable")
@@ -72,6 +94,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", action="store_true", help="Print the targets and cases, then exit")
     parser.add_argument("--quiet", action="store_true", help="Write no progress lines and no table")
     return parser
+
+
+def quiet_driver_logs() -> None:
+    """Keep per-query driver log records out of a measured run.
+
+    Only the loggers named in `NOISY_DRIVER_LOGGERS` are raised, and only to
+    `ERROR`, so a real driver failure still reaches the stream. Nothing else in
+    the process has its logging changed, because a benchmark run should not
+    decide how an application logs.
+    """
+
+    for name in NOISY_DRIVER_LOGGERS:
+        logging.getLogger(name).setLevel(logging.ERROR)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             links_per_block=arguments.links_per_block,
             search_limit=arguments.search_limit,
             seed=arguments.seed,
+            workers=tuple(arguments.workers or (SINGLE_CALLER,)),
         )
     except (TypeError, ValueError) as error:
         parser.error(str(error))
@@ -116,13 +152,25 @@ def main(argv: list[str] | None = None) -> int:
         groups=tuple(arguments.group or ()),
         names=tuple(arguments.case or ()),
         layers=layers,
+        concurrent=settings.measures_concurrency,
     )
     if not cases:
-        print("no case matched the selection", file=sys.stderr)
+        dropped = select(
+            default_cases(),
+            groups=tuple(arguments.group or ()),
+            names=tuple(arguments.case or ()),
+            layers=layers,
+            concurrent=True,
+        )
+        # Naming the reason beats "matched nothing" when the selection was fine
+        # and only the worker level was missing.
+        message = CONCURRENT_ONLY_HINT if dropped else "no case matched the selection"
+        print(message, file=sys.stderr)
         return EXIT_BAD_SELECTION
     if arguments.list:
-        print(_listing(targets, cases, layers))
+        print(_listing(targets, cases, layers, settings.workers))
         return EXIT_OK
+    quiet_driver_logs()
     result = runner.run(
         settings=settings,
         targets=targets,
@@ -158,7 +206,12 @@ def _table_width(requested: int | None) -> int | None:
     return shutil.get_terminal_size().columns
 
 
-def _listing(targets: tuple, cases: tuple, layers: tuple[str, ...]) -> str:
+def _listing(
+    targets: tuple,
+    cases: tuple,
+    layers: tuple[str, ...],
+    workers: tuple[int, ...],
+) -> str:
     """Render what a run would measure, without measuring it."""
 
     lines = ["targets:"]
@@ -168,6 +221,7 @@ def _listing(targets: tuple, cases: tuple, layers: tuple[str, ...]) -> str:
         lines.append(f"  {'':12} {target.storage}")
     lines.append("")
     lines.append(f"layers: {', '.join(layers)}")
+    lines.append(f"workers: {', '.join(str(level) for level in workers)}")
     lines.append("")
     lines.append("cases:")
     for case in cases:

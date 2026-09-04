@@ -3,12 +3,17 @@
 Latency moves with the interpreter, the operating system, the machine, and the
 code under test. A report without these facts cannot be compared with another
 one, so they are collected once per run.
+
+The thread switch interval is recorded for the same reason. It decides how
+often the interpreter can interrupt a pure-Python call, so it moves the
+conflict counts of a concurrent run more than anything else in this file.
 """
 
 from __future__ import annotations
 
 import os
 import platform
+import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -22,8 +27,8 @@ def describe() -> dict[str, Any]:
 
     Returns:
         Plain data holding the Python build, the operating system, the
-        machine, the usable CPU count, the `genie` version, and the source
-        commit when one can be read.
+        machine, the usable CPU count, the thread switch interval, the `genie`
+        version, and the source commit when one can be read.
     """
 
     return {
@@ -32,6 +37,7 @@ def describe() -> dict[str, Any]:
         "operating_system": f"{platform.system()} {platform.release()}",
         "machine": platform.machine(),
         "cpu_count": _usable_cpu_count(),
+        "switch_interval_ms": sys.getswitchinterval() * 1000.0,
         "genie_version": _genie_version(),
         "commit": read_commit(REPOSITORY_ROOT),
     }
@@ -96,6 +102,8 @@ def format_lines(environment: dict[str, Any]) -> list[str]:
 
     return [
         "{python_implementation} {python_version} on {operating_system} "
-        "({machine}, {cpu_count} CPU)".format(**environment),
+        "({machine}, {cpu_count} CPU, {switch_interval_ms:.1f} ms switch interval)".format(
+            **environment
+        ),
         "genie {genie_version} at commit {commit}".format(**environment),
     ]

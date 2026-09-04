@@ -1,10 +1,11 @@
 # Benchmarks
 
 Latency for Genie's raw memory operations, one store at a time, at two API
-layers.
+layers, with one caller or with several.
 
-- **Question it answers:** what does one operation cost, and how much of that
-  cost is Genie itself rather than the store underneath it.
+- **Question it answers:** what does one operation cost, how much of that cost
+  is Genie itself rather than the store underneath it, and what changes when
+  more than one caller works at the same time.
 - **Why it exists:** to hold baseline numbers a release can be compared
   against, so a slowdown is visible before users find it.
 - **Not a test suite.** Nothing asserts. `pytest` does not collect this
@@ -26,6 +27,7 @@ conda run -n "genie" python lib/benchmarks/run.py --list
 conda run -n "genie" python lib/benchmarks/run.py --iterations 500 --blocks 5000
 conda run -n "genie" python lib/benchmarks/run.py --target sqlite --group read
 conda run -n "genie" python lib/benchmarks/run.py --layer backend --layer memory
+conda run -n "genie" python lib/benchmarks/run.py --workers 4 --workers 8
 conda run -n "genie" python lib/benchmarks/run.py --json reports/latest.json
 ```
 
@@ -33,7 +35,9 @@ conda run -n "genie" python lib/benchmarks/run.py --json reports/latest.json
   extra package.
 - **Exit status is `1` when any measured call raised,** and `0` otherwise.
   Timing is never a pass or fail signal, because a shared machine is too noisy
-  for that.
+  for that, and a conflict a `contention` case expected is not an error.
+- **`--workers` is the only concurrency switch.** Without it the run measures
+  one caller and produces exactly the tables it always did.
 - **`--quiet` drops the progress lines and the tables,** which is what you want
   together with `--json`.
 
@@ -56,6 +60,103 @@ of the suite.
 - **`core` runs once, in its own section.** A core helper has no store behind
   it, so repeating it under every target would only duplicate the same number.
   `--target` does not affect it; `--layer core` and `--group overhead` do.
+
+
+## Concurrency
+
+`--workers` measures the same case with several callers at once. It is off by
+default, so a plain run keeps its length and its numbers.
+
+```bash
+conda run -n "genie" python lib/benchmarks/run.py --workers 4 --workers 8
+conda run -n "genie" python lib/benchmarks/run.py --group contention --workers 4
+```
+
+- **Workers is a third axis** next to the target and the layer. Any case can be
+  measured at any level, so `search` under eight callers is as available as
+  `hot_block_set` is.
+- **Every worker shares one `Memory` and one backend,** which is the shape an
+  application has. They are threads, not processes.
+- **`--iterations` and `--warmup` count per worker.** Four workers make four
+  times as many calls. Latency stays comparable across levels while throughput
+  grows.
+- **Level 1 is always measured,** because `speedup` divides by it. Asking for
+  `--workers 8` measures 1 and 8.
+- **`core` cases stay at level 1.** A core helper has no store behind it, so
+  there is nothing to contend on.
+- **The levels of one case run back to back,** so the runs being compared
+  happen close together and a drifting machine cannot move `speedup` on its
+  own.
+
+### The two rates
+
+| Number | Question it answers |
+| --- | --- |
+| `ops_per_second` | What one caller saw, from the time its own calls took |
+| `throughput_per_second` | What every caller together achieved, from the wall time of the measured window |
+| `speedup` | `throughput_per_second` divided by the single caller's |
+
+- **A speedup near 1 means the store serializes.** More callers are not
+  finishing more work, they are queueing for the same turn.
+- **A speedup below 1 is normal for an adapter that serializes,** because the
+  callers now pay for lock handoff on top of the same serialized work.
+- **Latency and throughput move in opposite directions here.** A queued caller
+  waits longer, so `p50_ms` and especially `p95_ms` grow while the store
+  finishes about the same number of calls per second. Read both columns.
+
+### Conflicts
+
+- **A conflict is a lost race, not a failure.** `Memory.set` and
+  `Memory.update` read a block and then write it with `expected_version`. When
+  another worker wrote first, the call raises `MemoryConflict`.
+- **Conflicts are counted apart from errors,** in their own column, and never
+  change the exit status. A case says which exception types it expects to lose
+  to; anything else is still an error.
+- **A conflicted call is not timed.** It did not finish its work, so keeping it
+  out of the percentiles is the honest choice, and
+  `throughput_per_second` counts only the calls that committed.
+- **Genie does not retry.** The conflict reaches the caller, which is the
+  contract. These cases measure how often an application would have to.
+
+### What each adapter can show
+
+The `speedup` column is readable only next to the adapter's concurrency model.
+
+| Adapter | In-process model | What a concurrent run shows |
+| --- | --- | --- |
+| `InMemoryBackend` | One `RLock` taken per operation | Calls queue, so speedup stays near 1 |
+| `SQLiteBackend` | One connection, one `RLock` held for a whole read or write transaction | Every operation serializes |
+| `PostgresBackend` | Same, plus `pg_advisory_xact_lock` so writes serialize across processes too | Every operation serializes |
+| `MongoDBBackend` | Pooled client; writes take a database-resident guard document | Reads overlap, writes queue |
+| `Neo4jBackend` | Pooled driver; writes take a database-resident guard | Reads overlap, writes queue |
+| `RedisBackend` | Pooled client | Reads overlap |
+
+- **These are not defects.** The shipped adapters target one small, controlled
+  database, and a single guarded writer is what makes their compound "read,
+  check, then write" steps atomic.
+- **A serializing adapter still reports useful numbers.** Latency under load
+  and the tail say how long a caller waits for its turn, which is what an
+  application feels.
+
+### The switch interval decides what a thread benchmark can see
+
+- **CPython runs one thread at a time** and switches only every
+  `sys.getswitchinterval()` seconds, 5 ms by default. Every report records the
+  value as `switch_interval_ms`, because it moves the conflict counts more than
+  anything else in the environment.
+- **A pure-Python call is far shorter than 5 ms,** so one worker finishes
+  thousands of `InMemoryBackend` operations inside a single turn. Its read and
+  its write are almost never split by another worker.
+- **So `hot_block_set` on `in_memory` reports zero conflicts,** even at eight
+  workers and thousands of writes to one block.
+- **That is a fact about this interpreter, not a safe backend.** The same eight
+  workers writing the same block 2000 times each produce over twelve thousand
+  conflicts once `sys.setswitchinterval` is lowered to a microsecond.
+- **Any adapter that talks to a server releases the GIL inside the call,** so
+  its workers interleave for real and its conflict counts mean what they say.
+  `sqlite` conflicts on a hot block. `in_memory` does not.
+- **Read `in_memory` concurrency numbers as a floor,** and take conflict
+  behavior from a server target.
 
 ## Targets
 
@@ -90,6 +191,7 @@ of the suite.
 ./lib/scripts/benchmark_full.sh
 ./lib/scripts/benchmark_full.sh --iterations 50 --blocks 500
 ./lib/scripts/benchmark_full.sh --group read --json reports/servers.json
+./lib/scripts/benchmark_full.sh --group contention --workers 4 --blocks 200
 ```
 
 - **It needs Docker,** and it starts throwaway PostgreSQL, Neo4j, MongoDB, and
@@ -100,6 +202,11 @@ of the suite.
   can be in flight together.
 - **Container startup alone is about a minute** before the first measurement,
   and the script prints each step while it waits.
+- **Per-query driver notices are silenced for the run.** Neo4j reports a
+  notification whenever a query names a label, property, or relationship type
+  the database has not stored yet, which is nearly every query against a store
+  a variant has just emptied. The runner raises those loggers to `ERROR`, so a
+  real driver failure still reaches the stream while the notices do not.
 
 ### Why a server run takes so long
 
@@ -128,8 +235,12 @@ spent 82.7s of its 103.8s on setup:
       ./lib/scripts/benchmark_full.sh --iterations 20 --warmup 5 --blocks 200 \
           --sections 5 --links-per-block 10
 
+- **`--workers` multiplies the measuring column, not the setup one.** Each
+  extra level repeats every selected variant, and the corpus is written once
+  per variant whatever the level. A server run is the only place the pooled
+  adapters can show a speedup above 1, so it is worth the time.
 - **Keep the defaults for a report you intend to compare against later,** and
-  only compare runs whose `settings` line matches.
+  only compare runs whose `settings` line matches, worker levels included.
 - **A server store cannot be thrown away like a temporary file,** so each
   variant empties it on open instead. The reset uses only `search` and
   `delete_block`: deleting a root cascades to its subtree and to the links,
@@ -157,6 +268,10 @@ spent 82.7s of its 103.8s on setup:
 | `link` | `list_links` | `list_links` | `Memory.list_links` |
 | `search` | `search_subtree_text` | `search` at `Scope.SUBTREE` | `Memory.search` with the same query |
 | `search` | `search_global_filter` | `search` at `Scope.GLOBAL` | `Memory.search` with the same query |
+| `contention` | `hot_block_get` | `get_block` on one shared block | `Memory.get` on the same block |
+| `contention` | `hot_parent_put` | `put_block` under one shared parent | `Memory.put(parent=...)` under it |
+| `contention` | `hot_block_set` | — | `Memory.set` on one shared block |
+| `contention` | `hot_block_merge` | — | `Memory.update(value=...)` on one shared block |
 | `overhead` | `codec_round_trip` | — | `CodecRegistry.encode` then `decode` |
 | `overhead` | `policy_check` | — | `PolicyEngine.allows` for `Operation.READ` |
 | `overhead` | `hook_dispatch` | — | One `HookRegistry.operation` context with no hooks registered |
@@ -175,6 +290,24 @@ Three case-level details change how a row should be read:
   twice over. Read it against the `get` row of the same target: the difference
   is what a bounded `MemoryHandle` adds over an unbounded `Memory`.
 
+The `contention` group has three rules of its own:
+
+- **It runs only when `--workers` names a level above 1.** A shared target with
+  one caller is not shared. Asking for `--group contention` without a level is
+  refused with a message that names the missing flag. When concurrency is
+  measured they run at every level, level 1 included, because that is the
+  denominator of `speedup`.
+- **Read each one against the spread case it mirrors.** `hot_block_get` against
+  `get`, `hot_parent_put` against `put_root`, `hot_block_set` against
+  `set_value`. Those cases give every worker its own ids and its own offset
+  into the corpus, so the difference is contention and not store cost.
+- **`hot_block_set` and `hot_block_merge` are `memory` only,** for the same
+  reason `merge_value` is: `Memory.set` reads and then compare-and-swap writes
+  inside one call, and `update_block` alone has no version to expect until a
+  separate `get_block` supplies it. `hot_block_merge` decodes and merges as
+  well, so its window between the read and the write is wider and it should
+  lose more races than `hot_block_set` on the same target.
+
 ## Flags
 
 | Flag | Meaning |
@@ -187,6 +320,7 @@ Three case-level details change how a row should be read:
 | `--links-per-block` | Outgoing links attached to the corpus hub block |
 | `--search-limit` | Candidate budget passed to search |
 | `--seed` | Seed for the corpus generator |
+| `--workers` | Callers running one case at the same time. Repeatable. Level 1 is always measured |
 | `--layer` | Measure one layer only. Repeatable |
 | `--target` | Measure one target only. Repeatable |
 | `--group` | Measure one group only. Repeatable |
@@ -197,7 +331,8 @@ Three case-level details change how a row should be read:
 | `--quiet` | Write no progress lines and no tables |
 
 `--iterations` and `--blocks` are the two dials that change how long a run
-takes.
+takes, and `--workers` multiplies both: each level repeats every selected
+variant, and each worker makes its own `--iterations` calls.
 
 ## The corpus
 
@@ -221,10 +356,17 @@ Every variant reports:
   latency in milliseconds, from `time.perf_counter_ns`.
 - **`ops_per_second`** — the rate one caller sees, from the time its own calls
   took. Setup and warmup are excluded.
-- **`samples`** — measured calls that returned without raising. In the JSON
-  only, to keep the tables narrow.
-- **`errors` and `first_error`** — calls that raised, and the first failure's
-  type and message.
+- **`throughput_per_second`** — the rate every caller together achieved, from
+  the wall time of the measured window. Only calls that returned are counted.
+- **`workers` and `wall_seconds`** — the callers that ran at the same time, and
+  the wall time of their measured window. In the JSON only.
+- **`samples`** — measured calls that returned without raising, every worker's
+  merged. In the JSON only, to keep the tables narrow.
+- **`errors` and `first_error`** — calls that raised something unexpected, and
+  the first failure's type and message.
+- **`conflicts`** — calls that lost a race the case expected to lose, such as a
+  `MemoryConflict` on a block another worker wrote first. Never folded into
+  `errors`, and never a reason to fail a run.
 - **`setup_seconds`** — wall time spent writing the corpus and the variant's
   own targets, which is excluded from every latency number. In the JSON only.
 - **`notes`** — the corpus scale, plus what the calls actually did, such as how
@@ -232,6 +374,11 @@ Every variant reports:
 
 Each case measured at both store layers also reports **`overhead_ms`** and
 **`overhead_percent`**, the difference between the two `p50_ms` values.
+
+Each worker level above 1 also reports **`speedup`**, its
+`throughput_per_second` divided by the single caller's. It is `null` when the
+single-caller rate is missing or zero, because there is then nothing honest to
+divide by.
 
 ## Methodology
 
@@ -260,13 +407,33 @@ numbers.
 - **Garbage collection runs once before the loop and stays enabled,** because a
   caller in production pays that cost too.
 - **The report records the environment** — Python build, operating system,
-  machine, CPU count, `genie` version, and source commit — because latency
-  moves with all of them.
+  machine, CPU count, thread switch interval, `genie` version, and source
+  commit — because latency moves with all of them.
+
+At more than one worker, four more choices apply:
+
+- **Setup runs in the calling thread, one worker at a time.** Preparation can
+  therefore never race and is never timed. Worker `0` does the setup the
+  workers share, such as creating the block a `contention` case fights over or
+  the hub links `list_links` walks, so more workers never mean more corpus.
+- **Every worker gets its own ids and its own starting offset.** A write case
+  puts ids carrying the worker index, and a rotation over the corpus starts at
+  a different place per worker. Without that, four workers would walk in
+  lockstep and a spread case would quietly measure a hot one.
+- **A barrier starts the measured window for every worker at the same instant.**
+  Warmup happens before it, so a slow first call cannot land inside another
+  worker's measurement. Wall time runs from that barrier to the last worker's
+  last return.
+- **Progress is polled, never pushed.** Each worker writes its own finished-call
+  count into its own slot and the calling thread sums those slots, so no lock
+  enters a worker's hot path and reporting cannot distort throughput.
 
 ## Output
 
-Two tables per section: a latency table with one row per measured variant, and
-an overhead table with one row per case measured at both store layers.
+Up to three tables per section: a latency table with one row per measured
+variant, an overhead table with one row per case measured at both store layers,
+and, when a run measured more than one worker, a concurrency table with one row
+per worker level of each case and layer.
 
 - **The target is a section heading,** not a column. Repeating it on every row
   costs width and reads worse.
@@ -276,10 +443,17 @@ an overhead table with one row per case measured at both store layers.
   sub-microsecond and three decimals of a millisecond would round them to zero.
 - **A table too wide for the terminal drops a column,** `p99 ms` first and then
   `p95 ms`, and the overhead table gives up `+%` because its two `p50` columns
-  already carry it. A closing line names everything left out.
-- **`case`, `layer`, `p50 ms`, `ops/s`, and `errors` are never dropped.**
-  Without them a row cannot be identified or read. That sets a floor: below it
-  the table stays wider than the window.
+  already carry it. The concurrency table can only give up `p95 ms`. A closing
+  line names everything left out.
+- **`case`, `layer`, `p50 ms`, `ops/s`, and `errors` are never dropped,** and
+  the concurrency table also keeps `workers`, `wall ops/s`, `speedup`, and
+  `conflicts`, which are the reason it exists. Without them a row cannot be
+  identified or read. That sets a floor: below it the table stays wider than
+  the window.
+- **`wall ops/s` is not the latency table's `ops/s`.** One is the rate every
+  caller together achieved, the other the rate one caller saw.
+- **Each layer of the concurrency table opens with its single-caller row,** so
+  what the extra workers changed is visible without looking at another table.
 - **A pipe or a file is never trimmed.** Only a terminal has a width to
   respect, so redirected output keeps every column. `--width` still applies if
   you ask for it.
@@ -315,6 +489,10 @@ the JSON file stay clean and a slow case is visibly working.
 - **Progress is never written inside a timed call.** The reporter is told about
   a call only after its duration has been read, so a progress line cannot
   inflate a measurement.
+- **Neither is a driver's own logging.** The Neo4j driver logs a server
+  notification while it streams a result, which is inside the call being timed.
+  The runner raises that logger above `WARNING`, so the record is never built
+  and stderr formatting stays out of every `neo4j` measurement.
 
 ## Reading the report
 
@@ -363,6 +541,15 @@ the JSON file stay clean and a slow case is visibly working.
   the two variants ran far enough apart for the machine to drift, which shows
   up most on the slowest targets. Treat anything inside a few percent of zero
   as "no measurable difference".
+- **A speedup near 1 is the expected answer for most shipped adapters,** not a
+  disappointment. `SQLiteBackend` and `PostgresBackend` hold one lock around a
+  whole transaction on one connection, so extra callers queue by design. The
+  useful number there is what the queue does to `p95 ms`.
+- **Zero conflicts on `in_memory` does not mean the write was safe.** A
+  pure-Python call is far shorter than the 5 ms thread switch interval, so two
+  workers almost never split one read-then-write pair. The same case on
+  `sqlite` conflicts, because the driver releases the GIL inside the call.
+  `switch_interval_ms` in the report header is the number that explains it.
 - **Read `core` against the overhead table.** The three `core` helpers add up
   to about 0.013 ms, and the `get` overhead is about 0.015 ms. That agreement
   is a good sign: the gap on a simple read is the codec, the policy check, and
@@ -375,6 +562,14 @@ Planned next, in order:
 
 1. **Saved baselines** plus a comparison command, so a run can actually fail a
    release check instead of only reporting numbers.
-2. **Concurrency and contention.** Worker levels, wall-clock throughput next to
-   the single-caller rate, and hot-block cases.
-3. **Structure facades.** One operation per facade family.
+2. **Mixed read and write load.** Every worker of a variant makes the same call
+   today, so one latency number describes the whole variant. Readers running
+   while writers work would need a result pool per role and a second set of
+   columns.
+3. **Structure facades.** One operation per facade family, including the
+   contention their shared state creates: unique key binding in
+   `KeyedCollection` and sequence allocation in `EventLog`.
+4. **Processes as well as threads.** Threads share one `Memory` and one
+   backend, which is what an application has, but the GIL bounds what an
+   in-process adapter can show. `InMemoryBackend` cannot be shared between
+   processes at all, so this needs a different target model.

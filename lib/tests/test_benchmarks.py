@@ -8,20 +8,22 @@ from __future__ import annotations
 
 import io
 import json
+import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from benchmarks import report, run, runner
-from benchmarks.cases import CaseContext, PreparedCase, default_cases, select
+from benchmarks.cases import HOT_PARENT_ID, CaseContext, PreparedCase, default_cases, select
 from benchmarks.metrics import percentile, summarize
 from benchmarks.progress import PLAIN_INTERVAL_SECONDS, TERMINAL_INTERVAL_SECONDS, for_stream
-from benchmarks.report import LATENCY_DROP_ORDER
+from benchmarks.report import CONCURRENCY_DROP_ORDER, LATENCY_DROP_ORDER
 from benchmarks.runner import CORE_SECTION, REPORT_SCHEMA, WorkItem
 from benchmarks.settings import BACKEND, CORE, LAYERS, MEMORY, BenchmarkSettings
 from benchmarks.targets import BackendTarget, clear_store, default_targets, server_targets
-from genie import InMemoryBackend, Memory, MemoryQuery, Scope
+from genie import InMemoryBackend, Memory, MemoryConflict, MemoryQuery, Scope
 
 TINY = BenchmarkSettings(
     iterations=2,
@@ -33,6 +35,21 @@ TINY = BenchmarkSettings(
     search_limit=3,
 )
 """Settings small enough to run the whole harness inside a unit test."""
+
+WORKERS = 3
+"""Callers the concurrency tests use. Enough to interleave, still quick."""
+
+TINY_CONCURRENT = BenchmarkSettings(
+    iterations=2,
+    warmup=1,
+    blocks=6,
+    sections=2,
+    value_size=4,
+    links_per_block=2,
+    search_limit=3,
+    workers=(1, WORKERS),
+)
+"""`TINY`, measured at one caller and at several."""
 
 
 def _quiet() -> Any:
@@ -51,7 +68,7 @@ class _FakeTerminal(io.StringIO):
 
 
 def test_every_case_runs_at_every_layer_it_declares() -> None:
-    """A full run measures each case at each of its layers, with no errors."""
+    """A single-caller run measures each case at each of its layers, no errors."""
 
     result = runner.run(settings=TINY, progress=_quiet())
 
@@ -63,14 +80,15 @@ def test_every_case_runs_at_every_layer_it_declares() -> None:
         for case in section["cases"]
         for layer in case["variants"]
     }
+    single_caller_cases = select(default_cases())
     available = [target for target in default_targets() if target.available]
     assert [target.name for target in available[:2]] == ["in_memory", "sqlite"]
     for target in available:
-        for case in default_cases():
+        for case in single_caller_cases:
             for layer in (BACKEND, MEMORY):
                 if case.prepare_for(layer) is not None:
                     assert (target.name, case.name, layer) in measured
-    for case in default_cases():
+    for case in single_caller_cases:
         if case.prepare_for(CORE) is not None:
             assert (CORE_SECTION, case.name, CORE) in measured
 
@@ -150,6 +168,326 @@ def test_core_cases_run_once_in_their_own_section() -> None:
     assert not skipped
     assert {item.section for item in items} == {CORE_SECTION}
     assert len(items) == len(cases)
+
+
+# --------------------------------------------------------------------------
+# concurrency
+# --------------------------------------------------------------------------
+
+
+def _measured(result: dict[str, Any], section: str, case: str, layer: str, workers: int) -> dict[str, Any]:
+    """Return one measured variant, whatever worker level it ran at.
+
+    Args:
+        result: Report returned by the runner.
+        section: Section name, such as `"in_memory"`.
+        case: Case name.
+        layer: Layer name.
+        workers: Worker level to look for.
+
+    Returns:
+        The summary of that variant.
+    """
+
+    entry = next(
+        item
+        for report_section in result["sections"]
+        if report_section["name"] == section
+        for item in report_section["cases"]
+        if item["name"] == case
+    )
+    if workers == 1:
+        return entry["variants"][layer]
+    return next(
+        level["result"]
+        for level in entry["concurrency"]
+        if level["layer"] == layer and level["workers"] == workers
+    )
+
+
+def test_every_worker_of_a_variant_is_measured() -> None:
+    """Latency comes from every worker's calls merged, not from one of them."""
+
+    cases = select(default_cases(), names=("get",))
+    result = runner.run(
+        settings=TINY_CONCURRENT,
+        targets=default_targets()[:1],
+        cases=cases,
+        layers=(BACKEND,),
+        progress=_quiet(),
+    )
+    measured = _measured(result, "in_memory", "get", BACKEND, WORKERS)
+
+    assert measured["workers"] == WORKERS
+    assert measured["samples"] == TINY_CONCURRENT.iterations * WORKERS
+    assert measured["errors"] == 0
+
+
+def test_the_single_caller_level_is_measured_even_when_it_was_not_asked_for() -> None:
+    """`speedup` needs a denominator, so level 1 is never left out."""
+
+    settings = BenchmarkSettings(iterations=2, warmup=1, blocks=6, sections=2, value_size=4, links_per_block=2, search_limit=3, workers=(WORKERS,))
+    cases = select(default_cases(), names=("get",))
+    result = runner.run(
+        settings=settings,
+        targets=default_targets()[:1],
+        cases=cases,
+        layers=(BACKEND,),
+        progress=_quiet(),
+    )
+
+    assert settings.workers == (1, WORKERS)
+    assert _measured(result, "in_memory", "get", BACKEND, 1)["workers"] == 1
+    assert _measured(result, "in_memory", "get", BACKEND, WORKERS)["workers"] == WORKERS
+
+
+def test_workers_never_write_the_same_id() -> None:
+    """Every write case gives each worker its own ids, so nothing collides.
+
+    A repeated id raises `MemoryConflict`, and no write case treats that as an
+    expected conflict, so a collision would show up as an error.
+    """
+
+    cases = select(default_cases(), groups=("write",), concurrent=True)
+    result = runner.run(
+        settings=TINY_CONCURRENT,
+        targets=default_targets()[:1],
+        cases=cases,
+        layers=(BACKEND, MEMORY),
+        progress=_quiet(),
+    )
+
+    assert result["errors"] == 0
+    assert result["conflicts"] == 0
+    for section in result["sections"]:
+        for case in section["cases"]:
+            for level in case["concurrency"]:
+                assert level["result"]["samples"] == TINY_CONCURRENT.iterations * WORKERS
+
+
+def test_setup_every_worker_shares_runs_once() -> None:
+    """The hub links are corpus state, so more workers must not add more."""
+
+    cases = select(default_cases(), names=("list_links",))
+    result = runner.run(
+        settings=TINY_CONCURRENT,
+        targets=default_targets()[:1],
+        cases=cases,
+        layers=(BACKEND,),
+        progress=_quiet(),
+    )
+    single = _measured(result, "in_memory", "list_links", BACKEND, 1)
+    concurrent = _measured(result, "in_memory", "list_links", BACKEND, WORKERS)
+
+    assert single["notes"]["returned"] == TINY_CONCURRENT.links_per_block
+    assert concurrent["notes"]["returned"] == single["notes"]["returned"]
+
+
+def test_a_contention_case_aims_every_worker_at_one_target() -> None:
+    """Shared means shared: one parent, and children nothing else can clash with."""
+
+    case = next(item for item in default_cases() if item.name == "hot_parent_put")
+    prepare = case.prepare_for(BACKEND)
+    assert prepare is not None
+    item = WorkItem("in_memory", default_targets()[0], case, BACKEND, WORKERS)
+    context, dispose = runner.build_context(item, TINY_CONCURRENT)
+    try:
+        prepared = [
+            prepare(replace(context, worker_index=worker)) for worker in range(WORKERS)
+        ]
+        for worker in range(WORKERS):
+            for index in range(TINY_CONCURRENT.total_calls):
+                prepared[worker].call(index)
+        children = context.backend.children(HOT_PARENT_ID)
+    finally:
+        dispose()
+
+    assert len(children) == TINY_CONCURRENT.total_calls * WORKERS
+    assert len({child.id for child in children}) == len(children)
+
+
+def test_contention_cases_stay_out_of_a_single_caller_run() -> None:
+    """A shared target with one caller is not shared, so it says nothing."""
+
+    single = {case.name for case in select(default_cases())}
+    concurrent = {case.name for case in select(default_cases(), concurrent=True)}
+    result = runner.run(settings=TINY, progress=_quiet())
+    measured = {
+        case["name"] for section in result["sections"] for case in section["cases"]
+    }
+
+    assert "hot_block_set" in concurrent - single
+    assert not measured & (concurrent - single)
+
+
+def test_contention_cases_run_at_every_level_once_concurrency_is_asked_for() -> None:
+    """They need level 1 too, because that is what `speedup` divides by."""
+
+    cases = select(default_cases(), groups=("contention",), concurrent=True)
+    result = runner.run(
+        settings=TINY_CONCURRENT,
+        targets=default_targets()[:1],
+        cases=cases,
+        layers=(BACKEND, MEMORY),
+        progress=_quiet(),
+    )
+    entry = next(
+        case
+        for section in result["sections"]
+        for case in section["cases"]
+        if case["name"] == "hot_block_set"
+    )
+
+    assert list(entry["variants"]) == [MEMORY]
+    assert [(level["layer"], level["workers"]) for level in entry["concurrency"]] == [
+        (MEMORY, WORKERS)
+    ]
+
+
+def test_a_hot_block_write_expects_to_lose_races() -> None:
+    """A contention write declares the conflict it is there to provoke."""
+
+    for name in ("hot_block_set", "hot_block_merge"):
+        case = next(item for item in default_cases() if item.name == name)
+        prepare = case.prepare_for(MEMORY)
+        assert prepare is not None
+        item = WorkItem("in_memory", default_targets()[0], case, MEMORY, WORKERS)
+        context, dispose = runner.build_context(item, TINY_CONCURRENT)
+        try:
+            prepared = prepare(context)
+        finally:
+            dispose()
+
+        assert prepared.conflict_errors == (MemoryConflict,)
+
+
+def test_a_conflict_is_counted_apart_from_an_error() -> None:
+    """A lost race is the answer a contention case asked for, not a failure."""
+
+    def losing(_: int) -> None:
+        raise MemoryConflict("another worker wrote first")
+
+    summary = runner.measure_concurrent(
+        [PreparedCase(call=losing, conflict_errors=(MemoryConflict,))] * WORKERS,
+        settings=TINY_CONCURRENT,
+    )
+
+    assert summary.conflicts == TINY_CONCURRENT.iterations * WORKERS
+    assert summary.errors == 0
+    assert summary.first_error is None
+    assert summary.samples == 0
+
+
+def test_an_undeclared_conflict_is_still_an_error() -> None:
+    """Only the types a case named are forgiven. Everything else fails the run."""
+
+    def losing(_: int) -> None:
+        raise MemoryConflict("another worker wrote first")
+
+    summary = runner.measure_concurrent(
+        [PreparedCase(call=losing)] * WORKERS,
+        settings=TINY_CONCURRENT,
+    )
+
+    assert summary.errors == TINY_CONCURRENT.iterations * WORKERS
+    assert summary.conflicts == 0
+    assert summary.first_error is not None
+
+
+def test_conflicts_never_change_the_exit_status() -> None:
+    """Timing and lost races are results. Only an unexpected failure fails."""
+
+    conflicting = PreparedCase(call=_raise_conflict, conflict_errors=(MemoryConflict,))
+    case = default_cases()[0]
+    result = runner.run(
+        settings=TINY_CONCURRENT,
+        targets=default_targets()[:1],
+        cases=(replace(case, backend=lambda context: conflicting, memory=None),),
+        layers=(BACKEND,),
+        progress=_quiet(),
+    )
+
+    assert result["errors"] == 0
+    assert result["conflicts"] > 0
+
+
+def _raise_conflict(_: int) -> None:
+    """Lose a race, the way a hot-block write does."""
+
+    raise MemoryConflict("another worker wrote first")
+
+
+def test_throughput_is_the_wall_rate_and_speedup_divides_by_one_caller() -> None:
+    """The two rates answer different questions and must not be the same one."""
+
+    cases = select(default_cases(), names=("get",))
+    result = runner.run(
+        settings=TINY_CONCURRENT,
+        targets=default_targets()[:1],
+        cases=cases,
+        layers=(BACKEND,),
+        progress=_quiet(),
+    )
+    entry = next(
+        case
+        for section in result["sections"]
+        for case in section["cases"]
+        if case["name"] == "get"
+    )
+    single = entry["variants"][BACKEND]
+    level = next(item for item in entry["concurrency"] if item["workers"] == WORKERS)
+
+    assert single["wall_seconds"] > 0.0
+    assert level["result"]["wall_seconds"] > 0.0
+    assert level["result"]["throughput_per_second"] == pytest.approx(
+        level["result"]["samples"] / level["result"]["wall_seconds"]
+    )
+    assert level["speedup"] == pytest.approx(
+        level["result"]["throughput_per_second"] / single["throughput_per_second"]
+    )
+
+
+def test_core_cases_are_measured_at_one_caller_only() -> None:
+    """A core helper has no store, so more callers cannot contend on anything."""
+
+    cases = select(default_cases(), groups=("overhead",))
+    available = tuple(target for target in default_targets() if target.available)
+    items, _ = runner.plan_run(available, cases, LAYERS, (1, WORKERS))
+
+    assert {item.workers for item in items} == {1}
+
+
+def test_the_worker_count_reaches_the_progress_label() -> None:
+    """A run that takes minutes must say which level it is on."""
+
+    case = default_cases()[0]
+
+    assert WorkItem("sqlite", None, case, MEMORY).label == f"sqlite memory: {case.name}"
+    assert WorkItem("sqlite", None, case, MEMORY, 4).label == f"sqlite memory: {case.name} x4"
+
+
+@pytest.mark.parametrize(
+    ("workers", "expected"),
+    [((1,), (1,)), ((4,), (1, 4)), ((8, 2, 2), (1, 2, 8))],
+)
+def test_worker_levels_are_sorted_deduplicated_and_start_at_one(
+    workers: tuple[int, ...],
+    expected: tuple[int, ...],
+) -> None:
+    """Two runs that asked for the same levels must report the same rows."""
+
+    settings = BenchmarkSettings(workers=workers)
+
+    assert settings.workers == expected
+    assert settings.measures_concurrency is (max(expected) > 1)
+
+
+@pytest.mark.parametrize("workers", [(0,), (-1,), ("4",), 4, (True,)])
+def test_settings_reject_worker_levels_that_cannot_describe_a_run(workers: Any) -> None:
+    """A level below one, or one that is not a number, is a usage error."""
+
+    with pytest.raises((TypeError, ValueError)):
+        BenchmarkSettings(workers=workers)
 
 
 def test_unavailable_targets_are_planned_as_skipped() -> None:
@@ -427,6 +765,60 @@ def test_a_narrow_width_drops_the_least_useful_column_first() -> None:
     assert "left out to fit the width: +%, p95 ms, p99 ms" in narrow
 
 
+def _concurrency_headers(text: str) -> list[str]:
+    """Return the header row of every concurrency table in a report."""
+
+    return [line for line in text.splitlines() if line.startswith("case ") and "workers" in line]
+
+
+def test_the_concurrency_table_opens_each_layer_with_its_single_caller_row() -> None:
+    """The extra workers mean nothing without the row they are compared to."""
+
+    cases = select(default_cases(), names=("get",))
+    result = runner.run(
+        settings=TINY_CONCURRENT,
+        targets=default_targets()[:1],
+        cases=cases,
+        layers=(BACKEND,),
+        progress=_quiet(),
+    )
+
+    text = report.format_report(result, width=0)
+    lines = text.splitlines()
+    heading = lines.index("concurrency: how the same call behaves with more callers")
+    rows = [line for line in lines[heading:] if line.startswith("get ")]
+
+    assert "wall ops/s" in text
+    assert len(rows) == 2
+    # case, layer, workers, p50, p95, wall ops/s, speedup, conflicts, errors
+    assert [row.split()[2] for row in rows] == ["1", str(WORKERS)]
+    assert rows[0].split()[6] == "1.00"
+
+
+def test_a_narrow_concurrency_table_gives_up_p95_first() -> None:
+    """`speedup` and `conflicts` are why the table exists, so they never go."""
+
+    cases = select(default_cases(), names=("get",))
+    result = runner.run(
+        settings=TINY_CONCURRENT,
+        targets=default_targets()[:1],
+        cases=cases,
+        layers=(BACKEND,),
+        progress=_quiet(),
+    )
+
+    full = report.format_report(result, width=0)
+    natural_width = len(_concurrency_headers(full)[0])
+    narrow = report.format_report(result, width=natural_width - 1)
+
+    assert CONCURRENCY_DROP_ORDER == ("p95 ms",)
+    for line in _concurrency_headers(narrow):
+        assert "p95 ms" not in line
+        assert "speedup" in line
+        assert "conflicts" in line
+        assert "wall ops/s" in line
+
+
 def test_progress_writes_whole_lines_when_the_stream_is_not_a_terminal() -> None:
     """Nothing can erase a line in a log, so whole lines are written far apart."""
 
@@ -546,6 +938,88 @@ def test_the_command_line_runs_a_single_case_and_writes_json(tmp_path: Path) -> 
     assert [section["name"] for section in written["sections"]] == ["in_memory"]
     assert [case["name"] for case in written["sections"][0]["cases"]] == ["get"]
     assert list(written["sections"][0]["cases"][0]["variants"]) == [BACKEND]
+
+
+def test_the_command_line_measures_worker_levels(tmp_path: Path) -> None:
+    """`--workers` is the whole opt-in. Level 1 comes along on its own."""
+
+    destination = tmp_path / "concurrent.json"
+    status = run.main(
+        [
+            "--case",
+            "get",
+            "--target",
+            "in_memory",
+            "--layer",
+            "backend",
+            "--workers",
+            str(WORKERS),
+            "--iterations",
+            "2",
+            "--warmup",
+            "1",
+            "--blocks",
+            "6",
+            "--sections",
+            "2",
+            "--links-per-block",
+            "2",
+            "--quiet",
+            "--json",
+            str(destination),
+        ]
+    )
+    written = json.loads(destination.read_text(encoding="utf-8"))
+    entry = written["sections"][0]["cases"][0]
+
+    assert status == run.EXIT_OK
+    assert written["workers"] == [1, WORKERS]
+    assert entry["variants"][BACKEND]["workers"] == 1
+    assert [level["workers"] for level in entry["concurrency"]] == [WORKERS]
+
+
+def test_the_command_line_says_why_a_contention_case_needs_workers() -> None:
+    """Naming the missing flag beats reporting that nothing matched."""
+
+    assert run.main(["--group", "contention", "--quiet"]) == run.EXIT_BAD_SELECTION
+
+
+def test_the_command_line_refuses_a_worker_level_below_one() -> None:
+    """Zero callers cannot run a case, so it fails before any work starts."""
+
+    with pytest.raises(SystemExit) as raised:
+        run.main(["--workers", "0"])
+
+    assert raised.value.code == 2
+
+
+def test_per_query_driver_notices_are_kept_out_of_a_measured_run() -> None:
+    """A driver notice on every call would be timed as part of that call.
+
+    Neo4j reports a notification whenever a query names a label or property the
+    database has not stored yet, which is nearly every query against a store a
+    variant has just emptied. The driver logs it while it streams the result,
+    so the record is written inside the call being timed and onto the stream
+    the progress line uses.
+    """
+
+    assert "neo4j.notifications" in run.NOISY_DRIVER_LOGGERS
+    levels = {name: logging.getLogger(name).level for name in run.NOISY_DRIVER_LOGGERS}
+    try:
+        for name in run.NOISY_DRIVER_LOGGERS:
+            logging.getLogger(name).setLevel(logging.NOTSET)
+
+        run.quiet_driver_logs()
+
+        for name in run.NOISY_DRIVER_LOGGERS:
+            logger = logging.getLogger(name)
+            # Not enabled means the record is never even built, so the cost
+            # leaves the timed call along with the output.
+            assert not logger.isEnabledFor(logging.WARNING)
+            assert logger.isEnabledFor(logging.ERROR)
+    finally:
+        for name, level in levels.items():
+            logging.getLogger(name).setLevel(level)
 
 
 def test_the_command_line_refuses_settings_that_cannot_describe_a_run() -> None:

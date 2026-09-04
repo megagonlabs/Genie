@@ -13,6 +13,16 @@ measured at:
 A `prepare` function builds everything a case needs and returns the one call
 the runner times. Preparation runs outside the measured region, so a timed call
 covers the operation and nothing else.
+
+Two rules keep a case honest when more than one worker runs it:
+
+- **Every worker writes its own ids.** A throwaway block, link, or subtree an
+  ordinary case creates carries the worker index, so no two workers can write
+  the same id. `_spec` and `_worker_suffix` do this for every write case.
+- **Shared setup runs once.** Preparation that changes corpus state every
+  worker reads, such as the hub links `list_links` walks, runs for worker `0`
+  only. The `contention` cases build on this: their target is created once and
+  every worker then hits it.
 """
 
 from __future__ import annotations
@@ -25,10 +35,11 @@ from typing import Any
 from benchmarks import dataset
 from benchmarks.dataset import HUB_ID, ROOT_ID, BlockSpec, Corpus, payload
 from benchmarks.settings import BACKEND, CORE, MEMORY, BenchmarkSettings
-from genie import HookOperation, Memory, MemoryLink, MemoryQuery, Operation, Scope
+from genie import HookOperation, Memory, MemoryConflict, MemoryLink, MemoryQuery, Operation, Scope
 
-GROUPS = ("write", "read", "link", "search", "overhead")
-"""Case groups, following the memory lifecycle and then the core helpers."""
+GROUPS = ("write", "read", "link", "search", "contention", "overhead")
+"""Case groups, following the memory lifecycle, then contention, then the core
+helpers."""
 
 SUBTREE_CHILDREN = 8
 """Children given to each throwaway subtree the `delete_subtree` case removes."""
@@ -38,6 +49,15 @@ RELATION = "bench.related"
 
 WRITTEN_TYPE = "bench.written"
 """Block type the write cases create."""
+
+HOT_BLOCK_ID = "bench_hot_block"
+"""Block every worker of a `contention` read or write case shares."""
+
+HOT_PARENT_ID = "bench_hot_parent"
+"""Parent every worker of `hot_parent_put` creates its children under."""
+
+FIRST_WORKER = 0
+"""Worker that performs setup shared by every worker of a variant."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +72,11 @@ class CaseContext:
         backend: Backend under measurement.
         memory: Memory wrapping that backend.
         principal_id: Owner of every block in the corpus.
+        worker_index: Zero-based position of the worker this case is being
+            prepared for. Setup that every worker shares runs for
+            `FIRST_WORKER` only.
+        worker_count: Workers that will run this variant at the same time. One
+            means a single caller, which is what a default run measures.
     """
 
     settings: BenchmarkSettings
@@ -59,6 +84,14 @@ class CaseContext:
     backend: Any
     memory: Memory
     principal_id: str
+    worker_index: int = FIRST_WORKER
+    worker_count: int = 1
+
+    @property
+    def is_first_worker(self) -> bool:
+        """Whether this worker performs the setup every worker shares."""
+
+        return self.worker_index == FIRST_WORKER
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,10 +102,15 @@ class PreparedCase:
         call: Makes one call. Receives the zero-based call index, which lets a
             case walk over its own targets instead of reusing one.
         describe: Turns the last result into notes saying what the call did.
+        conflict_errors: Exception types this case expects to lose a race to,
+            such as `MemoryConflict` when another worker wrote the same block
+            first. They are counted as conflicts rather than errors, so they
+            never fail a run. Any other exception is still an error.
     """
 
     call: Callable[[int], Any]
     describe: Callable[[Any], Mapping[str, Any]] | None = None
+    conflict_errors: tuple[type[BaseException], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +126,11 @@ class BenchmarkCase:
         core: Prepares the core-only helper call, when there is one.
         needs_corpus: Whether the case needs the full corpus written first.
             The `core` cases do not, so they skip that setup entirely.
+        concurrent_only: Whether the case is measured only in a run that asks
+            for more than one worker. The `contention` cases are, because a
+            shared target with one caller is not shared. When such a run does
+            happen they are measured at every level, level 1 included, so
+            `speedup` has a denominator.
     """
 
     name: str
@@ -97,6 +140,7 @@ class BenchmarkCase:
     memory: Callable[[CaseContext], PreparedCase] | None = None
     core: Callable[[CaseContext], PreparedCase] | None = None
     needs_corpus: bool = True
+    concurrent_only: bool = False
 
     @property
     def layers(self) -> tuple[str, ...]:
@@ -139,11 +183,51 @@ def _truth(result: Any) -> Mapping[str, Any]:
     return {"result": bool(result)}
 
 
+def _worker_suffix(context: CaseContext) -> str:
+    """Return the id part that keeps one worker off another worker's blocks.
+
+    A single caller writes the ids it always wrote. More than one caller adds
+    the worker index, so two workers can never put the same id.
+
+    Args:
+        context: Case context naming the worker.
+
+    Returns:
+        An empty string for a single caller, `"_w<index>"` otherwise.
+    """
+
+    if context.worker_count <= 1:
+        return ""
+    return f"_w{context.worker_index}"
+
+
+def _read_cursor(context: CaseContext, size: int) -> int:
+    """Return the offset a worker starts its read rotation at.
+
+    Every worker runs the same call indexes, so without an offset they would
+    read the same id at the same moment and a spread read would measure a hot
+    one instead. Spacing the workers evenly over the corpus keeps the spread
+    cases spread. The `contention` cases share a target on purpose and do not
+    use this.
+
+    Args:
+        context: Case context naming the worker.
+        size: Number of ids the case rotates over.
+
+    Returns:
+        The starting offset, or `0` for a single caller.
+    """
+
+    if context.worker_count <= 1 or size <= 0:
+        return 0
+    return context.worker_index * size // context.worker_count
+
+
 def _spec(context: CaseContext, prefix: str, index: int, parent_id: str | None) -> BlockSpec:
     """Build one throwaway block spec for a write case."""
 
     return BlockSpec(
-        id=f"{prefix}_{index:06d}",
+        id=f"{prefix}{_worker_suffix(context)}_{index:06d}",
         type=WRITTEN_TYPE,
         value=payload(index, value_size=context.settings.value_size),
         parent_id=parent_id,
@@ -163,17 +247,24 @@ def _encoded(context: CaseContext, spec: BlockSpec) -> Any:
 
 
 def _section_id(context: CaseContext, index: int) -> str:
-    """Return a section id, walking the chain so writes spread out."""
+    """Return a section id, walking the chain so writes spread out.
+
+    Each worker starts at its own offset, so more than one caller spreads over
+    the chain instead of queueing on one section.
+    """
 
     sections = context.corpus.sections
-    return sections[index % len(sections)].id
+    return sections[(index + _read_cursor(context, len(sections))) % len(sections)].id
 
 
 def _leaf_id(context: CaseContext, index: int) -> str:
-    """Return a leaf id, walking the corpus so reads spread out."""
+    """Return a leaf id, walking the corpus so reads spread out.
+
+    Each worker starts at its own offset, for the same reason as `_section_id`.
+    """
 
     leaves = context.corpus.leaves
-    return leaves[index % len(leaves)].id
+    return leaves[(index + _read_cursor(context, len(leaves))) % len(leaves)].id
 
 
 # --------------------------------------------------------------------------
@@ -349,16 +440,18 @@ def _memory_delete_subtree(context: CaseContext) -> PreparedCase:
 
 def _backend_get(context: CaseContext) -> PreparedCase:
     ids = [leaf.id for leaf in context.corpus.leaves]
+    start = _read_cursor(context, len(ids))
     return PreparedCase(
-        call=lambda index: context.backend.get_block(ids[index % len(ids)]),
+        call=lambda index: context.backend.get_block(ids[(index + start) % len(ids)]),
         describe=_found,
     )
 
 
 def _memory_get(context: CaseContext) -> PreparedCase:
     ids = [leaf.id for leaf in context.corpus.leaves]
+    start = _read_cursor(context, len(ids))
     return PreparedCase(
-        call=lambda index: context.memory.get(ids[index % len(ids)]),
+        call=lambda index: context.memory.get(ids[(index + start) % len(ids)]),
         describe=_found,
     )
 
@@ -366,8 +459,9 @@ def _memory_get(context: CaseContext) -> PreparedCase:
 def _memory_handle_get(context: CaseContext) -> PreparedCase:
     handle = context.memory.get_handle(root=ROOT_ID)
     ids = [leaf.id for leaf in context.corpus.leaves]
+    start = _read_cursor(context, len(ids))
     return PreparedCase(
-        call=lambda index: handle.get(ids[index % len(ids)]),
+        call=lambda index: handle.get(ids[(index + start) % len(ids)]),
         describe=_found,
     )
 
@@ -430,7 +524,7 @@ def _backend_add_link(context: CaseContext) -> PreparedCase:
             source_id=_leaf_id(context, index),
             target_id=ROOT_ID,
             relation=RELATION,
-            id=f"bench_link_{index:06d}",
+            id=f"bench_link{_worker_suffix(context)}_{index:06d}",
         )
         for index in range(context.settings.total_calls)
     ]
@@ -445,16 +539,19 @@ def _memory_add_link(context: CaseContext) -> PreparedCase:
 
 
 def _backend_list_links(context: CaseContext) -> PreparedCase:
-    targets = context.corpus.link_target_ids(context.settings.links_per_block)
-    for index, target_id in enumerate(targets):
-        context.backend.add_link(
-            MemoryLink(
-                source_id=HUB_ID,
-                target_id=target_id,
-                relation=RELATION,
-                id=f"bench_hub_link_{index:06d}",
+    # The hub is corpus state every worker reads, so its links are written once
+    # and not once per worker.
+    if context.is_first_worker:
+        targets = context.corpus.link_target_ids(context.settings.links_per_block)
+        for index, target_id in enumerate(targets):
+            context.backend.add_link(
+                MemoryLink(
+                    source_id=HUB_ID,
+                    target_id=target_id,
+                    relation=RELATION,
+                    id=f"bench_hub_link_{index:06d}",
+                )
             )
-        )
     return PreparedCase(
         call=lambda index: context.backend.list_links(HUB_ID, direction="out"),
         describe=_count,
@@ -462,8 +559,10 @@ def _backend_list_links(context: CaseContext) -> PreparedCase:
 
 
 def _memory_list_links(context: CaseContext) -> PreparedCase:
-    for target_id in context.corpus.link_target_ids(context.settings.links_per_block):
-        context.memory.add_link(HUB_ID, target_id, RELATION)
+    # Written once for the same reason as the backend variant above.
+    if context.is_first_worker:
+        for target_id in context.corpus.link_target_ids(context.settings.links_per_block):
+            context.memory.add_link(HUB_ID, target_id, RELATION)
     return PreparedCase(
         call=lambda index: context.memory.list_links(HUB_ID, direction="out"),
         describe=_count,
@@ -534,6 +633,123 @@ def _memory_search_global_filter(context: CaseContext) -> PreparedCase:
     return PreparedCase(
         call=lambda index: context.memory.search(query),
         describe=_search_notes(context.settings),
+    )
+
+
+# --------------------------------------------------------------------------
+# contention
+# --------------------------------------------------------------------------
+#
+# Every worker of these cases hits one target on purpose. They are measured
+# only in a run that asks for more than one worker, and then at every level, so
+# `speedup` has a single-caller denominator. Read each one against the spread
+# case it mirrors:
+#
+# - `hot_block_get` against `get`, which walks the corpus.
+# - `hot_parent_put` against `put_root`, which shares nothing.
+# - `hot_block_set` against `set_value`, which gives each worker its own block.
+
+
+def _shared_spec(context: CaseContext, block_id: str, parent_id: str | None) -> BlockSpec:
+    """Build the spec of a block every worker of a case shares.
+
+    The id is fixed rather than worker-derived, which is the whole point: every
+    worker ends up on the same block.
+
+    Args:
+        context: Case context.
+        block_id: Id every worker will use.
+        parent_id: Parent to hang the block under.
+
+    Returns:
+        The spec.
+    """
+
+    return BlockSpec(
+        id=block_id,
+        type=WRITTEN_TYPE,
+        value=payload(0, value_size=context.settings.value_size),
+        parent_id=parent_id,
+        metadata={"role": "shared", "index": 0, "bucket": 0},
+    )
+
+
+def _store_shared_block(context: CaseContext, block_id: str) -> None:
+    """Create the shared target once, straight through the backend."""
+
+    if context.is_first_worker:
+        context.backend.put_block(_encoded(context, _shared_spec(context, block_id, ROOT_ID)))
+
+
+def _put_shared_block(context: CaseContext, block_id: str) -> None:
+    """Create the shared target once, through the public `Memory` API."""
+
+    if not context.is_first_worker:
+        return
+    spec = _shared_spec(context, block_id, ROOT_ID)
+    context.memory.put(
+        type=spec.type,
+        value=spec.value,
+        parent=spec.parent_id,
+        metadata=spec.metadata,
+        id=spec.id,
+    )
+
+
+def _backend_hot_block_get(context: CaseContext) -> PreparedCase:
+    _store_shared_block(context, HOT_BLOCK_ID)
+    return PreparedCase(call=lambda index: context.backend.get_block(HOT_BLOCK_ID), describe=_found)
+
+
+def _memory_hot_block_get(context: CaseContext) -> PreparedCase:
+    _put_shared_block(context, HOT_BLOCK_ID)
+    return PreparedCase(call=lambda index: context.memory.get(HOT_BLOCK_ID), describe=_found)
+
+
+def _backend_hot_parent_put(context: CaseContext) -> PreparedCase:
+    _store_shared_block(context, HOT_PARENT_ID)
+    blocks = [
+        _encoded(context, _spec(context, "bench_hot_child", index, HOT_PARENT_ID))
+        for index in range(context.settings.total_calls)
+    ]
+    return PreparedCase(call=lambda index: context.backend.put_block(blocks[index]))
+
+
+def _memory_hot_parent_put(context: CaseContext) -> PreparedCase:
+    _put_shared_block(context, HOT_PARENT_ID)
+    specs = [
+        _spec(context, "bench_hot_child", index, HOT_PARENT_ID)
+        for index in range(context.settings.total_calls)
+    ]
+    return PreparedCase(
+        call=lambda index: context.memory.put(
+            type=specs[index].type,
+            value=specs[index].value,
+            parent=specs[index].parent_id,
+            metadata=specs[index].metadata,
+            id=specs[index].id,
+        )
+    )
+
+
+def _memory_hot_block_set(context: CaseContext) -> PreparedCase:
+    _put_shared_block(context, HOT_BLOCK_ID)
+    values = [
+        payload(index, value_size=context.settings.value_size)
+        for index in range(context.settings.total_calls)
+    ]
+    return PreparedCase(
+        call=lambda index: context.memory.set(HOT_BLOCK_ID, values[index]),
+        conflict_errors=(MemoryConflict,),
+    )
+
+
+def _memory_hot_block_merge(context: CaseContext) -> PreparedCase:
+    _put_shared_block(context, HOT_BLOCK_ID)
+    merges = [{"counter": index} for index in range(context.settings.total_calls)]
+    return PreparedCase(
+        call=lambda index: context.memory.update(HOT_BLOCK_ID, value=merges[index]),
+        conflict_errors=(MemoryConflict,),
     )
 
 
@@ -683,6 +899,36 @@ CASES: tuple[BenchmarkCase, ...] = (
         memory=_memory_search_global_filter,
     ),
     BenchmarkCase(
+        name="hot_block_get",
+        group="contention",
+        description="Read one block every worker shares",
+        backend=_backend_hot_block_get,
+        memory=_memory_hot_block_get,
+        concurrent_only=True,
+    ),
+    BenchmarkCase(
+        name="hot_parent_put",
+        group="contention",
+        description="Create a child under one parent every worker shares",
+        backend=_backend_hot_parent_put,
+        memory=_memory_hot_parent_put,
+        concurrent_only=True,
+    ),
+    BenchmarkCase(
+        name="hot_block_set",
+        group="contention",
+        description="Replace the value of one block every worker shares",
+        memory=_memory_hot_block_set,
+        concurrent_only=True,
+    ),
+    BenchmarkCase(
+        name="hot_block_merge",
+        group="contention",
+        description="Merge one field into one block every worker shares",
+        memory=_memory_hot_block_merge,
+        concurrent_only=True,
+    ),
+    BenchmarkCase(
         name="codec_round_trip",
         group="overhead",
         description="CodecRegistry encode then decode of one value",
@@ -719,8 +965,9 @@ def select(
     groups: tuple[str, ...] = (),
     names: tuple[str, ...] = (),
     layers: tuple[str, ...] = (),
+    concurrent: bool = False,
 ) -> tuple[BenchmarkCase, ...]:
-    """Filter cases by group, name text, and layer.
+    """Filter cases by group, name text, layer, and worker count.
 
     Args:
         cases: Cases to filter.
@@ -729,6 +976,9 @@ def select(
             every name.
         layers: Keep cases measurable at any of these layers. Empty keeps every
             case.
+        concurrent: Whether the run measures more than one worker. False drops
+            the `concurrent_only` cases, because a shared target with one
+            caller is not shared.
 
     Returns:
         The matching cases, in their original order.
@@ -736,6 +986,8 @@ def select(
 
     selected = []
     for case in cases:
+        if case.concurrent_only and not concurrent:
+            continue
         if groups and case.group not in groups:
             continue
         if names and not any(name in case.name for name in names):

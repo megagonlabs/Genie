@@ -7,6 +7,7 @@ recorded in every report.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from typing import Any, Final
 
@@ -21,6 +22,9 @@ MEMORY: Final = "memory"
 
 CORE: Final = "core"
 """One core-library helper on its own, with no backend behind it."""
+
+SINGLE_CALLER: Final = 1
+"""Worker level every run measures. It is the denominator of `speedup`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +45,12 @@ class BenchmarkSettings:
             blocks than this.
         seed: Seed for the corpus generator. The same seed always writes the
             same blocks.
+        workers: Caller counts to measure, smallest first. Every level runs the
+            same case with that many threads sharing one `Memory` and one
+            backend. `iterations` and `warmup` are counted per worker, so a
+            variant at four workers makes four times as many calls. Level 1 is
+            always measured, because `speedup` needs a single-caller
+            denominator.
     """
 
     iterations: int = 100
@@ -51,14 +61,20 @@ class BenchmarkSettings:
     links_per_block: int = 50
     search_limit: int = 20
     seed: int = 20260903
+    workers: tuple[int, ...] = (SINGLE_CALLER,)
 
     def __post_init__(self) -> None:
-        """Reject counts that cannot describe a run.
+        """Reject counts that cannot describe a run, and normalize the levels.
+
+        Worker levels are sorted, de-duplicated, and always include level 1, so
+        two runs that asked for the same levels in a different order report the
+        same rows.
 
         Raises:
-            TypeError: If any field is not an integer.
-            ValueError: If a count is out of range, or the corpus cannot hold
-                the requested sections or links.
+            TypeError: If any field is not an integer, or `workers` is not a
+                sequence of integers.
+            ValueError: If a count is out of range, a worker level is below 1,
+                or the corpus cannot hold the requested sections or links.
         """
 
         for name in (
@@ -92,14 +108,50 @@ class BenchmarkSettings:
             raise ValueError("sections must not be greater than blocks.")
         if self.links_per_block > self.blocks:
             raise ValueError("links_per_block must not be greater than blocks.")
+        object.__setattr__(self, "workers", _normalize_workers(self.workers))
 
     @property
     def total_calls(self) -> int:
-        """Calls one variant makes, warmup included."""
+        """Calls one worker makes, warmup included."""
 
         return self.warmup + self.iterations
+
+    @property
+    def measures_concurrency(self) -> bool:
+        """Whether any level above one caller was asked for."""
+
+        return max(self.workers) > SINGLE_CALLER
 
     def as_dict(self) -> dict[str, Any]:
         """Return the settings as plain data for the JSON report."""
 
-        return asdict(self)
+        data = asdict(self)
+        data["workers"] = list(self.workers)
+        return data
+
+
+def _normalize_workers(workers: Any) -> tuple[int, ...]:
+    """Sort worker levels, drop duplicates, and add the single-caller level.
+
+    Args:
+        workers: Levels asked for, in any order.
+
+    Returns:
+        The levels to measure, smallest first, always starting at 1.
+
+    Raises:
+        TypeError: If `workers` is not a sequence of integers.
+        ValueError: If a level is below 1.
+    """
+
+    if isinstance(workers, (str, bytes)) or not isinstance(workers, Iterable):
+        raise TypeError("workers must be a sequence of integers.")
+    levels = set()
+    for level in workers:
+        if isinstance(level, bool) or not isinstance(level, int):
+            raise TypeError("workers must be a sequence of integers.")
+        if level < 1:
+            raise ValueError("every worker level must be at least 1.")
+        levels.add(level)
+    levels.add(SINGLE_CALLER)
+    return tuple(sorted(levels))

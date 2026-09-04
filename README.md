@@ -150,9 +150,12 @@ the server-backed adapters. Extra arguments are passed on to pytest.
 
 ```bash
 conda run -n "genie" python lib/benchmarks/run.py
+conda run -n "genie" python lib/benchmarks/run.py --workers 4
 ```
 
 The [benchmark suite](lib/benchmarks/README.md) measures what one operation
 costs on each backend, and how much of that cost Genie itself adds over the raw
-store call. `./lib/scripts/benchmark_full.sh` runs it against throwaway
-containers for the server-backed adapters.
+store call. `--workers` adds a second question: what changes when several
+callers share one `Memory`, including the throughput they reach together and
+the races a hot block loses. `./lib/scripts/benchmark_full.sh` runs it against
+throwaway containers for the server-backed adapters.

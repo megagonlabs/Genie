@@ -10,11 +10,15 @@
 #   ./lib/scripts/benchmark_full.sh
 #   ./lib/scripts/benchmark_full.sh --iterations 50 --blocks 500
 #   ./lib/scripts/benchmark_full.sh --group read --json reports/servers.json
+#   ./lib/scripts/benchmark_full.sh --group contention --workers 4 --blocks 200
 #
 # A six-target run is long, because a server call costs far more than an
 # in-process one and every variant rewrites its corpus. Lower `--iterations` and
 # `--blocks` while you are working, and keep the defaults for a report you
 # intend to compare against later.
+#
+# A server is also the only place the pooled adapters can show a speedup above
+# 1, so `--workers` is worth the extra time here in a way it is not locally.
 
 set -euo pipefail
 
