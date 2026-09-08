@@ -427,32 +427,6 @@ At more than one worker, four more choices apply:
   count into its own slot and the calling thread sums those slots, so no lock
   enters a worker's hot path and reporting cannot distort throughput.
 
-## Progress
-
-Progress goes to standard error while the run is in flight, so the tables and
-the JSON file stay clean and a slow case is visibly working.
-
-- **In a terminal, one line updates in place** with the variant number, the
-  calls finished, the seconds spent, and a rough time remaining:
-
-      [58/61] sqlite memory: search_subtree_text  60/110 calls  3.1s  about 3s left
-
-- **In a pipe or a log file, whole lines are written far apart** — every five
-  seconds instead of five times a second — because nothing there can erase a
-  line and a fast update rate would only fill the log.
-- **Each variant closes with what it measured,** so the scrollback keeps a
-  record:
-
-      [58/61] sqlite memory: search_subtree_text  100 calls in 5.8s  p50 52.290 ms
-
-- **Progress is never written inside a timed call.** The reporter is told about
-  a call only after its duration has been read, so a progress line cannot
-  inflate a measurement.
-- **Neither is a driver's own logging.** The Neo4j driver logs a server
-  notification while it streams a result, which is inside the call being timed.
-  The runner raises that logger above `WARNING`, so the record is never built
-  and stderr formatting stays out of every `neo4j` measurement.
-
 ## Reading the report
 
 - **Compare a case with itself across releases,** not with a different case.
@@ -517,18 +491,7 @@ the JSON file stay clean and a slow case is visibly working.
 
 ## Not here yet
 
-Planned next, in order:
-
-1. **Saved baselines** plus a comparison command, so a run can actually fail a
-   release check instead of only reporting numbers.
-2. **Mixed read and write load.** Every worker of a variant makes the same call
+1. **Mixed read and write load.** Every worker of a variant makes the same call
    today, so one latency number describes the whole variant. Readers running
    while writers work would need a result pool per role and a second set of
    columns.
-3. **Structure facades.** One operation per facade family, including the
-   contention their shared state creates: unique key binding in
-   `KeyedCollection` and sequence allocation in `EventLog`.
-4. **Processes as well as threads.** Threads share one `Memory` and one
-   backend, which is what an application has, but the GIL bounds what an
-   in-process adapter can show. `InMemoryBackend` cannot be shared between
-   processes at all, so this needs a different target model.
