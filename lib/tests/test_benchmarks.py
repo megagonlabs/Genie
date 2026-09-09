@@ -35,7 +35,7 @@ from benchmarks.workload import (
     split_roles,
     write_range,
 )
-from genie import InMemoryBackend, Memory, MemoryConflict, MemoryQuery, Scope
+from genie import InMemoryBackend, Memory, MemoryBlock, MemoryConflict, MemoryQuery, Scope
 
 TINY = BenchmarkSettings(
     iterations=2,
@@ -1038,6 +1038,22 @@ def _stream(entry: dict[str, Any], stream: str) -> dict[str, Any]:
     return next(item for item in entry["streams"] if item["stream"] == stream)
 
 
+def _block(memory: Memory, block_id: str) -> MemoryBlock:
+    """Return a block the test requires to exist.
+
+    Args:
+        memory: Memory to read from.
+        block_id: Block the caller expects to be there.
+
+    Returns:
+        The block.
+    """
+
+    block = memory.get(block_id)
+    assert block is not None, f"{block_id} should exist"
+    return block
+
+
 @pytest.fixture(scope="module")
 def mixed_report() -> dict[str, Any]:
     """One mixed run on `sqlite`, shared by the tests that only read it."""
@@ -1168,10 +1184,11 @@ def test_a_writer_rewrites_every_block_exactly_once() -> None:
     context, dispose = runner.build_workload_context(item, TINY_WORKLOAD)
     try:
         writer = prepare_worker(replace(context, worker_index=3), item.roles)
-        assert writer.measured_calls == TINY_WORKLOAD.blocks
-        for index in range(TINY_WORKLOAD.warmup + writer.measured_calls):
+        sweep = writer.measured_calls
+        assert sweep is not None and sweep == TINY_WORKLOAD.blocks
+        for index in range(TINY_WORKLOAD.warmup + sweep):
             writer.prepared.call(index)
-        versions = {context.memory.get(leaf.id).version for leaf in context.corpus.leaves}
+        versions = {_block(context.memory, leaf.id).version for leaf in context.corpus.leaves}
     finally:
         dispose()
 
@@ -1188,8 +1205,8 @@ def test_writer_warmup_never_eats_into_the_sweep() -> None:
         writer = prepare_worker(replace(context, worker_index=3), item.roles)
         for index in range(TINY_WORKLOAD.warmup):
             writer.prepared.call(index)
-        throwaway = context.memory.get(f"{WARMUP_BLOCK_PREFIX}_w000")
-        untouched = {context.memory.get(leaf.id).version for leaf in context.corpus.leaves}
+        throwaway = _block(context.memory, f"{WARMUP_BLOCK_PREFIX}_w000")
+        untouched = {_block(context.memory, leaf.id).version for leaf in context.corpus.leaves}
     finally:
         dispose()
 
@@ -1468,11 +1485,11 @@ def test_a_pass_counts_calls_that_returned_not_calls_that_started() -> None:
     reads-alone pass millions of failures to repeat instead of nothing to do.
     """
 
-    def raises(index: int) -> Any:
+    def raises(_index: int) -> Any:
         raise RuntimeError("injected read failure")
 
     settings = replace(TINY_WORKLOAD, warmup=1)
-    working = WorkloadWorker(STREAM_READ, 0, PreparedCase(call=lambda index: "ok"), 4)
+    working = WorkloadWorker(STREAM_READ, 0, PreparedCase(call=lambda _index: "ok"), 4)
     broken = WorkloadWorker(STREAM_READ, 1, PreparedCase(call=raises), 5)
 
     result = runner._run_workload_pass(

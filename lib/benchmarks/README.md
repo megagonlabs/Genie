@@ -614,11 +614,3 @@ At more than one worker, four more choices apply:
   is a good sign: the gap on a simple read is the codec, the policy check, and
   the hook envelope, and nothing hidden. Where a gap is much larger than that
   floor, look for extra calls.
-
-## Not here yet
-
-1. **Open-loop arrival.** Both the cases and the mixed workload are closed
-   loop: a worker starts its next call as soon as the last one returned. So a
-   run answers "what happens when writers work flat out", not "what is read
-   p99 at 500 writes per second". A target rate would need a scheduler and
-   sleeps inside the harness.
