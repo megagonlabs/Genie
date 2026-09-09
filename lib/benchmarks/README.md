@@ -28,6 +28,7 @@ conda run -n "genie" python lib/benchmarks/run.py --iterations 500 --blocks 5000
 conda run -n "genie" python lib/benchmarks/run.py --target sqlite --group read
 conda run -n "genie" python lib/benchmarks/run.py --layer backend --layer memory
 conda run -n "genie" python lib/benchmarks/run.py --workers 4 --workers 8
+conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4
 conda run -n "genie" python lib/benchmarks/run.py --json reports/latest.json
 ```
 
@@ -38,6 +39,8 @@ conda run -n "genie" python lib/benchmarks/run.py --json reports/latest.json
   for that, and a conflict a `contention` case expected is not an error.
 - **`--workers` is the only concurrency switch.** Without it the run measures
   one caller and produces exactly the tables it always did.
+- **`--workload` measures the mixed read/write scenario instead of the cases.**
+  It is the one flag that changes a run's shape rather than its size.
 - **`--quiet` drops the progress lines and the tables,** which is what you want
   together with `--json`.
 
@@ -157,6 +160,128 @@ The `speedup` column is readable only next to the adapter's concurrency model.
   `sqlite` conflicts on a hot block. `in_memory` does not.
 - **Read `in_memory` concurrency numbers as a floor,** and take conflict
   behavior from a server target.
+
+## Mixed read and write load
+
+`--workload` swaps the single-operation cases for one fixed scenario: readers
+and writers working on the same blocks at the same time. It answers a question
+no case can, because every worker of a case makes the same call.
+
+```bash
+conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4
+conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4 --workers 8 --target sqlite
+conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4 --list
+```
+
+- **One flag, no knobs.** The scenario is fixed so that two runs mean the same
+  thing. It reuses `--workers`, `--blocks`, `--target`, `--warmup`, `--json`,
+  `--quiet`, and `--list`.
+- **It needs more than one worker.** `--workload` on its own is a usage error
+  naming the fix, because one worker cannot read and write at once.
+- **It measures no cases,** so `--layer`, `--group`, and `--case` are refused
+  rather than quietly dropped.
+- **`--iterations`, `--search-limit`, and `--links-per-block` have no effect on
+  it,** and the run says so once on standard error. The window comes from
+  `--blocks`, and neither stream searches or follows a link. The JSON still
+  records every setting.
+
+### The scenario
+
+| Element | Choice |
+| --- | --- |
+| Split | 3 readers per writer, taken from `--workers` |
+| Readers | `Memory.get`, walking the leaf list from a spread offset, wrapping, looping until stopped |
+| Writers | `Memory.set`, dividing the leaf list into contiguous ranges and walking their own range once |
+| Layer | `memory` only |
+| Window | Ends when the last writer finishes its share of one sweep |
+
+- **Roles are fixed for the whole window.** A worker only reads or only writes,
+  so read latency comes from threads that did nothing but read.
+- **The window is one full sweep of the corpus,** not a duration someone
+  picked. It derives from `--blocks`, has a meaning you can state, adapts to a
+  slow or a fast store, and guarantees that every block a reader can land on is
+  rewritten during the window.
+- **Writers split the sweep rather than repeating it.** Two writers take half
+  the leaves each, so the corpus is rewritten exactly once at any worker count
+  and no two writers touch the same block. More writers means a shorter window
+  and more write pressure per second.
+- **Reader offsets only stop several readers starting on the same page.** A
+  reader wraps and covers the whole corpus many times over one sweep, so where
+  it began stops mattering after the first pass.
+- **Warmup writes go to a throwaway block of the writer's own,** a root outside
+  the corpus. Otherwise the first `--warmup` calls would eat into the sweep and
+  it would no longer be exactly one pass.
+
+### Why these two operations
+
+- **`Memory.get` and `Memory.set` over existing leaves is the only pairing that
+  collides on the same row.** `Memory.put` creates new ids, so it would never
+  overlap a read target.
+- **`delete` is not in the mix.** It would make later reads return `None` and
+  later writes fail with not found, measuring a missing-block path instead of
+  contention.
+- **A raw `backend` write cannot join.** `update_block` needs an
+  `expected_version`, and a benchmark cannot know that version in advance once a
+  second worker writes the same block. `Memory.set` resolves it internally,
+  which also means one write is two store round trips, not one.
+- **Overlap is guaranteed over the window, not at one instant.** A read may land
+  just before, just after, or during a write to the same block, and the
+  scheduler decides which. For a guaranteed same-instant collision on one row,
+  use `--group contention`.
+
+### The three passes
+
+Each target and worker level is measured three times, in this order.
+
+| Pass | What runs | Window |
+| --- | --- | --- |
+| `mixed` | readers and writers together | ends when the sweep ends |
+| `reads_alone` | the readers repeat their mixed call counts, no writer | the same calls |
+| `writes_alone` | the writers sweep the corpus once, no reader | one sweep |
+
+- **The order is forced.** `reads_alone` repeats the call counts `mixed`
+  produced, so it cannot be planned before `mixed` has run. One work item
+  covers all three rather than one variant each.
+- **They run back to back,** each with a fresh store and a fresh corpus, so a
+  drifting machine cannot move the deltas.
+- **Matching call counts rather than duration** means both sides of the
+  comparison hold the same number of samples.
+- **A baseline holds concurrency fixed and changes only whether the other side
+  is running,** so the difference it exposes is interference and not
+  concurrency.
+
+### Reading the table
+
+- **`+%` is the headline.** It is what running together cost that stream's
+  median call, measured against the same threads with the other side switched
+  off.
+- **The sweep ratio is the other headline.** A line reading `one sweep of 1000
+  blocks: 649 ms mixed, 394 ms reads alone, 207 ms writes alone (sweep 3.13x
+  slower mixed)` says how much longer a full rewrite took under read load.
+- **`wall ops/s` divides every stream by the same window,** so the two stream
+  rates add up to the total row.
+- **The total row fills only the columns that add up.** A percentile across two
+  different operations would describe no real operation, so those cells are `-`.
+- **`calls` and `share %` show the mix that actually happened.** The split
+  rounds, so 2 workers give 1 reader and 1 writer, and 6 give 4 and 2. Read the
+  achieved share, never the nominal ratio.
+- **Conflicts should read 0.** Writers own disjoint ranges, so a non-zero count
+  means the ranges are wrong or something outside the run is writing the store.
+  Conflict behavior belongs to `--group contention`.
+
+### `in_memory` cannot show this
+
+- **`InMemoryBackend` is pure Python, so its writer can hold the GIL for a whole
+  short sweep** and leave the readers with no calls at all. Three runs at
+  `--blocks 120` gave 3634, 3472, and then 0 reads.
+- **`sqlite` and the server targets release the GIL inside the call,** so their
+  readers always get scheduled. The same three runs on `sqlite` gave 721, 723,
+  and 722 reads.
+- **So take the mixed numbers from `sqlite` or a server target.** The `calls`
+  column is the disclosure: a stream with a handful of samples has a meaningless
+  `+%`, and a one-sample p50 is just that one call's duration.
+- **This is the same cause as the missing `in_memory` conflicts,** explained
+  under "The switch interval decides what a thread benchmark can see" above.
 
 ## Targets
 
@@ -321,6 +446,7 @@ The `contention` group has three rules of its own:
 | `--search-limit` | Candidate budget passed to search |
 | `--seed` | Seed for the corpus generator |
 | `--workers` | Callers running one case at the same time. Repeatable. Level 1 is always measured |
+| `--workload` | Measure the mixed read/write scenario instead of the cases. Needs `--workers 4` or more |
 | `--layer` | Measure one layer only. Repeatable |
 | `--target` | Measure one target only. Repeatable |
 | `--group` | Measure one group only. Repeatable |
@@ -491,7 +617,8 @@ At more than one worker, four more choices apply:
 
 ## Not here yet
 
-1. **Mixed read and write load.** Every worker of a variant makes the same call
-   today, so one latency number describes the whole variant. Readers running
-   while writers work would need a result pool per role and a second set of
-   columns.
+1. **Open-loop arrival.** Both the cases and the mixed workload are closed
+   loop: a worker starts its next call as soon as the last one returned. So a
+   run answers "what happens when writers work flat out", not "what is read
+   p99 at 500 writes per second". A target rate would need a scheduler and
+   sleeps inside the harness.

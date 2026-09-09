@@ -26,18 +26,31 @@ At more than one worker the same four steps run, with three differences:
 - **Progress is polled, not pushed.** Each worker writes its own finished-call
   count into its own slot and the calling thread sums those slots. No lock
   enters a worker's hot path, so reporting cannot distort throughput.
+
+`settings.workload` replaces all of that with the mixed read/write scenario,
+which measures three passes per target and worker level instead of one variant:
+
+1. **Mixed.** Readers and writers run together. The window ends when the last
+   writer finishes its share of one sweep over the corpus.
+2. **Reads alone.** Each reader repeats the exact number of calls it made in
+   the mixed pass, with no writer running.
+3. **Writes alone.** The writers sweep the corpus once more, with no reader
+   running.
+
+The three must run in that order, because pass 2 needs the call counts pass 1
+produced. So one work item covers all three rather than one variant each.
 """
 
 from __future__ import annotations
 
 import gc
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from threading import Barrier
-from time import perf_counter, perf_counter_ns
+from threading import Barrier, Event
+from time import perf_counter, perf_counter_ns, sleep
 from typing import Any
 
 from benchmarks import dataset, environment
@@ -46,10 +59,38 @@ from benchmarks.metrics import NANOSECONDS_PER_MILLISECOND, Summary, summarize
 from benchmarks.progress import Progress
 from benchmarks.settings import BACKEND, CORE, LAYERS, MEMORY, SINGLE_CALLER, BenchmarkSettings
 from benchmarks.targets import BackendTarget, default_targets
+from benchmarks.workload import (
+    STREAM_READ,
+    STREAM_WRITE,
+    STREAMS,
+    Roles,
+    WorkloadWorker,
+    prepare_worker,
+    split_roles,
+)
 from genie import InMemoryBackend, Memory
 
-REPORT_SCHEMA = 2
+REPORT_SCHEMA = 3
 """Version of the report shape. Raised when the JSON layout changes."""
+
+PASS_MIXED = "mixed"
+"""Pass where readers and writers run together. The real measurement."""
+
+PASS_READS_ALONE = "reads_alone"
+"""Pass where the readers repeat their mixed call counts with no writer."""
+
+PASS_WRITES_ALONE = "writes_alone"
+"""Pass where the writers sweep the corpus once with no reader."""
+
+WORKLOAD_PASSES = (PASS_MIXED, PASS_READS_ALONE, PASS_WRITES_ALONE)
+"""The three passes of one mixed variant, in the order they must run."""
+
+WORKLOAD_PASS_NOTES = {
+    PASS_MIXED: "readers and writers together; the window ends when the sweep ends",
+    PASS_READS_ALONE: "the readers repeat their mixed call counts, with no writer",
+    PASS_WRITES_ALONE: "the writers sweep the corpus once, with no reader",
+}
+"""What each pass does, for `--list` and for anything else that explains a run."""
 
 CORE_SECTION = "core"
 """Section name for cases that measure the core library with no store."""
@@ -153,7 +194,8 @@ def run(
 
     A case marked `concurrent_only` is measured only when the settings ask for
     more than one worker, so a default run keeps the length and the shape it
-    always had.
+    always had. When `settings.workload` is set, `cases` and `layers` are
+    ignored and the mixed read/write scenario is measured instead.
 
     Args:
         settings: Run settings. Defaults to `BenchmarkSettings()`.
@@ -169,6 +211,8 @@ def run(
 
     run_settings = settings or BenchmarkSettings()
     run_targets = tuple(targets if targets is not None else default_targets())
+    if run_settings.workload:
+        return run_workload(settings=run_settings, targets=run_targets, progress=progress)
     run_cases = tuple(cases if cases is not None else default_cases())
     if not run_settings.measures_concurrency:
         run_cases = tuple(case for case in run_cases if not case.concurrent_only)
@@ -594,6 +638,7 @@ def _follow_progress(
     futures: Sequence[Future[float]],
     finished_calls: Sequence[int],
     total: int,
+    slots: Sequence[int] | None = None,
 ) -> None:
     """Report what the workers have finished until every one of them is done.
 
@@ -606,6 +651,9 @@ def _follow_progress(
         futures: One future per worker.
         finished_calls: One counter per worker, written by that worker only.
         total: Calls the whole variant will make, warmup included.
+        slots: Counters to add up, or `None` for all of them. A mixed pass
+            passes only its writers, because they are the workers with a known
+            call count and the ones that decide when the pass ends.
     """
 
     if progress is None:
@@ -613,7 +661,8 @@ def _follow_progress(
     pending = list(futures)
     while pending:
         _, not_done = wait(pending, timeout=progress.interval)
-        progress.call_done(sum(finished_calls), total)
+        counted = finished_calls if slots is None else [finished_calls[slot] for slot in slots]
+        progress.call_done(sum(counted), total)
         pending = list(not_done)
 
 
@@ -626,6 +675,597 @@ def _scale_notes(item: WorkItem, context: CaseContext) -> dict[str, Any]:
         "corpus_blocks": context.corpus.block_count,
         "corpus_depth": context.corpus.depth,
     }
+
+
+# --------------------------------------------------------------------------
+# mixed read/write workload
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class WorkloadItem:
+    """One target and one worker level of the mixed scenario.
+
+    Attributes:
+        section: Report section, which is the target name.
+        target: Store to measure. Every pass opens its own instance.
+        workers: Callers the variant runs.
+        roles: How those callers split into readers and writers.
+    """
+
+    section: str
+    target: BackendTarget
+    workers: int
+    roles: Roles
+
+    def label(self, pass_name: str) -> str:
+        """Return the progress label for one pass of this variant.
+
+        Args:
+            pass_name: One of `WORKLOAD_PASSES`.
+
+        Returns:
+            A label naming the target, the split, the worker count, and the
+            pass.
+        """
+
+        split = f"{self.roles.readers}r/{self.roles.writers}w"
+        return f"{self.section} workload {split} x{self.workers}: {pass_name}"
+
+
+def plan_workload(
+    targets: Sequence[BackendTarget],
+    levels: Sequence[int],
+) -> tuple[list[WorkloadItem], list[BackendTarget]]:
+    """Work out every mixed variant a run will measure.
+
+    Args:
+        targets: Targets to measure.
+        levels: Worker levels to measure, smallest first. Level 1 is not one of
+            them, because one worker cannot read and write at the same time.
+
+    Returns:
+        The variants to measure and the targets that were skipped.
+    """
+
+    items: list[WorkloadItem] = []
+    skipped: list[BackendTarget] = []
+    for target in targets:
+        if not target.available:
+            skipped.append(target)
+            continue
+        for level in levels:
+            items.append(WorkloadItem(target.name, target, level, split_roles(level)))
+    return items, skipped
+
+
+def run_workload(
+    *,
+    settings: BenchmarkSettings,
+    targets: Sequence[BackendTarget] | None = None,
+    progress: Progress | None = None,
+) -> dict[str, Any]:
+    """Measure the mixed scenario on every available target and return the report.
+
+    Args:
+        settings: Run settings with `workload` set.
+        targets: Targets to measure. Defaults to `default_targets()`.
+        progress: Reporter told about each pass and each call.
+
+    Returns:
+        The report as plain data, in the same outer shape a case run produces.
+        Each section carries a `workloads` list instead of filled `cases`.
+    """
+
+    run_targets = tuple(targets if targets is not None else default_targets())
+    items, skipped = plan_workload(run_targets, settings.workload_levels)
+    started_at = datetime.now(UTC)
+    started = perf_counter()
+    total_passes = len(items) * len(WORKLOAD_PASSES)
+    measured: dict[str, list[dict[str, Any]]] = {}
+    for index, item in enumerate(items):
+        entry = measure_workload_item(
+            item,
+            settings=settings,
+            progress=progress,
+            first_position=index * len(WORKLOAD_PASSES) + 1,
+            total=total_passes,
+        )
+        measured.setdefault(item.section, []).append(entry)
+    if progress is not None:
+        progress.close()
+    return {
+        "schema": REPORT_SCHEMA,
+        "started_at": started_at.isoformat(),
+        "duration_seconds": perf_counter() - started,
+        "environment": environment.describe(),
+        "settings": settings.as_dict(),
+        "layers": [MEMORY],
+        "workers": list(settings.workload_levels),
+        "sections": _build_workload_sections(run_targets, measured, skipped),
+        "errors": _workload_total(measured, "errors"),
+        "conflicts": _workload_total(measured, "conflicts"),
+    }
+
+
+def measure_workload_item(
+    item: WorkloadItem,
+    *,
+    settings: BenchmarkSettings,
+    progress: Progress | None = None,
+    first_position: int = 1,
+    total: int = len(WORKLOAD_PASSES),
+) -> dict[str, Any]:
+    """Measure the three passes of one mixed variant, in order.
+
+    The order is forced. The reads-alone pass repeats the call counts the mixed
+    pass produced, so it cannot be planned before the mixed pass has run.
+
+    Args:
+        item: Variant to measure.
+        settings: Run settings.
+        progress: Reporter told about each pass and each call.
+        first_position: One-based position of this variant's first pass in the
+            whole run, used for the progress line.
+        total: Passes in the whole run.
+
+    Returns:
+        The variant's report entry.
+    """
+
+    passes: dict[str, dict[str, Any]] = {}
+    read_caps: dict[int, int] | None = None
+    for offset, pass_name in enumerate(WORKLOAD_PASSES):
+        if pass_name == PASS_MIXED:
+            streams: tuple[str, ...] = STREAMS
+            caps = None
+        elif pass_name == PASS_READS_ALONE:
+            streams = (STREAM_READ,)
+            caps = read_caps
+        else:
+            streams = (STREAM_WRITE,)
+            caps = None
+        if progress is not None:
+            progress.start_variant(first_position + offset, total, item.label(pass_name))
+        passes[pass_name] = _measure_workload_pass(
+            item,
+            settings=settings,
+            progress=progress,
+            streams=streams,
+            caps=caps,
+        )
+        if pass_name == PASS_MIXED:
+            read_caps = {
+                index: calls
+                for index, calls in passes[pass_name]["worker_calls"].items()
+                if item.roles.stream_of(index) == STREAM_READ
+            }
+    return _workload_entry(item, passes)
+
+
+def build_workload_context(
+    item: WorkloadItem,
+    settings: BenchmarkSettings,
+) -> tuple[CaseContext, Callable[[], None]]:
+    """Open a fresh store, write the corpus through `Memory`, and wrap it.
+
+    The corpus always goes in through the public API, because both streams of
+    this scenario call the public API too.
+
+    Args:
+        item: Variant about to be measured.
+        settings: Run settings.
+
+    Returns:
+        The case context and the function that disposes of the store.
+    """
+
+    backend, dispose = item.target.opener()
+    memory = Memory(backend=backend, principal=PRINCIPAL_ID)
+    corpus = dataset.build(settings)
+    dataset.populate_memory(memory, corpus)
+    context = CaseContext(
+        settings=settings,
+        corpus=corpus,
+        backend=backend,
+        memory=memory,
+        principal_id=PRINCIPAL_ID,
+        worker_count=item.workers,
+    )
+    return context, dispose
+
+
+def _measure_workload_pass(
+    item: WorkloadItem,
+    *,
+    settings: BenchmarkSettings,
+    progress: Progress | None,
+    streams: Sequence[str],
+    caps: Mapping[int, int] | None,
+) -> dict[str, Any]:
+    """Set up one pass, measure it, and dispose of its store.
+
+    Args:
+        item: Variant being measured.
+        settings: Run settings.
+        progress: Reporter told about each call.
+        streams: Streams this pass runs. Only the workers in those streams are
+            created, so a baseline pass leaves the other side switched off.
+        caps: Measured calls each worker should make, for workers that would
+            otherwise run until stopped.
+
+    Returns:
+        The pass result: one summary per stream, the shared wall window, the
+        setup time, and the measured calls each worker got a result from.
+    """
+
+    setup_started = perf_counter()
+    context, dispose = build_workload_context(item, settings)
+    indexes = tuple(index for index in range(item.workers) if item.roles.stream_of(index) in streams)
+    try:
+        workers = {
+            index: prepare_worker(replace(context, worker_index=index), item.roles)
+            for index in indexes
+        }
+        setup_seconds = perf_counter() - setup_started
+        result = _run_workload_pass(
+            workers,
+            caps=caps,
+            settings=settings,
+            progress=progress,
+            setup_seconds=setup_seconds,
+            scale={
+                "corpus_blocks": context.corpus.block_count,
+                "corpus_depth": context.corpus.depth,
+            },
+        )
+    finally:
+        dispose()
+    return result
+
+
+def _run_workload_pass(
+    workers: Mapping[int, WorkloadWorker],
+    *,
+    caps: Mapping[int, int] | None,
+    settings: BenchmarkSettings,
+    progress: Progress | None,
+    setup_seconds: float,
+    scale: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Time one pass with every worker calling at once.
+
+    How the window is defined:
+
+    - **Warmup happens before a barrier,** as it does for any concurrent
+      variant, so no worker's first call lands in another worker's
+      measurement.
+    - **A worker with a call count stops when it reaches it.** A writer's count
+      is the range it owns; a baseline reader's count is what it achieved in
+      the mixed pass.
+    - **A worker without one runs until the writers are done.** The last writer
+      to finish releases them through a barrier whose action sets the stop
+      event, so no lock enters anyone's hot path.
+    - **Wall time runs to the last return,** and every stream divides its own
+      returned calls by that same window, so the stream rates sum to the total.
+
+    Args:
+        workers: The prepared workers of this pass, keyed by worker index.
+        caps: Measured calls each worker should make, where a cap applies.
+        settings: Run settings, read for the warmup count.
+        progress: Reporter polled by this thread while the workers run.
+        setup_seconds: Wall time already spent preparing this pass.
+        scale: Notes describing the data the calls ran against.
+
+    Returns:
+        The pass result.
+
+    Raises:
+        RuntimeError: If a worker fails outside a measured call, which leaves
+            the pass with no honest number to report.
+    """
+
+    gc.collect()
+    order = tuple(sorted(workers))
+    slots = {index: slot for slot, index in enumerate(order)}
+    warmup = settings.warmup
+    stop = Event()
+    finished = [0] * len(order)
+    outcomes = {index: _Outcome(workers[index].prepared.conflict_errors) for index in order}
+    window: list[float] = []
+    warmed = Barrier(len(order))
+    measuring = Barrier(len(order), action=lambda: window.append(perf_counter()))
+    writers = tuple(index for index in order if workers[index].stream == STREAM_WRITE)
+    # The action fires when the last writer arrives, which is what ends the
+    # window for every reader that has no call count of its own.
+    sweeping = Barrier(len(writers), action=stop.set) if writers else None
+
+    def cap_of(index: int) -> int | None:
+        """Return the measured calls one worker should make, if it has a limit."""
+
+        if caps is not None and index in caps:
+            return caps[index]
+        return workers[index].measured_calls
+
+    def work(index: int) -> float:
+        """Run one worker's calls and return when it finished the last one."""
+
+        worker = workers[index]
+        outcome = outcomes[index]
+        call = worker.prepared.call
+        cap = cap_of(index)
+        slot = slots[index]
+        try:
+            for step in range(warmup):
+                # Warmup results are thrown away, failures included.
+                with suppress(Exception):
+                    call(step)
+                finished[slot] = step + 1
+            warmed.wait()
+            measuring.wait()
+            step = warmup
+            while not _workload_done(step, warmup, cap, stop):
+                started = perf_counter_ns()
+                try:
+                    result = call(step)
+                except Exception as error:  # noqa: BLE001 - a failing call is a result
+                    outcome.record_failure(error)
+                    # A call that raised returns almost at once, and a worker
+                    # without a call count of its own runs until the writers
+                    # finish. So a stream whose calls all fail would spin here
+                    # holding the interpreter lock, starving the workers still
+                    # doing real work and stretching the window that should
+                    # have ended in milliseconds. Handing the lock over costs
+                    # nothing that is measured, because a failed call is never
+                    # timed.
+                    sleep(0)
+                else:
+                    outcome.record_success(perf_counter_ns() - started, result)
+                step += 1
+                # This worker's own slot, so reporting never takes a lock the
+                # other workers could queue behind.
+                finished[slot] = step
+            if sweeping is not None and worker.stream == STREAM_WRITE:
+                sweeping.wait()
+            return perf_counter()
+        except BaseException:
+            # A worker that dies before a gate would leave the others waiting
+            # forever, so every gate is broken and the readers are released.
+            warmed.abort()
+            measuring.abort()
+            if sweeping is not None:
+                sweeping.abort()
+            stop.set()
+            raise
+
+    bounded = tuple(index for index in order if cap_of(index) is not None)
+    loop_started = perf_counter()
+    with ThreadPoolExecutor(max_workers=len(order)) as executor:
+        futures = [executor.submit(work, index) for index in order]
+        _follow_progress(
+            progress,
+            futures,
+            finished,
+            sum(warmup + (cap_of(index) or 0) for index in bounded),
+            [slots[index] for index in bounded],
+        )
+        try:
+            last_return = max(future.result() for future in futures)
+        except Exception as error:
+            raise RuntimeError(f"A benchmark worker failed outside a measured call: {error}") from error
+    wall_seconds = last_return - window[0] if window else 0.0
+    summaries = _workload_stream_summaries(
+        workers,
+        order,
+        outcomes,
+        wall_seconds=wall_seconds,
+        setup_seconds=setup_seconds,
+        scale=scale,
+    )
+    if progress is not None:
+        first = next(iter(summaries.values()), {})
+        progress.finish_variant(
+            sum(result["samples"] for result in summaries.values()),
+            perf_counter() - loop_started,
+            first.get("p50_ms", 0.0),
+        )
+    return {
+        "streams": summaries,
+        "wall_seconds": wall_seconds,
+        "setup_seconds": setup_seconds,
+        # Calls that returned, not calls that were started. This is the same
+        # rule `throughput_per_second` follows, and it is what makes the counts
+        # safe to hand to a baseline pass: a call that raised did no work, so
+        # repeating it would measure the failure path instead of the operation.
+        # A reader whose every call fails also spins as fast as the interpreter
+        # allows, so counting attempts would ask the baseline to repeat millions
+        # of failures rather than fail fast.
+        "worker_calls": {index: len(outcomes[index].durations) for index in order},
+    }
+
+
+def _workload_done(step: int, warmup: int, cap: int | None, stop: Event) -> bool:
+    """Whether one worker should stop before making another call.
+
+    Args:
+        step: Calls this worker has already started, warmup included.
+        warmup: Calls that were thrown away before measuring.
+        cap: Measured calls this worker should make, or `None` when it runs
+            until the writers are done.
+        stop: Event the last writer sets.
+
+    Returns:
+        Whether to stop.
+    """
+
+    if cap is not None:
+        return step >= warmup + cap
+    return stop.is_set()
+
+
+def _workload_stream_summaries(
+    workers: Mapping[int, WorkloadWorker],
+    order: Sequence[int],
+    outcomes: Mapping[int, _Outcome],
+    *,
+    wall_seconds: float,
+    setup_seconds: float,
+    scale: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Merge one pass's workers into one summary per stream.
+
+    Every stream divides its returned calls by the same `wall_seconds`, so the
+    per-stream rates add up to what the pass achieved together.
+
+    Args:
+        workers: The pass's prepared workers.
+        order: Worker indexes in report order.
+        outcomes: What each worker's calls did.
+        wall_seconds: Wall time of the measured window.
+        setup_seconds: Wall time spent preparing the pass.
+        scale: Notes describing the data the calls ran against.
+
+    Returns:
+        One summary per stream that ran, in report order.
+    """
+
+    summaries: dict[str, dict[str, Any]] = {}
+    for stream in STREAMS:
+        members = [index for index in order if workers[index].stream == stream]
+        if not members:
+            continue
+        summaries[stream] = _summarize_outcomes(
+            [outcomes[index] for index in members],
+            prepared=workers[members[0]].prepared,
+            workers=len(members),
+            wall_seconds=wall_seconds,
+            setup_seconds=setup_seconds,
+            scale=dict(scale),
+        ).as_dict()
+    return summaries
+
+
+def _workload_entry(item: WorkloadItem, passes: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
+    """Assemble one mixed variant's report entry from its three passes.
+
+    Args:
+        item: Variant that was measured.
+        passes: Result of each pass, keyed by pass name.
+
+    Returns:
+        The entry, holding each stream's mixed result next to its baseline, the
+        gap between the two, and the three measured windows.
+    """
+
+    mixed = passes[PASS_MIXED]["streams"]
+    baselines = {
+        STREAM_READ: passes[PASS_READS_ALONE]["streams"].get(STREAM_READ),
+        STREAM_WRITE: passes[PASS_WRITES_ALONE]["streams"].get(STREAM_WRITE),
+    }
+    total_calls = sum(result["samples"] for result in mixed.values())
+    streams: list[dict[str, Any]] = []
+    for stream in STREAMS:
+        result = mixed.get(stream)
+        if result is None:
+            continue
+        baseline = baselines[stream]
+        entry: dict[str, Any] = {
+            "stream": stream,
+            "workers": result["workers"],
+            "share_percent": result["samples"] / total_calls * 100.0 if total_calls else None,
+            "result": result,
+            "baseline": baseline,
+            "p50_delta_ms": None,
+            "p50_delta_percent": None,
+        }
+        if baseline and baseline["samples"] and result["samples"]:
+            entry["p50_delta_ms"] = result["p50_ms"] - baseline["p50_ms"]
+            if baseline["p50_ms"] > 0:
+                entry["p50_delta_percent"] = entry["p50_delta_ms"] / baseline["p50_ms"] * 100.0
+        streams.append(entry)
+    windows = {name: passes[name]["wall_seconds"] for name in WORKLOAD_PASSES}
+    sweep_alone = windows[PASS_WRITES_ALONE]
+    return {
+        "workers": item.workers,
+        "readers": item.roles.readers,
+        "writers": item.roles.writers,
+        "setup_seconds": passes[PASS_MIXED]["setup_seconds"],
+        "windows": windows,
+        "sweep_ratio": windows[PASS_MIXED] / sweep_alone if sweep_alone > 0 else None,
+        "streams": streams,
+    }
+
+
+def _build_workload_sections(
+    targets: Sequence[BackendTarget],
+    measured: Mapping[str, list[dict[str, Any]]],
+    skipped: Sequence[BackendTarget],
+) -> list[dict[str, Any]]:
+    """Assemble the mixed report's sections in target order.
+
+    `cases` stays present and empty, so a reader and the table renderer see the
+    same section shape whichever kind of run produced it.
+
+    Args:
+        targets: Targets the run knew about.
+        measured: Variant entries per target.
+        skipped: Targets that could not run.
+
+    Returns:
+        One section per target that ran or was skipped.
+    """
+
+    skip_reasons = {target.name: target.skip_reason for target in skipped}
+    sections: list[dict[str, Any]] = []
+    for target in targets:
+        if target.name in skip_reasons:
+            sections.append(
+                {
+                    "name": target.name,
+                    "storage": target.storage,
+                    "skipped": skip_reasons[target.name],
+                    "cases": [],
+                    "workloads": [],
+                }
+            )
+            continue
+        if target.name not in measured:
+            continue
+        sections.append(
+            {
+                "name": target.name,
+                "storage": target.storage,
+                "skipped": None,
+                "cases": [],
+                "workloads": list(measured[target.name]),
+            }
+        )
+    return sections
+
+
+def _workload_total(measured: Mapping[str, list[dict[str, Any]]], field: str) -> int:
+    """Add up one counter over every stream of every mixed variant.
+
+    Both the mixed result and its baseline are counted, because a failure in a
+    baseline pass is just as real as one in the mixed pass.
+
+    Args:
+        measured: Variant entries per target.
+        field: Summary field to add up, such as `"errors"`.
+
+    Returns:
+        The total.
+    """
+
+    total = 0
+    for entries in measured.values():
+        for entry in entries:
+            for stream in entry["streams"]:
+                for key in ("result", "baseline"):
+                    result = stream[key]
+                    if result:
+                        total += result[field]
+    return total
 
 
 def _build_sections(

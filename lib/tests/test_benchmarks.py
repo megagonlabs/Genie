@@ -19,10 +19,22 @@ from benchmarks import report, run, runner
 from benchmarks.cases import HOT_PARENT_ID, CaseContext, PreparedCase, default_cases, select
 from benchmarks.metrics import percentile, summarize
 from benchmarks.progress import PLAIN_INTERVAL_SECONDS, TERMINAL_INTERVAL_SECONDS, for_stream
-from benchmarks.report import CONCURRENCY_HEADERS, LATENCY_HEADERS
-from benchmarks.runner import CORE_SECTION, REPORT_SCHEMA, WorkItem
+from benchmarks.report import CONCURRENCY_HEADERS, LATENCY_HEADERS, WORKLOAD_HEADERS
+from benchmarks.runner import CORE_SECTION, REPORT_SCHEMA, WorkItem, WorkloadItem
 from benchmarks.settings import BACKEND, CORE, LAYERS, MEMORY, BenchmarkSettings
 from benchmarks.targets import BackendTarget, clear_store, default_targets, server_targets
+from benchmarks.workload import (
+    MINIMUM_WORKERS,
+    READ_PER_WRITE,
+    STREAM_READ,
+    STREAM_WRITE,
+    WARMUP_BLOCK_PREFIX,
+    WorkloadWorker,
+    prepare_worker,
+    read_offset,
+    split_roles,
+    write_range,
+)
 from genie import InMemoryBackend, Memory, MemoryConflict, MemoryQuery, Scope
 
 TINY = BenchmarkSettings(
@@ -963,3 +975,516 @@ def test_the_command_line_refuses_settings_that_cannot_describe_a_run() -> None:
         run.main(["--iterations", "0"])
 
     assert raised.value.code == 2
+
+
+# --------------------------------------------------------------------------
+# mixed read/write workload
+# --------------------------------------------------------------------------
+
+
+TINY_WORKLOAD = BenchmarkSettings(
+    warmup=1,
+    blocks=120,
+    sections=4,
+    value_size=4,
+    links_per_block=2,
+    workers=(1, 4),
+    workload=True,
+)
+"""Settings small enough for a unit test, large enough for a real mix.
+
+The sweep has to outlast a few thread switches, or the readers of a mixed pass
+can be starved to no calls at all. See
+`test_a_stream_that_recorded_nothing_still_reports`.
+"""
+
+
+def _target(name: str) -> BackendTarget:
+    """Return one shipped target by name."""
+
+    return next(target for target in default_targets() if target.name == name)
+
+
+def _workload_report(name: str = "sqlite") -> dict[str, Any]:
+    """Measure the mixed scenario on one target.
+
+    `sqlite` is the default on purpose. Its driver releases the interpreter
+    lock, so its readers always get scheduled and its call counts repeat.
+
+    Args:
+        name: Target to measure.
+
+    Returns:
+        The report.
+    """
+
+    return runner.run(settings=TINY_WORKLOAD, targets=(_target(name),), progress=_quiet())
+
+
+def _entry(result: dict[str, Any], workers: int = 4) -> dict[str, Any]:
+    """Return one measured mixed variant from a report."""
+
+    return next(
+        entry
+        for section in result["sections"]
+        for entry in section["workloads"]
+        if entry["workers"] == workers
+    )
+
+
+def _stream(entry: dict[str, Any], stream: str) -> dict[str, Any]:
+    """Return one stream of one mixed variant."""
+
+    return next(item for item in entry["streams"] if item["stream"] == stream)
+
+
+@pytest.fixture(scope="module")
+def mixed_report() -> dict[str, Any]:
+    """One mixed run on `sqlite`, shared by the tests that only read it."""
+
+    return _workload_report()
+
+
+@pytest.mark.parametrize(
+    ("workers", "expected"),
+    [
+        (2, (1, 1)),
+        (3, (2, 1)),
+        (4, (3, 1)),
+        (5, (4, 1)),
+        (6, (4, 2)),
+        (8, (6, 2)),
+        (12, (9, 3)),
+        (16, (12, 4)),
+    ],
+)
+def test_the_split_puts_three_readers_behind_every_writer(
+    workers: int,
+    expected: tuple[int, int],
+) -> None:
+    """The common worker counts land exactly on the target ratio."""
+
+    roles = split_roles(workers)
+
+    assert (roles.readers, roles.writers) == expected
+    assert roles.workers == workers
+
+
+def test_the_split_keeps_at_least_one_worker_in_each_stream() -> None:
+    """Two workers cannot hold a 3 to 1 ratio, so the split drifts on purpose."""
+
+    roles = split_roles(MINIMUM_WORKERS)
+
+    assert roles.readers == 1
+    assert roles.writers == 1
+    assert roles.readers / roles.writers != READ_PER_WRITE
+
+
+@pytest.mark.parametrize("workers", [1, 0, -3])
+def test_the_split_refuses_a_worker_count_that_cannot_mix(workers: int) -> None:
+    """One worker cannot read and write at the same time."""
+
+    with pytest.raises(ValueError):
+        split_roles(workers)
+
+
+def test_readers_and_writers_are_read_off_the_worker_index() -> None:
+    """Readers take the low indexes, so a role needs no separate lookup."""
+
+    roles = split_roles(8)
+
+    assert [roles.stream_of(index) for index in range(8)] == [STREAM_READ] * 6 + [STREAM_WRITE] * 2
+    assert [roles.position_of(index) for index in range(8)] == [0, 1, 2, 3, 4, 5, 0, 1]
+
+
+@pytest.mark.parametrize("index", [-1, 8, 99])
+def test_a_worker_index_outside_the_split_is_refused(index: int) -> None:
+    """An index no worker holds is a programming error, not a default."""
+
+    roles = split_roles(8)
+
+    with pytest.raises(ValueError):
+        roles.stream_of(index)
+    with pytest.raises(ValueError):
+        roles.position_of(index)
+
+
+def test_reader_offsets_space_the_readers_over_the_corpus() -> None:
+    """Three readers start a third of the way apart, not on the same page."""
+
+    offsets = [read_offset(position, 3, 1000) for position in range(3)]
+
+    assert offsets == [0, 333, 666]
+
+
+@pytest.mark.parametrize("writers", [1, 2, 3, 7, 120])
+def test_write_ranges_cover_every_block_exactly_once(writers: int) -> None:
+    """One sweep rewrites the whole corpus however the blocks divide."""
+
+    blocks = 120
+    ranges = [write_range(position, writers, blocks) for position in range(writers)]
+    covered = [index for start, stop in ranges for index in range(start, stop)]
+
+    assert covered == list(range(blocks))
+
+
+def test_write_ranges_refuse_fewer_blocks_than_writers() -> None:
+    """A writer with no range to sweep would measure nothing."""
+
+    with pytest.raises(ValueError):
+        write_range(0, 4, 3)
+
+
+@pytest.mark.parametrize("position", [-1, 3])
+def test_a_position_outside_its_own_stream_is_refused(position: int) -> None:
+    """Both walks reject a position their stream does not hold."""
+
+    with pytest.raises(ValueError):
+        read_offset(position, 3, 120)
+    with pytest.raises(ValueError):
+        write_range(position, 3, 120)
+
+
+def test_a_reader_walks_past_the_end_of_the_corpus_and_wraps() -> None:
+    """A reader loops until it is stopped, so it must never run out of ids."""
+
+    item = WorkloadItem("in_memory", _target("in_memory"), 4, split_roles(4))
+    context, dispose = runner.build_workload_context(item, TINY_WORKLOAD)
+    try:
+        reader = prepare_worker(replace(context, worker_index=0), item.roles)
+        found = [reader.prepared.call(index) is not None for index in range(TINY_WORKLOAD.blocks + 5)]
+    finally:
+        dispose()
+
+    assert reader.stream == STREAM_READ
+    assert reader.measured_calls is None
+    assert all(found)
+
+
+def test_a_writer_rewrites_every_block_exactly_once() -> None:
+    """The sweep is one pass, so every leaf ends one version above its first."""
+
+    item = WorkloadItem("in_memory", _target("in_memory"), 4, split_roles(4))
+    context, dispose = runner.build_workload_context(item, TINY_WORKLOAD)
+    try:
+        writer = prepare_worker(replace(context, worker_index=3), item.roles)
+        assert writer.measured_calls == TINY_WORKLOAD.blocks
+        for index in range(TINY_WORKLOAD.warmup + writer.measured_calls):
+            writer.prepared.call(index)
+        versions = {context.memory.get(leaf.id).version for leaf in context.corpus.leaves}
+    finally:
+        dispose()
+
+    assert writer.stream == STREAM_WRITE
+    assert versions == {2}
+
+
+def test_writer_warmup_never_eats_into_the_sweep() -> None:
+    """Warmup writes go to a throwaway block, or the sweep would not be one pass."""
+
+    item = WorkloadItem("in_memory", _target("in_memory"), 4, split_roles(4))
+    context, dispose = runner.build_workload_context(item, TINY_WORKLOAD)
+    try:
+        writer = prepare_worker(replace(context, worker_index=3), item.roles)
+        for index in range(TINY_WORKLOAD.warmup):
+            writer.prepared.call(index)
+        throwaway = context.memory.get(f"{WARMUP_BLOCK_PREFIX}_w000")
+        untouched = {context.memory.get(leaf.id).version for leaf in context.corpus.leaves}
+    finally:
+        dispose()
+
+    assert throwaway.version == TINY_WORKLOAD.warmup + 1
+    assert throwaway.parent_id is None
+    assert untouched == {1}
+
+
+def test_a_writer_expects_to_lose_a_race_and_a_reader_does_not() -> None:
+    """A write can conflict, so it is declared. A read cannot."""
+
+    item = WorkloadItem("in_memory", _target("in_memory"), 4, split_roles(4))
+    context, dispose = runner.build_workload_context(item, TINY_WORKLOAD)
+    try:
+        reader = prepare_worker(replace(context, worker_index=0), item.roles)
+        writer = prepare_worker(replace(context, worker_index=3), item.roles)
+    finally:
+        dispose()
+
+    assert writer.prepared.conflict_errors == (MemoryConflict,)
+    assert reader.prepared.conflict_errors == ()
+
+
+def test_a_mixed_run_needs_more_than_one_worker() -> None:
+    """A single caller has no mixed form, so the settings refuse it."""
+
+    with pytest.raises(ValueError):
+        BenchmarkSettings(workload=True)
+    with pytest.raises(ValueError):
+        BenchmarkSettings(workload=True, workers=(1,))
+
+
+def test_a_mixed_run_needs_a_block_for_every_writer() -> None:
+    """Fewer leaves than writers would leave a writer with nothing to sweep."""
+
+    with pytest.raises(ValueError):
+        BenchmarkSettings(workload=True, workers=(8,), blocks=1, sections=1, links_per_block=0)
+
+
+@pytest.mark.parametrize("workload", [1, 0, "yes", None])
+def test_workload_must_be_a_boolean(workload: Any) -> None:
+    """The one switch that changes a run's shape is not a count."""
+
+    with pytest.raises(TypeError):
+        BenchmarkSettings(workload=workload, workers=(4,))
+
+
+def test_workload_levels_leave_out_the_single_caller() -> None:
+    """Level 1 is always in `workers`, and never in a mixed run."""
+
+    settings = BenchmarkSettings(workload=True, workers=(8, 4))
+
+    assert settings.workers == (1, 4, 8)
+    assert settings.workload_levels == (4, 8)
+
+
+def test_a_mixed_run_plans_one_variant_per_target_and_level() -> None:
+    """Every available target is measured at every level asked for."""
+
+    targets = (_target("in_memory"), _target("sqlite"))
+    items, skipped = runner.plan_workload(targets, (4, 8))
+
+    assert skipped == []
+    assert [(item.section, item.workers) for item in items] == [
+        ("in_memory", 4),
+        ("in_memory", 8),
+        ("sqlite", 4),
+        ("sqlite", 8),
+    ]
+
+
+def test_a_mixed_run_reports_a_target_it_could_not_measure() -> None:
+    """A server with no connection variables is named, not left out."""
+
+    result = runner.run(
+        settings=TINY_WORKLOAD,
+        targets=(_target("in_memory"), _target("neo4j")),
+        progress=_quiet(),
+    )
+    sections = {section["name"]: section for section in result["sections"]}
+
+    assert sections["neo4j"]["skipped"]
+    assert sections["neo4j"]["workloads"] == []
+    assert sections["in_memory"]["workloads"]
+
+
+def test_a_mixed_run_measures_no_cases(mixed_report: dict[str, Any]) -> None:
+    """The workload replaces the cases rather than running beside them."""
+
+    assert mixed_report["layers"] == [MEMORY]
+    assert mixed_report["workers"] == list(TINY_WORKLOAD.workload_levels)
+    assert all(section["cases"] == [] for section in mixed_report["sections"])
+    assert mixed_report["errors"] == 0
+
+
+def test_the_write_stream_makes_exactly_one_sweep(mixed_report: dict[str, Any]) -> None:
+    """However many writers share it, the corpus is rewritten once."""
+
+    for workers in TINY_WORKLOAD.workload_levels:
+        entry = _entry(mixed_report, workers)
+        write = _stream(entry, STREAM_WRITE)
+
+        assert write["result"]["samples"] == TINY_WORKLOAD.blocks
+        assert write["result"]["workers"] == entry["writers"]
+        assert write["result"]["notes"]["version"] == 2
+
+
+def test_both_streams_divide_the_same_window(mixed_report: dict[str, Any]) -> None:
+    """One shared clock, so the per-stream rates add up to the pass rate."""
+
+    entry = _entry(mixed_report)
+    results = [stream["result"] for stream in entry["streams"]]
+    calls = sum(result["samples"] for result in results)
+    rates = sum(result["throughput_per_second"] for result in results)
+
+    assert {result["wall_seconds"] for result in results} == {entry["windows"]["mixed"]}
+    assert rates == pytest.approx(calls / entry["windows"]["mixed"])
+    assert sum(stream["share_percent"] for stream in entry["streams"]) == pytest.approx(100.0)
+
+
+def test_the_read_baseline_repeats_the_mixed_call_counts(mixed_report: dict[str, Any]) -> None:
+    """Same reads, same readers, only the writers differ."""
+
+    read = _stream(_entry(mixed_report), STREAM_READ)
+
+    assert read["result"]["samples"] > 0
+    assert read["baseline"]["samples"] == read["result"]["samples"]
+    assert read["baseline"]["workers"] == read["result"]["workers"]
+
+
+def test_every_stream_reports_the_gap_against_its_baseline(mixed_report: dict[str, Any]) -> None:
+    """The delta is what running together cost, which is the point of the run."""
+
+    entry = _entry(mixed_report)
+    for stream in entry["streams"]:
+        expected = stream["result"]["p50_ms"] - stream["baseline"]["p50_ms"]
+
+        assert stream["p50_delta_ms"] == pytest.approx(expected)
+        assert stream["p50_delta_percent"] == pytest.approx(
+            expected / stream["baseline"]["p50_ms"] * 100.0
+        )
+
+
+def test_the_three_windows_and_the_sweep_ratio_are_reported(mixed_report: dict[str, Any]) -> None:
+    """A sweep under load takes longer than the same sweep alone."""
+
+    entry = _entry(mixed_report)
+    windows = entry["windows"]
+
+    assert set(windows) == set(runner.WORKLOAD_PASSES)
+    assert all(value > 0 for value in windows.values())
+    assert entry["sweep_ratio"] == pytest.approx(
+        windows[runner.PASS_MIXED] / windows[runner.PASS_WRITES_ALONE]
+    )
+
+
+def test_a_stream_that_recorded_nothing_still_reports() -> None:
+    """A starved stream must report zeros, not divide by them.
+
+    A pure-Python backend can hold the interpreter lock for a whole short
+    sweep, which leaves its readers with no calls at all. That is a real
+    outcome, so the entry has to survive it.
+    """
+
+    empty = summarize([], workers=3, wall_seconds=0.5).as_dict()
+    busy = summarize([1_000_000] * 4, workers=1, wall_seconds=0.5).as_dict()
+    item = WorkloadItem("in_memory", _target("in_memory"), 4, split_roles(4))
+    passes = {
+        runner.PASS_MIXED: {"streams": {STREAM_READ: empty, STREAM_WRITE: busy}, "wall_seconds": 0.5, "setup_seconds": 0.1},
+        runner.PASS_READS_ALONE: {"streams": {STREAM_READ: empty}, "wall_seconds": 0.2, "setup_seconds": 0.1},
+        runner.PASS_WRITES_ALONE: {"streams": {STREAM_WRITE: busy}, "wall_seconds": 0.3, "setup_seconds": 0.1},
+    }
+
+    entry = runner._workload_entry(item, passes)
+    read = _stream(entry, STREAM_READ)
+
+    assert read["share_percent"] == 0.0
+    assert read["p50_delta_ms"] is None
+    assert read["p50_delta_percent"] is None
+    assert report.format_report({"sections": [{"name": "x", "workloads": [entry]}]})
+
+
+def test_the_workload_table_has_a_row_per_stream_and_a_total(mixed_report: dict[str, Any]) -> None:
+    """One table per level, closed by a row that only adds up what can add up."""
+
+    text = report.format_report(mixed_report)
+    lines = text.splitlines()
+
+    assert any(line.startswith("workload x4: 3 readers, 1 writer") for line in lines)
+    assert any("one sweep of 120 blocks" in line for line in lines)
+    assert sum(line.startswith("total") for line in lines) == len(TINY_WORKLOAD.workload_levels)
+    header = next(line for line in lines if line.strip().startswith("stream"))
+    assert all(column in header for column in WORKLOAD_HEADERS)
+    total = next(line for line in lines if line.startswith("total"))
+    assert total.split()[1] == "4"
+
+
+def test_the_settings_line_leaves_out_what_a_mixed_run_never_reads(
+    mixed_report: dict[str, Any],
+) -> None:
+    """A number that changed nothing must not look like it did."""
+
+    line = next(
+        line for line in report.format_report(mixed_report).splitlines()
+        if line.startswith("settings:")
+    )
+
+    assert "workload=True" in line
+    assert f"workers={list(TINY_WORKLOAD.workload_levels)}" in line
+    for unused in report.WORKLOAD_UNUSED_SETTINGS:
+        assert f"{unused}=" not in line
+        assert unused in mixed_report["settings"]
+
+
+def test_a_mixed_report_names_the_run_and_round_trips_as_json(
+    mixed_report: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """The header counts variants, not the cases a mixed run never had."""
+
+    text = report.format_report(mixed_report)
+    destination = report.write_json(mixed_report, tmp_path / "mixed.json")
+
+    assert "run: mixed workload, 1 variant in 1 section" in text
+    # The old header counted cases and would have said "0 cases, 0 variants".
+    assert "case" not in text.split("\n\n")[0]
+    assert json.loads(destination.read_text(encoding="utf-8")) == mixed_report
+
+
+def test_the_command_line_lists_a_mixed_run_without_measuring() -> None:
+    """`--list` names the levels, the split, and the three passes."""
+
+    assert run.main(["--workload", "--workers", "4", "--list", "--quiet"]) == run.EXIT_OK
+
+
+def test_the_command_line_refuses_a_case_selection_with_the_workload() -> None:
+    """Selecting cases in a run that has none cannot be honored either way."""
+
+    for selection in (["--group", "read"], ["--layer", "backend"], ["--case", "get"]):
+        assert run.main(["--workload", "--workers", "4", *selection]) == run.EXIT_BAD_SELECTION
+
+
+def test_the_command_line_runs_the_workload_and_writes_json(tmp_path: Path) -> None:
+    """The narrowest useful mixed run: one target, one level, JSON only."""
+
+    destination = tmp_path / "workload.json"
+    status = run.main(
+        [
+            "--workload",
+            "--workers", "4",
+            "--target", "in_memory",
+            "--blocks", "40",
+            "--sections", "2",
+            "--links-per-block", "2",
+            "--value-size", "4",
+            "--warmup", "1",
+            "--quiet",
+            "--json", str(destination),
+        ]
+    )
+    written = json.loads(destination.read_text(encoding="utf-8"))
+    entry = _entry(written)
+
+    assert status == run.EXIT_OK
+    assert written["settings"]["workload"] is True
+    assert _stream(entry, STREAM_WRITE)["result"]["samples"] == 40
+
+
+def test_a_pass_counts_calls_that_returned_not_calls_that_started() -> None:
+    """The count a baseline inherits must exclude failures.
+
+    A call that raised did no work, so repeating it would measure the failure
+    path instead of the operation. It also matters for termination: a mixed
+    reader has no call count of its own, so if every read raises it spins as
+    fast as the interpreter allows. Counting attempts would hand the
+    reads-alone pass millions of failures to repeat instead of nothing to do.
+    """
+
+    def raises(index: int) -> Any:
+        raise RuntimeError("injected read failure")
+
+    settings = replace(TINY_WORKLOAD, warmup=1)
+    working = WorkloadWorker(STREAM_READ, 0, PreparedCase(call=lambda index: "ok"), 4)
+    broken = WorkloadWorker(STREAM_READ, 1, PreparedCase(call=raises), 5)
+
+    result = runner._run_workload_pass(
+        {0: working, 1: broken},
+        caps=None,
+        settings=settings,
+        progress=None,
+        setup_seconds=0.0,
+        scale={},
+    )
+
+    assert result["worker_calls"][0] == 4
+    assert result["worker_calls"][1] == 0
+    assert result["streams"][STREAM_READ]["samples"] == 4
+    assert result["streams"][STREAM_READ]["errors"] == 5

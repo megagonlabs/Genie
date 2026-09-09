@@ -3,6 +3,10 @@
 The settings decide how long a run takes and what data it runs against. Two
 reports are comparable only when their settings match, so the values are
 recorded in every report.
+
+`workload` is the one switch that changes the shape of a run rather than its
+size. It swaps the single-operation cases for the mixed read/write scenario,
+which needs more than one worker and takes its length from `blocks`.
 """
 
 from __future__ import annotations
@@ -51,6 +55,12 @@ class BenchmarkSettings:
             variant at four workers makes four times as many calls. Level 1 is
             always measured, because `speedup` needs a single-caller
             denominator.
+        workload: Whether to measure the mixed read/write scenario instead of
+            the single-operation cases. It needs more than one worker, because
+            one worker cannot read and write at the same time. It also reads
+            `blocks` as the size of one full write sweep, which is what sets
+            the length of its measured window, so `iterations` does not apply
+            to it.
     """
 
     iterations: int = 100
@@ -62,6 +72,7 @@ class BenchmarkSettings:
     search_limit: int = 20
     seed: int = 20260903
     workers: tuple[int, ...] = (SINGLE_CALLER,)
+    workload: bool = False
 
     def __post_init__(self) -> None:
         """Reject counts that cannot describe a run, and normalize the levels.
@@ -71,10 +82,12 @@ class BenchmarkSettings:
         same rows.
 
         Raises:
-            TypeError: If any field is not an integer, or `workers` is not a
-                sequence of integers.
+            TypeError: If any count field is not an integer, `workers` is not a
+                sequence of integers, or `workload` is not a boolean.
             ValueError: If a count is out of range, a worker level is below 1,
-                or the corpus cannot hold the requested sections or links.
+                the corpus cannot hold the requested sections or links, or a
+                mixed run was asked for that the other settings cannot
+                describe.
         """
 
         for name in (
@@ -90,6 +103,8 @@ class BenchmarkSettings:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer.")
+        if not isinstance(self.workload, bool):
+            raise TypeError("workload must be a boolean.")
         if self.iterations < 1:
             raise ValueError("iterations must be at least 1.")
         if self.warmup < 0:
@@ -109,10 +124,36 @@ class BenchmarkSettings:
         if self.links_per_block > self.blocks:
             raise ValueError("links_per_block must not be greater than blocks.")
         object.__setattr__(self, "workers", _normalize_workers(self.workers))
+        if self.workload:
+            self._check_workload()
+
+    def _check_workload(self) -> None:
+        """Reject a mixed run the other settings cannot describe.
+
+        Raises:
+            ValueError: If no worker level is above one caller, or the corpus
+                holds fewer leaves than the largest writer count, which would
+                leave a writer with no range to sweep.
+        """
+
+        # Imported inside the method on purpose. The workload module reaches the
+        # case helpers, and those read these settings, so importing it at module
+        # scope would close a cycle.
+        from benchmarks.workload import split_roles
+
+        if not self.workload_levels:
+            raise ValueError("a mixed workload needs more than one worker; add --workers 4.")
+        writers = max(split_roles(level).writers for level in self.workload_levels)
+        if self.blocks < writers:
+            raise ValueError(f"a mixed workload at {max(self.workload_levels)} workers needs at least {writers} blocks.")
 
     @property
     def total_calls(self) -> int:
-        """Calls one worker makes, warmup included."""
+        """Calls one worker makes, warmup included.
+
+        This describes a single-operation case. A mixed run counts its calls
+        from the write sweep instead, so it does not use this.
+        """
 
         return self.warmup + self.iterations
 
@@ -121,6 +162,16 @@ class BenchmarkSettings:
         """Whether any level above one caller was asked for."""
 
         return max(self.workers) > SINGLE_CALLER
+
+    @property
+    def workload_levels(self) -> tuple[int, ...]:
+        """Worker levels a mixed run measures, smallest first.
+
+        Level 1 is left out. One worker cannot read and write at the same time,
+        and a mixed variant is the only kind that has no single-caller form.
+        """
+
+        return tuple(level for level in self.workers if level > SINGLE_CALLER)
 
     def as_dict(self) -> dict[str, Any]:
         """Return the settings as plain data for the JSON report."""
