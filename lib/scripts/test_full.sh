@@ -10,15 +10,15 @@
 # container setup can serve something other than pytest. `benchmark_full.sh` uses
 # it to run the benchmarks. Extra arguments are passed on to that command.
 #
-# The command runs under `conda run --no-capture-output`. Without that flag conda
-# holds stdout and stderr until the process exits, which makes a long run look
-# like a hang.
+# The command runs on the Python interpreter already on `PATH`, so activate your
+# environment first. `GENIE_TEST_PYTHON` overrides that interpreter when you would
+# rather not activate one. Output streams live, so a long run keeps reporting.
 
 set -euo pipefail
 
 GENIE_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-GENIE_TEST_CONDA_ENV="${GENIE_TEST_CONDA_ENV:-genie}"
-GENIE_TEST_COMMAND="${GENIE_TEST_COMMAND:-python -m pytest}"
+GENIE_TEST_PYTHON="${GENIE_TEST_PYTHON:-python}"
+GENIE_TEST_COMMAND="${GENIE_TEST_COMMAND:-$GENIE_TEST_PYTHON -m pytest}"
 GENIE_TEST_LABEL="${GENIE_TEST_LABEL:-the complete Genie test suite}"
 GENIE_TEST_POSTGRES_IMAGE="${GENIE_TEST_POSTGRES_IMAGE:-postgres:16-alpine}"
 GENIE_TEST_POSTGRES_CONTAINER="${GENIE_TEST_POSTGRES_CONTAINER:-genie-postgres-test}"
@@ -114,7 +114,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-require_command conda
+require_command "$GENIE_TEST_PYTHON"
 require_command docker
 
 require_port GENIE_TEST_POSTGRES_HOST_PORT "$GENIE_TEST_POSTGRES_HOST_PORT"
@@ -127,27 +127,27 @@ require_attempts GENIE_TEST_NEO4J_READY_ATTEMPTS "$GENIE_TEST_NEO4J_READY_ATTEMP
 require_attempts GENIE_TEST_MONGODB_READY_ATTEMPTS "$GENIE_TEST_MONGODB_READY_ATTEMPTS"
 require_attempts GENIE_TEST_REDIS_READY_ATTEMPTS "$GENIE_TEST_REDIS_READY_ATTEMPTS"
 
-if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import psycopg" >/dev/null 2>&1; then
-    echo "The PostgreSQL test dependency is missing from Conda environment '$GENIE_TEST_CONDA_ENV'." >&2
-    echo "Install it with: conda run -n \"$GENIE_TEST_CONDA_ENV\" python -m pip install -e \".[dev,neo4j,postgres,redis]\"" >&2
+if ! "$GENIE_TEST_PYTHON" -c "import psycopg" >/dev/null 2>&1; then
+    echo "The PostgreSQL test dependency is missing from the active Python environment." >&2
+    echo "Install it with: python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
     exit 1
 fi
 
-if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import neo4j" >/dev/null 2>&1; then
-    echo "The Neo4j test dependency is missing from Conda environment '$GENIE_TEST_CONDA_ENV'." >&2
-    echo "Install it with: conda run -n \"$GENIE_TEST_CONDA_ENV\" python -m pip install -e \".[dev,neo4j,redis]\"" >&2
+if ! "$GENIE_TEST_PYTHON" -c "import neo4j" >/dev/null 2>&1; then
+    echo "The Neo4j test dependency is missing from the active Python environment." >&2
+    echo "Install it with: python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
     exit 1
 fi
 
-if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import pymongo" >/dev/null 2>&1; then
-    echo "The MongoDB test dependency is missing from Conda environment '$GENIE_TEST_CONDA_ENV'." >&2
-    echo "Install it with: conda run -n \"$GENIE_TEST_CONDA_ENV\" python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
+if ! "$GENIE_TEST_PYTHON" -c "import pymongo" >/dev/null 2>&1; then
+    echo "The MongoDB test dependency is missing from the active Python environment." >&2
+    echo "Install it with: python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
     exit 1
 fi
 
-if ! conda run -n "$GENIE_TEST_CONDA_ENV" python -c "import redis" >/dev/null 2>&1; then
-    echo "The Redis test dependency is missing from Conda environment '$GENIE_TEST_CONDA_ENV'." >&2
-    echo "Install it with: conda run -n \"$GENIE_TEST_CONDA_ENV\" python -m pip install -e \".[dev,neo4j,redis]\"" >&2
+if ! "$GENIE_TEST_PYTHON" -c "import redis" >/dev/null 2>&1; then
+    echo "The Redis test dependency is missing from the active Python environment." >&2
+    echo "Install it with: python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
     exit 1
 fi
 
@@ -158,7 +158,7 @@ require_free_container "$GENIE_TEST_REDIS_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_REPLICA_CONTAINER"
 
 echo "Compiling Genie..."
-conda run -n "$GENIE_TEST_CONDA_ENV" python -m compileall -q lib/src/genie lib/tests lib/benchmarks examples lamps
+"$GENIE_TEST_PYTHON" -m compileall -q lib/src/genie lib/tests lib/benchmarks examples lamps
 
 echo "Starting disposable PostgreSQL container..."
 docker run --rm -d \
@@ -328,4 +328,4 @@ env \
     GENIE_REDIS_URL="redis://127.0.0.1:${GENIE_TEST_REDIS_HOST_PORT}/${GENIE_TEST_REDIS_DATABASE}" \
     GENIE_REDIS_REPLICA_URL="redis://127.0.0.1:${GENIE_TEST_REDIS_REPLICA_HOST_PORT}/${GENIE_TEST_REDIS_DATABASE}" \
     GENIE_REDIS_KEY_PREFIX="$GENIE_TEST_REDIS_KEY_PREFIX" \
-    conda run --no-capture-output -n "$GENIE_TEST_CONDA_ENV" $GENIE_TEST_COMMAND "$@"
+    $GENIE_TEST_COMMAND "$@"

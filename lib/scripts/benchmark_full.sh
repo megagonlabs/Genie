@@ -24,7 +24,7 @@ set -euo pipefail
 
 GENIE_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-export GENIE_TEST_COMMAND="python lib/benchmarks/run.py"
+export GENIE_TEST_COMMAND="${GENIE_TEST_PYTHON:-python} lib/benchmarks/run.py"
 export GENIE_TEST_LABEL="the Genie benchmarks"
 
 # A benchmark variant empties its store before it writes, so the benchmarks must
