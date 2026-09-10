@@ -22,23 +22,23 @@ module from the repository root, so that both the `lamps` and `genie` packages
 can be found:
 
 ```bash
-conda run -n "genie" python -m lamps.<name>.demo
-conda run -n "genie" python -m pytest lamps/<name>/tests -q
+python -m lamps.<name>.demo
+python -m pytest lamps/<name>/tests -q
 ```
 
 Put each lamp name in place of `<name>`:
 
 | Lamp | Run the demo | Run the tests |
 | --- | --- | --- |
-| Graphiti | `conda run -n "genie" python -m lamps.graphiti.demo` | `conda run -n "genie" python -m pytest lamps/graphiti/tests -q` |
-| Hindsight | `conda run -n "genie" python -m lamps.hindsight.demo` | `conda run -n "genie" python -m pytest lamps/hindsight/tests -q` |
-| LangMem | `conda run -n "genie" python -m lamps.langmem.demo` | `conda run -n "genie" python -m pytest lamps/langmem/tests -q` |
-| Mem0 | `conda run -n "genie" python -m lamps.mem0.demo` | `conda run -n "genie" python -m pytest lamps/mem0/tests -q` |
-| MemoryOS | `conda run -n "genie" python -m lamps.memoryos.demo` | `conda run -n "genie" python -m pytest lamps/memoryos/tests -q` |
+| Graphiti | `python -m lamps.graphiti.demo` | `python -m pytest lamps/graphiti/tests -q` |
+| Hindsight | `python -m lamps.hindsight.demo` | `python -m pytest lamps/hindsight/tests -q` |
+| LangMem | `python -m lamps.langmem.demo` | `python -m pytest lamps/langmem/tests -q` |
+| Mem0 | `python -m lamps.mem0.demo` | `python -m pytest lamps/mem0/tests -q` |
+| MemoryOS | `python -m lamps.memoryos.demo` | `python -m pytest lamps/memoryos/tests -q` |
 
 - **Each demo prints its whole run and then exits.**
 - **Every run prints the same output.** No lamp reads a clock, a network, or an API key.
-- **All lamps at once:** `conda run -n "genie" python -m pytest lamps -q`, because pytest finds every lamp test through `pyproject.toml`.
+- **All lamps at once:** `python -m pytest lamps -q`, because pytest finds every lamp test through `pyproject.toml`.
 
 ## Shared agent-demo format
 

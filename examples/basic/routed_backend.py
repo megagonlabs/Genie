@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/routed_backend.py
+    python examples/basic/routed_backend.py
 """
 
 from __future__ import annotations

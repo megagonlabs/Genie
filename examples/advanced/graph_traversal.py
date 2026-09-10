@@ -10,7 +10,7 @@ same links with an explicit relation and depth bound.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/advanced/graph_traversal.py
+    python examples/advanced/graph_traversal.py
 """
 
 from __future__ import annotations

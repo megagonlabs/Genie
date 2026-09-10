@@ -6,7 +6,7 @@ handle, where unbounded access is deliberate and visible at the call site.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/scoped_agents.py
+    python examples/basic/scoped_agents.py
 """
 
 from __future__ import annotations

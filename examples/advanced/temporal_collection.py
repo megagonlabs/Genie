@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/advanced/temporal_collection.py
+    python examples/advanced/temporal_collection.py
 """
 
 from __future__ import annotations

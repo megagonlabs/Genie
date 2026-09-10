@@ -8,7 +8,7 @@ reports that record as absent instead of raising.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/advanced/versioned_catalog.py
+    python examples/advanced/versioned_catalog.py
 """
 
 from __future__ import annotations

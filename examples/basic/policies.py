@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/policies.py
+    python examples/basic/policies.py
 """
 
 from __future__ import annotations

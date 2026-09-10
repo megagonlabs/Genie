@@ -17,7 +17,7 @@ reported only by `genie.structures` facades, so they are in
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/hook_audit.py
+    python examples/basic/hook_audit.py
 """
 
 from __future__ import annotations

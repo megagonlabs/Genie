@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/search_filters.py
+    python examples/basic/search_filters.py
 """
 
 from __future__ import annotations

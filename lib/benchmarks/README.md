@@ -22,14 +22,14 @@ layers, with one caller or with several.
 From the repository root:
 
 ```bash
-conda run -n "genie" python lib/benchmarks/run.py
-conda run -n "genie" python lib/benchmarks/run.py --list
-conda run -n "genie" python lib/benchmarks/run.py --iterations 500 --blocks 5000
-conda run -n "genie" python lib/benchmarks/run.py --target sqlite --group read
-conda run -n "genie" python lib/benchmarks/run.py --layer backend --layer memory
-conda run -n "genie" python lib/benchmarks/run.py --workers 4 --workers 8
-conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4
-conda run -n "genie" python lib/benchmarks/run.py --json reports/latest.json
+python lib/benchmarks/run.py
+python lib/benchmarks/run.py --list
+python lib/benchmarks/run.py --iterations 500 --blocks 5000
+python lib/benchmarks/run.py --target sqlite --group read
+python lib/benchmarks/run.py --layer backend --layer memory
+python lib/benchmarks/run.py --workers 4 --workers 8
+python lib/benchmarks/run.py --workload --workers 4
+python lib/benchmarks/run.py --json reports/latest.json
 ```
 
 - **A default run takes about thirty seconds** and needs no server and no
@@ -71,8 +71,8 @@ of the suite.
 default, so a plain run keeps its length and its numbers.
 
 ```bash
-conda run -n "genie" python lib/benchmarks/run.py --workers 4 --workers 8
-conda run -n "genie" python lib/benchmarks/run.py --group contention --workers 4
+python lib/benchmarks/run.py --workers 4 --workers 8
+python lib/benchmarks/run.py --group contention --workers 4
 ```
 
 - **Workers is a third axis** next to the target and the layer. Any case can be
@@ -168,9 +168,9 @@ and writers working on the same blocks at the same time. It answers a question
 no case can, because every worker of a case makes the same call.
 
 ```bash
-conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4
-conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4 --workers 8 --target sqlite
-conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4 --list
+python lib/benchmarks/run.py --workload --workers 4
+python lib/benchmarks/run.py --workload --workers 4 --workers 8 --target sqlite
+python lib/benchmarks/run.py --workload --workers 4 --list
 ```
 
 - **One flag, no knobs.** The scenario is fixed so that two runs mean the same

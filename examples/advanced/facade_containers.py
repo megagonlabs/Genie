@@ -16,7 +16,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/advanced/facade_containers.py
+    python examples/advanced/facade_containers.py
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/links.py
+    python examples/basic/links.py
 """
 
 from __future__ import annotations

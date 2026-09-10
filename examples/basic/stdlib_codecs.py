@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/stdlib_codecs.py
+    python examples/basic/stdlib_codecs.py
 """
 
 from __future__ import annotations

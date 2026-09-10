@@ -17,8 +17,8 @@ architectural example, not a drop-in implementation.
 From the repository root, with no API key and no external service:
 
 ```bash
-conda run -n "genie" python -m lamps.mem0.demo
-conda run -n "genie" python -m pytest lamps/mem0/tests -q
+python -m lamps.mem0.demo
+python -m pytest lamps/mem0/tests -q
 ```
 
 - **`demo.py` is the entry point.** Run the module path from the repository root so that both `lamps` and `genie` can be found.

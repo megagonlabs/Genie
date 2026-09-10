@@ -2,14 +2,14 @@
 
 Run it from the repository root:
 
-    conda run -n "genie" python lib/benchmarks/run.py
-    conda run -n "genie" python lib/benchmarks/run.py --list
-    conda run -n "genie" python lib/benchmarks/run.py --iterations 500 --blocks 10000
-    conda run -n "genie" python lib/benchmarks/run.py --target sqlite --group read
-    conda run -n "genie" python lib/benchmarks/run.py --layer backend --layer memory
-    conda run -n "genie" python lib/benchmarks/run.py --workers 4 --workers 8
-    conda run -n "genie" python lib/benchmarks/run.py --workload --workers 4
-    conda run -n "genie" python lib/benchmarks/run.py --json reports/latest.json
+    python lib/benchmarks/run.py
+    python lib/benchmarks/run.py --list
+    python lib/benchmarks/run.py --iterations 500 --blocks 10000
+    python lib/benchmarks/run.py --target sqlite --group read
+    python lib/benchmarks/run.py --layer backend --layer memory
+    python lib/benchmarks/run.py --workers 4 --workers 8
+    python lib/benchmarks/run.py --workload --workers 4
+    python lib/benchmarks/run.py --json reports/latest.json
 
 Exit status is `1` when any measured call raised, and `0` otherwise. Timing is
 never a pass or fail signal, because a shared machine is too noisy for that,

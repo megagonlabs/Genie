@@ -9,7 +9,7 @@ blocks can be acyclic in one relation and cyclic in another.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/acyclic_links.py
+    python examples/basic/acyclic_links.py
 """
 
 from __future__ import annotations

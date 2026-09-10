@@ -12,7 +12,7 @@ from rather than inventing its own.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/advanced/structure_hooks.py
+    python examples/advanced/structure_hooks.py
 """
 
 from __future__ import annotations

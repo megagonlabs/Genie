@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/advanced/experiment_memory.py
+    python examples/advanced/experiment_memory.py
 """
 
 from __future__ import annotations

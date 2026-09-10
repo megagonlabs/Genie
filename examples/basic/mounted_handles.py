@@ -11,7 +11,7 @@ Mount access is a separate handle capability.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/mounted_handles.py
+    python examples/basic/mounted_handles.py
 """
 
 from __future__ import annotations

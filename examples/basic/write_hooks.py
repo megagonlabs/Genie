@@ -10,7 +10,7 @@ is rejected, so a hook cannot quietly redirect a link.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/write_hooks.py
+    python examples/basic/write_hooks.py
 """
 
 from __future__ import annotations

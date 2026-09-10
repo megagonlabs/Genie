@@ -7,7 +7,7 @@ registration order, so `JsonCodec` goes last as the fallback for plain data.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/custom_codecs.py
+    python examples/basic/custom_codecs.py
 """
 
 from __future__ import annotations

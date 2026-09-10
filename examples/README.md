@@ -1,10 +1,9 @@
 # Examples
 
-Every example runs from the repository root, uses plain assertions, and runs in
-the project Conda environment:
+Every example runs from the repository root and uses plain assertions:
 
 ```bash
-conda run -n "genie" python examples/<path>.py
+python examples/<path>.py
 ```
 
 ## Basic reading order

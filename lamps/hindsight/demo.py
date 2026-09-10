@@ -2,7 +2,7 @@
 
 From the repository root:
 
-    conda run -n "genie" python -m lamps.hindsight.demo
+    python -m lamps.hindsight.demo
 """
 
 from __future__ import annotations

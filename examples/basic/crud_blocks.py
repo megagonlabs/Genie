@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/crud_blocks.py
+    python examples/basic/crud_blocks.py
 """
 
 from __future__ import annotations

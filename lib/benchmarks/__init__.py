@@ -14,7 +14,7 @@ test run stays fast. `lib/tests/test_benchmarks.py` keeps the harness working.
 
 Run it from the repository root:
 
-    conda run -n "genie" python lib/benchmarks/run.py
+    python lib/benchmarks/run.py
 """
 
 from benchmarks.settings import BACKEND, CORE, LAYERS, MEMORY, SINGLE_CALLER, BenchmarkSettings

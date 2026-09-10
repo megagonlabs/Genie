@@ -9,7 +9,7 @@ composing three generic Genie facades:
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/advanced/agent_memory.py
+    python examples/advanced/agent_memory.py
 """
 
 from __future__ import annotations

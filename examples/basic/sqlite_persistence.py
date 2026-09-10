@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/sqlite_persistence.py
+    python examples/basic/sqlite_persistence.py
 """
 
 from __future__ import annotations

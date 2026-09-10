@@ -7,7 +7,7 @@ must act on a specific block cannot report that as a value, so it raises
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/block_presence.py
+    python examples/basic/block_presence.py
 """
 
 from __future__ import annotations

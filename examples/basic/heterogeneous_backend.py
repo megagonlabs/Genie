@@ -13,7 +13,7 @@ refreshes them after each committed write.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/heterogeneous_backend.py
+    python examples/basic/heterogeneous_backend.py
 """
 
 from __future__ import annotations

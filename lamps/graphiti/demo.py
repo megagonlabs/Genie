@@ -2,7 +2,7 @@
 
 From the repository root:
 
-    conda run -n "genie" python -m lamps.graphiti.demo
+    python -m lamps.graphiti.demo
 """
 
 from __future__ import annotations

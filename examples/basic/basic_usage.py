@@ -12,7 +12,7 @@ This example combines the main concepts shown in the smaller examples:
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/basic_usage.py
+    python examples/basic/basic_usage.py
 """
 
 from __future__ import annotations

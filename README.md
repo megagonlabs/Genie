@@ -23,11 +23,15 @@ or define one memory schema for everyone.
 ## Install
 
 - **Python 3.11 or newer**, with no required runtime dependencies.
-- **From a cloned repository:**
+- **From a cloned repository**, in a fresh virtual environment:
 
 ```bash
-conda run -n "genie" python -m pip install -e .
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install -e .
 ```
+
+- **Optional backend adapters** come from extras: `python -m pip install -e ".[postgres]"`, and the same for `neo4j`, `mongodb`, and `redis`.
 
 ## Quick start
 
@@ -140,17 +144,20 @@ handle scope and policy checks.
 
 ## Develop
 
+Install the development extra, then run the checks from the repository root:
+
 ```bash
-conda run -n "genie" python -m pytest
-conda run -n "genie" python -m compileall -q lib/src/genie lib/tests examples lamps
+python -m pip install -e ".[dev]"
+python -m pytest
+python -m compileall -q lib/src/genie lib/tests examples lamps
 ```
 
 `./lib/scripts/test_full.sh` runs the whole suite against throwaway containers for
 the server-backed adapters. Extra arguments are passed on to pytest.
 
 ```bash
-conda run -n "genie" python lib/benchmarks/run.py
-conda run -n "genie" python lib/benchmarks/run.py --workers 4
+python lib/benchmarks/run.py
+python lib/benchmarks/run.py --workers 4
 ```
 
 The [benchmark suite](lib/benchmarks/README.md) measures what one operation

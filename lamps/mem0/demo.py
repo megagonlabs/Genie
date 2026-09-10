@@ -2,7 +2,7 @@
 
 From the repository root:
 
-    conda run -n "genie" python -m lamps.mem0.demo
+    python -m lamps.mem0.demo
 """
 
 from __future__ import annotations

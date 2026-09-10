@@ -10,7 +10,7 @@ the unreviewed query or results the hook existed to change.
 
 Run from the repository root:
 
-    conda run -n "genie" python examples/basic/search_hooks.py
+    python examples/basic/search_hooks.py
 """
 
 from __future__ import annotations
