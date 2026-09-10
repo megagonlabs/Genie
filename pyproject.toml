@@ -47,7 +47,10 @@ where = ["lib/src"]
 include = ["genie*"]
 
 [tool.setuptools.package-data]
-genie = ["py.typed"]
+# `**/README.md` ships the per-package guides, so an installed copy carries its
+# own reference docs next to the code they describe. Only READMEs, so nothing
+# else added under the package tree ends up published by accident.
+genie = ["py.typed", "**/README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["lib/tests", "lamps"]
