@@ -47,9 +47,6 @@ where = ["lib/src"]
 include = ["genie*"]
 
 [tool.setuptools.package-data]
-# `**/README.md` ships the per-package guides, so an installed copy carries its
-# own reference docs next to the code they describe. Only READMEs, so nothing
-# else added under the package tree ends up published by accident.
 genie = ["py.typed", "**/README.md"]
 
 [tool.pytest.ini_options]
@@ -58,6 +55,4 @@ pythonpath = ["lib/src", "lib", "."]
 
 [tool.ruff]
 line-length = 193
-# Roots that hold first-party code, so import sorting groups `genie`,
-# `tests`, `examples`, and `lamps` correctly.
 src = ["lib/src", "lib", "."]
