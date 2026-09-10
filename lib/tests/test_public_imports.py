@@ -34,7 +34,7 @@ def test_package_all_exports_are_importable() -> None:
 
 
 def test_layered_import_styles_work_for_common_types() -> None:
-    """Users can import common types from either `genie` or focused packages."""
+    """Common types resolve to the same object from `genie` or a subpackage."""
 
     from genie import (
         AcyclicLinkStore,
@@ -110,6 +110,34 @@ def test_layered_import_styles_work_for_common_types() -> None:
     assert ValidityInterval is not None
     assert VersionedRecords is not None
     assert VersionedStore is not None
+
+
+def test_root_package_reexports_every_subpackage_export() -> None:
+    """`genie` exports every name its subpackages export.
+
+    Genie keeps one rule for its public surface: a name that is public at all
+    is importable from `genie` itself. The focused subpackages stay available
+    for readers who prefer them, but they never hold a name the root package
+    is missing, so the two import styles cannot drift apart.
+    """
+
+    subpackage_names = [
+        "genie.backend",
+        "genie.codecs",
+        "genie.hooks",
+        "genie.memory",
+        "genie.policy",
+        "genie.query",
+        "genie.structures",
+    ]
+
+    root = importlib.import_module("genie")
+    for subpackage_name in subpackage_names:
+        subpackage = importlib.import_module(subpackage_name)
+        missing = sorted(set(subpackage.__all__) - set(root.__all__))
+        assert not missing, f"{subpackage_name} exports names absent from genie.__all__: {missing}"
+        for exported_name in subpackage.__all__:
+            assert getattr(root, exported_name) is getattr(subpackage, exported_name)
 
 
 def test_lazy_import_modules_reject_unknown_attributes() -> None:

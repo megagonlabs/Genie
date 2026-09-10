@@ -4,6 +4,13 @@
 facade adds organization and queries without changing the values your
 application stored, and one block may take part in several structures at once.
 
+```python
+from genie.structures import OwnershipTree
+
+# Equivalent, because every public name is also exported from the root package:
+from genie import OwnershipTree
+```
+
 ## Facades
 
 | Facade | Purpose | Stored structure |

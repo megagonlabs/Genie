@@ -109,6 +109,14 @@ MemoryLink
 All facades point at the same blocks. Combine them freely; they keep the normal
 handle scope and policy checks.
 
+```python
+from genie import EventLog, OwnershipTree
+```
+
+- **Every public name imports from `genie`,** and also from its focused
+  subpackage, so `from genie.structures import OwnershipTree` reaches the same
+  class. Pick whichever reads better in your code.
+
 ## Architecture
 
 ```text
