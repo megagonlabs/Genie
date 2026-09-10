@@ -26,19 +26,20 @@ license-files = ["LICENSE"]
 
 [project.optional-dependencies]
 mongodb = [
-  "pymongo>=4.7",
+  "pymongo>=4.7,<5",
 ]
 neo4j = [
-  "neo4j>=5.26",
+  "neo4j>=5.26,<7",
 ]
 postgres = [
-  "psycopg[binary]>=3.1",
+  "psycopg[binary]>=3.1,<4",
 ]
 redis = [
-  "redis>=5.0",
+  "redis>=5.0,<6",
 ]
 dev = [
   "pytest>=8",
+  "ruff>=0.16",
 ]
 
 [tool.setuptools.packages.find]
@@ -52,16 +53,8 @@ genie = ["py.typed"]
 testpaths = ["lib/tests", "lamps"]
 pythonpath = ["lib/src", "lib", "."]
 
-[tool.black]
-line-length = 193
-
 [tool.ruff]
 line-length = 193
 # Roots that hold first-party code, so import sorting groups `genie`,
 # `tests`, `examples`, and `lamps` correctly.
 src = ["lib/src", "lib", "."]
-
-[tool.isort]
-profile = "black"
-line_length = 193
-src_paths = ["lib/src", "lib", "."]
