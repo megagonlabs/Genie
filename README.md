@@ -26,7 +26,7 @@ or define one memory schema for everyone.
 - **From a cloned repository**, in a fresh virtual environment:
 
 ```bash
-python -m venv .venv
+python -m venv .venv --prompt genie
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install -e .
 ```
