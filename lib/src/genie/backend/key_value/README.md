@@ -188,4 +188,4 @@ which is the Redis default.**
 Related: [Backend contracts](../README.md), [relational
 backends](../relational/README.md), [graph backends](../graph/README.md),
 [document backends](../document/README.md), and [Redis
-tests](../../../tests/backends/test_redis_backend.py).
+tests](../../../../tests/backends/test_redis_backend.py).

@@ -147,7 +147,7 @@ A production adapter should:
 - **Return normalized `SearchResult` values.**
 
 The reusable [backend
-contracts](../../tests/backends/test_backend_contracts.py) cover the optional
+contracts](../../../tests/backends/test_backend_contracts.py) cover the optional
 capabilities and their behavior under concurrent writes.
 
 Related: [Memory](../memory/README.md), [Structures](../structures/README.md),

@@ -163,5 +163,5 @@ class AgentMemory:
 
 `LineageDAG` reuses `PropertyGraph`. `VersionedRecords` reuses
 `KeyedCollection` and `EventLog`. See the [advanced
-examples](../../examples/advanced/README.md) and the [backend
+examples](../../../../examples/advanced/README.md) and the [backend
 contracts](../backend/README.md).

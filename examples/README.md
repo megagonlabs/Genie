@@ -48,5 +48,5 @@ See the [advanced guide](advanced/README.md).
 - **Agent examples use rooted handles.** Unbounded handles appear only for trusted administrative or routing behavior.
 - **Application types and agent decisions** stay in the example code.
 - **For production,** use `SQLiteBackend` for local persistence, or another adapter with suitable storage, search, and operational behavior.
-- **Server-backed adapters have no runnable example,** because they need a separately configured service. They are covered in the [backend guide](../genie/backend/README.md).
+- **Server-backed adapters have no runnable example,** because they need a separately configured service. They are covered in the [backend guide](../lib/src/genie/backend/README.md).
 - **Backend protocols and operational errors** are APIs for adapter authors, so they are documented in that guide too rather than shown as application workflows.

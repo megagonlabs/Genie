@@ -96,6 +96,6 @@ already proves the server is reachable. There is no separate connectivity flag.
 
 Related: [Backend contracts](../README.md), [document
 backends](../document/README.md), [SQLite
-tests](../../../tests/backends/test_sqlite_backend.py), [PostgreSQL
-tests](../../../tests/backends/test_postgres_backend.py),
+tests](../../../../tests/backends/test_sqlite_backend.py), [PostgreSQL
+tests](../../../../tests/backends/test_postgres_backend.py),
 [Memory](../../memory/README.md), and [Structures](../../structures/README.md).
