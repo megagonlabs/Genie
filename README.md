@@ -157,11 +157,17 @@ Install the development extra, then run the checks from the repository root:
 ```bash
 python -m pip install -e ".[dev]"
 python -m pytest
+python -m ruff check .
 python -m compileall -q lib/src/genie lib/tests examples lamps
 ```
 
-`./lib/scripts/test_full.sh` runs the whole suite against throwaway containers for
-the server-backed adapters. Extra arguments are passed on to pytest.
+A plain `pytest` run skips the live tests of the server-backed adapters, so
+report it as partial. `./lib/scripts/test_full.sh` runs the whole suite against
+throwaway containers for those adapters and needs Docker. Extra arguments are
+passed on to pytest.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the repository layout, the design
+boundaries a change should respect, and how to send one.
 
 ```bash
 python lib/benchmarks/run.py
