@@ -1279,16 +1279,24 @@ def test_a_mixed_run_plans_one_variant_per_target_and_level() -> None:
 
 
 def test_a_mixed_run_reports_a_target_it_could_not_measure() -> None:
-    """A server with no connection variables is named, not left out."""
+    """A target that cannot run is named in the report, not left out.
 
+    - **The skip reason is set here,** not read from the environment. A target
+      built by `default_targets()` is only unavailable when its `GENIE_*`
+      connection variables are missing, so reading them would make this test
+      pass on a plain run and fail under `lib/scripts/test_full.sh`, where a
+      live server is configured.
+    """
+
+    reason = "no connection variables in this test"
     result = runner.run(
         settings=TINY_WORKLOAD,
-        targets=(_target("in_memory"), _target("neo4j")),
+        targets=(_target("in_memory"), replace(_target("neo4j"), skip_reason=reason)),
         progress=_quiet(),
     )
     sections = {section["name"]: section for section in result["sections"]}
 
-    assert sections["neo4j"]["skipped"]
+    assert sections["neo4j"]["skipped"] == reason
     assert sections["neo4j"]["workloads"] == []
     assert sections["in_memory"]["workloads"]
 
