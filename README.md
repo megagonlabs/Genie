@@ -168,6 +168,8 @@ passed on to pytest.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the repository layout, the design
 boundaries a change should respect, and how to send one.
+[SECURITY.md](SECURITY.md) explains how to report a vulnerability privately and
+which parts of the scoped-access model are in scope.
 
 ```bash
 python lib/benchmarks/run.py
