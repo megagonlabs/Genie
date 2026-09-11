@@ -50,7 +50,7 @@ include = ["genie*"]
 genie = ["py.typed", "**/README.md"]
 
 [tool.pytest.ini_options]
-testpaths = ["lib/tests", "lamps"]
+testpaths = ["lib/tests", "examples/lamps"]
 pythonpath = ["lib/src", "lib", "."]
 
 [tool.ruff]

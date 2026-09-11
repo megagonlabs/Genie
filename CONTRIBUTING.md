@@ -24,7 +24,7 @@ python -m pip install -e ".[dev]"
 ```bash
 python -m pytest
 python -m ruff check .
-python -m compileall -q lib/src/genie lib/tests examples lamps
+python -m compileall -q lib/src/genie lib/tests examples
 ```
 
 - **`./lib/scripts/ruff_report.sh`** regenerates `ruff_report.txt` at the
@@ -84,7 +84,7 @@ Keep application business logic, memory taxonomies, agent behavior, storage
 layout, retrieval strategy, and domain-specific value meaning **outside** the
 core library. Task interpretation, action selection, planning, extraction,
 consolidation, and ranking policy belong in an application or agent. Agent
-framework integrations are fine in `examples/` and `lamps/`, but they must never
+framework integrations are fine in `examples/`, including `examples/lamps/`, but they must never
 become dependencies of the core package.
 
 ## Engineering standards
@@ -127,7 +127,7 @@ Apply these in proportion to the size and user-facing impact of the change.
 | `lib/tests/test_benchmarks.py` | Tests for that harness |
 | `lib/scripts/` | Repository-wide developer scripts |
 | `examples/basic/`, `examples/advanced/` | Small runnable examples |
-| `lamps/<name>/`, `lamps/<name>/tests/` | One architectural demonstration each |
+| `examples/lamps/<name>/`, `examples/lamps/<name>/tests/` | One architectural demonstration each |
 | `docs/design.md` | Architecture and safety boundaries |
 
 - **The benchmark harness stays out of `lib/tests/`** so a plain `pytest` run

@@ -148,7 +148,7 @@ from genie import EventLog, OwnershipTree
 - [Policies](lib/src/genie/policy/README.md)
 - [Hooks](lib/src/genie/hooks/README.md)
 - [Codecs](lib/src/genie/codecs/README.md)
-- [Examples](examples/README.md) and [Lamps](lamps/README.md)
+- [Examples](examples/README.md) and [Lamps](examples/lamps/README.md)
 
 ## Develop
 
@@ -158,7 +158,7 @@ Install the development extra, then run the checks from the repository root:
 python -m pip install -e ".[dev]"
 python -m pytest
 python -m ruff check .
-python -m compileall -q lib/src/genie lib/tests examples lamps
+python -m compileall -q lib/src/genie lib/tests examples
 ```
 
 A plain `pytest` run skips the live tests of the server-backed adapters, so

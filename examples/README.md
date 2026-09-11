@@ -1,10 +1,11 @@
 # Examples
 
-Every example runs from the repository root and uses plain assertions:
+Everything here runs from the repository root.
 
-```bash
-python examples/<path>.py
-```
+- **Single-file examples** in `basic/` and `advanced/` run as scripts and use
+  plain assertions: `python examples/<path>.py`.
+- **Lamps** in `lamps/` are packages and run as modules:
+  `python -m examples.lamps.<name>.demo`.
 
 ## Basic reading order
 
@@ -40,6 +41,22 @@ together in one agent workflow. See the [basic guide](basic/README.md).
 - **[`advanced/facade_containers.py`](advanced/facade_containers.py)** — the ordinary block that each facade is bound to, and what happens when it is deleted.
 
 See the [advanced guide](advanced/README.md).
+
+## Lamps
+
+**[`lamps/`](lamps/README.md)** holds larger, application-level memory patterns
+built from Genie. Each one is a package with its own guide, demo, and tests.
+
+| Lamp | Run the demo | Run the tests |
+| --- | --- | --- |
+| [Graphiti](lamps/graphiti/README.md) | `python -m examples.lamps.graphiti.demo` | `python -m pytest examples/lamps/graphiti/tests -q` |
+| [Hindsight](lamps/hindsight/README.md) | `python -m examples.lamps.hindsight.demo` | `python -m pytest examples/lamps/hindsight/tests -q` |
+| [LangMem](lamps/langmem/README.md) | `python -m examples.lamps.langmem.demo` | `python -m pytest examples/lamps/langmem/tests -q` |
+| [Mem0](lamps/mem0/README.md) | `python -m examples.lamps.mem0.demo` | `python -m pytest examples/lamps/mem0/tests -q` |
+| [MemoryOS](lamps/memoryos/README.md) | `python -m examples.lamps.memoryos.demo` | `python -m pytest examples/lamps/memoryos/tests -q` |
+
+- **Run them as modules,** not as scripts, because each lamp is a package.
+- **Architectural demonstrations, not products.** See the [lamps guide](lamps/README.md).
 
 ## Conventions
 

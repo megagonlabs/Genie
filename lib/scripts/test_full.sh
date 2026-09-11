@@ -158,7 +158,7 @@ require_free_container "$GENIE_TEST_REDIS_CONTAINER"
 require_free_container "$GENIE_TEST_REDIS_REPLICA_CONTAINER"
 
 echo "Compiling Genie..."
-"$GENIE_TEST_PYTHON" -m compileall -q lib/src/genie lib/tests lib/benchmarks examples lamps
+"$GENIE_TEST_PYTHON" -m compileall -q lib/src/genie lib/tests lib/benchmarks examples
 
 echo "Starting disposable PostgreSQL container..."
 docker run --rm -d \
