@@ -1,0 +1,50 @@
+== Mem0-inspired scoped memory ==
+An agent hands conversations to a two-phase pipeline that decides whether each extracted fact is added, folded into a stored memory, or allowed to delete one, and every decision stays readable.
+Genie structures: ownership tree, two keyed collections, versioned records, event log, property graph
+
+Tools available to the agent:
+- add_memories: Extract memories from an exchange and reconcile them against user:alice/agent:travel-agent. Each candidate becomes ADD, UPDATE, DELETE, or NONE at a 0.5 similarity floor.
+- search_memories: Search memories below user:alice/agent:travel-agent and return the relationships beside them.
+- list_memories: List every memory below user:alice/agent:travel-agent, or below one run inside it.
+- update_memory: Rewrite one memory by id, keeping the id and recording the old wording.
+- delete_memory: Delete one memory by id. Its recorded history stays readable.
+- memory_history: Read every ADD, UPDATE, and DELETE recorded for one memory.
+- forget_scope: Retire user:alice/agent:travel-agent, or one run inside it, with everything stored below it.
+
+Agent answer:
+Question: How should I book Alice's next Austin trip?
+Relevant memories for 'Alice window seats vegetarian Austin':
+- Alice prefers window seats on flights (v2, score 0.6)
+- Alice is vegetarian (v1, score 0.4)
+- Alice stays at the Cedar Lodge when visiting Austin (v2, score 0.4)
+Related entities:
+- Alice diet vegetarian
+- Alice prefers window seat
+- Alice stays at Riverside Inn
+How this was handled before:
+- To plan a trip for Alice: confirm the seat preference first, then hold the Austin hotel, then add the vegetarian meal to every leg. (v1)
+How the top memory reached its current wording (v2):
+- ADD: nothing on file -> Alice prefers aisle seats on flights
+- UPDATE: Alice prefers aisle seats on flights -> Alice prefers window seats on flights
+
+Inspectable tool calls:
+01. add_memories
+02. add_memories
+03. add_memories
+04. add_memories
+05. update_memory
+06. delete_memory
+07. memory_history
+08. forget_scope
+09. search_memories
+10. list_memories
+11. memory_history
+
+Tool usage:
+- add_memories x4
+- update_memory x1
+- delete_memory x1
+- memory_history x2
+- forget_scope x1
+- search_memories x1
+- list_memories x1

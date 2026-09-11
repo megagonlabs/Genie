@@ -1,0 +1,52 @@
+== LangMem-inspired agent memory ==
+An agent forms memories on the hot path and in a debounced background queue, keeps a single profile document current, and revises its own prompt from feedback.
+Genie structures: ownership tree, keyed collection, two versioned records, event log, temporal collection, lineage DAG
+
+Tools available to the agent:
+- manage_memory: Write one memory now, under memories/dana. Permitted: create | update.
+- search_memory: Search memories below memories/dana by text and metadata.
+- submit_conversation: Queue a conversation for background memory formation, debounced per thread.
+- run_reflection: Apply every submission that has come due. Manager permissions: insert=true, update=true, delete=true.
+- get_profile: Read the single 'preferences' document and the versions before it.
+- optimize_prompt: Fold feedback on past exchanges into a prompt, if it changes the rules.
+- get_prompt: Read the prompt the agent runs with, its rules, and its earlier versions.
+
+Agent answer:
+Question: Should I approve the Litestar diff for Dana?
+Procedural memory (code-review r2, from review-812-feedback):
+  Review the diff and report what will break.
+  Rules learned from feedback:
+  1. Name the test that fails in every comment.
+  2. Lead with what breaks before any style comment.
+Profile preferences r2: language=python, name=Dana Ruiz, review_tone=direct
+- was r1: language=python, name=Dana, review_tone=neutral
+Relevant memories for 'billing service Litestar migration tests':
+- memories/dana/semantic/stack v1 (score 0.6): billing service runs on Litestar after the swap landed
+- memories/dana/semantic/tests v2 (score 0.4): Dana's team tests with pytest and a smoke suite every service
+Episode to follow:
+- memories/dana/episodes/missed-migration v1 (score 0.6): The Litestar swap left the billing migration out of the diff. The last review missed a migration and the deploy failed. Asked for the migration file before approving anything. Dana added it and the deploy passed.
+
+Inspectable tool calls:
+01. submit_conversation
+02. submit_conversation
+03. run_reflection
+04. manage_memory
+05. manage_memory
+06. submit_conversation
+07. run_reflection
+08. optimize_prompt
+09. optimize_prompt
+10. optimize_prompt
+11. get_prompt
+12. get_profile
+13. search_memory
+14. search_memory
+
+Tool usage:
+- submit_conversation x3
+- run_reflection x2
+- manage_memory x2
+- optimize_prompt x3
+- get_prompt x1
+- get_profile x1
+- search_memory x2

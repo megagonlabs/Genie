@@ -40,6 +40,7 @@ Put each lamp name in place of `<name>`:
 - **Each demo prints its whole run and then exits.**
 - **Every run prints the same output.** No lamp reads a clock, a network, or an API key.
 - **All lamps at once:** `python -m pytest examples/lamps -q`, because pytest finds every lamp test through `pyproject.toml`.
+- **Each demo's output is captured** in `examples/expected/lamps/<name>.out` and compared by `lib/tests/test_examples.py`. Refresh it with `python lib/scripts/capture_example_output.py` after an intended change.
 
 ## Shared agent-demo format
 

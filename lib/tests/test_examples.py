@@ -8,35 +8,48 @@ from pathlib import Path
 
 import pytest
 
+from examples._catalog import (
+    EXPECTED_ROOT,
+    command_for,
+    discover_examples,
+    documented_command,
+    expected_path_for,
+)
 from examples.advanced.agent_memory import TaskAgent, TaskMemory
 from genie import InMemoryBackend, Memory
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CAPTURE_SCRIPT = "python lib/scripts/capture_example_output.py"
 RUNNABLE_EXAMPLES = [
-    ("basic/crud_blocks.py", "CRUD and ownership"),
-    ("basic/block_presence.py", "Block presence"),
-    ("basic/scoped_agents.py", "Scoped agent handles"),
-    ("basic/search_filters.py", "Search and filters"),
-    ("basic/links.py", "Links and mounts"),
-    ("basic/acyclic_links.py", "Acyclic links"),
-    ("basic/mounted_handles.py", "Mounted handles"),
-    ("basic/routed_backend.py", "Routed storage and mounts"),
-    ("basic/policies.py", "Access policies"),
-    ("basic/hook_audit.py", "Hook audit"),
-    ("basic/write_hooks.py", "Write hooks"),
-    ("basic/search_hooks.py", "Search hooks"),
-    ("basic/custom_codecs.py", "Custom codecs"),
-    ("basic/stdlib_codecs.py", "Standard-library codecs"),
-    ("basic/sqlite_persistence.py", "SQLite persistence"),
-    ("basic/heterogeneous_backend.py", "Heterogeneous routed backend"),
-    ("basic/basic_usage.py", "Integrated agent memory walkthrough"),
-    ("advanced/temporal_collection.py", "Temporal collection"),
-    ("advanced/graph_traversal.py", "Graph traversal"),
-    ("advanced/versioned_catalog.py", "Versioned catalog"),
-    ("advanced/facade_containers.py", "Facade containers"),
-    ("advanced/structure_hooks.py", "Structural hook events"),
-    ("advanced/agent_memory.py", "Compound memory for an agent"),
-    ("advanced/experiment_memory.py", "Experiment memory using all seven structures"),
+    "basic/crud_blocks.py",
+    "basic/block_presence.py",
+    "basic/scoped_agents.py",
+    "basic/search_filters.py",
+    "basic/links.py",
+    "basic/acyclic_links.py",
+    "basic/mounted_handles.py",
+    "basic/routed_backend.py",
+    "basic/policies.py",
+    "basic/hook_audit.py",
+    "basic/write_hooks.py",
+    "basic/search_hooks.py",
+    "basic/custom_codecs.py",
+    "basic/stdlib_codecs.py",
+    "basic/sqlite_persistence.py",
+    "basic/heterogeneous_backend.py",
+    "basic/basic_usage.py",
+    "advanced/temporal_collection.py",
+    "advanced/graph_traversal.py",
+    "advanced/versioned_catalog.py",
+    "advanced/facade_containers.py",
+    "advanced/structure_hooks.py",
+    "advanced/agent_memory.py",
+    "advanced/experiment_memory.py",
+    "lamps/graphiti/demo.py",
+    "lamps/hindsight/demo.py",
+    "lamps/langmem/demo.py",
+    "lamps/mem0/demo.py",
+    "lamps/memoryos/demo.py",
 ]
 
 
@@ -95,35 +108,39 @@ def test_task_agent_interprets_memory_and_selects_an_action() -> None:
     ]
     assert agent.choose_next_action() == "try reranking"
 
+@pytest.mark.parametrize("example", RUNNABLE_EXAMPLES)
+def test_example_matches_its_captured_output(example: str) -> None:
+    """Every example runs from the repository root and prints what was captured."""
 
-@pytest.mark.parametrize(
-    ("example", "expected_heading"),
-    RUNNABLE_EXAMPLES,
-)
-def test_example_runs_as_a_script(example: str, expected_heading: str) -> None:
-    """Every example script runs successfully from the repository root."""
+    expected = expected_path_for(example)
+    assert expected.exists(), f"{example} has no captured output. Create it with: {CAPTURE_SCRIPT}"
 
     result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "examples" / example)],
+        command_for(example, python=sys.executable),
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.startswith(f"== {expected_heading} ==\n")
+    assert result.returncode == 0, f"{documented_command(example)} failed:\n{result.stdout}{result.stderr}"
+    assert result.stdout == expected.read_text(encoding="utf-8"), (
+        f"{example} no longer prints what {expected.relative_to(REPO_ROOT)} holds. "
+        f"If the change is intended, refresh it with: {CAPTURE_SCRIPT}"
+    )
 
 
 def test_every_example_script_has_smoke_coverage() -> None:
-    """Keep newly added basic and advanced scripts in the runnable test set."""
+    """Keep newly added scripts and lamp demos in the runnable test set."""
 
-    examples_root = REPO_ROOT / "examples"
-    discovered = {
-        str(path.relative_to(examples_root))
-        for tier in ("basic", "advanced")
-        for path in (examples_root / tier).glob("*.py")
-        if path.name != "__init__.py"
-    }
+    assert len(RUNNABLE_EXAMPLES) == len(set(RUNNABLE_EXAMPLES))
+    assert set(RUNNABLE_EXAMPLES) == set(discover_examples())
 
-    assert {example for example, _ in RUNNABLE_EXAMPLES} == discovered
+
+def test_no_orphan_captured_output() -> None:
+    """No captured-output file is left behind after its example is removed."""
+
+    owned = {expected_path_for(example) for example in discover_examples()}
+    orphans = sorted(path.relative_to(REPO_ROOT).as_posix() for path in EXPECTED_ROOT.rglob("*.out") if path not in owned)
+
+    assert not orphans, f"Captured output with no example: {orphans}. Remove it with: {CAPTURE_SCRIPT}"

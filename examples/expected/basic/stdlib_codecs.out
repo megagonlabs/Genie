@@ -1,0 +1,24 @@
+== Standard-library codecs ==
+
+== JsonCodec stays the default ==
+Decimal requires an opt-in codec: No Genie codec registered for value of type 'Decimal'.
+
+== Register stdlib codecs explicitly ==
+registered: bytes, datetime, decimal, UUID, dataclass, and enum codecs
+
+== Store common standard-library values ==
+bytes: b'release-notes'
+timestamp: 2026-06-30T12:15:00+00:00
+amount: 0.1000000000000000001
+uuid: a23a8348-3b66-4ba1-bac7-d9dac418556c
+audit tags: release, docs
+priority: high
+
+== Inspect storage-safe payloads ==
+bytes content type: application/vnd.genie.bytes+base64
+bytes payload: 'cmVsZWFzZS1ub3Rlcw=='
+datetime payload: {'kind': 'datetime', 'value': '2026-06-30T12:15:00+00:00'}
+decimal payload: '0.1000000000000000001'
+uuid payload: 'a23a8348-3b66-4ba1-bac7-d9dac418556c'
+dataclass payload keys: ['fields', 'type']
+enum payload: {'type': '__main__:Priority', 'name': 'HIGH'}

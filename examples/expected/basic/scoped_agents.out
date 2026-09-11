@@ -1,0 +1,6 @@
+== Scoped agent handles ==
+writer remembered: writer: use concise bullets
+writer scope root: Write summary
+sibling task read: blocked as expected
+unbounded subtree search without a root: blocked as expected
+supervisor global search: Unrelated task

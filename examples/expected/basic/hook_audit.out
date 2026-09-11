@@ -1,0 +1,9 @@
+== Hook audit ==
+blocks observed by the audit hook: 2
+operations grouped under the turn: 4
+structural reads recorded: children disclosed 1, ancestors disclosed 1
+handle reading a block outside its root: handle.subtree
+suppression windows announced to every hook: 2
+contained sink failure: Contained after_put failure from fail-open hook BestEffortSink during put.
+unregistering the mandatory audit hook: refused
+operations with a terminal event: 16

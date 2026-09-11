@@ -29,6 +29,9 @@ python -m compileall -q lib/src/genie lib/tests examples
 
 - **`./lib/scripts/ruff_report.sh`** regenerates `ruff_report.txt` at the
   repository root.
+- **`python lib/scripts/capture_example_output.py`** refreshes the captured
+  output of every example under `examples/expected/`. Run it when you change
+  what an example prints, and commit the result.
 - **Keep `ruff check .` clean.** Line length is 193, set in `[tool.ruff]`.
   Ruff also sorts imports, so there is no separate formatter to run.
 
@@ -128,12 +131,17 @@ Apply these in proportion to the size and user-facing impact of the change.
 | `lib/scripts/` | Repository-wide developer scripts |
 | `examples/basic/`, `examples/advanced/` | Small runnable examples |
 | `examples/lamps/<name>/`, `examples/lamps/<name>/tests/` | One architectural demonstration each |
+| `examples/expected/` | Captured output of every example |
 | `docs/design.md` | Architecture and safety boundaries |
 
 - **The benchmark harness stays out of `lib/tests/`** so a plain `pytest` run
   does not time operations.
 - **Examples run from the repository root** and use plain assertions. Keep them
   useful for a first-time reader.
+- **Every example is output-tested.** `lib/tests/test_examples.py` runs each one
+  and compares its whole standard output against `examples/expected/`. Add new
+  examples to its `RUNNABLE_EXAMPLES` list and capture their output, and keep
+  them deterministic so the comparison stays stable.
 - **Lamps are architectural demonstrations,** not compatibility layers or
   production implementations. Document their concept mappings and their
   deliberate limits.

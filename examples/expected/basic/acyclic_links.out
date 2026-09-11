@@ -1,0 +1,6 @@
+== Acyclic links ==
+closing the derivation loop: refused
+a block deriving from itself: refused
+cycle allowed in an ordinary relation: mentions
+acyclic insert of the reserved mount relation: refused
+derivation edges touching the clean set: 2

@@ -1,0 +1,5 @@
+== Access policies ==
+ordinary reader reading an owner_private note: blocked
+ordinary reader exporting a compliance report: blocked
+compliance role exporting an owner-only report: blocked by block override
+allowed checks: public read, researcher read, and compliance export

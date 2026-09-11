@@ -1,0 +1,11 @@
+== Graph traversal ==
+features came from: ['deduplicated crawl']
+features fed into: ['candidate ranker']
+how the ranker came to exist:
+- 1 hop(s): candidate ranker <- encoded features
+- 2 hop(s): candidate ranker <- encoded features <- deduplicated crawl
+- 3 hop(s): candidate ranker <- encoded features <- deduplicated crawl <- raw crawl
+annotated derivation: {'job': 'clean-2026-01-10'}
+two-hop paths from the raw crawl: 2
+one-hop inbound path to the ranker: 1
+edge metadata after a second annotation: {'job': 'clean-2026-01-11'}

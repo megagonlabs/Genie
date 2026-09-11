@@ -1,0 +1,8 @@
+== Heterogeneous routed backend ==
+blocks stored in SQLite: 3
+top semantic match: Keep the proposal concise and database agnostic.
+score is a cosine, not a substring count: 0.500
+reason from the vector index: 'cosine 0.500'
+subtree search skipped the unowned glossary: 1 result
+link search reached the glossary: Glossary of retrieval terms
+filtered subtree search: Keep the proposal concise and database agnostic.

@@ -1,0 +1,9 @@
+== Experiment memory using all seven structures ==
+ownership tree: experiment has 2 revisions
+property graph: experiment --produced--> first result
+keyed collection: 2 named runs
+event log: latest sequences [1, 2]
+temporal collection: 2 events before Jan 12
+lineage DAG: experiment -> first result -> second result (2 edges)
+versioned records: revision 2 -> {'candidate_count': 40, 'recall': 0.84}
+lineage cycle: blocked as expected

@@ -1,0 +1,66 @@
+== Graphiti-inspired bi-temporal knowledge graph ==
+An agent ingests episodes, invalidates contradicted facts on two time axes, groups entities by slice, and ranks the result.
+Genie structures: ownership tree, property graph, event log, two temporal collections, versioned records, lineage DAG
+
+Tools available to the agent:
+- add_episode: Store one source record as the ground truth for later facts.
+- add_triplet: Store a subject-relation-object fact from an episode. Entities are resolved by type and name, and a single-valued relation invalidates the subject's previous fact instead of deleting it.
+- update_entity_summary: Append a new summary revision for an entity, keeping earlier ones.
+- build_communities: Group the entities one time slice connects and summarize each group.
+- snapshot: Return facts on a bi-temporal slice: true at as_of, and optionally restricted to what the graph had on record at known_at.
+- get_entity_history: Return every version of one relationship with both time axes and sources.
+- search: Rank facts for a query with the EDGE_HYBRID_SEARCH_RRF recipe, optionally centered on an entity and filtered by time.
+- get_community: Return the community an entity belongs to, with its member summaries.
+
+Agent answer:
+Question: Where does Alice live and work now, and what did we believe in June?
+True for Alice as of 2025-08-01:
+- Alice -[lives_in]-> Seattle
+- Alice -[works_at]-> Cascade Analytics
+On record for Alice on 2025-06-10:
+- Alice -[lives_in]-> San Francisco
+- Bob -[manages]-> Alice
+- Alice -[works_at]-> Acme
+lives_in history for Alice:
+- Alice -[lives_in]-> San Francisco; true [2024-01-10, 2025-06-01); on record [2024-01-10, 2025-06-20); sources: chat/2024-01-10, chat/2025-06-20
+- Alice -[lives_in]-> Seattle; true [2025-06-01, open); on record [2025-06-20, open); sources: chat/2025-06-20
+Top facts for 'where does Alice live and work':
+- Alice lives in Seattle. (score 0.049)
+- Alice works at Cascade Analytics. (score 0.048)
+- Bob works at Acme. (score 0.031)
+Community context:
+- Cascade Analytics community: Alice lives in Seattle and works at Cascade Analytics. Cascade Analytics is a company. Dana is a person. Seattle is a city.
+
+Inspectable tool calls:
+01. add_episode
+02. add_triplet
+03. add_triplet
+04. update_entity_summary
+05. add_episode
+06. add_triplet
+07. add_triplet
+08. add_triplet
+09. add_episode
+10. add_triplet
+11. update_entity_summary
+12. add_episode
+13. add_triplet
+14. add_triplet
+15. add_triplet
+16. update_entity_summary
+17. build_communities
+18. snapshot
+19. snapshot
+20. get_entity_history
+21. search
+22. get_community
+
+Tool usage:
+- add_episode x4
+- add_triplet x9
+- update_entity_summary x3
+- build_communities x1
+- snapshot x2
+- get_entity_history x1
+- search x1
+- get_community x1

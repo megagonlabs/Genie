@@ -1,0 +1,9 @@
+== Temporal collection ==
+events before Jan 20, 2026: ['version 2 deployed']
+facts valid on Jan 5, 2026: ['primary region was us-east']
+facts valid on Jan 15, 2026: ['primary region is us-west']
+facts overlapping the transition: 2
+entries with an event time in range: 2
+entries valid on Jan 15, 2026: 2
+entries matching both bounds: ['rollout window is open']
+replace and remove changed temporal membership, not block values

@@ -1,0 +1,10 @@
+== Block presence ==
+project contains its note: True
+project contains a grandchild: True
+project contains an unrelated block: False
+reading a block that was never stored: None
+membership test against a missing root: MemoryNotFound
+updating a block that was never stored: MemoryNotFound
+writing under a missing parent: MemoryNotFound
+linking to a block that was never stored: MemoryNotFound
+after deletion the note is absent, not an error

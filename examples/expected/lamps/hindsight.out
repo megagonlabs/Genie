@@ -1,0 +1,70 @@
+== Hindsight-inspired agent memory ==
+An agent retains documents, consolidates their facts into versioned beliefs, keeps a standing answer current, and reflects from the highest layer that already knows.
+Genie structures: ownership tree, event log, temporal collection, keyed collection, property graph, two versioned records, lineage DAG
+
+Tools available to the agent:
+- register_entity: Declare a canonical entity and the surface forms it answers to.
+- retain: Store one source payload and the facts extracted from it, resolving entities and recording provenance.
+- link_memories: Connect two facts with a temporal, semantic, or causal link.
+- invalidate_memory: Soft-retire one fact so it stops being recalled but stays auditable.
+- consolidate: Fold the facts retained since the last run into versioned observations.
+- create_mental_model: Register a standing question whose answer the bank keeps current.
+- refresh_mental_model: Rebuild a standing answer, writing a version only if its scope changed.
+- get_mental_model: Read the current standing answer and the versions before it.
+- recall: Rank facts and observations with the similarity, keyword, graph, and temporal retrievers, fused and capped at a token budget.
+- reflect: Answer from the highest layer that knows: mental model, then observations, then raw facts, reporting the evidence used.
+
+Agent answer:
+Question: What should I know before I change Northwind billing?
+Mental model northwind-change-brief r3: Northwind frontends are built in Vue. Previously: Northwind frontends are built in React. Northwind billing migrations finish only in small batches.
+- was r1: Northwind frontends are built in React.
+- was r2: Northwind frontends are built in React. Northwind billing migrations finish only in small batches.
+Recalled for 'Northwind billing migration batches' (40/45 tokens, 4 dropped):
+- [experience] I retried the Northwind billing migration on March 9 in four small batches and it succeeded. (similarity+keyword+graph+temporal, 0.0648)
+- [world] The Northwind billing service stores its data in Postgres. (similarity+keyword+graph+temporal, 0.0633)
+- [experience] I migrated Northwind billing in one batch on February 3 and the migration timed out. (similarity+keyword+graph, 0.0487)
+Reflection (search_mental_models -> search_observations -> recall):
+- Northwind frontends are built in Vue. Previously: Northwind frontends are built in React. Northwind billing migrations finish only in small batches.
+Based on:
+- [mental_model] northwind-change-brief r3 (from 2 source(s))
+- [observation] Northwind frontends are built in Vue. Previously: Northwind frontends are built in React. (from 2 source(s))
+- [observation] Northwind billing migrations finish only in small batches. (from 2 source(s))
+- [experience] I migrated Northwind billing in one batch on February 3 and the migration timed out. (from 1 source(s))
+- [experience] I retried the Northwind billing migration on March 9 in four small batches and it succeeded. (from 1 source(s))
+- [world] The Northwind billing service stores its data in Postgres. (from 1 source(s))
+
+Inspectable tool calls:
+01. register_entity
+02. register_entity
+03. create_mental_model
+04. retain
+05. consolidate
+06. refresh_mental_model
+07. retain
+08. consolidate
+09. refresh_mental_model
+10. retain
+11. link_memories
+12. link_memories
+13. consolidate
+14. refresh_mental_model
+15. retain
+16. link_memories
+17. invalidate_memory
+18. consolidate
+19. refresh_mental_model
+20. get_mental_model
+21. recall
+22. reflect
+
+Tool usage:
+- register_entity x2
+- create_mental_model x1
+- retain x4
+- consolidate x4
+- refresh_mental_model x4
+- link_memories x3
+- invalidate_memory x1
+- get_mental_model x1
+- recall x1
+- reflect x1

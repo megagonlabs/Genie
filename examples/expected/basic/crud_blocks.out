@@ -1,0 +1,6 @@
+== CRUD and ownership ==
+created project: Launch notes
+updated note (version 3): {'body': 'Outline reviewed', 'status': 'done'}
+children before delete: ['note']
+checklist ancestors: ['note', 'project']
+deleting the project removed its owned descendants

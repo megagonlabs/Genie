@@ -1,0 +1,6 @@
+== Compound memory for an agent ==
+agent: retrieval-agent
+keyed precondition: {'name': 'data ready', 'satisfied': True}
+event log history: ['baseline recall was 0.72', 'reranker recall was 0.81']
+property graph knowledge: data_ready --enables--> ['test a larger candidate set']
+agent's next action: test a larger candidate set

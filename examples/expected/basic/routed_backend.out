@@ -1,0 +1,11 @@
+== Routed storage and mounts ==
+US project route: us
+EU project route: eu
+US note inherited route: us
+mount link relation: genie.mount
+mounts discovered before APAC registration: 2 (EU and APAC)
+APAC mount before route registration: unresolved
+EU subtree search result: EU launch requires data residency review.
+EU mount target: EU rollout
+APAC project route after registration: apac
+APAC mount after route registration: APAC rollout

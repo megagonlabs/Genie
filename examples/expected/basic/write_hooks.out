@@ -1,0 +1,11 @@
+== Write hooks ==
+metadata added before storage: {'audited': True}
+reads recorded: [True, False]
+edit counter maintained by the hook: 2
+versions reported by after_update: [(1, 2), (2, 3)]
+stored link metadata: {'confidence': 0.9, 'stamped': True}
+updated link metadata: {'confidence': 1.0, 'stamped': True, 'restamped': True}
+traversal recorded: [('before', 0), ('after', 1)]
+deleting a block under retention hold: refused by the hook
+deletion events for a two-block subtree: [('before', 'project'), ('before', 'note'), ('after', 'project'), ('after', 'note')]
+a hook repointing a link: refused

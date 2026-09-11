@@ -1,0 +1,7 @@
+== Search hooks ==
+requested limit: 50, limits clamped by the guard: [50]
+filters as the hook received them: {'metadata.priority': {'$gte': 0}}
+results returned to the caller: 2
+results mentioning the embargoed finding: 0
+results withheld by the redactor: 1
+search while the redactor is offline: refused, not unredacted

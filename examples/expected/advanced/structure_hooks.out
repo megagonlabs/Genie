@@ -1,0 +1,14 @@
+== Structural hook events ==
+proposed changes:
+- keyed_collection bind (record allocated when proposed: True)
+- keyed_collection rebind (record allocated when proposed: True)
+- keyed_collection unbind (record allocated when proposed: False)
+- event_log append (record allocated when proposed: False)
+- temporal_collection add (record allocated when proposed: True)
+- temporal_collection replace (record allocated when proposed: True)
+- temporal_collection remove (record allocated when proposed: False)
+committed changes: 7
+structural changes reported by three reads: none
+rebinding a released address: refused
+versioned record reported: ['bind', 'append']
+revision 1 of the production ranker: tuned ranker

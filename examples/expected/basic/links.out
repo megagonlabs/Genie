@@ -1,0 +1,9 @@
+== Links and mounts ==
+outgoing relation from requirement: informs
+updated outgoing link metadata: {'weight': 0.9, 'status': 'reviewed'}
+incoming relation to requirement: mentions
+link-scoped search result: Sections: context, tradeoffs, next steps.
+mounts discovered from requirement: 1
+mount target: External deployment reference.
+local subtree search includes the mounted target: no
+deleting the mount source deletes the mounted memory: no

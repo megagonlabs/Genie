@@ -1,0 +1,72 @@
+== MemoryOS-inspired tiered memory ==
+An agent talks through a full memory hierarchy: exchanges page out of a short queue into topic sessions, the session a retrieval keeps visiting gets hot enough to be read into a lasting profile, and the one nobody comes back to is evicted before it ever is.
+Genie structures: ownership tree, three event logs, keyed collection, temporal collection, lineage DAG, versioned records, property graph
+
+Tools available to the agent:
+- add_memory: Record one exchange for alice/travel-agent. A full short-term queue (3) pages its oldest exchange into a session first, and a session over 5.0 heat is analyzed afterwards.
+- retrieve_memory: Read all four tiers for a query. Every session the query reaches gets hotter.
+- get_user_profile: Read the profile the analyses arrived at, and every reading it replaced.
+- inspect_sessions: Read each mid-term session with its visit, length, and recency terms.
+- analyze_now: Analyze the hottest session immediately, whatever its heat.
+- trace_knowledge: Ask which pages one promoted fact was extracted from.
+- read_dialogue_chain: Walk forward from one page along the exchanges that continued it.
+- memory_stats: Read how much each tier of alice/travel-agent holds.
+
+Agent answer:
+Question: How should you book Alice's next Austin trip?
+Profile on file (revision 2):
+- seat_preference: window
+- document_watch: passport expires March 2026
+Recent exchanges still in short-term memory (3/3):
+- Book the vegetarian meal for the Austin flight.
+- Remind me to renew the passport in January.
+- Can you start planning next month's Austin trip?
+Mid-term pages retrieved for 'window seat booking passport Austin':
+- [flight seat preferences] Last trip you booked a window seat and I had to have it changed. (score 0.6)
+- [flight seat preferences] The window seat turned out better, so keep window from now on. (score 0.4)
+- [passport and documents] My passport expires in March 2026. (score 0.2)
+What is on file about the user:
+- Alice switched from aisle seats to window seats. (score 0.2)
+- Alice's passport expires in March 2026. (score 0.2)
+What the assistant learned about doing the job:
+- Confirm Alice's seat preference before booking. (score 0.4)
+Why 'Alice switched from aisle seats to window seats.' is on file:
+- read from: 'The window seat turned out better, so keep window from now on.'
+The exchange that started the seat conversation, and what continued it:
+- I always want an aisle seat when we fly.
+- then: Last trip you booked a window seat and I had to have it changed.
+- then: The window seat turned out better, so keep window from now on.
+Where the tiers stand:
+- 3/3 sessions holding 5 page(s)
+- 2 user fact(s) and 1 assistant fact(s) promoted
+
+Inspectable tool calls:
+01. add_memory
+02. add_memory
+03. add_memory
+04. add_memory
+05. retrieve_memory
+06. add_memory
+07. inspect_sessions
+08. add_memory
+09. add_memory
+10. add_memory
+11. add_memory
+12. add_memory
+13. inspect_sessions
+14. analyze_now
+15. retrieve_memory
+16. get_user_profile
+17. trace_knowledge
+18. read_dialogue_chain
+19. memory_stats
+
+Tool usage:
+- add_memory x10
+- retrieve_memory x2
+- inspect_sessions x2
+- analyze_now x1
+- get_user_profile x1
+- trace_knowledge x1
+- read_dialogue_chain x1
+- memory_stats x1

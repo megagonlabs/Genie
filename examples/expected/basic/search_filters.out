@@ -1,0 +1,5 @@
+== Search and filters ==
+query: 'proposal' in the project subtree, priority >= 2
+normalized filters: {'metadata.priority': {'$gte': 2}, 'owner': {'$in': ['team']}}
+matches: 1
+- requirement: Keep the proposal concise and database agnostic. (score=1.0, reason='matched text')

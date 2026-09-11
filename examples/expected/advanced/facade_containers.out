@@ -1,0 +1,9 @@
+== Facade containers ==
+tree root: model workspace
+catalog collection: model catalog
+log: training events
+catalog collection after renaming: ranker catalog
+bound at ('serving', 'active_model')
+reading the collection after deleting it: MemoryNotFound
+keyed read after deleting the collection: MemoryNotFound
+facades bound to other blocks are unaffected

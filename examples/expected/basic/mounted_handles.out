@@ -1,0 +1,9 @@
+== Mounted handles ==
+listing mounts without the capability: blocked as expected
+resolving a mount without the capability: blocked as expected
+mounts visible to the auditor handle: 1
+mount label: compliance
+resolved target outside the handle's subtree: Shared compliance reference
+reading inside the mounted tree: still blocked
+granting mount access from a handle that lacks it: blocked as expected
+resolving a mount rooted above a sub-handle: blocked as expected

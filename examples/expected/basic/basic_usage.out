@@ -1,0 +1,39 @@
+== Integrated agent memory walkthrough ==
+
+== Seed application-owned memory ==
+
+== Pass handles to agents ==
+planner wrote task: {'title': 'Draft outline', 'status': 'open'}
+writer wrote note: Use three sections: problem, approach, next steps.
+
+== Search inside the bounded ownership tree ==
+writer recalled 1 block(s) for 'sections'
+- note: Use three sections: problem, approach, next steps.
+writer recalled 2 block(s) for 'draft'
+- task: {'title': 'Draft outline', 'status': 'open'}
+- project: {'name': 'Proposal draft', 'deadline': 'Friday'}
+planner's filtered search results:
+- requirement: Keep the proposal concise and database-agnostic.
+
+== Add a typed link and search linked memory ==
+linked search results:
+- note: Use three sections: problem, approach, next steps.
+
+== Use policies for private working memory ==
+writer reading planner-private note: blocked as expected
+
+== Update data and decode typed values ==
+updated task: {'title': 'Draft outline', 'status': 'in_progress'}
+decoded style preference: StylePreference(tone='warm', length='short')
+decoded deadline: 2026-07-03T17:00:00+00:00
+decoded budget: 1250.75
+
+== Scopes prevent accidental escape ==
+writer reading outside its task subtree: blocked as expected
+planner creating a handle outside its project: blocked as expected
+
+== Audit hook observed writes and deletions ==
+audit events: 11
+
+== Done ==
+The full Memory object stayed in trusted application code; agents only received handles.

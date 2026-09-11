@@ -1,0 +1,11 @@
+== Custom codecs ==
+decoded custom preference: Preference(topic='tone', value='warm')
+decoded timestamp: 2026-06-30T12:15:00+00:00
+decoded amount: 19.99
+decoded uuid: 22222222-2222-4222-8222-222222222222
+stored preference content type: application/vnd.genie.preference+json
+stored preference payload: {'topic': 'tone', 'value': 'warm'}
+stored amount payload: '19.99'
+storing an unregistered type: No Genie codec registered for value of type 'Rating'.
+decoded rating after registering its codec: Rating(subject='retrieval', score=4)
+re-registering a content type replaced its codec

@@ -6,6 +6,8 @@ Everything here runs from the repository root.
   plain assertions: `python examples/<path>.py`.
 - **Lamps** in `lamps/` are packages and run as modules:
   `python -m examples.lamps.<name>.demo`.
+- **`expected/` holds what each example prints.** Read it to see the output
+  without running anything.
 
 ## Basic reading order
 
@@ -57,6 +59,21 @@ built from Genie. Each one is a package with its own guide, demo, and tests.
 
 - **Run them as modules,** not as scripts, because each lamp is a package.
 - **Architectural demonstrations, not products.** See the [lamps guide](lamps/README.md).
+
+## Captured output
+
+Every example has a captured-output file under
+[`expected/`](expected), named after the example. `lib/tests/test_examples.py`
+runs each example and compares its whole standard output against that file.
+
+- **Refresh them after an intended output change:**
+  `python lib/scripts/capture_example_output.py`. It reruns every example,
+  rewrites the files, and deletes captured output that no example owns.
+- **Every example must be registered** in `RUNNABLE_EXAMPLES` in
+  `lib/tests/test_examples.py`. `test_every_example_script_has_smoke_coverage`
+  fails when a new script or lamp demo is missing from that list.
+- **Output must be deterministic.** No example reads a clock, a network, a
+  random source, or a block id it prints.
 
 ## Conventions
 

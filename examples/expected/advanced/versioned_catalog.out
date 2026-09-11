@@ -1,0 +1,8 @@
+== Versioned catalog ==
+registered directly under 'rankers': ['canary', 'production']
+registered below 'rankers': ['canary', 'production', 'nightly']
+production revisions: [1, 2]
+current production revision: 2 -> {'recall': 0.84}
+records left after retiring the canary: 2
+the retired record reports absence rather than an error
+pruning a block outside the tree: blocked as expected
