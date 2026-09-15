@@ -68,18 +68,21 @@ the ones above it:
 | Retiring a user | `OwnershipTree.delete_subtree` on their namespace |
 | Agent access | Named JSON-compatible tools |
 
-Five ownership tiers sit below one store root. So deleting the store deletes
-everything in it, and deleting a namespace deletes the memories addressed inside
-it:
+Five tiers sit below one store root. So deleting the store deletes everything in
+it, and deleting a namespace deletes everything that belongs to that user:
 
 ```text
 langmem.store                     one namespaced memory store
-  namespaces                      the namespace tree, and the items it owns
+  namespaces                      the namespace tree: items, profiles, and queued work
   profiles                        one identity per profile, one revision per update
   prompts                         one identity per prompt, one revision per optimization
   trajectories                    annotated exchanges the feedback came from
   queue                           deferred submissions: arrival order and due time
 ```
+
+- **A tier anchor is where a structure keeps its bindings, not where the blocks live.** Ownership and structure membership are separate in Genie, so a block can be owned by one tier and registered with a structure anchored on another.
+- **Per-user state is owned by the user's namespace block.** Items, the profile identity and its revisions, and every queued submission hang off `memories/{user_id}`, while still being bound into `KeyedCollection`, `VersionedRecords`, `EventLog` and `TemporalCollection` on their own tiers.
+- **Prompts and trajectories are the exception, on purpose.** They belong to the agent rather than to one user, so they are owned by their tiers and outlive any namespace.
 
 ## A namespace with a lifecycle
 
@@ -92,6 +95,8 @@ langmem.store                     one namespaced memory store
 | Delete everything for `dana` | List and delete each key | One `delete_subtree` |
 
 - **The second row is the important one.** The lamp does not delete the keyed bindings. They go when the blocks they point at go, because a binding refers to a block rather than copying it. So a namespace cannot be half-retired, and a freed address can be inserted into again.
+- **"Everything" means everything, not only the items.** Dana's profile and its revision history go, and so does any conversation still queued for her. Nothing is left that could write into the namespace after it is retired, which is the failure a per-key cleanup is most likely to miss: a pending reflection would otherwise come due later and recreate the namespace it was supposed to be deleted with.
+- **`forget` returns the items it removed and nothing else.** The profile and the queued submissions are not items, so they are not listed even though they went.
 - **Search is the other half of the split that Genie draws.** Choosing candidates is the backend's job: the prefix becomes a scope, the item type and any metadata filter go into the query, and one search runs per query term. Scoring is the lamp's job, because Genie has no ranking.
 - **Scoring detail:** a candidate counts a term only when the term appears in the candidate's own value, and the score is the share of terms that do. Ties break on the item address rather than on `MemoryBlock.id`, because block ids are new UUIDs on every run and a tie broken by id would make scores differ between runs.
 

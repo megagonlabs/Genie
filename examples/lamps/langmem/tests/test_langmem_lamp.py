@@ -261,6 +261,62 @@ def test_forgetting_a_namespace_deletes_its_items_and_leaves_a_sibling_alone() -
         lamp.store.forget(DANA)
 
 
+def test_forgetting_a_namespace_takes_its_profile_and_queued_work_with_it() -> None:
+    lamp = _lamp()
+    lamp.store.insert((*DANA, "semantic"), "stack", _fact("billing", "runs on", "Litestar", "after"))
+    lamp.profiles.update(DANA, "preferences", {"review_tone": "direct"}, at=OPENED)
+    lamp.queue.submit(
+        Conversation(
+            thread="review-812",
+            messages=(Message("user", "It runs on Litestar."),),
+            patches=(Patch(action="insert", collection="semantic", key="tests", value=_fact("team", "tests with", "pytest", "always")),),
+            profile={"language": "rust"},
+        ),
+        base=DANA,
+        at=OPENED,
+        after_seconds=600,
+    )
+
+    lamp.store.forget(DANA)
+
+    assert lamp.store.namespace_node(DANA) is None
+    assert lamp.profiles.current(DANA, "preferences") is None
+    assert lamp.profiles.history(DANA, "preferences") == []
+    assert lamp.queue.pending(base=DANA) == []
+    assert lamp.queue.history() == []
+
+    # Nothing is left that could write into the namespace after it is retired.
+    assert lamp.queue.run_due(now=NOON) == []
+    assert lamp.store.get((*DANA, "semantic"), "tests") is None
+    assert lamp.store.namespace_node(DANA) is None
+
+
+def test_forgetting_one_namespace_leaves_another_users_profile_and_queue_alone() -> None:
+    lamp = _lamp()
+    lamp.profiles.register(BOB, "preferences", default={**PROFILE_DEFAULT, "name": "Bob"}, at=OPENED)
+    lamp.store.insert((*DANA, "semantic"), "stack", _fact("billing", "runs on", "Litestar", "after"))
+    lamp.queue.submit(
+        Conversation(
+            thread="bob-thread",
+            messages=(Message("user", "Bob writes Go."),),
+            patches=(Patch(action="insert", collection="semantic", key="stack", value=_fact("billing", "runs on", "Django", "always")),),
+        ),
+        base=BOB,
+        at=OPENED,
+        after_seconds=600,
+    )
+
+    lamp.store.forget(DANA)
+
+    assert lamp.profiles.require(BOB, "preferences").value["name"] == "Bob"
+    assert [submission.thread for submission in lamp.queue.pending(base=BOB)] == ["bob-thread"]
+
+    runs = lamp.queue.run_due(now=NOON, base=BOB)
+
+    assert [run.thread for run in runs] == ["bob-thread"]
+    assert lamp.store.require((*BOB, "semantic"), "stack").value["object"] == "Django"
+
+
 def test_the_profile_is_one_document_whose_earlier_versions_stay_readable() -> None:
     lamp = _lamp()
 

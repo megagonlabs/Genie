@@ -111,7 +111,7 @@ class ProfileStore:
             raise ValueError(f"Profile {profile_name!r} already exists in {namespace_path(target)!r}.")
         opening = self._check(json_mapping(default, field="default"))
         identity = self.structures.tiers.create_child(
-            parent=self.structures.profile_root,
+            parent=self.structures.ensure_namespace(target),
             type=PROFILE_TYPE,
             value={"namespace": list(target), "name": profile_name},
             metadata={"namespace_path": namespace_path(target), "name": profile_name},

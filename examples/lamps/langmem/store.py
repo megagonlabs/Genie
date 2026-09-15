@@ -29,7 +29,6 @@ from typing import Any
 
 from examples.lamps.langmem.model import (
     ITEM_TYPE,
-    NAMESPACE_TYPE,
     SEARCH_LIMIT,
     MemoryItem,
     Namespace,
@@ -113,7 +112,7 @@ class MemoryStore:
             raise ValueError(f"Item {item_key!r} already exists in namespace {namespace_path(target)!r}.")
         checked, schema_name = self._check(target, item_value)
         block = self.structures.tiers.create_child(
-            parent=self._ensure_namespace(target),
+            parent=self.structures.ensure_namespace(target),
             type=ITEM_TYPE,
             value={"namespace": list(target), "key": item_key, "value": checked},
             metadata=item_metadata(target, item_key, schema_name=schema_name),
@@ -310,16 +309,10 @@ class MemoryStore:
             value: Namespace to look up.
 
         Returns:
-            The namespace block, or `None` when nothing has been stored there.
+            The namespace block, or `None` when the path was never created.
         """
 
-        node = self.structures.namespaces
-        for segment in namespace(*value):
-            child = self._segment_child(node, segment)
-            if child is None:
-                return None
-            node = child
-        return node
+        return self.structures.namespace_node(value)
 
     def forget(self, value: Sequence[str]) -> list[MemoryItem]:
         """Delete a namespace and everything addressed at or below it.
@@ -327,13 +320,20 @@ class MemoryStore:
         A key-value store has no answer for "this user left"; every key has to
         be found and removed one at a time. Because each namespace segment owns
         what is stored below it, ownership answers it in one call: the subtree
-        goes, and the keyed bindings go with the blocks they pointed at.
+        goes, and the structure bindings go with the blocks they pointed at.
+
+        The subtree is everything that belongs to the user, not only their
+        items. Their profile and any conversation still queued for them are
+        owned by the same namespace block, so nothing is left behind that could
+        write to the namespace after it is retired.
 
         Args:
             value: Namespace to retire.
 
         Returns:
-            The items that were removed, in ascending address order.
+            The items that were removed, in ascending address order. The
+            profile and queued submissions that went with them are not listed,
+            because they are not items.
 
         Raises:
             KeyError: If the namespace holds nothing.
@@ -346,36 +346,6 @@ class MemoryStore:
         removed = self.items(target)
         self.structures.tiers.delete_subtree(node)
         return removed
-
-    def _ensure_namespace(self, value: Namespace) -> MemoryBlock:
-        """Return the block owning one namespace, creating the path as needed."""
-
-        node = self.structures.namespaces
-        path: list[str] = []
-        for segment in value:
-            path.append(segment)
-            child = self._segment_child(node, segment)
-            if child is None:
-                child = self.structures.tiers.create_child(
-                    parent=node,
-                    type=NAMESPACE_TYPE,
-                    value={"segment": segment, "path": namespace_path(path)},
-                    metadata={"segment": segment, "path": namespace_path(path)},
-                )
-            node = child
-        return node
-
-    def _segment_child(self, node: MemoryBlock, segment: str) -> MemoryBlock | None:
-        """Return the namespace child of `node` named `segment`, if any."""
-
-        return next(
-            (
-                child
-                for child in self.structures.tiers.children(node)
-                if child.type == NAMESPACE_TYPE and child.metadata.get("segment") == segment
-            ),
-            None,
-        )
 
     def _check(self, value: Namespace, item_value: Any) -> tuple[Any, str | None]:
         """Validate a value against its namespace schema, if one is registered."""

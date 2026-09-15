@@ -108,7 +108,7 @@ class ReflectionQueue:
         superseded = self._pending_for_thread(thread, base=target)
         messages, patches, profile = _fold(superseded, conversation)
         block = self.structures.tiers.create_child(
-            parent=self.structures.queue_root,
+            parent=self.structures.ensure_namespace(target),
             type=SUBMISSION_TYPE,
             value={
                 "thread": thread,
