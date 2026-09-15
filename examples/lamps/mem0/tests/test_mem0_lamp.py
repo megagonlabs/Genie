@@ -17,6 +17,8 @@ from examples.lamps.mem0.model import (
     MEMORY_NAMESPACE,
     MEMORY_TYPE,
     PROCEDURAL,
+    READ_LIMIT,
+    SCOPE_TYPE,
     STORE_TYPE,
     Fact,
     Message,
@@ -429,6 +431,31 @@ def test_retiring_one_run_leaves_the_user_wide_entities_alone() -> None:
 
     assert lamp.client.get_all(ALICE_USER) == []
     assert lamp.graph.entity_names(ALICE_USER) == ["Alice", "vegetarian"]
+
+
+def test_entity_nodes_are_owned_by_their_namespace() -> None:
+    lamp = _lamp()
+    lamp.client.add(ALICE, relations=(Triplet("Alice", "diet", "vegetarian"),), at=MONDAY)
+    lamp.client.add(BOB, relations=(Triplet("Bob", "prefers", "night train"),), at=MONDAY)
+
+    scopes = lamp.structures.tiers.children(lamp.structures.entity_root)
+
+    assert [block.metadata["segment"] for block in scopes] == ["user:alice", "user:bob"]
+    assert all(block.type == SCOPE_TYPE for block in scopes)
+    assert [block.metadata["entity"] for block in lamp.structures.tiers.children(scopes[1])] == ["bob", "night train"]
+
+
+def test_retiring_a_namespace_clears_more_entities_than_one_read_returns() -> None:
+    lamp = _lamp()
+    for index in range(READ_LIMIT + 5):
+        lamp.graph.ensure_entity(ALICE_USER, f"entity-{index:05d}")
+
+    assert len(lamp.graph.entities(ALICE_USER, limit=READ_LIMIT)) == READ_LIMIT
+
+    lamp.graph.drop(ALICE_USER)
+
+    assert lamp.structures.tiers.children(lamp.structures.entity_root) == []
+    assert lamp.graph.entity_names(ALICE_USER) == []
 
 
 def test_storing_an_exchange_verbatim_skips_both_phases() -> None:

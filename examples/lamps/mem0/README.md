@@ -74,7 +74,7 @@ the ones above it:
 | Graph relationship | `PropertyGraph` edge with a typed relation |
 | A contradicted relationship | The edge marked retracted, since Genie has no link delete |
 | `search` returning `relations` | The graph read that runs beside the memory search |
-| Graph memory cleared with the scope | The entity blocks deleted; Genie drops their links |
+| Graph memory cleared with the scope | `OwnershipTree.delete_subtree` on that namespace block |
 | Agent access | Named JSON-compatible tools |
 
 Three ownership tiers sit below one store root. That mirrors the fact that
@@ -84,7 +84,7 @@ upstream these are three independent stores:
 mem0.store                        one memory layer
   memories                        the session tree, and the memories in it
   history                         one identity per memory, one event per change
-  entities                        graph nodes, and the edges between them
+  entities                        one namespace per user, its nodes, and their edges
 ```
 
 ## A filter and a subtree select the same memories
@@ -147,7 +147,8 @@ adds.
 - **The demo shows that honestly.** The hotel memory is corrected from the Riverside Inn to the Cedar Lodge through the direct path, and the entity graph still says `Alice stays at Riverside Inn`, because no graph extraction ran. It reads like an inconsistency because upstream it is one.
 - **Entities are addressed by folded name inside the session's outermost identifier,** which is the level upstream scopes graph nodes at. So two runs of the same user share one node per entity, and resolving an extracted name is a keyed lookup rather than a scan.
 - **A contradicted relationship is marked retracted, not deleted,** because Genie has no operation that removes a single link. It is filtered out of reads instead. That fits the rest of the lamp, where a change stays readable, and it means a retracted edge and its replacement sit side by side.
-- **Retiring a whole entity namespace does clear the graph,** the way upstream clears graph memory alongside the vector store. It clears it by deleting the entity blocks, because Genie removes the links of a deleted block. So the relationships go with the entities that anchored them, rather than being unlinked one at a time.
+- **Retiring a whole entity namespace does clear the graph,** the way upstream clears graph memory alongside the vector store. The namespace owns its nodes, so this is one `delete_subtree`, for the same reason retiring a run is. Deleting the nodes is all it takes: Genie drops the links and the keyed bindings of a deleted block, so the relationships go with the entities that anchored them rather than being unlinked one at a time.
+- **That matters beyond tidiness.** A walk that deletes each node it read can only retire as much as one read page returns, so a namespace larger than `READ_LIMIT` would be half-cleared. A subtree is the whole namespace by definition.
 - **Retiring a single run leaves them alone,** since entities are shared above that level.
 
 ## Tools and workflow

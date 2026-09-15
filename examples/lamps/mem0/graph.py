@@ -18,6 +18,9 @@ The Genie side:
   level upstream scopes graph nodes at. So resolving an extracted name is one
   keyed lookup rather than a scan, and listing a user's entities is one
   namespaced read.
+- That namespace is also a block, and it owns the nodes addressed inside it. So
+  clearing a user's graph is one `delete_subtree`, the same operation that
+  retires their memories.
 - Genie has no operation that removes a single link, so a retracted relationship
   is marked rather than deleted. That fits the rest of the lamp, where a change
   is something you can still read afterwards.
@@ -32,6 +35,7 @@ from examples.lamps.mem0.model import (
     ENTITY_TYPE,
     READ_LIMIT,
     RELATION_PREFIX,
+    SCOPE_TYPE,
     GraphChange,
     GraphRelation,
     Session,
@@ -119,16 +123,7 @@ class GraphMemory:
             edge appears once, walked from the entity it starts at.
         """
 
-        found: list[GraphRelation] = []
-        for block in self.entities(session, limit=limit):
-            for edge in self.structures.graph.edges(block, direction="out"):
-                if not edge.relation.startswith(RELATION_PREFIX):
-                    continue
-                relation = self._relation(session, edge)
-                if relation.retracted and not include_retracted:
-                    continue
-                found.append(relation)
-        return _ordered(found)
+        return self._relations_of(self.entities(session, limit=limit), session, include_retracted=include_retracted)
 
     def relations_for(self, session: Session, query: str, *, limit: int = READ_LIMIT) -> list[GraphRelation]:
         """Return the relationships attached to the entities a query names.
@@ -220,7 +215,7 @@ class GraphMemory:
         key = entity_key(display)
         namespace = self.namespace(session)
         block = self.structures.tiers.create_child(
-            parent=self.structures.entity_root,
+            parent=self._ensure_scope(session),
             type=ENTITY_TYPE,
             value={"name": display, "key": key, "scope": list(namespace)},
             metadata={"entity": key, "scope": "/".join(namespace)},
@@ -236,9 +231,12 @@ class GraphMemory:
         """Delete one scope's entity namespace and every edge attached to it.
 
         Mem0 clears graph memory alongside the vector store when a scope is
-        retired. Deleting the nodes is enough here: Genie removes the links of a
-        deleted block, so the relationships go with the entities they connected
-        rather than being unlinked one at a time.
+        retired. Each namespace owns its own nodes here, so retiring it is one
+        `delete_subtree` rather than a walk that deletes each node in turn. That
+        is the same argument the memory tier makes: a listing that deletes what
+        it read can only retire as much as one read returns, while a subtree is
+        the whole namespace by definition. The edges and the keyed bindings go
+        with the blocks, because Genie drops both when a block is deleted.
 
         Args:
             session: Scope being retired. Nothing is deleted unless it names the
@@ -251,9 +249,12 @@ class GraphMemory:
 
         if session.path != self.namespace(session):
             return []
-        removed = self.relations(session, include_retracted=True)
-        for block in self.entities(session):
-            self.memory.delete(block)
+        node = self._scope_node(session)
+        if node is None:
+            return []
+        nodes = [block for block in self.structures.tiers.children(node) if block.type == ENTITY_TYPE]
+        removed = self._relations_of(nodes, session, include_retracted=True)
+        self.structures.tiers.delete_subtree(node)
         return removed
 
     def namespace(self, session: Session) -> tuple[str, ...]:
@@ -271,6 +272,47 @@ class GraphMemory:
         """
 
         return session.path[:1]
+
+    def _scope_node(self, session: Session) -> MemoryBlock | None:
+        """Return the block owning one entity namespace, when it exists."""
+
+        segment = self.namespace(session)[0]
+        return next(
+            (
+                child
+                for child in self.structures.tiers.children(self.structures.entity_root)
+                if child.type == SCOPE_TYPE and child.metadata.get("segment") == segment
+            ),
+            None,
+        )
+
+    def _ensure_scope(self, session: Session) -> MemoryBlock:
+        """Return the block owning one entity namespace, creating it when absent."""
+
+        existing = self._scope_node(session)
+        if existing is not None:
+            return existing
+        namespace = self.namespace(session)
+        return self.structures.tiers.create_child(
+            parent=self.structures.entity_root,
+            type=SCOPE_TYPE,
+            value={"segment": namespace[0], "path": list(namespace)},
+            metadata={"segment": namespace[0], "scope": "/".join(namespace)},
+        )
+
+    def _relations_of(self, blocks: list[MemoryBlock], session: Session, *, include_retracted: bool) -> list[GraphRelation]:
+        """Return the relationships that start at one set of entity nodes."""
+
+        found: list[GraphRelation] = []
+        for block in blocks:
+            for edge in self.structures.graph.edges(block, direction="out"):
+                if not edge.relation.startswith(RELATION_PREFIX):
+                    continue
+                relation = self._relation(session, edge)
+                if relation.retracted and not include_retracted:
+                    continue
+                found.append(relation)
+        return _ordered(found)
 
     def _edge(self, session: Session, triplet: Triplet, relation: str) -> MemoryLink | None:
         """Return the live edge matching one candidate, when there is one."""
