@@ -18,6 +18,9 @@ Two Genie facades over the same event blocks give both readings:
 - The events are owned by the history tier rather than by the memory they
   describe, which is the point: a deleted memory still has a readable history,
   and its final row is the deletion.
+- Each identity also keeps the scope path of the memory it describes. The events
+  outlive the memory, so the store can no longer answer who owned it, and a
+  caller that wants to scope-check a history read needs that answer here.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from examples.lamps.mem0.model import (
     RECORD_TYPE,
     HistoryEntry,
     MemoryEvent,
+    Session,
     format_timestamp,
     normalize_timestamp,
     optional_text,
@@ -62,6 +66,7 @@ class HistoryLog:
         memory_id: str,
         event: MemoryEvent,
         *,
+        session: Session,
         old_memory: str | None = None,
         new_memory: str | None = None,
         actor_id: str | None = None,
@@ -72,10 +77,14 @@ class HistoryLog:
 
         The identity a memory's history hangs from is registered on its first
         event, so a memory that is never written has no history record at all.
+        The scope is written on that identity and never changed afterwards,
+        because a memory stays in the scope it was created in.
 
         Args:
             memory_id: Memory the change applies to.
             event: `ADD`, `UPDATE`, or `DELETE`.
+            session: Scope the memory belongs to, kept on the identity so the
+                history stays attributable after the memory is deleted.
             old_memory: Text before the change, absent for an `ADD`.
             new_memory: Text after the change, absent for a `DELETE`.
             actor_id: Who the change came from, when a turn named a speaker.
@@ -97,11 +106,12 @@ class HistoryLog:
         address = MemoryAddress(HISTORY_NAMESPACE, identifier)
         identity = self.structures.history.identity(address)
         if identity is None:
+            scope = list(session.path)
             identity = self.structures.tiers.create_child(
                 parent=self.structures.history_root,
                 type=RECORD_TYPE,
-                value={"memory_id": identifier},
-                metadata={"memory_id": identifier},
+                value={"memory_id": identifier, "scope": scope},
+                metadata={"memory_id": identifier, "scope": "/".join(scope)},
             )
             self.structures.history.register(address, identity)
         block = self.structures.tiers.create_child(
@@ -140,6 +150,27 @@ class HistoryLog:
             _entry(revision.block, revision=revision.entry.revision)
             for revision in self.structures.history.history(address, limit=limit)
         ]
+
+    def owner(self, memory_id: str) -> tuple[str, ...] | None:
+        """Return the scope path of the memory one history belongs to.
+
+        Args:
+            memory_id: Memory to look the owning scope up for.
+
+        Returns:
+            The recorded path, or `None` when no memory with that id was ever
+            written. A deleted memory still answers, because the identity
+            outlives it.
+        """
+
+        address = MemoryAddress(HISTORY_NAMESPACE, required_text(memory_id, field="memory_id"))
+        identity = self.structures.history.identity(address)
+        if identity is None or not isinstance(identity.value, dict):
+            return None
+        recorded = cast(dict[str, Any], identity.value).get("scope")
+        if not isinstance(recorded, list):
+            return None
+        return tuple(str(segment) for segment in recorded)
 
     def journal(self, *, limit: int = READ_LIMIT) -> list[HistoryEntry]:
         """Return every recorded change to any memory, in applied order.

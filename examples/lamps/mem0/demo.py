@@ -90,8 +90,10 @@ def build_agent() -> Mem0Agent:
     """Assemble an empty store, its structures, and an agent over them.
 
     The tool set is bound to one user and one agent, so no tool argument can
-    name another user's memories. A run is a tool argument, because upstream a
-    run is one conversation and is passed per call.
+    name another user's memories. The client below keeps upstream's flat id
+    space, so the tools taking a memory id check it against the bound scope. A
+    run is a tool argument, because upstream a run is one conversation and is
+    passed per call.
 
     Returns:
         An agent whose only memory access is the named tool set.

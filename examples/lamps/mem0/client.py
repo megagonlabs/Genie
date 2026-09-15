@@ -190,6 +190,23 @@ class Mem0Memory:
 
         return self.store.get(memory_id)
 
+    def owner(self, memory_id: str) -> tuple[str, ...] | None:
+        """Return the scope path one memory id belongs to.
+
+        The id space is flat, so this is the lookup a caller needs to decide
+        whether an id it was handed is inside the scope it is allowed to touch.
+        It is answered from the history tier rather than from the store, so a
+        deleted id still resolves and cannot be mistaken for an unused one.
+
+        Args:
+            memory_id: Id to look up.
+
+        Returns:
+            The path, or `None` when no memory with that id was ever written.
+        """
+
+        return self.history_log.owner(memory_id)
+
     def get_all(
         self,
         session: Session,
@@ -306,6 +323,7 @@ class Mem0Memory:
             self.history_log.record(
                 memory.memory_id,
                 "DELETE",
+                session=memory.session,
                 old_memory=memory.text,
                 actor_id=memory.session.actor_id,
                 at=applied_at,
@@ -385,6 +403,7 @@ class Mem0Memory:
             self.history_log.record(
                 target.memory_id,
                 "DELETE",
+                session=removed.session,
                 old_memory=removed.text,
                 actor_id=decision.fact.actor_id,
                 role=decision.fact.role,
@@ -395,6 +414,7 @@ class Mem0Memory:
         self.history_log.record(
             target.memory_id,
             "UPDATE",
+            session=updated.session,
             old_memory=target.text,
             new_memory=updated.text,
             actor_id=decision.fact.actor_id,
@@ -425,6 +445,7 @@ class Mem0Memory:
         self.history_log.record(
             stored.memory_id,
             "ADD",
+            session=stored.session,
             new_memory=stored.text,
             actor_id=stored.session.actor_id,
             role=fact.role,

@@ -502,6 +502,60 @@ def test_a_tool_set_is_bound_to_one_user_and_cannot_be_argued_out_of_it() -> Non
         alice.call("reset_everything", {})
 
 
+def test_a_memory_id_from_another_scope_is_refused_like_an_unknown_one() -> None:
+    lamp = _lamp()
+    alice = Mem0Tools(lamp.client, session=Session(user_id="alice", agent_id="travel-agent"))
+    bob = Mem0Tools(lamp.client, session=Session(user_id="bob", agent_id="travel-agent"))
+    added = alice.call("add_memories", {"facts": [{"text": AISLE}], "at": "2025-04-10T09:00:00Z", "run": "trip-42"})
+    memory_id = added["results"][0]["id"]
+
+    assert alice.owns(memory_id) is True
+    assert bob.owns(memory_id) is False
+    assert bob.owns("nobody-stored-this") is False
+    assert bob.call("memory_history", {"memory_id": memory_id}) == {"memory_id": memory_id, "exists": False, "events": []}
+    assert bob.call("memory_history", {"memory_id": "nobody-stored-this"}) == {
+        "memory_id": "nobody-stored-this",
+        "exists": False,
+        "events": [],
+    }
+    with pytest.raises(KeyError, match="was not found"):
+        bob.call("update_memory", {"memory_id": memory_id, "text": "Bob rewrote this", "at": "2025-04-14T09:00:00Z"})
+    with pytest.raises(KeyError, match="was not found"):
+        bob.call("delete_memory", {"memory_id": memory_id, "at": "2025-04-14T09:00:00Z"})
+
+    assert [memory["memory"] for memory in alice.call("list_memories", {})["results"]] == [AISLE]
+
+
+def test_the_bound_scope_reaches_every_run_below_it_and_nothing_beside_it() -> None:
+    lamp = _lamp()
+    agent_wide = Mem0Tools(lamp.client, session=Session(user_id="alice", agent_id="travel-agent"))
+    one_run = Mem0Tools(lamp.client, session=Session(user_id="alice", agent_id="travel-agent", run_id="trip-99"))
+    added = agent_wide.call("add_memories", {"facts": [{"text": AISLE}], "at": "2025-04-10T09:00:00Z", "run": "trip-42"})
+    memory_id = added["results"][0]["id"]
+
+    assert agent_wide.owns(memory_id) is True
+    assert one_run.owns(memory_id) is False
+    assert agent_wide.call("update_memory", {"memory_id": memory_id, "text": WINDOW, "at": "2025-04-14T09:00:00Z"})["event"] == "UPDATE"
+
+
+def test_a_history_stays_readable_and_scoped_after_the_memory_is_deleted() -> None:
+    lamp = _lamp()
+    alice = Mem0Tools(lamp.client, session=Session(user_id="alice", agent_id="travel-agent", run_id="trip-42"))
+    bob = Mem0Tools(lamp.client, session=Session(user_id="bob", agent_id="travel-agent"))
+    added = alice.call("add_memories", {"facts": [{"text": AISLE}], "at": "2025-04-10T09:00:00Z"})
+    memory_id = added["results"][0]["id"]
+    alice.call("delete_memory", {"memory_id": memory_id, "at": "2025-04-14T09:00:00Z"})
+
+    after = alice.call("memory_history", {"memory_id": memory_id})
+
+    assert lamp.history.owner(memory_id) == ("user:alice", "agent:travel-agent", "run:trip-42")
+    assert lamp.client.owner(memory_id) == ("user:alice", "agent:travel-agent", "run:trip-42")
+    assert lamp.client.owner("nobody-stored-this") is None
+    assert after["exists"] is False
+    assert [event["event"] for event in after["events"]] == ["ADD", "DELETE"]
+    assert bob.call("memory_history", {"memory_id": memory_id})["events"] == []
+
+
 def test_tools_return_json_compatible_results_for_every_call() -> None:
     lamp = _lamp()
     tools = Mem0Tools(lamp.client, session=Session(user_id="alice", agent_id="travel-agent", run_id="trip-42"))

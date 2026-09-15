@@ -9,8 +9,12 @@ is how little the caller controls.
 - That asymmetry is why the tools here return the decisions rather than a
   success flag. The call log is where the agent's memory writes become
   inspectable.
-- The user and agent identifiers are bound once, at construction, so no tool
-  argument can name another user's memories.
+- The user and agent identifiers are bound once, at construction, and no tool
+  argument can name another user's memories. The client below keeps one flat id
+  space, as upstream does, so the three tools that take a memory id check that
+  the id is inside the bound scope before they act. That check belongs here
+  rather than in the client, because this is the layer a model supplies
+  arguments to.
 - A run is a tool argument, because a run is one conversation and upstream
   passes it per call. It can only narrow the bound scope, never leave it.
 - The example agent chooses its calls from explicit inputs rather than from a
@@ -85,7 +89,8 @@ class Mem0Tools:
             session: Scope every call is made inside, normally naming the
                 user and agent only. A `run_id` on it becomes the default run,
                 which a call may replace; the user and agent cannot be named by
-                any tool argument at all.
+                any tool argument at all. A memory id from outside this scope is
+                refused the same way an unknown id is.
         """
 
         self.client = client
@@ -138,6 +143,45 @@ class Mem0Tools:
             run_id=selected or self.session.run_id,
             actor_id=optional_text(actor, field="actor") or self.session.actor_id,
         )
+
+    def owns(self, memory_id: str) -> bool:
+        """Report whether one memory id is inside the bound scope.
+
+        The bound path is a prefix test, so a tool set bound to a user and an
+        agent reaches every run below them, and nothing beside them.
+
+        Args:
+            memory_id: Id supplied as a tool argument.
+
+        Returns:
+            `True` when a memory with that id was written inside the bound
+            scope, including one since deleted.
+        """
+
+        bound = self.session.path
+        owner = self.client.owner(required_text(memory_id, field="memory_id"))
+        return owner is not None and owner[: len(bound)] == bound
+
+    def _require_own(self, memory_id: str) -> str:
+        """Return the id, or refuse it exactly as an unknown id is refused.
+
+        An id outside the bound scope and an id that was never written give the
+        same `KeyError`, so a tool set cannot be used to test which ids exist in
+        somebody else's scope.
+
+        Args:
+            memory_id: Id supplied as a tool argument.
+
+        Returns:
+            The id, when it is inside the bound scope.
+
+        Raises:
+            KeyError: If the id is unknown or belongs to another scope.
+        """
+
+        if not self.owns(memory_id):
+            raise KeyError(f"Memory {memory_id!r} was not found.")
+        return memory_id
 
     def _add_memories(
         self,
@@ -215,7 +259,7 @@ class Mem0Tools:
         """Implement `update_memory`, the caller's own correction."""
 
         change = self.client.update(
-            memory_id,
+            self._require_own(memory_id),
             text,
             metadata=json_mapping(metadata, field="metadata") or None,
             actor_id=optional_text(actor, field="actor"),
@@ -227,15 +271,21 @@ class Mem0Tools:
         """Implement `delete_memory`, the caller's own removal."""
 
         change = self.client.delete(
-            memory_id,
+            self._require_own(memory_id),
             actor_id=optional_text(actor, field="actor"),
             at=parse_timestamp(at, field="at"),
         )
         return change.as_json()
 
     def _memory_history(self, *, memory_id: str) -> dict[str, Any]:
-        """Implement `memory_history` for one memory, deleted or not."""
+        """Implement `memory_history` for one memory, deleted or not.
 
+        An id from another scope reads as an id that was never written, which is
+        the same answer this tool already gives for an unknown id.
+        """
+
+        if not self.owns(memory_id):
+            return {"memory_id": memory_id, "exists": False, "events": []}
         entries = self.client.history(memory_id)
         return {
             "memory_id": memory_id,

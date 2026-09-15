@@ -99,7 +99,7 @@ mem0.store                        one memory layer
 | Retire one run | List and delete each record | One `delete_subtree` |
 
 - **The last row is the important one.** The lamp does not delete the keyed bindings. They go when the blocks they point at go, because a binding refers to a block rather than copying it. So a run cannot be half-retired, and a freed memory id can be bound again.
-- **The id space stays flat,** which is the other half of the split. Upstream, `get`, `update`, and `delete` take a memory id and no scope. So the id is a `KeyedCollection` address in one namespace, while the session is a path in the tree. One lookup by identity, one by scope, each on the structure that fits it.
+- **The id space stays flat,** which is the other half of the split. Upstream, `get`, `update`, and `delete` take a memory id and no scope. So the id is a `KeyedCollection` address in one namespace, while the session is a path in the tree. One lookup by identity, one by scope, each on the structure that fits it. A flat id space trusts its caller, which is why the tool layer above it checks the scope rather than the client doing it.
 - **Search is split the way Genie draws the line.** Choosing candidates is the backend's job: the session becomes a scope, the block type and any metadata filter go into the query, and one search runs per query term. Scoring is the lamp's job, because Genie has no ranking.
 - **Scoring detail:** a candidate counts a term only when the term appears in the memory's own text, and the score is the share of terms that do. Ties break on creation time and then on text, not on `MemoryBlock.id`, because block ids are new UUIDs on every run and a tie broken by id would make results differ between runs.
 
@@ -162,7 +162,9 @@ adds.
 | `memory_history` | Read every change recorded for one memory |
 | `forget_scope` | Retire the bound scope, or one run inside it |
 
-- **The tool set is bound to one user and one agent at construction,** so no tool argument can name another user's memories. The lamp's tests check that by building two tool sets over one store.
+- **The tool set is bound to one user and one agent at construction,** so no tool argument can name another user's memories. The lamp's tests check that by building two tool sets over one store and calling every tool from the wrong one.
+- **The three id-addressed tools enforce that binding themselves.** `Mem0Memory` keeps one flat id space, as upstream does, so `update_memory`, `delete_memory`, and `memory_history` check that the id is inside the bound scope before acting. The check lives in `Mem0Tools` rather than in the client, because the client is called by application code that already knows which user it serves, while a tool argument is chosen by a model.
+- **An id from another scope is refused exactly as an unknown id is,** so a tool set cannot be used to test which ids exist elsewhere. `Mem0Memory.owner` answers the check from the history tier rather than from the store, so a deleted id still resolves to the scope it was written in.
 - **A run *is* a tool argument,** because upstream a run is one conversation and is passed per call, but it can only narrow the bound scope.
 
 The agent learns Alice's travel preferences across two runs:
