@@ -167,7 +167,9 @@ In the demo, three pieces of feedback produce two versions:
 | `optimize_prompt` | Fold feedback into a prompt, if it changes the rules |
 | `get_prompt` | Read the prompt the agent runs with, and its earlier versions |
 
-- **Every tool is bound to `("memories", "{user_id}")`,** with `user_id` supplied once at construction. No tool argument names a user, so a tool set built for one user cannot address another user's memories. The lamp's tests check that by building two tool sets over one store.
+- **Every namespace-addressed tool is bound to `("memories", "{user_id}")`,** with `user_id` supplied once at construction. No tool argument names a user, so a tool set built for one user cannot address another user's memories. The lamp's tests check that by building two tool sets over one store.
+- **One queue tier holds every namespace's submissions,** so `submit_conversation` and `run_reflection` pass the bound namespace down. A tool set runs only its own user's due work and sees only its own user's pending threads. A thread name is unique inside one namespace, not across the store, so the debounce matches on the pair and two users picking the same thread name leave each other alone.
+- **`optimize_prompt` and `get_prompt` sit outside that boundary, on purpose.** A prompt is the agent's own instructions rather than one user's memory, so prompts live in a shared `("prompts",)` namespace outside the user path. Every tool set reads and revises the same ones, and a revision one user's feedback produces governs the agent for all of them.
 
 The agent learns Dana's code-review preferences from three conversations:
 

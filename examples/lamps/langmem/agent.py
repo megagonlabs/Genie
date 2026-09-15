@@ -12,9 +12,15 @@ restricted by `actions_permitted`, the manager by `enable_inserts` and its
 siblings. This module keeps both gates, so the difference is visible in the call
 log.
 
-- Every tool is bound to a namespace template resolved once, at construction,
-  from request-scoped values. So no tool argument names a user, and a tool set
-  built for one user cannot address another's memories.
+- Every namespace-addressed tool is bound to a namespace template resolved once,
+  at construction, from request-scoped values. So no tool argument names a user,
+  and a tool set built for one user cannot address another's memories. One queue
+  tier holds every namespace's submissions, so the two queue tools pass the bound
+  namespace down and see only their own user's work.
+- `optimize_prompt` and `get_prompt` are the exception, on purpose. A prompt is
+  the agent's own instructions rather than one user's memory, so prompts live in
+  a shared `("prompts",)` namespace outside the user path and every tool set
+  reads and revises the same ones.
 - The agent decides which tools to call from explicit inputs rather than from a
   model, which keeps the example runnable with no API key. Extraction and prompt
   rewriting are the two steps that genuinely need a model upstream, so the agent
@@ -265,13 +271,13 @@ class LangMemTools:
         """Implement `run_reflection` over the submissions that are due."""
 
         moment = parse_timestamp(now, field="now")
-        runs = self.queue.run_due(now=moment)
+        runs = self.queue.run_due(now=moment, base=self.namespace)
         return {
             "now": format_timestamp(moment),
             "runs": [_run(run) for run in runs],
             "still_pending": [
                 {"thread": submission.thread, "due_at": format_timestamp(submission.due_at)}
-                for submission in self.queue.pending()
+                for submission in self.queue.pending(base=self.namespace)
             ],
         }
 

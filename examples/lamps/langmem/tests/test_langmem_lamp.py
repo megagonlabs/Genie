@@ -495,6 +495,85 @@ def test_a_submission_inside_its_delay_window_is_left_on_the_queue() -> None:
     assert lamp.queue.pending() == []
 
 
+def test_run_reflection_runs_only_the_queue_of_the_user_it_is_bound_to() -> None:
+    lamp = _lamp()
+    dana = _tools(lamp)
+    bob = _tools(lamp, user="bob")
+    dana.call(
+        "submit_conversation",
+        {
+            "thread": "review-812",
+            "messages": [{"role": "user", "content": "It runs on Litestar."}],
+            "at": datetime(2025, 5, 5, 9, tzinfo=UTC).isoformat(),
+            "patches": [
+                {
+                    "action": "insert",
+                    "collection": "semantic",
+                    "key": "stack",
+                    "value": _fact("billing", "runs on", "Litestar", "after the swap"),
+                }
+            ],
+        },
+    )
+
+    theirs = bob.call("run_reflection", {"now": NOON.isoformat()})
+
+    assert theirs["runs"] == []
+    assert theirs["still_pending"] == []
+    assert lamp.store.get((*DANA, "semantic"), "stack") is None
+
+    ours = dana.call("run_reflection", {"now": NOON.isoformat()})
+
+    assert [run["thread"] for run in ours["runs"]] == ["review-812"]
+    assert [outcome["address"] for outcome in ours["runs"][0]["applied"]] == ["semantic/stack"]
+    assert lamp.store.require((*DANA, "semantic"), "stack").value["object"] == "Litestar"
+
+
+def test_two_users_on_the_same_thread_name_do_not_supersede_each_other() -> None:
+    lamp = _lamp()
+    dana = _tools(lamp)
+    bob = _tools(lamp, user="bob")
+    dana.call(
+        "submit_conversation",
+        {
+            "thread": "review-812",
+            "messages": [{"role": "user", "content": "It runs on Litestar."}],
+            "at": datetime(2025, 5, 5, 9, tzinfo=UTC).isoformat(),
+            "after_seconds": 600,
+            "patches": [
+                {
+                    "action": "insert",
+                    "collection": "semantic",
+                    "key": "stack",
+                    "value": _fact("billing", "runs on", "Litestar", "after the swap"),
+                }
+            ],
+        },
+    )
+
+    theirs = bob.call(
+        "submit_conversation",
+        {
+            "thread": "review-812",
+            "messages": [{"role": "user", "content": "Mine is a different exchange."}],
+            "at": datetime(2025, 5, 5, 9, 4, tzinfo=UTC).isoformat(),
+            "after_seconds": 600,
+        },
+    )
+
+    assert theirs["superseded"] is None
+    assert theirs["messages"] == 1
+    assert theirs["patches"] == []
+    assert [submission.state for submission in lamp.queue.history()] == ["pending", "pending"]
+
+    ran = bob.call("run_reflection", {"now": NOON.isoformat()})
+
+    assert [run["thread"] for run in ran["runs"]] == ["review-812"]
+    assert ran["runs"][0]["applied"] == []
+    assert lamp.store.get((*BOB, "semantic"), "stack") is None
+    assert [submission.thread for submission in lamp.queue.pending(base=DANA)] == ["review-812"]
+
+
 def test_a_prompt_revision_is_written_only_when_the_rules_change() -> None:
     lamp = _lamp()
     naming = AnnotatedTrajectory(

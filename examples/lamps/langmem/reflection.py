@@ -105,7 +105,7 @@ class ReflectionQueue:
         delay = _delay(after_seconds)
         thread = required_text(conversation.thread, field="thread")
         target = namespace(*base)
-        superseded = self._pending_for_thread(thread)
+        superseded = self._pending_for_thread(thread, base=target)
         messages, patches, profile = _fold(superseded, conversation)
         block = self.structures.tiers.create_child(
             parent=self.structures.queue_root,
@@ -129,33 +129,43 @@ class ReflectionQueue:
             self._cancel(superseded, replaced_by=block.id)
         return _submission(entry.entry.sequence, block)
 
-    def pending(self) -> list[Submission]:
+    def pending(self, *, base: Sequence[str] | None = None) -> list[Submission]:
         """Return the submissions still waiting to run, earliest due first.
+
+        Args:
+            base: Namespace to read within. `None` reads every namespace, which
+                is what a background runner owning the whole store wants. A
+                caller acting for one user passes that user's namespace.
 
         Returns:
             Pending submissions in due order.
         """
 
-        return self._scheduled(stop=None)
+        return self._scheduled(stop=None, base=base)
 
-    def due(self, now: datetime) -> list[Submission]:
+    def due(self, now: datetime, *, base: Sequence[str] | None = None) -> list[Submission]:
         """Return the submissions whose delay has elapsed.
 
         Args:
             now: Current time.
+            base: Namespace to read within, as on `pending`.
 
         Returns:
             Due submissions in due order.
         """
 
-        return self._scheduled(stop=_inclusive(normalize_timestamp(now, field="now")))
+        return self._scheduled(stop=_inclusive(normalize_timestamp(now, field="now")), base=base)
 
-    def run_due(self, *, now: datetime) -> list[ManagerRun]:
+    def run_due(self, *, now: datetime, base: Sequence[str] | None = None) -> list[ManagerRun]:
         """Run the manager over every submission that has come due.
 
         Args:
             now: Current time. Submissions still inside their delay window are
                 left on the queue.
+            base: Namespace to run within. `None` runs every namespace, which
+                is what a background runner owning the whole store wants. A
+                caller acting for one user passes that user's namespace, so it
+                cannot run, or see the result of, another user's submission.
 
         Returns:
             One run per processed submission, in due order.
@@ -163,7 +173,7 @@ class ReflectionQueue:
 
         moment = normalize_timestamp(now, field="now")
         runs: list[ManagerRun] = []
-        for submission in self.due(moment):
+        for submission in self.due(moment, base=base):
             run = self.manager.apply(
                 Conversation(
                     thread=submission.thread,
@@ -199,11 +209,16 @@ class ReflectionQueue:
             for item in self.structures.queue.read(limit=SEARCH_LIMIT)
         ]
 
-    def _pending_for_thread(self, thread: str) -> Submission | None:
-        """Return the submission still waiting on one thread, if any."""
+    def _pending_for_thread(self, thread: str, *, base: Namespace) -> Submission | None:
+        """Return the submission still waiting on one thread, if any.
+
+        A thread name is only unique inside one namespace, so the match is on
+        the pair. Without that, two users picking the same thread name would
+        cancel and absorb each other's queued work.
+        """
 
         return next(
-            (submission for submission in self.pending() if submission.thread == thread),
+            (submission for submission in self.pending(base=base) if submission.thread == thread),
             None,
         )
 
@@ -217,21 +232,30 @@ class ReflectionQueue:
         )
         self.structures.schedule.remove(submission.block)
 
-    def _scheduled(self, *, stop: datetime | None) -> list[Submission]:
+    def _scheduled(self, *, stop: datetime | None, base: Sequence[str] | None = None) -> list[Submission]:
         """Return the scheduled submissions due before `stop`, in due order.
 
         The temporal read gives the due order and the log read gives each
         submission its sequence, so the two facades are consulted once each
         rather than once per submission.
+
+        One queue tier holds every namespace's submissions, so `base` is
+        applied here, after the temporal read. `TemporalCollection` orders by
+        time and carries no metadata filter, so the namespace each submission
+        recorded is what narrows the result.
         """
 
+        wanted = None if base is None else namespace(*base)
         sequences = {item.block.id: item.entry.sequence for item in self.structures.queue.read(limit=SEARCH_LIMIT)}
         scheduled: list[Submission] = []
         for item in self.structures.schedule.events(stop=stop, limit=SEARCH_LIMIT):
             sequence = sequences.get(item.block.id)
             if sequence is None:
                 raise KeyError(f"Submission {item.block.id!r} is not on the queue log.")
-            scheduled.append(_submission(sequence, item.block))
+            submission = _submission(sequence, item.block)
+            if wanted is not None and self._namespace_of(submission) != wanted:
+                continue
+            scheduled.append(submission)
         return scheduled
 
     def _namespace_of(self, submission: Submission) -> Namespace:
