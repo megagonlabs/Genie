@@ -113,7 +113,8 @@ class MemoryManager:
 
         Returns:
             What happened to every proposed change, in proposal order, plus the
-            profile if the conversation revised one.
+            profile if the conversation revised one and why the revision was
+            refused if it was.
 
         Raises:
             KeyError: If the conversation revises a profile that is not
@@ -123,12 +124,14 @@ class MemoryManager:
         ran_at = normalize_timestamp(at, field="at")
         target = namespace(*base)
         outcomes = tuple(self._apply_patch(patch, base=target, source=source) for patch in conversation.patches)
+        profile, profile_reason = self._revise_profile(conversation, base=target, source=source, at=ran_at)
         return ManagerRun(
             thread=conversation.thread,
             source_id=None if source is None else source.id,
             ran_at=ran_at,
             outcomes=outcomes,
-            profile=self._revise_profile(conversation, base=target, source=source, at=ran_at),
+            profile=profile,
+            profile_reason=profile_reason,
         )
 
     def _apply_patch(
@@ -187,16 +190,25 @@ class MemoryManager:
         base: Namespace,
         source: MemoryBlock | None,
         at: datetime,
-    ) -> Profile | None:
-        """Merge a conversation's profile fields, recording what changed it."""
+    ) -> tuple[Profile | None, str | None]:
+        """Merge a conversation's profile fields, recording what changed it.
+
+        The permissions cover this write too. A profile is always patched in
+        place, because `register` is what creates one, so `update` is the
+        permission a revision asks for. A refusal is returned rather than
+        raised, the same way a refused patch is, and leaves the profile at the
+        version it already had.
+        """
 
         if not conversation.profile:
-            return None
+            return None, None
         before = self.profiles.require(base, self.profile_name)
+        if not self.permissions["update"]:
+            return before, "update is not enabled for this manager"
         after = self.profiles.update(base, self.profile_name, conversation.profile, at=at)
         if source is not None and after.revision != before.revision:
             self._link(source, after.block, role="revised")
-        return after
+        return after, None
 
     def _record_source(self, source: MemoryBlock | None, item: MemoryItem) -> None:
         """Record which conversation a stored memory came from."""

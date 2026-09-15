@@ -655,6 +655,7 @@ def _run(run: ManagerRun) -> dict[str, Any]:
         "applied": [_outcome(outcome) for outcome in run.applied],
         "refused": [_outcome(outcome) for outcome in run.refused],
         "profile": None if run.profile is None else _profile(run.profile),
+        "profile_refused": run.profile_reason,
     }
 
 

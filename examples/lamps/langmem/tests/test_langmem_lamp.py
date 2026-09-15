@@ -307,6 +307,47 @@ def test_the_manager_refuses_the_kinds_of_change_it_is_not_enabled_for() -> None
     assert lamp.store.get((*DANA, "semantic"), "stale") is not None
 
 
+def test_the_manager_refuses_a_profile_revision_it_is_not_enabled_for() -> None:
+    lamp = _lamp(enable_updates=False)
+    submission = lamp.queue.submit(
+        Conversation(
+            thread="review-831",
+            messages=(Message("user", "Be direct with me."),),
+            profile={"review_tone": "direct"},
+        ),
+        base=DANA,
+        at=NOON,
+    )
+
+    run = lamp.queue.run_due(now=NOON)[0]
+    profile = lamp.profiles.require(DANA, "preferences")
+
+    assert run.profile_reason == "update is not enabled for this manager"
+    assert run.profile is not None and run.profile.revision == 1
+    assert profile.revision == 1
+    assert profile.value["review_tone"] == "neutral"
+    assert [version.revision for version in lamp.profiles.history(DANA, "preferences")] == [1]
+    assert lamp.structures.lineage.successors(submission.block) == []
+
+
+def test_a_manager_that_may_update_still_revises_the_profile() -> None:
+    lamp = _lamp(enable_updates=True)
+
+    run = lamp.manager.apply(
+        Conversation(
+            thread="review-832",
+            messages=(Message("user", "Be direct with me."),),
+            profile={"review_tone": "direct"},
+        ),
+        base=DANA,
+        at=NOON,
+    )
+
+    assert run.profile_reason is None
+    assert run.profile is not None and run.profile.revision == 2
+    assert lamp.profiles.require(DANA, "preferences").value["review_tone"] == "direct"
+
+
 def test_the_manager_turns_a_colliding_insert_into_a_patch_of_the_stored_memory() -> None:
     lamp = _lamp()
     stored = lamp.store.insert((*DANA, "semantic"), "stack", _fact("billing", "runs on", "FastAPI", "before"))

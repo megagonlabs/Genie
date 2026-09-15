@@ -113,6 +113,7 @@ structures. That is why `store.py` and `profiles.py` are separate modules.
 
 - **The manager is what makes LangMem a memory system rather than a store.** It reads an exchange, looks at what is already on file, and returns the changes it wants to make.
 - **Because the changes are returned rather than written, each kind can be permitted separately** — and upstream, deletes are off by default.
+- **The profile is gated by the same permissions.** A profile revision is a patch of a document `register` already created, so `enable_updates` is what it asks for. A manager that may not update leaves the profile at the version it already had and reports `profile_refused`, the same way a refused patch comes back as a result rather than an error.
 
 Two things follow, and the demo shows both directly:
 

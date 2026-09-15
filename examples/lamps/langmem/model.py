@@ -521,7 +521,9 @@ class ManagerRun:
             from the queue rather than from a hot-path tool call.
         ran_at: When the manager ran.
         outcomes: What happened to every proposed change, in proposal order.
-        profile: Profile after the run, when the conversation revised one.
+        profile: Profile after the run, when the conversation revised one. It
+            is the profile as it still stands when the revision was refused.
+        profile_reason: Why the profile revision was refused, when it was.
     """
 
     thread: str
@@ -529,6 +531,7 @@ class ManagerRun:
     ran_at: datetime
     outcomes: tuple[PatchOutcome, ...]
     profile: Profile | None = None
+    profile_reason: str | None = None
 
     @property
     def applied(self) -> tuple[PatchOutcome, ...]:
