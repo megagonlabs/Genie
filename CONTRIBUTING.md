@@ -11,13 +11,13 @@ the memory model or the public interfaces is welcome.
 ```bash
 python -m venv .venv --prompt genie
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-python -m pip install -e ".[dev]"
+python -m pip install -e "./lib[dev]"
 ```
 
 - **`dev` installs `pytest` and `ruff`,** the only two tools this repository
   runs.
 - **Backend adapters are extras.** Add the ones you are working on:
-  `python -m pip install -e ".[dev,mongodb,neo4j,postgres,redis]"`.
+  `python -m pip install -e "./lib[dev,mongodb,neo4j,postgres,redis]"`.
 
 ## Run the checks
 
@@ -129,11 +129,20 @@ Apply these in proportion to the size and user-facing impact of the change.
 | `lib/benchmarks/` | The benchmark harness, standard library only |
 | `lib/tests/test_benchmarks.py` | Tests for that harness |
 | `lib/scripts/` | Repository-wide developer scripts |
+| `lib/pyproject.toml` | The `genie` package metadata, extras, and build settings |
+| `pytest.ini` | Repo-wide `pytest` settings |
+| `ruff.toml` | Repo-wide `ruff` settings |
 | `examples/basic/`, `examples/advanced/` | Small runnable examples |
 | `examples/lamps/<name>/`, `examples/lamps/<name>/tests/` | One architectural demonstration each |
 | `examples/expected/` | Captured output of every example |
 | `docs/design.md` | Architecture and safety boundaries |
 
+- **Packaging and tool settings are split on purpose.** `lib/pyproject.toml`
+  describes the `genie` package, so it sits next to the source in `lib/`.
+  `pytest.ini` and `ruff.toml` stay at the repository root, because they cover
+  `examples/` as well as `lib/` and `ruff` finds its settings by walking up
+  from each file. Install the package with `python -m pip install -e ./lib`,
+  and run `pytest` and `ruff` from the repository root.
 - **The benchmark harness stays out of `lib/tests/`** so a plain `pytest` run
   does not time operations.
 - **Examples run from the repository root** and use plain assertions. Keep them

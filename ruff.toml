@@ -1,0 +1,10 @@
+# Repo-wide ruff settings.
+#
+# These stay at the repository root because ruff looks for its settings by
+# walking up from each file. A config inside `lib/` would never reach
+# `examples/`. The `genie` package metadata lives in `lib/pyproject.toml`.
+
+line-length = 193
+
+# First-party import roots, so import sorting groups them correctly.
+src = ["lib/src", "lib", "."]

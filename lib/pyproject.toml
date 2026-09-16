@@ -43,16 +43,8 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["lib/src"]
+where = ["src"]
 include = ["genie*"]
 
 [tool.setuptools.package-data]
 genie = ["py.typed", "**/README.md"]
-
-[tool.pytest.ini_options]
-testpaths = ["lib/tests", "examples/lamps"]
-pythonpath = ["lib/src", "lib", "."]
-
-[tool.ruff]
-line-length = 193
-src = ["lib/src", "lib", "."]
