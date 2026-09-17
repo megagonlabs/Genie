@@ -2,7 +2,8 @@
 #
 # These stay at the repository root because ruff looks for its settings by
 # walking up from each file. A config inside `lib/` would never reach
-# `examples/`. The `genie` package metadata lives in `lib/pyproject.toml`.
+# `examples/`. The `genie` package metadata lives in `pyproject.toml`, also at
+# the root.
 
 line-length = 193
 

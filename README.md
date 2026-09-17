@@ -28,10 +28,10 @@ or define one memory schema for everyone.
 ```bash
 python -m venv .venv --prompt genie
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-python -m pip install -e ./lib
+python -m pip install -e .
 ```
 
-- **Optional backend adapters** come from extras: `python -m pip install -e "./lib[postgres]"`, and the same for `neo4j`, `mongodb`, and `redis`.
+- **Optional backend adapters** come from extras: `python -m pip install -e ".[postgres]"`, and the same for `neo4j`, `mongodb`, and `redis`.
 
 ## Quick start
 
@@ -155,7 +155,7 @@ from genie import EventLog, OwnershipTree
 Install the development extra, then run the checks from the repository root:
 
 ```bash
-python -m pip install -e "./lib[dev]"
+python -m pip install -e ".[dev]"
 python -m pytest
 python -m ruff check .
 python -m compileall -q lib/src/genie lib/tests examples

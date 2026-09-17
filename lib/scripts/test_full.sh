@@ -129,25 +129,25 @@ require_attempts GENIE_TEST_REDIS_READY_ATTEMPTS "$GENIE_TEST_REDIS_READY_ATTEMP
 
 if ! "$GENIE_TEST_PYTHON" -c "import psycopg" >/dev/null 2>&1; then
     echo "The PostgreSQL test dependency is missing from the active Python environment." >&2
-    echo "Install it with: python -m pip install -e \"./lib[dev,mongodb,neo4j,postgres,redis]\"" >&2
+    echo "Install it with: python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
     exit 1
 fi
 
 if ! "$GENIE_TEST_PYTHON" -c "import neo4j" >/dev/null 2>&1; then
     echo "The Neo4j test dependency is missing from the active Python environment." >&2
-    echo "Install it with: python -m pip install -e \"./lib[dev,mongodb,neo4j,postgres,redis]\"" >&2
+    echo "Install it with: python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
     exit 1
 fi
 
 if ! "$GENIE_TEST_PYTHON" -c "import pymongo" >/dev/null 2>&1; then
     echo "The MongoDB test dependency is missing from the active Python environment." >&2
-    echo "Install it with: python -m pip install -e \"./lib[dev,mongodb,neo4j,postgres,redis]\"" >&2
+    echo "Install it with: python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
     exit 1
 fi
 
 if ! "$GENIE_TEST_PYTHON" -c "import redis" >/dev/null 2>&1; then
     echo "The Redis test dependency is missing from the active Python environment." >&2
-    echo "Install it with: python -m pip install -e \"./lib[dev,mongodb,neo4j,postgres,redis]\"" >&2
+    echo "Install it with: python -m pip install -e \".[dev,mongodb,neo4j,postgres,redis]\"" >&2
     exit 1
 fi
 

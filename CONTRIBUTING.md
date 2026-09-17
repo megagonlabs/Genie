@@ -11,13 +11,13 @@ the memory model or the public interfaces is welcome.
 ```bash
 python -m venv .venv --prompt genie
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-python -m pip install -e "./lib[dev]"
+python -m pip install -e ".[dev]"
 ```
 
 - **`dev` installs `pytest` and `ruff`,** the only two tools this repository
   runs.
 - **Backend adapters are extras.** Add the ones you are working on:
-  `python -m pip install -e "./lib[dev,mongodb,neo4j,postgres,redis]"`.
+  `python -m pip install -e ".[dev,mongodb,neo4j,postgres,redis]"`.
 
 ## Run the checks
 
@@ -32,7 +32,7 @@ python -m compileall -q lib/src/genie lib/tests examples
 - **`python lib/scripts/capture_example_output.py`** refreshes the captured
   output of every example under `examples/expected/`. Run it when you change
   what an example prints, and commit the result.
-- **Keep `ruff check .` clean.** Line length is 193, set in `[tool.ruff]`.
+- **Keep `ruff check .` clean.** Line length is 193, set in `ruff.toml`.
   Ruff also sorts imports, so there is no separate formatter to run.
 
 ## Tests that need a server
@@ -129,7 +129,7 @@ Apply these in proportion to the size and user-facing impact of the change.
 | `lib/benchmarks/` | The benchmark harness, standard library only |
 | `lib/tests/test_benchmarks.py` | Tests for that harness |
 | `lib/scripts/` | Repository-wide developer scripts |
-| `lib/pyproject.toml` | The `genie` package metadata, extras, and build settings |
+| `pyproject.toml` | The `genie` package metadata, extras, and build settings |
 | `pytest.ini` | Repo-wide `pytest` settings |
 | `ruff.toml` | Repo-wide `ruff` settings |
 | `examples/basic/`, `examples/advanced/` | Small runnable examples |
@@ -137,12 +137,16 @@ Apply these in proportion to the size and user-facing impact of the change.
 | `examples/expected/` | Captured output of every example |
 | `docs/design.md` | Architecture and safety boundaries |
 
-- **Packaging and tool settings are split on purpose.** `lib/pyproject.toml`
-  describes the `genie` package, so it sits next to the source in `lib/`.
-  `pytest.ini` and `ruff.toml` stay at the repository root, because they cover
-  `examples/` as well as `lib/` and `ruff` finds its settings by walking up
-  from each file. Install the package with `python -m pip install -e ./lib`,
-  and run `pytest` and `ruff` from the repository root.
+- **Every config file sits at the repository root.** `pyproject.toml` describes
+  the `genie` package and points at the source with
+  `[tool.setuptools.packages.find] where = ["lib/src"]`. It has to be at the
+  root, because `readme` and `license-files` are resolved next to it and cannot
+  point outside its directory, and because `pip install` from a git URL only
+  looks at the repository root. `pytest.ini` and `ruff.toml` are there for their
+  own reasons: they cover `examples/` as well as `lib/`, and `ruff` finds its
+  settings by walking up from each file. Install the package with
+  `python -m pip install -e .`, and run `pytest` and `ruff` from the repository
+  root.
 - **The benchmark harness stays out of `lib/tests/`** so a plain `pytest` run
   does not time operations.
 - **Examples run from the repository root** and use plain assertions. Keep them

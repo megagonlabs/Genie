@@ -43,7 +43,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["lib/src"]
 include = ["genie*"]
 
 [tool.setuptools.package-data]
