@@ -20,6 +20,8 @@ with Neo4jBackend(
     memory.put(type="note", value={"text": "Persist this"})
 ```
 
+- **`"password"` is a placeholder.** Put your own Neo4j password in its place. Neo4j asks for a new password the first time a server starts, so there is no default that works here. The URI and the `neo4j` user name are real defaults.
+
 ## Behavior
 
 - **Blocks are graph nodes.** Ownership and typed links are relationships. Link, key, log, and temporal records also get stable graph identities.

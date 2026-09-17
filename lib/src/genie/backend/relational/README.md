@@ -46,6 +46,8 @@ with PostgresBackend("postgresql://user:password@localhost:5432/app") as backend
     memory.put(type="note", value={"text": "Persist this"})
 ```
 
+- **`user`, `password`, and `app` are placeholders.** Put your own PostgreSQL user, password, and database name in their place. Unlike `SQLiteBackend` above, this block does not run as written.
+
 `psycopg` connects while the constructor runs, so a successful construction
 already proves the server is reachable. There is no separate connectivity flag.
 
