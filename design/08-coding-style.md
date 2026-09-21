@@ -11,6 +11,14 @@ code base itself varies, this note says so instead of picking a winner.
 
 ## What the tools check
 
+| Job | Tool | Config file |
+| --- | --- | --- |
+| Lint and import sort | `ruff check .`, from `ruff>=0.16` in the `dev` extra | `ruff.toml`, at the repository root |
+| Format | none, by choice | — |
+| Type check | none | — |
+| Tests | `pytest`, from `pytest>=8` in the `dev` extra | `pytest.ini`, at the repository root |
+| Syntax | `compileall`, from the standard library | — |
+
 ```bash
 python -m pytest
 python -m ruff check .
@@ -24,12 +32,12 @@ python -m compileall -q lib/src/genie lib/tests examples
   block fails `ruff check .`. There is no separate `isort` step.
 - **Line length is not checked.** `E501` is not in the active set, so 193 is a
   budget the author keeps by hand. No line in the package reaches it.
-- **Docstrings and annotations are not checked by ruff.** No `D1xx` and no
-  `ANN` rules are active. `CONTRIBUTING.md` still asks for typed public APIs
-  with Google-style docstrings, so that one is kept in review instead.
-- **`ruff format` is not part of the checks.** Formatting is written by hand.
-  Running the formatter would rewrite most of the repository, which would bury
-  a small change in unrelated diff noise.
+- **Nothing checks types or docstrings.** No type checker is configured, and
+  ruff runs no `ANN` and no `D1xx` rules. `CONTRIBUTING.md` still asks for
+  typed public APIs with Google-style docstrings, so that one is kept in
+  review instead.
+- **Formatting is written by hand.** Running `ruff format` would rewrite most
+  of the repository, which would bury a small change in unrelated diff noise.
 - **A suppression names its rule and its reason.** Every `noqa` comment in the
   repository reads `# noqa: <CODE> - <reason>`, such as
   `# noqa: DTZ001 - invalid input` on a test that passes a naive `datetime` on
