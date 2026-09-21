@@ -5,16 +5,16 @@ a new one goes.
 
 ## Top-level layout
 
-Every entry in a working copy of the repository, with what it holds. Entries
-marked *untracked* or *generated* are not in git.
+Every file and folder in the repository, with what it holds. Tool caches, build
+output, coverage reports, and local editor or agent files are ignored by
+`.gitignore` and are not part of the layout.
 
 ```text
 Genie/
 ├── .claudeignore       # paths Claude Code should not index (caches, builds, .git)
 ├── .gitignore          # ignored paths: caches, coverage, reports, local agent files
-├── .vscode/            # local editor settings (untracked)
 ├── CONTRIBUTING.md     # setup, the checks to run, and where a new file belongs
-├── design/             # these design notes, numbered `NN-topic.md` (untracked)
+├── design/             # these design notes, numbered `NN-topic.md`
 ├── docs/               # long-form documentation for readers of the library
 ├── examples/           # runnable examples, lamps, and their captured output
 ├── lib/                # the library itself, plus its tests, benchmarks, and scripts
@@ -27,7 +27,7 @@ Genie/
 └── SECURITY.md         # how to report a vulnerability, and what is in scope
 ```
 
-- **Four trees carry content:** `lib/`, `examples/`, `docs/`, and `design/`. Everything else at the root is configuration, project text, or a generated file.
+- **Four trees carry content:** `lib/`, `examples/`, `docs/`, and `design/`. Everything else at the root is configuration or project text.
 - **`LICENSE` is empty today,** but `pyproject.toml` already points at it with `license-files = ["LICENSE"]`, so the file must stay where it is and needs its text before a release.
 - **`requirements.txt` declares nothing.** It exists to answer the question it usually answers: the core has no runtime dependencies, and `pytest` and `ruff` come from the `dev` extra in `pyproject.toml`.
 
@@ -213,7 +213,7 @@ examples/lamps/<name>/
 
 - **`docs/design.md`** is the reader-facing architecture document: model, safety, hooks, structures, and backends. Keep it in sync when the public memory model, architecture, or safety boundaries change.
 - **Package `README.md` files** hold the detail for one area, and `docs/design.md` links to them instead of repeating them.
-- **`design/` holds these notes,** numbered `NN-topic.md`. They are working documents about intent and organization, and they are untracked today.
+- **`design/` holds these notes,** numbered `NN-topic.md`. They are working documents about intent and organization, written for the people building Genie rather than for its users.
 
 ## Why every config file sits at the root
 
