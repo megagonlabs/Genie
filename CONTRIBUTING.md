@@ -114,8 +114,8 @@ Apply these in proportion to the size and user-facing impact of the change.
   tests and examples. A test must not depend on whether the machine happens to
   have a server configured.
 - **Update examples and documentation** when user-facing behavior changes, and
-  keep `docs/design.md` in sync with the public memory model, architecture, and
-  safety boundaries.
+  keep `design/01-overview.md` and `design/03-high-level-architecture.md` in
+  sync with the public memory model, architecture, and safety boundaries.
 - **Avoid broad refactors, dependency additions, and compatibility breaks**
   unless they are directly required, and say why in the change.
 
@@ -135,7 +135,7 @@ Apply these in proportion to the size and user-facing impact of the change.
 | `examples/basic/`, `examples/advanced/` | Small runnable examples |
 | `examples/lamps/<name>/`, `examples/lamps/<name>/tests/` | One architectural demonstration each |
 | `examples/expected/` | Captured output of every example |
-| `docs/design.md` | Architecture and safety boundaries |
+| `design/` | Design notes, numbered `NN-topic.md`: the model, the architecture, and the safety boundaries |
 
 - **Every config file sits at the repository root.** `pyproject.toml` describes
   the `genie` package and points at the source with

@@ -140,7 +140,8 @@ from genie import EventLog, OwnershipTree
 
 ## Learn more
 
-- [Architecture](docs/design.md)
+- [Overview](design/01-overview.md)
+- [Architecture](design/03-high-level-architecture.md)
 - [Memory and handles](lib/src/genie/memory/README.md)
 - [Structures](lib/src/genie/structures/README.md)
 - [Backends](lib/src/genie/backend/README.md)

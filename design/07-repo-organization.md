@@ -15,7 +15,6 @@ Genie/
 ├── .gitignore          # ignored paths: caches, coverage, reports, local agent files
 ├── CONTRIBUTING.md     # setup, the checks to run, and where a new file belongs
 ├── design/             # these design notes, numbered `NN-topic.md`
-├── docs/               # long-form documentation for readers of the library
 ├── examples/           # runnable examples, lamps, and their captured output
 ├── lib/                # the library itself, plus its tests, benchmarks, and scripts
 ├── LICENSE             # license text, named by `license-files` in `pyproject.toml`
@@ -27,7 +26,7 @@ Genie/
 └── SECURITY.md         # how to report a vulnerability, and what is in scope
 ```
 
-- **Four trees carry content:** `lib/`, `examples/`, `docs/`, and `design/`. Everything else at the root is configuration or project text.
+- **Three trees carry content:** `lib/`, `examples/`, and `design/`. Everything else at the root is configuration or project text.
 - **`LICENSE` is empty today,** but `pyproject.toml` already points at it with `license-files = ["LICENSE"]`, so the file must stay where it is and needs its text before a release.
 - **`requirements.txt` declares nothing.** It exists to answer the question it usually answers: the core has no runtime dependencies, and `pytest` and `ruff` come from the `dev` extra in `pyproject.toml`.
 
@@ -209,11 +208,12 @@ examples/lamps/<name>/
 - **Their tests stay with them,** under `examples/lamps/<name>/tests`, not in `lib/tests/`.
 - **Taxonomy, retrieval, and agent behavior live in the lamp,** which is exactly the point: it shows the boundary the core library holds.
 
-## `docs/` and `design/`
+## `design/` — the design notes
 
-- **`docs/design.md`** is the reader-facing architecture document: model, safety, hooks, structures, and backends. Keep it in sync when the public memory model, architecture, or safety boundaries change.
-- **Package `README.md` files** hold the detail for one area, and `docs/design.md` links to them instead of repeating them.
-- **`design/` holds these notes,** numbered `NN-topic.md`. They are working documents about intent and organization, written for the people building Genie rather than for its users.
+- **`design/` holds these notes,** numbered `NN-topic.md`. They cover intent, architecture, and organization, and they are written for the people building Genie and for the developers who use it.
+- **`01-overview.md` and `03-high-level-architecture.md` are the reader-facing pair.** `README.md` links to them, so keep them in sync when the public memory model, architecture, or safety boundaries change.
+- **`04-detailed-architecture.md` holds module internals,** so a change to an algorithm, a check order, or an invariant belongs there.
+- **Package `README.md` files** hold the detail for one area, and the design notes link to them instead of repeating them.
 
 ## Why every config file sits at the root
 
@@ -240,12 +240,12 @@ examples/lamps/<name>/
 | A developer script | `lib/scripts/` |
 | A small example | `examples/basic/` or `examples/advanced/`, listed in `RUNNABLE_EXAMPLES` in `lib/tests/test_examples.py`, with output in `examples/expected/` |
 | A lamp | `examples/lamps/<name>/`, with tests in `examples/lamps/<name>/tests/` |
-| Architecture documentation | `docs/design.md`, or the `README.md` of the area |
+| Architecture documentation | `design/03-high-level-architecture.md` or `design/04-detailed-architecture.md`, or the `README.md` of the area |
 | A design note | `design/NN-topic.md` |
 
 ## Related reading
 
 - [Overview](01-overview.md) — the model these directories implement
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — setup, the checks to run, and the boundaries a change should respect
-- [Architecture](../docs/design.md) — the public memory model in detail
+- [High-level architecture](03-high-level-architecture.md) — the components these directories hold
 - [Examples](../examples/README.md) and [Lamps](../examples/lamps/README.md) — reading order and how to run them

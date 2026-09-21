@@ -146,7 +146,8 @@ seven.
 
 ## Related reading
 
-- [Architecture](../docs/design.md) — the same model in more detail
+- [High-level architecture](03-high-level-architecture.md) — components, boundaries, and extension seams
+- [Detailed architecture](04-detailed-architecture.md) — module internals
 - [Memory and handles](../lib/src/genie/memory/README.md), [Structures](../lib/src/genie/structures/README.md), [Backends](../lib/src/genie/backend/README.md)
 - [Queries](../lib/src/genie/query/README.md), [Policies](../lib/src/genie/policy/README.md), [Hooks](../lib/src/genie/hooks/README.md), [Codecs](../lib/src/genie/codecs/README.md)
 - [Examples](../examples/README.md) and [Lamps](../examples/lamps/README.md) — runnable patterns
