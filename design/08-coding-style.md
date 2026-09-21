@@ -1,8 +1,13 @@
 # Coding Style
 
-The conventions the Genie code base already follows, and which of them a tool
-actually checks. Where a rule is a convention and not a check, the author and
-the reviewer keep it.
+The conventions the Genie code base already follows, so a new change can look
+like the code around it.
+
+Two kinds of thing are written down here and they carry different weight. A few
+are hard rules, because `ruff check .` fails or `CONTRIBUTING.md` requires them,
+and the text says which. The rest are house habits: worth matching so the code
+stays consistent, but not a reason to reject a sensible alternative. Where the
+code base itself varies, this note says so instead of picking a winner.
 
 ## What the tools check
 
@@ -19,32 +24,32 @@ python -m compileall -q lib/src/genie lib/tests examples
   block fails `ruff check .`. There is no separate `isort` step.
 - **Line length is not checked.** `E501` is not in the active set, so 193 is a
   budget the author keeps by hand. No line in the package reaches it.
-- **Docstrings and annotations are not checked.** No `D1xx` and no `ANN` rules
-  are active, and coverage is still complete. That is a review habit, not a
-  tool result.
+- **Docstrings and annotations are not checked by ruff.** No `D1xx` and no
+  `ANN` rules are active. `CONTRIBUTING.md` still asks for typed public APIs
+  with Google-style docstrings, so that one is kept in review instead.
 - **`ruff format` is not part of the checks.** Formatting is written by hand.
-  Running the formatter would rewrite most of the repository, so leave it alone
-  unless the repository adopts it on purpose.
+  Running the formatter would rewrite most of the repository, which would bury
+  a small change in unrelated diff noise.
 - **A suppression names its rule and its reason.** Every `noqa` comment in the
   repository reads `# noqa: <CODE> - <reason>`, such as
   `# noqa: DTZ001 - invalid input` on a test that passes a naive `datetime` on
-  purpose. There are none in `lib/src/genie/`.
+  purpose. They all sit in tests and benchmarks so far; the package has none.
 - **`./lib/scripts/ruff_report.sh`** writes the grouped output to
   `ruff_report.txt`, which `.gitignore` keeps out of the repository.
 
 ## Language level
 
 - **Python 3.11 or newer,** set by `requires-python = ">=3.11"`.
-- **Built-in generics and `|` unions only:** `dict[str, Any]`, `str | None`,
-  `Mapping[str, int]`. `typing.Optional`, `List`, `Dict`, and `Tuple` never
-  appear in the package.
+- **Built-in generics and `|` unions:** `dict[str, Any]`, `str | None`,
+  `Mapping[str, int]`.
 - **3.11 features in use:** `Self` for methods that return their own class,
   `StrEnum` for `HookOperation`, `HandleCapability`, `HookOutcome`,
   `StructureKind`, and `StructureAction`, and `datetime.UTC` for timestamps.
 - **Every timestamp is timezone-aware UTC,** built through `utc_now()` in
   `genie.memory.block` rather than `datetime.now()`.
-- **No third-party runtime imports in the core.** `lib/benchmarks/` follows the
-  same rule. Driver imports belong to the adapters and stay optional.
+- **No third-party runtime imports in the core,** a hard rule from
+  `CONTRIBUTING.md`. `lib/benchmarks/` follows it too. Driver imports belong to
+  the adapters and stay optional.
 
 ## Imports
 
@@ -52,15 +57,18 @@ python -m compileall -q lib/src/genie lib/tests examples
   that writes annotations. The ones that skip it are the `__init__.py`
   re-export modules plus `memory/errors.py` and `query/scope.py`, which have no
   annotations to defer.
-- **Absolute imports only.** Every internal import reads
+- **Internal imports are absolute.** Every one reads
   `from genie.<area> import <name>`. The package has no relative imports, so a
   module's dependencies are readable without knowing where the file sits.
-- **Multi-name imports are parenthesized and sorted,** one name per line.
+- **Multi-name imports are parenthesized with one name per line,** which is
+  the shape ruff's import sort produces.
 - **Type-only imports go inside `if TYPE_CHECKING:`,** mostly in adapters that
   need the structure record types for annotations but must not import them at
   runtime.
-- **An optional driver is imported inside the function that needs it,** never at
+- **An optional driver is imported inside the function that needs it,** not at
   module scope, so importing the adapter never fails on a missing package.
+  `CONTRIBUTING.md` makes this a hard rule: a missing driver has to raise
+  `UnsupportedOperation`.
 
 ## Package surface
 
@@ -101,8 +109,10 @@ python -m compileall -q lib/src/genie lib/tests examples
 ## Docstrings
 
 - **Google style,** with `Args:`, `Returns:`, `Raises:`, and `Attributes:`
-  sections. `Raises:` lists the exceptions a caller has to handle.
-- **One blank line after every docstring,** before the first statement.
+  sections. `CONTRIBUTING.md` requires this for public APIs. `Raises:` lists the
+  exceptions a caller has to handle.
+- **A blank line follows the docstring,** before the first statement. The code
+  base does this everywhere.
 - **Coverage is complete on the public surface:** every module, every public
   class, and every public function and method has a docstring. The only
   definitions without one are nested closures inside functions.
@@ -110,9 +120,9 @@ python -m compileall -q lib/src/genie lib/tests examples
 - **Exact code names stay in backticks** inside docstrings, the same rule the
   repository applies to its markdown: `` `None` ``, `` `expected_version` ``,
   `` `MemoryPolicy.owner_private()` ``.
-- **Plain English, high density.** Short sentences, everyday words, no
-  introductory filler. Explain what a name means, never swap the name for a
-  friendlier phrase.
+- **Plain English, high density,** which `CONTRIBUTING.md` asks for in docs,
+  docstrings, and comments alike. Short sentences, everyday words, no
+  introductory filler. Explain what a name means, and keep the name itself.
 
 ```python
 def get_block(self, block_id: str) -> MemoryBlock | None:
@@ -130,21 +140,27 @@ def get_block(self, block_id: str) -> MemoryBlock | None:
 
 ## Comments
 
-- **Comments are rare.** The docstrings carry the explanation, and a module as
-  large as `sqlite.py` has no comments at all.
-- **A comment says why, not what.** It earns its place when the code is correct
-  for a reason the reader cannot see, such as
+- **Comment as much as the code needs.** The repository varies widely and that
+  is fine. `RedisBackend` is commented heavily, because its Lua scripts, its
+  retry loop, and its key layout are not self-evident. `SQLiteBackend` has
+  almost none, because the SQL it runs reads plainly. Neither one is a target to
+  copy.
+- **Docstrings and comments do different jobs.** A docstring is the contract a
+  caller reads without opening the body. A comment is for whoever is reading the
+  body. Writing both for the same function is normal, not duplication.
+- **A comment is most useful for what the code cannot show,** such as why a
+  check is ordered the way it is, what a driver's reply means, or which
+  invariant makes a branch unreachable:
   `# A dropped socket arrives as an OperationalError with no SQLSTATE.`
 - **Embedded non-Python code gets a comment block.** Every Lua script in
   `RedisBackend` is preceded by a comment naming its `KEYS` and `ARGV`, what it
   returns, and which Python method it must stay in step with.
-- **Long adapters use section banners.** `PostgresBackend`, `Neo4jBackend`,
-  `MongoDBBackend`, and `RedisBackend` split their class with a dashed ruler and
-  a section name.
-- **The sections keep the same order in every adapter:** core block storage and
-  ownership traversal, keyed collection, ordered event log, temporal collection
-  and index, typed links and lineage, portable search, then the private helpers.
-  Keeping the order makes two adapters readable side by side.
+- **The large adapters split their class with section banners,** a dashed ruler
+  and a section name. `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, and
+  `RedisBackend` use the same section order: core block storage and ownership
+  traversal, keyed collection, ordered event log, temporal collection and index,
+  typed links and lineage, portable search, then the private helpers. Matching
+  it lets two adapters be read side by side.
 
 ```python
     # ------------------------------------------------------------------
@@ -188,16 +204,18 @@ def get_block(self, block_id: str) -> MemoryBlock | None:
 
 ## Tests
 
-- **Plain functions, not test classes.** The only classes in the suite are the
-  reusable contract suites in `lib/tests/backends/test_backend_contracts.py`,
-  the per-adapter subclasses that run them, and the stand-in helpers a test
-  needs.
-- **No `conftest.py` anywhere, and almost no fixtures.** A test builds what it
-  needs in its own body, usually with a bare `Memory()`. Reading a test never
-  means chasing shared setup.
+- **Most tests are plain functions.** Classes are used where they earn their
+  place: the reusable contract suites in
+  `lib/tests/backends/test_backend_contracts.py`, the per-adapter subclasses
+  that run them, and the stand-in helpers a test needs.
+- **Setup is usually inline.** The repository has no `conftest.py` and few
+  fixtures, so a test builds what it needs in its own body, often with a bare
+  `Memory()`. A fixture is the right call when setup is genuinely shared or
+  expensive.
 - **The test name is a sentence about behavior,** such as
   `test_delete_authorizes_the_target_and_not_its_descendants`.
-- **One-line docstring per test** saying what the behavior is.
+- **A test usually carries a one-line docstring** saying what the behavior
+  is.
 - **`pytest.mark.parametrize` takes a tuple of names,** mostly for tables of
   rejected constructor arguments and their expected messages.
 - **Live adapter tests are gated twice,** on the driver being importable and on
@@ -210,8 +228,9 @@ _LIVE_REASON = "set GENIE_POSTGRES_DSN and install the postgres extra to run liv
 
 - **A plain `pytest` run is therefore partial,** and is reported that way.
   `./lib/scripts/test_full.sh` is the complete run.
-- **Tests stay deterministic.** No clock dependence, no network beyond the gated
-  live tests, no reliance on what the machine happens to have installed.
+- **Tests stay deterministic,** another hard rule from `CONTRIBUTING.md`. No
+  clock dependence, no network beyond the gated live tests, and no reliance on
+  what the machine happens to have installed.
 
 ## Examples
 
