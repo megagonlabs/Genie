@@ -497,6 +497,10 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
   attached as a note when the operation already failed).
 - **What a `before_*` hook returns is validated.** A change to a protected
   field is a `ValueError`; a wrong return type is a `TypeError`.
+- **`after_delete` fans out from one call to many.** `Memory.delete` calls
+  `HookRegistry.after_delete(context, *blocks)` once with every removed block.
+  The registry then calls each hook's `after_delete(context, block)` once per
+  block, and raises failures only after every block has reached every hook.
 
 ### `HookRegistry`
 
