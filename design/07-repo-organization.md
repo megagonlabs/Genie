@@ -248,4 +248,5 @@ examples/lamps/<name>/
 - [Overview](01-overview.md) — the model these directories implement
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — setup, the checks to run, and the boundaries a change should respect
 - [High-level architecture](03-high-level-architecture.md) — the components these directories hold
+- [Library](06-library.md) — how an application builds on the package in `lib/src/genie/`
 - [Examples](../examples/README.md) and [Lamps](../examples/lamps/README.md) — reading order and how to run them

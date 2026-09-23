@@ -160,6 +160,7 @@ extra, for example `install 'genie[redis]'`.
 
 - [Overview](01-overview.md) — the design philosophy behind these choices
 - [High-level architecture](03-high-level-architecture.md) — where backends and indexes attach
+- [Library](06-library.md) — how an application builds its own memory on this stack
 - [Repository organization](07-repo-organization.md) — where each file lives
 - [Coding style](08-coding-style.md) — how the tools are used
 - [Backends](../lib/src/genie/backend/README.md) — adapter behavior and deployment responsibilities
