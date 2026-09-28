@@ -5,8 +5,6 @@ blocks, parent/child ownership, typed relationships, scoped access, and optional
 structure views. Genie does not depend on any agent framework, database, memory
 taxonomy, retrieval strategy, or stored value type.
 
-> Genie is alpha software. Public APIs may still change.
-
 ## What it provides
 
 - **`MemoryBlock` values** — your application chooses the type, value, metadata, policy, and version.
