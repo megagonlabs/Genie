@@ -10,7 +10,7 @@ their own memory systems.
 - **The audience:** developers who want to own their memory design. Genie gives them the mechanism and leaves every decision about meaning to them.
 - **The boundary:** Genie stores and protects values. It never decides what a value means, or what an agent should do with it.
 - **Out of scope:** running agents, planning their work, creating embeddings, hosting a database, and defining one memory taxonomy for everyone.
-- **Status:** alpha. Public APIs may still change, and this document describes current behavior only.
+- **Status:** This document describes current behavior only.
 
 ## What It Does
 

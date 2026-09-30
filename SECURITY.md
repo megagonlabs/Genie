@@ -18,9 +18,6 @@ A useful report includes:
 - **The Genie version or commit,** the Python version, and the backend adapter
   and driver versions if a server is involved.
 
-Genie is alpha software with no released versions yet, so fixes land on the
-default branch. There are no maintenance branches and no backports.
-
 ## What is in scope
 
 Genie's security-relevant job is **scoped access**: deciding which `Principal`

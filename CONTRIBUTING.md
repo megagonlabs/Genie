@@ -1,7 +1,7 @@
 # Contributing to Genie
 
-Genie is alpha software. Public APIs may still change, so a change that improves
-the memory model or the public interfaces is welcome.
+Change that improves the memory model or the
+public interfaces is welcome.
 
 ## Set up
 

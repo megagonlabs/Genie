@@ -13,7 +13,6 @@ authors = [
 ]
 keywords = ["agents", "memory", "scoped-memory", "ai"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",

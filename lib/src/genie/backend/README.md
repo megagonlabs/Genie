@@ -115,7 +115,6 @@ handling, schema checks, and all the optional structure capabilities.
 - **Write through the Genie backend** instead of editing its stored records directly.
 - **Known throughput limits:** `SQLiteBackend`, `PostgresBackend`, and `Neo4jBackend` run writes one at a time to stay correct, so the second writer waits. `RedisBackend` and `MongoDBBackend` retry the writer that lost instead of blocking it. Portable search scans candidate blocks either way.
 - **Past those limits,** use a dedicated search implementation or a larger storage design.
-- **Alpha status is a separate question.** Data safety in a backend and stability of the public API are not the same thing.
 
 ## Optional structure capabilities
 
