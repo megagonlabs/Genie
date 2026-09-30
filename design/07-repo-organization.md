@@ -27,7 +27,7 @@ Genie/
 ```
 
 - **Three trees carry content:** `lib/`, `examples/`, and `design/`. Everything else at the root is configuration or project text.
-- **`LICENSE` is empty today,** but `pyproject.toml` already points at it with `license-files = ["LICENSE"]`, so the file must stay where it is and needs its text before a release.
+- **`LICENSE` holds the BSD 3-Clause text** for the `1.0.0` release. `pyproject.toml` points at it with `license-files = ["LICENSE"]`, so the file must stay where it is.
 - **`requirements.txt` declares nothing.** It exists to answer the question it usually answers: the core has no runtime dependencies, and `pytest` and `ruff` come from the `dev` extra in `pyproject.toml`.
 
 ## `lib/` — the library

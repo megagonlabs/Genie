@@ -48,8 +48,8 @@ out on purpose.
 | Build backend | `setuptools.build_meta`, `setuptools>=77` | 77 is the first release that reads `license-files` from `[project]` |
 | Source root | `lib/src` | `[tool.setuptools.packages.find] where = ["lib/src"]`, so only `genie*` ships |
 | Package data | `py.typed`, `**/README.md` | The module guides travel with the installed package |
-| Version | `0.1.0` |  |
-| License file | `LICENSE` | Named by `license-files`; empty today and needs its text before a release |
+| Version | `1.0.0` |  |
+| License file | `LICENSE` | Named by `license-files`; holds the BSD 3-Clause text for the `1.0.0` release |
 
 - **One `pyproject.toml` at the repository root.** `lib/` has no config of its own.
 - **`requirements.txt` declares nothing.** It is a note that points at the `dev` extra.

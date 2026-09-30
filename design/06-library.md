@@ -179,7 +179,7 @@ details out of agent code.
 - **The public API is the root `__all__`** in `lib/src/genie/__init__.py`. Each name also imports from its subpackage, so `from genie import KeyedCollection` and `from genie.structures import KeyedCollection` reach the same class. `lib/tests/test_public_imports.py` checks both styles.
 - **Underscore modules are private.** `genie.structures._hooks` and `genie.structures._routing` are not re-exported.
 - **Typed.** `py.typed` ships with the package, so a type checker in the application reads Genie's annotations.
-- **Version `0.1.0`.**
+- **Version `1.0.0`.**
 - **Installed from the repository.** `pip install -e .` from a clone, or `pip install` from a git URL. Adapter drivers come from extras, such as `genie[postgres]`.
 - **The module guides ship with the code.** Every subpackage `README.md` is package data, so an installed version carries the guide that matches it.
 
