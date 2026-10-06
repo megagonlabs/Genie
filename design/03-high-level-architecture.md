@@ -120,9 +120,11 @@ A create call through a trusted `Memory` object:
    into storage data plus a content type.
 4. **Build the block.** Id, type, encoded value, parent id, metadata, policy
    (the explicit argument or `Memory.default_policy`), and creator.
-5. **Call `before_put`.** Hooks may replace the block, including its policy.
-   Changing `parent_id` is rejected, so a hook cannot move the block into
-   someone else's subtree after the parent check has already passed.
+5. **Call `before_put`.** Hooks may change the value, metadata, content type,
+   and policy. Changing any other field, such as `parent_id`, `created_by`, or
+   `version`, is rejected. So a hook cannot move the block into someone else's
+   subtree after the parent check has already passed, or change the owner
+   that `AccessRule` checks.
 6. **Write once.** `backend.put_block` stores the block.
 7. **Call `after_put` and decode.** The stored block is reported, then decoded
    and returned with the application value.

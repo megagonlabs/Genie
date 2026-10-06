@@ -161,6 +161,8 @@ operation.
 | Structural | Nothing. They observe immutable backend-owned records |
 
 - **Genie checks the protected fields before it stores anything:** identity, ownership, topology, policy, timestamp, and version.
+- **Every `MemoryBlock` field not listed above is protected,** including `id`, `type`, `parent_id`, `created_by`, `created_at`, `updated_at`, and `version`. Changing one raises `ValueError`, and nothing is stored.
+- **A `before_put` policy must be a `MemoryPolicy`.** Anything else raises `TypeError`, and nothing is stored.
 - **`before_put` is different from `before_update`,** because a policy is chosen when a block is created and stays stable after that. `before_put` may set the new block's `policy`; `before_update` may not.
 - **`before_put` still cannot change the authorized parent.**
 

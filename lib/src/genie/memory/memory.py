@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import fields, replace
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from genie.backend.base import MemoryBackend
@@ -154,8 +154,10 @@ class Memory:
             AccessDenied: If the principal cannot write under the parent.
             MemoryNotFound: If the parent id does not exist.
             TypeError: If `policy` is not a `MemoryPolicy`, metadata is not a
-                strict JSON dictionary, or no codec can encode the value.
-            ValueError: If a `before_put` hook changes the block's parent id.
+                strict JSON dictionary, no codec can encode the value, or a
+                `before_put` hook sets a policy that is not a `MemoryPolicy`.
+            ValueError: If a `before_put` hook changes a field other than the
+                value, metadata, content type, or policy.
         """
 
         with self._operation(HookOperation.PUT) as context:
@@ -167,7 +169,7 @@ class Memory:
                 self._require_access(context, Operation.WRITE, parent_block)
                 self._require_access(context, Operation.TRAVERSE_DOWN, parent_block)
             encoded = self.codecs.encode(value, content_type)
-            block = MemoryBlock(
+            proposed = MemoryBlock(
                 id=id or new_memory_id(),
                 type=type,
                 value=encoded.data,
@@ -177,10 +179,11 @@ class Memory:
                 policy=policy if policy is not None else self.default_policy,
                 created_by=self.principal.id,
             )
-            block = self.hooks.before_put(context, block)
-            if block.parent_id != parent_id:
-                raise ValueError("before_put hooks cannot change a block's parent_id.")
+            block = self.hooks.before_put(context, proposed)
             block = block.with_updates(metadata=_copy_metadata(block.metadata))
+            _require_block_hook_invariants(proposed, block, callback="before_put", mutable_fields=_PUT_HOOK_FIELDS)
+            if not isinstance(block.policy, MemoryPolicy):
+                raise TypeError("before_put hooks must set policy to a MemoryPolicy.")
             stored = self.backend.put_block(block)
             self.hooks.after_put(context, stored)
             return self._decode_block(stored)
@@ -250,7 +253,7 @@ class Memory:
             )
             updated = self.hooks.before_update(context, block, proposed)
             updated = updated.with_updates(metadata=_copy_metadata(updated.metadata))
-            _require_update_hook_invariants(proposed, updated)
+            _require_block_hook_invariants(proposed, updated, callback="before_update", mutable_fields=_UPDATE_HOOK_FIELDS)
             stored = self.backend.update_block(updated, expected_version=block.version)
             self.hooks.after_update(context, block, stored)
             return self._decode_block(stored)
@@ -302,7 +305,7 @@ class Memory:
             )
             updated = self.hooks.before_update(context, block, proposed)
             updated = updated.with_updates(metadata=_copy_metadata(updated.metadata))
-            _require_update_hook_invariants(proposed, updated)
+            _require_block_hook_invariants(proposed, updated, callback="before_update", mutable_fields=_UPDATE_HOOK_FIELDS)
             stored = self.backend.update_block(updated, expected_version=block.version)
             self.hooks.after_update(context, block, stored)
             return self._decode_block(stored)
@@ -1329,32 +1332,34 @@ class Memory:
         return False
 
 
-def _require_update_hook_invariants(
+_UPDATE_HOOK_FIELDS = ("value", "metadata", "content_type")
+_PUT_HOOK_FIELDS = (*_UPDATE_HOOK_FIELDS, "policy")
+
+
+def _require_block_hook_invariants(
     proposed: MemoryBlock,
     hooked: MemoryBlock,
+    *,
+    callback: str,
+    mutable_fields: tuple[str, ...],
 ) -> None:
-    """Require block-update hooks to preserve non-payload fields."""
+    """Require block hooks to change only the fields their callback allows.
 
-    stable_fields = (
-        "id",
-        "type",
-        "parent_id",
-        "policy",
-        "created_at",
-        "updated_at",
-        "created_by",
-        "version",
-    )
+    Every other `MemoryBlock` field is protected, including fields added later.
+    """
+
     changed = [
-        field
-        for field in stable_fields
-        if getattr(hooked, field) != getattr(proposed, field)
+        field.name
+        for field in fields(MemoryBlock)
+        if field.name not in mutable_fields
+        and getattr(hooked, field.name) != getattr(proposed, field.name)
     ]
     if changed:
+        allowed = f"{', '.join(mutable_fields[:-1])}, and {mutable_fields[-1]}"
         names = ", ".join(changed)
         raise ValueError(
-            "before_update hooks may change only value, metadata, and "
-            f"content_type; changed protected fields: {names}."
+            f"{callback} hooks may change only {allowed}; changed protected "
+            f"fields: {names}."
         )
 
 

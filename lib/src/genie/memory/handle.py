@@ -154,9 +154,11 @@ class MemoryHandle:
                 is reached.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 parent id.
-            TypeError: If metadata is not a strict JSON dictionary or no codec
-                can encode the value.
-            ValueError: If a `before_put` hook changes the block's parent id.
+            TypeError: If metadata is not a strict JSON dictionary, no codec
+                can encode the value, or a `before_put` hook sets a policy that
+                is not a `MemoryPolicy`.
+            ValueError: If a `before_put` hook changes a field other than the
+                value, metadata, content type, or policy.
         """
 
         parent_id = _block_id(parent) if parent is not None else self.root_id

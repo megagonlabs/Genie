@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from decimal import Decimal
 from threading import Lock
 from typing import Any, cast
 
@@ -13,6 +14,8 @@ import pytest
 from genie import (
     AccessDenied,
     AccessRule,
+    CodecRegistry,
+    DecimalCodec,
     HandleCapability,
     HookContext,
     HookOperation,
@@ -21,6 +24,7 @@ from genie import (
     HookRecursionError,
     HookRegistry,
     InMemoryBackend,
+    JsonCodec,
     KeyedStore,
     LinkRelations,
     Memory,
@@ -136,6 +140,88 @@ def test_before_put_hook_cannot_change_parent_after_authorization() -> None:
 
     assert memory.children(root) == []
     assert memory.children(outside) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("id", "mem_other"),
+        ("type", "changed"),
+        ("created_at", datetime(2000, 1, 1, tzinfo=UTC)),
+        ("updated_at", datetime(2000, 1, 1, tzinfo=UTC)),
+        ("created_by", "someone-else"),
+        ("version", 7),
+    ],
+)
+def test_before_put_hook_cannot_change_protected_block_fields(field: str, value: object) -> None:
+    """Put hooks cannot rewrite identity, ownership, timestamps, or version."""
+
+    class RewriteHook(MemoryHook):
+        """Hook that rewrites one protected field of each new block."""
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Return a block with the protected field replaced."""
+
+            return block.with_updates(**{field: value})
+
+    memory = Memory(principal="agent:writer", hooks=[RewriteHook()])
+
+    with pytest.raises(ValueError, match=f"before_put hooks may change only value, metadata, content_type, and policy; changed protected fields: {field}\\."):
+        memory.put(type="note", value="should not be stored", id="mem_note")
+
+    assert memory.get("mem_note") is None
+    assert memory.get("mem_other") is None
+
+
+def test_before_put_hook_may_change_value_metadata_content_type_and_policy() -> None:
+    """Put hooks keep every field their contract allows them to change."""
+
+    class ReplaceHook(MemoryHook):
+        """Hook that replaces every field a put hook may change."""
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Store a decimal payload with new metadata and a public policy."""
+
+            encoded = DecimalCodec().encode(Decimal("1.50"))
+            return block.with_updates(
+                value=encoded.data,
+                content_type=encoded.content_type,
+                metadata={"hooked": True},
+                policy=MemoryPolicy.public(),
+            )
+
+    memory = Memory(
+        principal="agent:writer",
+        hooks=[ReplaceHook()],
+        codecs=CodecRegistry([JsonCodec(), DecimalCodec()]),
+    )
+
+    stored = memory.put(type="note", value="original")
+
+    assert stored.value == Decimal("1.50")
+    assert stored.content_type == DecimalCodec.content_type
+    assert stored.metadata == {"hooked": True}
+    assert stored.policy == MemoryPolicy.public()
+    assert (stored.type, stored.created_by, stored.version) == ("note", "agent:writer", 1)
+
+
+def test_before_put_hook_policy_must_be_a_memory_policy() -> None:
+    """A hook-chosen policy is checked before the block is stored."""
+
+    class BadPolicyHook(MemoryHook):
+        """Hook that attaches a value that is not a policy."""
+
+        def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
+            """Return a block whose policy is a plain string."""
+
+            return block.with_updates(policy="public")
+
+    memory = Memory(hooks=[BadPolicyHook()])
+
+    with pytest.raises(TypeError, match="before_put hooks must set policy to a MemoryPolicy"):
+        memory.put(type="note", value="should not be stored", id="mem_note")
+
+    assert memory.backend.get_block("mem_note") is None
 
 
 def test_before_put_hook_may_set_block_policy() -> None:

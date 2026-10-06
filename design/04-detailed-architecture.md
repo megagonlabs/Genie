@@ -497,8 +497,9 @@ Each adapter maps the same contracts onto its own store, with the same duties:
 - **Report every refusal** through `on_denied`, and close every started
   operation with exactly one terminal event.
 - **Validate whatever a hook returns** before it reaches the backend:
-  `before_put` may not change `parent_id`, `before_update` may change only
-  value, metadata, and content type, and link hooks may change only metadata.
+  `before_put` may change only value, metadata, content type, and policy,
+  `before_update` may change only value, metadata, and content type, and link
+  hooks may change only metadata.
 - **Keep the policy immutable** after creation, and keep handles narrowing
   only.
 - **Put atomicity in the backend contract,** with reusable contract and
