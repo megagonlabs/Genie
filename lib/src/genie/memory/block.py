@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from genie.memory._validation import require_non_empty_str
 from genie.policy.policy import MemoryPolicy
 
 
@@ -59,6 +60,11 @@ class MemoryBlock:
         updated_at: UTC timestamp for the latest update.
         created_by: Principal id that created the block, when known.
         version: Increasing version number managed by `Memory`.
+
+    Raises:
+        TypeError: If `id`, `type`, or `parent_id` is not a string. A
+            `parent_id` of `None` is allowed.
+        ValueError: If `id`, `type`, or `parent_id` is empty.
     """
 
     type: str
@@ -72,6 +78,14 @@ class MemoryBlock:
     updated_at: datetime = field(default_factory=utc_now)
     created_by: str | None = None
     version: int = 1
+
+    def __post_init__(self) -> None:
+        """Validate the identity, type, and parent fields."""
+
+        require_non_empty_str(self.id, field_name="MemoryBlock id")
+        require_non_empty_str(self.type, field_name="MemoryBlock type")
+        if self.parent_id is not None:
+            require_non_empty_str(self.parent_id, field_name="MemoryBlock parent_id")
 
     def with_updates(self, **changes: Any) -> MemoryBlock:
         """Return a copy of the block with selected fields replaced.

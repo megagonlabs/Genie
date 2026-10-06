@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -501,3 +502,61 @@ def test_update_link_rejects_a_dangling_non_mount_target() -> None:
 
     with pytest.raises(MemoryNotFound, match="Target memory block"):
         memory.update_link(link, metadata={"stale": True})
+
+
+def test_link_relations_and_endpoints_must_be_non_empty_strings() -> None:
+    """Link calls reject a bad relation or endpoint before anything is stored."""
+
+    memory = Memory()
+    source = memory.put(type="note", value="source")
+    target = memory.put(type="note", value="target")
+    scope = memory.get_unbounded_handle(allow_mounts=True)
+
+    for add in (memory.add_link, memory.add_acyclic_link, scope.add_link, scope.add_acyclic_link):
+        with pytest.raises(TypeError, match="relation must be a string"):
+            add(source, target, cast(str, None))
+        with pytest.raises(ValueError, match="relation must not be empty"):
+            add(source, target, "")
+        with pytest.raises(TypeError, match="MemoryBlock or a string id"):
+            add(source, cast(str, {"$ne": None}), "related")
+    for add_mount in (memory.add_mount, scope.add_mount):
+        with pytest.raises(TypeError, match="MemoryBlock or a string id"):
+            add_mount(source, cast(str, 123))
+    for list_links in (memory.list_links, scope.list_links):
+        with pytest.raises(TypeError, match="relation must be a string"):
+            list_links(source, relation=cast(str, {"$ne": None}))
+        with pytest.raises(ValueError, match="relation must not be empty"):
+            list_links(source, relation="")
+
+    assert memory.list_links(source, direction="both") == []
+
+
+def test_link_arguments_must_be_memory_links() -> None:
+    """Update and mount resolution reject values that are not links."""
+
+    memory = Memory()
+    scope = memory.get_unbounded_handle(allow_mounts=True)
+
+    for update_link in (memory.update_link, scope.update_link):
+        with pytest.raises(TypeError, match="link must be a MemoryLink"):
+            update_link(cast(MemoryLink, "link_missing"), metadata={})
+    for resolve_mount in (memory.resolve_mount, scope.resolve_mount):
+        with pytest.raises(TypeError, match="mount must be a MemoryLink"):
+            resolve_mount(cast(MemoryLink, "link_missing"))
+
+
+def test_memory_link_requires_string_endpoints_relation_and_id() -> None:
+    """The link record rejects bad fields, including in copies."""
+
+    link = MemoryLink(source_id="mem_a", target_id="mem_b", relation="related")
+
+    with pytest.raises(TypeError, match="MemoryLink source_id must be a string"):
+        MemoryLink(source_id=cast(str, 1), target_id="mem_b", relation="related")
+    with pytest.raises(ValueError, match="MemoryLink target_id must not be empty"):
+        MemoryLink(source_id="mem_a", target_id="", relation="related")
+    with pytest.raises(TypeError, match="MemoryLink relation must be a string"):
+        MemoryLink(source_id="mem_a", target_id="mem_b", relation=cast(str, None))
+    with pytest.raises(ValueError, match="MemoryLink id must not be empty"):
+        MemoryLink(source_id="mem_a", target_id="mem_b", relation="related", id="")
+    with pytest.raises(TypeError, match="MemoryLink relation must be a string"):
+        replace(link, relation=cast(str, None))

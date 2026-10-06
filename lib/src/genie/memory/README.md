@@ -82,6 +82,7 @@ target = memory.resolve_mount(mount)
 - **Links hide** when an endpoint does not allow `read`.
 - **A bounded handle** rejects references outside its scope.
 - **Choosing a policy** from a handle needs `allow_policy_override=True`.
+- **Ids, block types, and relations** must be non-empty strings. A wrong type raises `TypeError` and an empty string raises `ValueError`. A bad value never reaches the backend.
 - **Metadata** on blocks and links must be strict JSON dictionaries.
 - **Returned JSON values and metadata are defensive copies.** You get a copy, so changing what you received does not change what is stored.
 - **Hooks cannot widen** a parent or search scope that was already authorized.

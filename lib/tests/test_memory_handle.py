@@ -402,3 +402,33 @@ def test_handle_delete_and_unbounded_ancestor_lookup_keep_explicit_boundaries() 
     assert memory.get(grandchild) is None
     with pytest.raises(AccessDenied, match="cannot infer which ancestors"):
         memory.get_unbounded_handle(allow_up=True).ancestors()
+
+
+def test_handle_rejects_bad_block_references_before_boundary_checks() -> None:
+    """A bad id raises `TypeError` or `ValueError`, not a boundary refusal."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    handle = memory.get_handle(root=root, allow_mounts=True)
+    calls = {
+        "get": lambda ref: handle.get(ref),
+        "set": lambda ref: handle.set(ref, "value"),
+        "update": lambda ref: handle.update(ref, metadata={}),
+        "delete": lambda ref: handle.delete(ref),
+        "children": lambda ref: handle.children(ref),
+        "list_links": lambda ref: handle.list_links(ref),
+        "list_mounts": lambda ref: handle.list_mounts(ref),
+        "discover_mounts": lambda ref: handle.discover_mounts(ref),
+        "put parent": lambda ref: handle.put(type="note", value="value", parent=ref),
+        "search": lambda ref: handle.search(root=ref),
+        "get_handle": lambda ref: handle.get_handle(root=ref),
+    }
+
+    for call in calls.values():
+        for ref in (123, {"$ne": None}):
+            with pytest.raises(TypeError, match="MemoryBlock or a string id"):
+                call(ref)
+        with pytest.raises(ValueError, match="Block id must not be empty"):
+            call("")
+    with pytest.raises(TypeError, match="type must be a string"):
+        handle.put(type=cast(str, 123), value="value")

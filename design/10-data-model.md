@@ -100,6 +100,7 @@ What is stored, and what each part answers:
 
 ### `MemoryBlock`
 
+- **`id` and `type`** are non-empty strings, and so is `parent_id` when set.
 - **`type` and `value`** are application-defined. `value` is stored encoded;
   `content_type` (default `application/json`) selects the codec that decodes
   it.
@@ -119,8 +120,8 @@ What is stored, and what each part answers:
 
 - **Fields:** `source_id`, `target_id`, `relation`, `id`, `metadata`,
   `created_at`. No version and no update time.
-- **Directed and typed.** `relation` is a free string. Parallel links between
-  the same two blocks are allowed and stay separate records.
+- **Directed and typed.** `relation` is a free, non-empty string. Parallel
+  links between the same two blocks are allowed and stay separate records.
 - **Only `metadata` changes,** by merge, through `Memory.update_link`.
 - **`LinkRelations.MOUNT` (`"genie.mount"`) is reserved** for mounts, and
   `add_acyclic_link` refuses it.

@@ -26,6 +26,11 @@ boundaries are in [High-level architecture](03-high-level-architecture.md).
   so nothing that has already been handed out can be edited in place.
 - **`with_updates(metadata=None)` writes `{}`,** not `None`, so metadata is
   never absent.
+- **The constructors check identity fields.** `MemoryBlock` checks `id`,
+  `type`, and `parent_id`; `MemoryLink` checks `id`, `source_id`, `target_id`,
+  and `relation`. A non-string raises `TypeError` and an empty string raises
+  `ValueError` (`parent_id` may be `None`). `with_updates` and
+  `dataclasses.replace` run the same check.
 - **Ids are prefixed by kind:** `mem_` for blocks, `link_` for links,
   `handle_` for handles, `hookop_` for hook contexts. The prefix makes a
   stray id readable in a log.

@@ -60,6 +60,7 @@ database names, the same way `PostgresBackend` uses a schema.
 - **Portable encodings** are used for values, metadata, policies, namespaces, and timestamps, instead of BSON-specific value types.
 - **Values and metadata are stored as JSON text, not as BSON subdocuments.** This is the same choice `PostgresBackend` makes with `text` instead of `jsonb`, for the same reason: BSON cannot round-trip every JSON object. A key containing a dot, a key starting with `$`, and an integer larger than 64 bits all change or fail on the way in.
 - **Caller data never becomes a field name.** Block ids, key names, and relations are stored as values, and every field name in a stored document is a Genie constant. So a `$`-prefixed or dotted key inside a value is just text.
+- **A non-string id never becomes a filter.** Every method that takes a block, link, log, or collection id, or a relation, raises `TypeError` for a non-string. MongoDB would read a dictionary such as `{"$ne": None}` as a query operator and match documents it does not name.
 - **Timestamps are ISO 8601 UTC strings.** A BSON date holds milliseconds and would quietly drop the microseconds a caller supplied.
 
 ## Writes

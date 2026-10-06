@@ -236,3 +236,83 @@ def test_memory_block_defaults_and_updates_are_safe_value_objects() -> None:
     assert first.updated_at.utcoffset() is not None
     assert first.metadata == {"source": "test"}
     assert cleared.metadata == {}
+
+
+@pytest.mark.parametrize(
+    ("arguments", "error", "message"),
+    [
+        ({"type": 123}, TypeError, "type must be a string"),
+        ({"type": ""}, ValueError, "type must not be empty"),
+        ({"type": "   "}, ValueError, "type must not be empty"),
+        ({"type": "note", "id": 123}, TypeError, "id must be a string"),
+        ({"type": "note", "id": {"$ne": None}}, TypeError, "id must be a string"),
+        ({"type": "note", "id": ""}, ValueError, "id must not be empty"),
+        ({"type": "note", "parent": 123}, TypeError, "MemoryBlock or a string id"),
+        ({"type": "note", "parent": ""}, ValueError, "Block id must not be empty"),
+    ],
+)
+def test_put_rejects_invalid_type_id_and_parent(
+    arguments: dict[str, Any],
+    error: type[Exception],
+    message: str,
+) -> None:
+    """A bad block type, id, or parent fails before anything is stored."""
+
+    memory = Memory()
+
+    with pytest.raises(error, match=message):
+        memory.put(value="invalid", **arguments)
+
+    assert memory.search() == []
+
+
+def test_block_references_must_be_blocks_or_non_empty_string_ids() -> None:
+    """Every block argument rejects a bad id before the backend reads it."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    calls = {
+        "get": lambda ref: memory.get(ref),
+        "set": lambda ref: memory.set(ref, "value"),
+        "update": lambda ref: memory.update(ref, metadata={}),
+        "delete": lambda ref: memory.delete(ref),
+        "children": lambda ref: memory.children(ref),
+        "ancestors": lambda ref: memory.ancestors(ref),
+        "contains root": lambda ref: memory.contains(ref, root),
+        "contains block": lambda ref: memory.contains(root, ref),
+        "search": lambda ref: memory.search(root=ref, scope="subtree"),
+        "get_handle": lambda ref: memory.get_handle(root=ref),
+    }
+
+    optional_root = {"search", "get_handle"}
+
+    for name, call in calls.items():
+        for ref in (123, {"$ne": None}, None):
+            if ref is None and name in optional_root:
+                continue
+            with pytest.raises(TypeError, match="MemoryBlock or a string id"):
+                call(ref)
+        with pytest.raises(ValueError, match="Block id must not be empty"):
+            call("")
+
+
+def test_memory_block_requires_string_id_type_and_parent() -> None:
+    """The block record rejects bad identity fields, including in copies."""
+
+    block = MemoryBlock(type="note", value="value")
+
+    with pytest.raises(TypeError, match="MemoryBlock type must be a string"):
+        MemoryBlock(type=cast(str, 123), value="value")
+    with pytest.raises(ValueError, match="MemoryBlock type must not be empty"):
+        MemoryBlock(type="", value="value")
+    with pytest.raises(TypeError, match="MemoryBlock id must be a string"):
+        MemoryBlock(type="note", value="value", id=cast(str, 123))
+    with pytest.raises(ValueError, match="MemoryBlock id must not be empty"):
+        MemoryBlock(type="note", value="value", id=" ")
+    with pytest.raises(TypeError, match="MemoryBlock parent_id must be a string"):
+        MemoryBlock(type="note", value="value", parent_id=cast(str, 123))
+    with pytest.raises(ValueError, match="MemoryBlock parent_id must not be empty"):
+        MemoryBlock(type="note", value="value", parent_id="")
+    with pytest.raises(TypeError, match="MemoryBlock id must be a string"):
+        block.with_updates(id=None)
+    assert MemoryBlock(type="note", value="value", parent_id=None).parent_id is None

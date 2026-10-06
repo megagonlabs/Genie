@@ -35,7 +35,7 @@ from genie import (
     UnsupportedOperation,
 )
 from genie.backend.document import mongodb as mongodb_module
-from genie.structures import TemporalEntry
+from genie.structures import KeyBinding, MemoryAddress, TemporalEntry
 from tests.backends.test_backend_contracts import (
     AcyclicLinkStoreContract,
     BlockStoreContract,
@@ -209,6 +209,55 @@ def test_mongodb_identities_separate_neighbouring_records() -> None:
 
     assert mongodb_module._identity("a", "bc") != mongodb_module._identity("ab", "c")
     assert mongodb_module._identity("log", 1) == mongodb_module._identity("log", 1)
+
+
+_OPERATOR = {"$ne": None}
+_BINDING = KeyBinding(collection_id="mem_keys", address=MemoryAddress((), "key"), block_id="mem_block")
+
+
+@pytest.mark.parametrize(
+    ("method", "args", "kwargs"),
+    [
+        ("get_block", (_OPERATOR,), {}),
+        ("delete_block", (_OPERATOR,), {}),
+        ("children", (_OPERATOR,), {}),
+        ("ancestors", (_OPERATOR,), {}),
+        ("descendants", (_OPERATOR,), {}),
+        ("contains", ("mem_root", _OPERATOR), {}),
+        ("rebind_key", (_BINDING,), {"expected_block_id": _OPERATOR}),
+        ("get_key", (_OPERATOR, MemoryAddress((), "key")), {}),
+        ("list_keys", (_OPERATOR,), {}),
+        ("unbind_key", ("mem_keys", MemoryAddress((), "key")), {"expected_block_id": _OPERATOR}),
+        ("delete_key_bindings_for_block", (_OPERATOR,), {}),
+        ("append_log_entry", ("mem_log", _OPERATOR), {}),
+        ("get_log_entry", (_OPERATOR, 0), {}),
+        ("list_log_entries", (_OPERATOR,), {}),
+        ("delete_log_entries_for_block", (_OPERATOR,), {}),
+        ("get_temporal_entry", ("mem_time", _OPERATOR), {}),
+        ("list_temporal_entries", ("mem_time",), {"after_block_id": _OPERATOR}),
+        ("remove_temporal_entry", (_OPERATOR, "mem_block"), {}),
+        ("delete_temporal_entries_for_block", (_OPERATOR,), {}),
+        ("query_temporal_entries", ("mem_time",), {"after_block_id": _OPERATOR}),
+        ("list_links", (_OPERATOR,), {}),
+        ("list_links", ("mem_block",), {"relation": _OPERATOR}),
+        ("delete_links_for_block", (_OPERATOR,), {}),
+    ],
+)
+def test_mongodb_rejects_non_string_ids_before_querying(
+    method: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> None:
+    """A non-string id is refused before MongoDB can read it as an operator.
+
+    The backend is never connected, so a call that got past the check would
+    fail with `AttributeError` instead of `TypeError`.
+    """
+
+    backend = object.__new__(MongoDBBackend)
+
+    with pytest.raises(TypeError, match="must be a string"):
+        getattr(backend, method)(*args, **kwargs)
 
 
 def test_mongodb_chunking_bounds_every_command_document() -> None:

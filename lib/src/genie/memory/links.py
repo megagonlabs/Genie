@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from genie.memory._validation import require_non_empty_str
 from genie.memory.block import utc_now
 
 
@@ -48,6 +49,11 @@ class MemoryLink:
         metadata: Optional relationship metadata. `Memory.update_link` merges
             metadata while preserving the other link fields.
         created_at: UTC timestamp for link creation.
+
+    Raises:
+        TypeError: If `source_id`, `target_id`, `relation`, or `id` is not a
+            string.
+        ValueError: If `source_id`, `target_id`, `relation`, or `id` is empty.
     """
 
     source_id: str
@@ -56,3 +62,11 @@ class MemoryLink:
     id: str = field(default_factory=new_link_id)
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        """Validate the endpoint, relation, and identity fields."""
+
+        require_non_empty_str(self.source_id, field_name="MemoryLink source_id")
+        require_non_empty_str(self.target_id, field_name="MemoryLink target_id")
+        require_non_empty_str(self.relation, field_name="MemoryLink relation")
+        require_non_empty_str(self.id, field_name="MemoryLink id")

@@ -138,6 +138,7 @@ handling, schema checks, and all the optional structure capabilities.
 A production adapter should:
 
 - **Reject** duplicate ids and parent cycles.
+- **Reject non-string ids** with `TypeError` when the store's query language would read another type as an operator. `Memory` and the record types already refuse them, but an adapter can be called directly. `MongoDBBackend` does this.
 - **Keep ownership correct,** and clean up dependent state on deletion.
 - **Return copies** rather than internal objects, and page results in a stable order.
 - **Enforce atomically:** block versions, subtree snapshots, keyed updates, sequences, and DAG insertion.

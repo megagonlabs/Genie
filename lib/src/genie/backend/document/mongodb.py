@@ -205,6 +205,10 @@ class MongoDBBackend:
     Multi-document transactions need a replica set or a sharded cluster, so a
     standalone `mongod` is not a supported target.
 
+    Every method that takes an id, a relation, or a collection id raises
+    `TypeError` when that argument is not a string. MongoDB would otherwise
+    read a value such as `{"$ne": None}` as a query operator.
+
     Attributes:
         uri: MongoDB connection string this backend opened.
         database: MongoDB database that holds every Genie collection.
@@ -474,6 +478,8 @@ class MongoDBBackend:
             An isolated block value, or `None` when it does not exist.
         """
 
+        _validate_id(block_id, name="block_id")
+
         def operation(session: Any) -> MemoryBlock | None:
             document = self._find_block(session, block_id)
             return _block_from_document(document) if document is not None else None
@@ -548,6 +554,8 @@ class MongoDBBackend:
             MemoryConflict: If the supplied subtree snapshot is stale.
         """
 
+        _validate_id(block_id, name="block_id")
+
         def operation(session: Any) -> None:
             documents = self._descendant_documents(session, block_id, include_self=True)
             current = {str(document["_id"]): int(document["version"]) for document in documents}
@@ -576,6 +584,8 @@ class MongoDBBackend:
             Direct child blocks in creation order.
         """
 
+        _validate_id(block_id, name="block_id")
+
         def operation(session: Any) -> list[MemoryBlock]:
             cursor = self._blocks.find({"parent_id": block_id}, session=session).sort("storage_order", _ASCENDING)
             return [_block_from_document(document) for document in cursor]
@@ -592,6 +602,7 @@ class MongoDBBackend:
             Ancestor blocks in nearest-parent-first order.
         """
 
+        _validate_id(block_id, name="block_id")
         return self._read(lambda session: [_block_from_document(document) for document in self._ancestor_documents(session, block_id)])
 
     def descendants(
@@ -610,6 +621,7 @@ class MongoDBBackend:
             Descendant blocks in depth-first creation order.
         """
 
+        _validate_id(block_id, name="block_id")
         return self._read(lambda session: [_block_from_document(document) for document in self._descendant_documents(session, block_id, include_self=include_self)])
 
     def contains(self, root_id: str, block_id: str) -> bool:
@@ -623,6 +635,8 @@ class MongoDBBackend:
             `True` when the candidate is the root or one of its descendants.
         """
 
+        _validate_id(root_id, name="root_id")
+        _validate_id(block_id, name="block_id")
         return self._read(lambda session: self._contains(session, root_id, block_id))
 
     # ------------------------------------------------------------------
@@ -682,6 +696,7 @@ class MongoDBBackend:
                 is unbound, or it no longer points to `expected_block_id`.
         """
 
+        _validate_id(expected_block_id, name="expected_block_id")
         identity = _identity(binding.collection_id, _encode_namespace(binding.address.namespace), binding.address.key)
 
         def operation(session: Any) -> KeyBinding:
@@ -717,6 +732,7 @@ class MongoDBBackend:
             Stored binding, or `None` when the address is unused.
         """
 
+        _validate_id(collection_id, name="collection_id")
         identity = _identity(collection_id, _encode_namespace(address.namespace), address.key)
 
         def operation(session: Any) -> KeyBinding | None:
@@ -758,6 +774,7 @@ class MongoDBBackend:
             ValueError: If `limit` is negative.
         """
 
+        _validate_id(collection_id, name="collection_id")
         if not isinstance(recursive, bool):
             raise TypeError("recursive must be a boolean.")
         _validate_limit(limit)
@@ -794,6 +811,8 @@ class MongoDBBackend:
                 to `expected_block_id`.
         """
 
+        _validate_id(collection_id, name="collection_id")
+        _validate_id(expected_block_id, name="expected_block_id")
         identity = _identity(collection_id, _encode_namespace(address.namespace), address.key)
 
         def operation(session: Any) -> None:
@@ -811,6 +830,7 @@ class MongoDBBackend:
                 target block id match are removed.
         """
 
+        _validate_id(block_id, name="block_id")
         self._write(lambda session: self._key_bindings.delete_many({"$or": [{"collection_id": block_id}, {"block_id": block_id}]}, session=session))
 
     # ------------------------------------------------------------------
@@ -835,6 +855,8 @@ class MongoDBBackend:
             MemoryConflict: If the log or referenced block does not exist.
         """
 
+        _validate_id(log_id, name="log_id")
+        _validate_id(block_id, name="block_id")
         from genie.structures.records import LogEntry
 
         def operation(session: Any) -> LogEntry:
@@ -873,6 +895,7 @@ class MongoDBBackend:
             ValueError: If `sequence` is negative.
         """
 
+        _validate_id(log_id, name="log_id")
         _validate_sequence(sequence, name="sequence")
         identity = _identity(log_id, sequence)
 
@@ -911,6 +934,7 @@ class MongoDBBackend:
                 than `start`.
         """
 
+        _validate_id(log_id, name="log_id")
         if not isinstance(reverse, bool):
             raise TypeError("reverse must be a boolean.")
         if start is not None:
@@ -945,6 +969,8 @@ class MongoDBBackend:
             block_id: Id of the deleted block. A log owned by this id is
                 dropped, along with entries pointing to it in any other log.
         """
+
+        _validate_id(block_id, name="block_id")
 
         def operation(session: Any) -> None:
             self._log_entries.delete_many({"$or": [{"log_id": block_id}, {"block_id": block_id}]}, session=session)
@@ -1036,6 +1062,8 @@ class MongoDBBackend:
             block.
         """
 
+        _validate_id(collection_id, name="collection_id")
+        _validate_id(block_id, name="block_id")
         identity = _identity(collection_id, block_id)
 
         def operation(session: Any) -> TemporalEntry | None:
@@ -1067,6 +1095,9 @@ class MongoDBBackend:
             ValueError: If `limit` is negative.
         """
 
+        _validate_id(collection_id, name="collection_id")
+        if after_block_id is not None:
+            _validate_id(after_block_id, name="after_block_id")
         _validate_limit(limit)
         if limit == 0:
             return []
@@ -1091,6 +1122,8 @@ class MongoDBBackend:
             MemoryConflict: If the collection does not contain the block.
         """
 
+        _validate_id(collection_id, name="collection_id")
+        _validate_id(block_id, name="block_id")
         identity = _identity(collection_id, block_id)
 
         def operation(session: Any) -> None:
@@ -1108,6 +1141,7 @@ class MongoDBBackend:
                 target block id match are removed.
         """
 
+        _validate_id(block_id, name="block_id")
         self._write(lambda session: self._temporal_entries.delete_many({"$or": [{"collection_id": block_id}, {"block_id": block_id}]}, session=session))
 
     def query_temporal_entries(
@@ -1154,6 +1188,9 @@ class MongoDBBackend:
                 than `occurred_start`, or `limit` is negative.
         """
 
+        _validate_id(collection_id, name="collection_id")
+        if after_block_id is not None:
+            _validate_id(after_block_id, name="after_block_id")
         from genie.structures.records import ValidityInterval
 
         if not isinstance(occurred_only, bool):
@@ -1312,6 +1349,9 @@ class MongoDBBackend:
             ValueError: If `direction` is invalid.
         """
 
+        _validate_id(block_id, name="block_id")
+        if relation is not None:
+            _validate_id(relation, name="relation")
         if direction not in {"out", "in", "both"}:
             raise ValueError("direction must be one of 'out', 'in', or 'both'.")
         if direction == "out":
@@ -1336,6 +1376,7 @@ class MongoDBBackend:
             block_id: Block id whose connected links should be removed.
         """
 
+        _validate_id(block_id, name="block_id")
         self._write(lambda session: self._links.delete_many({"$or": [{"source_id": block_id}, {"target_id": block_id}]}, session=session))
 
     # ------------------------------------------------------------------
@@ -2646,6 +2687,17 @@ def _validate_limit(value: object) -> None:
         raise TypeError("limit must be an integer.")
     if value < 0:
         raise ValueError("limit must be greater than or equal to zero.")
+
+
+def _validate_id(value: object, *, name: str) -> None:
+    """Require a string id before it reaches a MongoDB filter.
+
+    MongoDB reads a dictionary such as `{"$ne": None}` as a query operator, so
+    a non-string id could match documents it does not name.
+    """
+
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string.")
 
 
 def _validate_nonempty_string(value: object, *, name: str) -> None:

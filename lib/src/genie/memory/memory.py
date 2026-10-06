@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import fields, replace
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal
 
 from genie.backend.base import MemoryBackend
 from genie.backend.in_memory import InMemoryBackend
@@ -21,6 +21,7 @@ from genie.hooks import (
     TraversalKind,
     freeze_attributes,
 )
+from genie.memory._validation import require_non_empty_str
 from genie.memory.block import MemoryBlock, new_memory_id, utc_now
 from genie.memory.errors import HookRecursionError, MemoryNotFound, UnsupportedOperation
 from genie.memory.links import LinkRelations, MemoryLink
@@ -153,24 +154,30 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write under the parent.
             MemoryNotFound: If the parent id does not exist.
-            TypeError: If `policy` is not a `MemoryPolicy`, metadata is not a
-                strict JSON dictionary, no codec can encode the value, or a
-                `before_put` hook sets a policy that is not a `MemoryPolicy`.
-            ValueError: If a `before_put` hook changes a field other than the
-                value, metadata, content type, or policy.
+            TypeError: If `type` or `id` is not a string, `parent` is not a
+                block or string id, `policy` is not a `MemoryPolicy`, metadata
+                is not a strict JSON dictionary, no codec can encode the value,
+                or a `before_put` hook sets a policy that is not a
+                `MemoryPolicy`.
+            ValueError: If `type`, `id`, or the parent id is empty, or a
+                `before_put` hook changes a field other than the value,
+                metadata, content type, or policy.
         """
 
         with self._operation(HookOperation.PUT) as context:
+            require_non_empty_str(type, field_name="type")
+            if id is not None:
+                require_non_empty_str(id, field_name="id")
             if policy is not None and not isinstance(policy, MemoryPolicy):
                 raise TypeError("policy must be a MemoryPolicy or None.")
-            parent_id = _block_id(parent)
+            parent_id = _block_id(parent) if parent is not None else None
             if parent_id is not None:
                 parent_block = self._require_raw(parent_id)
                 self._require_access(context, Operation.WRITE, parent_block)
                 self._require_access(context, Operation.TRAVERSE_DOWN, parent_block)
             encoded = self.codecs.encode(value, content_type)
             proposed = MemoryBlock(
-                id=id or new_memory_id(),
+                id=new_memory_id() if id is None else id,
                 type=type,
                 value=encoded.data,
                 parent_id=parent_id,
@@ -199,7 +206,9 @@ class Memory:
 
         Raises:
             AccessDenied: If the principal cannot read the block.
-            TypeError: If no codec can decode the stored value.
+            TypeError: If `block_id` is not a block or string id, or no codec
+                can decode the stored value.
+            ValueError: If `block_id` is empty.
         """
 
         with self._operation(HookOperation.GET) as context:
@@ -235,9 +244,11 @@ class Memory:
             AccessDenied: If the principal cannot write the block.
             MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
-            TypeError: If no codec can encode the value.
-            ValueError: If a `before_update` hook changes a field other than
-                the value, metadata, or content type.
+            TypeError: If `block_id` is not a block or string id, or no codec
+                can encode the value.
+            ValueError: If `block_id` is empty, or a `before_update` hook
+                changes a field other than the value, metadata, or content
+                type.
         """
 
         with self._operation(HookOperation.SET) as context:
@@ -279,10 +290,12 @@ class Memory:
             AccessDenied: If the principal cannot write the block.
             MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
-            TypeError: If `value` is provided and the existing decoded value is
-                not a dictionary, or metadata is not a strict JSON dictionary.
-            ValueError: If a `before_update` hook changes a field other than
-                the value, metadata, or content type.
+            TypeError: If `block_id` is not a block or string id, `value` is
+                provided and the existing decoded value is not a dictionary,
+                or metadata is not a strict JSON dictionary.
+            ValueError: If `block_id` is empty, or a `before_update` hook
+                changes a field other than the value, metadata, or content
+                type.
         """
 
         with self._operation(HookOperation.UPDATE) as context:
@@ -329,6 +342,8 @@ class Memory:
             AccessDenied: If the target block denies write access.
             MemoryConflict: If the checked subtree changes before commit.
             MemoryNotFound: If the block does not exist.
+            TypeError: If `block_id` is not a block or string id.
+            ValueError: If `block_id` is empty.
         """
 
         with self._operation(HookOperation.DELETE) as context:
@@ -357,6 +372,8 @@ class Memory:
             AccessDenied: If the principal cannot traverse downward from the
                 parent.
             MemoryNotFound: If the parent does not exist.
+            TypeError: If `block_id` is not a block or string id.
+            ValueError: If `block_id` is empty.
         """
 
         with self._operation(HookOperation.CHILDREN) as context:
@@ -385,6 +402,8 @@ class Memory:
             AccessDenied: If the principal cannot traverse upward from the
                 block.
             MemoryNotFound: If the block does not exist.
+            TypeError: If `block_id` is not a block or string id.
+            ValueError: If `block_id` is empty.
         """
 
         with self._operation(HookOperation.ANCESTORS) as context:
@@ -423,9 +442,11 @@ class Memory:
             AccessDenied: If the principal cannot write the source or read the
                 target.
             MemoryNotFound: If either endpoint is missing.
-            TypeError: If metadata is not a strict JSON dictionary.
-            ValueError: If a `before_add_link` hook changes link identity or
-                topology.
+            TypeError: If `source` or `target` is not a block or string id,
+                `relation` is not a string, or metadata is not a strict JSON
+                dictionary.
+            ValueError: If an endpoint id or `relation` is empty, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         return self._add_link(
@@ -460,7 +481,8 @@ class Memory:
                 target. A pending mount without a registered target is governed
                 by its source policy.
             MemoryNotFound: If the link or a non-mount endpoint is missing.
-            TypeError: If metadata is not a strict JSON dictionary.
+            TypeError: If `link` is not a `MemoryLink`, or metadata is not a
+                strict JSON dictionary.
             ValueError: If a `before_update_link` hook changes link identity or
                 topology.
         """
@@ -518,10 +540,13 @@ class Memory:
                 target.
             MemoryConflict: If existing or proposed links would contain a cycle.
             MemoryNotFound: If either endpoint is missing.
-            TypeError: If metadata is not a strict JSON dictionary.
+            TypeError: If `source` or `target` is not a block or string id,
+                `relation` is not a string, or metadata is not a strict JSON
+                dictionary.
             UnsupportedOperation: If the backend lacks atomic DAG insertion.
-            ValueError: If `relation` is the reserved mount relation, or a
-                `before_add_link` hook changes link identity or topology.
+            ValueError: If an endpoint id or `relation` is empty, `relation`
+                is the reserved mount relation, or a `before_add_link` hook
+                changes link identity or topology.
         """
 
         if relation == LinkRelations.MOUNT:
@@ -565,16 +590,21 @@ class Memory:
             MemoryConflict: If `acyclic` is true and the link would form a
                 cycle.
             MemoryNotFound: If either endpoint is missing.
-            TypeError: If metadata is not a strict JSON dictionary.
+            TypeError: If `source` or `target` is not a block or string id,
+                `relation` is not a string, or metadata is not a strict JSON
+                dictionary.
             UnsupportedOperation: If `acyclic` is true and the backend lacks
                 atomic DAG insertion.
-            ValueError: If a `before_add_link` hook changes link identity or
-                topology.
+            ValueError: If an endpoint id or `relation` is empty, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         with self._operation(hook_operation) as context:
-            source_block = self._require_raw(_block_id(source))
-            target_block = self._require_raw(_block_id(target))
+            require_non_empty_str(relation, field_name="relation")
+            source_id = _block_id(source)
+            target_id = _block_id(target)
+            source_block = self._require_raw(source_id)
+            target_block = self._require_raw(target_id)
             self._require_access(context, Operation.WRITE, source_block)
             self._require_access(context, Operation.READ, target_block)
             acyclic_backend: AcyclicLinkStore | None = None
@@ -622,10 +652,15 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot read `block_id`.
             MemoryNotFound: If `block_id` does not exist.
-            ValueError: If `direction` is invalid.
+            TypeError: If `block_id` is not a block or string id, or
+                `relation` is not a string or `None`.
+            ValueError: If `block_id` or `relation` is empty, or `direction`
+                is invalid.
         """
 
         with self._operation(HookOperation.LIST_LINKS) as context:
+            if relation is not None:
+                require_non_empty_str(relation, field_name="relation")
             block = self._require_raw(_block_id(block_id))
             self._require_access(context, Operation.READ, block)
             traversal = Traversal(
@@ -673,9 +708,10 @@ class Memory:
             AccessDenied: If the principal cannot write the source or read the
                 target.
             MemoryNotFound: If either endpoint is missing.
-            TypeError: If metadata is not a strict JSON dictionary.
-            ValueError: If a `before_add_link` hook changes link identity or
-                topology.
+            TypeError: If `source` or `target` is not a block or string id, or
+                metadata is not a strict JSON dictionary.
+            ValueError: If an endpoint id is empty, or a `before_add_link`
+                hook changes link identity or topology.
         """
 
         return self._add_link(
@@ -701,6 +737,8 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot read `source`.
             MemoryNotFound: If `source` does not exist.
+            TypeError: If `source` is not a block or string id.
+            ValueError: If `source` is empty.
         """
 
         with self._operation(HookOperation.LIST_MOUNTS) as context:
@@ -749,6 +787,8 @@ class Memory:
             AccessDenied: If the principal cannot search and traverse downward
                 from `root`.
             MemoryNotFound: If `root` does not exist.
+            TypeError: If `root` is not a block or string id.
+            ValueError: If `root` is empty.
         """
 
         with self._operation(HookOperation.DISCOVER_MOUNTS) as context:
@@ -792,9 +832,12 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot read the source or target.
             MemoryNotFound: If the source block no longer exists.
+            TypeError: If `mount` is not a `MemoryLink`.
             ValueError: If `mount` is not a mount link.
         """
 
+        if not isinstance(mount, MemoryLink):
+            raise TypeError("mount must be a MemoryLink.")
         if mount.relation != LinkRelations.MOUNT:
             raise ValueError(f"Expected mount relation {LinkRelations.MOUNT!r}.")
         source = self._require_raw(mount.source_id)
@@ -850,8 +893,8 @@ class Memory:
             MemoryNotFound: If the query root does not exist.
             TypeError: If the text, root, types, filters, or limit arguments
                 have the wrong type.
-            ValueError: If the scope is invalid, the limit is negative, or a
-                non-global scope has no root.
+            ValueError: If the scope is invalid, the limit is negative, the
+                root id is empty, or a non-global scope has no root.
         """
 
         with self._operation(HookOperation.SEARCH) as context:
@@ -923,18 +966,19 @@ class Memory:
         Raises:
             AccessDenied: If the handle principal cannot read `root`.
             MemoryNotFound: If `root` does not exist.
-            TypeError: If `principal` is not a principal, id string, or `None`.
-            ValueError: If `root` is `None`, the scope name is unknown, or
-                `default_scope` requires a capability the new handle does not
-                enable.
+            TypeError: If `root` is not a block or string id, or `principal`
+                is not a principal, id string, or `None`.
+            ValueError: If `root` is `None` or empty, the scope name is
+                unknown, or `default_scope` requires a capability the new
+                handle does not enable.
         """
 
-        root_id = _block_id(root)
-        if root_id is None:
+        if root is None:
             raise ValueError(
                 "Memory.get_handle() requires a root. Use Memory.get_unbounded_handle() "
                 "for explicit unbounded access."
             )
+        root_id = _block_id(root)
         root_block = self._require_raw(root_id)
         handle_principal = Principal.coerce(principal) if principal is not None else self.principal
         self._require_access_outside_operation(
@@ -1015,6 +1059,8 @@ class Memory:
         Raises:
             AccessDenied: If downward traversal from the root is denied.
             MemoryNotFound: If the root does not exist.
+            TypeError: If `root` or `block_id` is not a block or string id.
+            ValueError: If `root` or `block_id` is empty.
         """
 
         with self._operation(HookOperation.CONTAINS) as context:
@@ -1215,6 +1261,8 @@ class Memory:
     def _require_stored_link(self, link: MemoryLink) -> MemoryLink:
         """Fetch a canonical link value or raise `MemoryNotFound`."""
 
+        if not isinstance(link, MemoryLink):
+            raise TypeError("link must be a MemoryLink.")
         stored = next(
             (
                 candidate
@@ -1399,17 +1447,16 @@ def _require_link_hook_invariants(
         )
 
 
-@overload
-def _block_id(block: str | MemoryBlock) -> str: ...
+def _block_id(block: str | MemoryBlock) -> str:
+    """Return a validated block id from a block object or id string.
 
-
-@overload
-def _block_id(block: None) -> None: ...
-
-
-def _block_id(block: str | MemoryBlock | None) -> str | None:
-    """Return a block id from a block object, id string, or `None`."""
+    Raises:
+        TypeError: If `block` is neither a `MemoryBlock` nor a string.
+        ValueError: If `block` is an empty string.
+    """
 
     if isinstance(block, MemoryBlock):
         return block.id
-    return block
+    if not isinstance(block, str):
+        raise TypeError("A block reference must be a MemoryBlock or a string id.")
+    return require_non_empty_str(block, field_name="Block id")

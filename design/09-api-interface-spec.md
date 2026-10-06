@@ -84,6 +84,11 @@ keys.get(MemoryAddress(("tickets",), "T-4471")).value     # {"number": "T-4471",
 - **Bad argument types raise `TypeError`; bad argument values raise
   `ValueError`.** A stored value that no registered codec can decode is also a
   `TypeError`.
+- **Ids, block types, and relations are non-empty strings.** A block argument
+  that is neither a `MemoryBlock` nor a string, a non-string `type` or `id` in
+  `put`, and a non-string `relation` raise `TypeError`. An empty or
+  whitespace-only string raises `ValueError`. A bad value never reaches the
+  backend. The tables below do not repeat these errors.
 
 ## `Memory`
 
@@ -113,13 +118,14 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 | Method | Returns | Checked | Raises |
 | --- | --- | --- | --- |
 | `put(*, type, value, parent=None, metadata=None, policy=None, content_type=None, id=None)` | `MemoryBlock` | `write` and `traverse_down` on the parent | `AccessDenied`, `MemoryNotFound` (parent), `TypeError`, `ValueError` |
-| `get(block_id)` | `MemoryBlock \| None` | `read` | `AccessDenied`, `TypeError` (no codec) |
+| `get(block_id)` | `MemoryBlock \| None` | `read` | `AccessDenied`, `TypeError` (bad id or no codec), `ValueError` (empty id) |
 | `set(block_id, value, *, content_type=None)` | `MemoryBlock` | `write` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `update(block_id, *, value=None, metadata=None)` | `MemoryBlock` | `write` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `delete(block_id)` | `None` | `write` on the target only | `AccessDenied`, `MemoryConflict`, `MemoryNotFound` |
 
 - **`put` without `parent` creates a root block.** No parent check runs.
-- **`id` is optional.** Without it, Genie generates a `mem_` id.
+- **`id` is optional.** Without it, Genie generates a `mem_` id. An empty
+  `id` is a `ValueError`; it does not fall back to a generated id.
 - **`set` replaces the value** and may change `content_type`. **`update`
   merges** into a `dict` value and into metadata, and keeps `content_type`.
   `update(value=...)` on a non-`dict` value is a `TypeError`.

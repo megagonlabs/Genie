@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 from uuid import uuid4
 
 from genie.hooks import HandleCapability, HookOperation, HookRegistry, freeze_attributes
+from genie.memory._validation import require_non_empty_str
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import HookRecursionError
 from genie.memory.links import LinkRelations, MemoryLink
@@ -154,11 +155,13 @@ class MemoryHandle:
                 is reached.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 parent id.
-            TypeError: If metadata is not a strict JSON dictionary, no codec
-                can encode the value, or a `before_put` hook sets a policy that
-                is not a `MemoryPolicy`.
-            ValueError: If a `before_put` hook changes a field other than the
-                value, metadata, content type, or policy.
+            TypeError: If `type` or `id` is not a string, `parent` is not a
+                block or string id, metadata is not a strict JSON dictionary,
+                no codec can encode the value, or a `before_put` hook sets a
+                policy that is not a `MemoryPolicy`.
+            ValueError: If `type`, `id`, or the parent id is empty, or a
+                `before_put` hook changes a field other than the value,
+                metadata, content type, or policy.
         """
 
         parent_id = _block_id(parent) if parent is not None else self.root_id
@@ -195,7 +198,9 @@ class MemoryHandle:
         Raises:
             AccessDenied: If the block is outside the handle boundary or policy
                 denies read access.
-            TypeError: If no codec can decode the stored value.
+            TypeError: If `block_id` is not a block or string id, or no codec
+                can decode the stored value.
+            ValueError: If `block_id` is empty.
         """
 
         actual_id = _block_id(block_id)
@@ -226,9 +231,11 @@ class MemoryHandle:
                 reached.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
-            TypeError: If no codec can encode the value.
-            ValueError: If a `before_update` hook changes a field other than
-                the value, metadata, or content type.
+            TypeError: If `block_id` is not a block or string id, or no codec
+                can encode the value.
+            ValueError: If `block_id` is empty, or a `before_update` hook
+                changes a field other than the value, metadata, or content
+                type.
         """
 
         actual_id = _block_id(block_id)
@@ -259,10 +266,12 @@ class MemoryHandle:
                 reached.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
-            TypeError: If `value` is provided and the existing decoded value is
-                not a dictionary, or metadata is not a strict JSON dictionary.
-            ValueError: If a `before_update` hook changes a field other than
-                the value, metadata, or content type.
+            TypeError: If `block_id` is not a block or string id, `value` is
+                provided and the existing decoded value is not a dictionary,
+                or metadata is not a strict JSON dictionary.
+            ValueError: If `block_id` is empty, or a `before_update` hook
+                changes a field other than the value, metadata, or content
+                type.
         """
 
         actual_id = _block_id(block_id)
@@ -284,6 +293,8 @@ class MemoryHandle:
                 denies write access to it.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
+            TypeError: If `block_id` is not a block or string id.
+            ValueError: If `block_id` is empty.
         """
 
         actual_id = _block_id(block_id)
@@ -305,6 +316,8 @@ class MemoryHandle:
                 downward traversal.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 parent.
+            TypeError: If `block_id` is not a block or string id.
+            ValueError: If `block_id` is empty.
         """
 
         actual_id = _block_id(block_id) if block_id is not None else self.root_id
@@ -334,6 +347,8 @@ class MemoryHandle:
                 handle boundary or policy denies upward traversal.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
+            TypeError: If `block_id` is not a block or string id.
+            ValueError: If `block_id` is empty.
         """
 
         if not self.allow_up:
@@ -378,13 +393,17 @@ class MemoryHandle:
                 policy denies the operation.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 endpoint.
-            TypeError: If metadata is not a strict JSON dictionary.
-            ValueError: If a `before_add_link` hook changes link identity or
-                topology.
+            TypeError: If `source` or `target` is not a block or string id,
+                `relation` is not a string, or metadata is not a strict JSON
+                dictionary.
+            ValueError: If an endpoint id or `relation` is empty, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
-        self._require_in_subtree(HookOperation.ADD_LINK, _block_id(source))
-        self._require_in_subtree(HookOperation.ADD_LINK, _block_id(target))
+        source_id = _block_id(source)
+        target_id = _block_id(target)
+        self._require_in_subtree(HookOperation.ADD_LINK, source_id)
+        self._require_in_subtree(HookOperation.ADD_LINK, target_id)
         return self._as_principal().add_link(source, target, relation, metadata=metadata)
 
     def update_link(
@@ -409,7 +428,8 @@ class MemoryHandle:
             AccessDenied: If the link falls outside the handle boundary, mount
                 access is required, or policy denies the operation.
             MemoryNotFound: If the link or a required endpoint is missing.
-            TypeError: If metadata is not a strict JSON dictionary.
+            TypeError: If `link` is not a `MemoryLink`, or metadata is not a
+                strict JSON dictionary.
             ValueError: If a `before_update_link` hook changes link identity or
                 topology.
         """
@@ -446,14 +466,19 @@ class MemoryHandle:
                 policy denies the operation.
             MemoryConflict: If the link would form a cycle.
             MemoryNotFound: If either endpoint is missing.
-            TypeError: If metadata is not a strict JSON dictionary.
+            TypeError: If `source` or `target` is not a block or string id,
+                `relation` is not a string, or metadata is not a strict JSON
+                dictionary.
             UnsupportedOperation: If the backend lacks atomic DAG insertion.
-            ValueError: If `relation` is the reserved mount relation, or a
-                `before_add_link` hook changes link identity or topology.
+            ValueError: If an endpoint id or `relation` is empty, `relation`
+                is the reserved mount relation, or a `before_add_link` hook
+                changes link identity or topology.
         """
 
-        self._require_in_subtree(HookOperation.ADD_ACYCLIC_LINK, _block_id(source))
-        self._require_in_subtree(HookOperation.ADD_ACYCLIC_LINK, _block_id(target))
+        source_id = _block_id(source)
+        target_id = _block_id(target)
+        self._require_in_subtree(HookOperation.ADD_ACYCLIC_LINK, source_id)
+        self._require_in_subtree(HookOperation.ADD_ACYCLIC_LINK, target_id)
         return self._as_principal().add_acyclic_link(
             source,
             target,
@@ -487,7 +512,10 @@ class MemoryHandle:
                 denies read access.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 block.
-            ValueError: If `direction` is invalid.
+            TypeError: If `block_id` is not a block or string id, or
+                `relation` is not a string or `None`.
+            ValueError: If `block_id` or `relation` is empty, or `direction`
+                is invalid.
         """
 
         actual_id = _block_id(block_id)
@@ -528,9 +556,10 @@ class MemoryHandle:
                 the handle boundary, or policy denies the write/read operation.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 endpoint.
-            TypeError: If metadata is not a strict JSON dictionary.
-            ValueError: If a `before_add_link` hook changes link identity or
-                topology.
+            TypeError: If `source` or `target` is not a block or string id, or
+                metadata is not a strict JSON dictionary.
+            ValueError: If an endpoint id is empty, or a `before_add_link`
+                hook changes link identity or topology.
         """
 
         self._require_mounts_allowed(HookOperation.ADD_MOUNT)
@@ -553,6 +582,8 @@ class MemoryHandle:
                 the handle boundary, or policy denies read access.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 source block.
+            TypeError: If `source` is not a block or string id.
+            ValueError: If `source` is empty.
         """
 
         self._require_mounts_allowed(HookOperation.LIST_MOUNTS)
@@ -587,6 +618,8 @@ class MemoryHandle:
                 root, or policy denies search or downward traversal.
             MemoryNotFound: If the underlying memory handle reaches a missing
                 scan root.
+            TypeError: If `root` is not a block or string id.
+            ValueError: If `root` is empty.
         """
 
         self._require_mounts_allowed(HookOperation.DISCOVER_MOUNTS)
@@ -620,9 +653,12 @@ class MemoryHandle:
                 outside the handle boundary, or policy denies source/target
                 read access.
             MemoryNotFound: If the source block no longer exists.
+            TypeError: If `mount` is not a `MemoryLink`.
             ValueError: If `mount` is not a mount link.
         """
 
+        if not isinstance(mount, MemoryLink):
+            raise TypeError("mount must be a MemoryLink.")
         self._require_mounts_allowed(HookOperation.RESOLVE_MOUNT)
         self._require_in_subtree(HookOperation.RESOLVE_MOUNT, mount.source_id)
         return self._as_principal().resolve_mount(mount)
@@ -657,7 +693,9 @@ class MemoryHandle:
                 handle's access, or if an unbounded handle cannot infer a
                 non-global search root.
             MemoryNotFound: If the query root does not exist.
-            ValueError: If the scope is invalid or limit is negative.
+            TypeError: If `root` is not a block or string id.
+            ValueError: If the scope is invalid, the root id is empty, or limit
+                is negative.
         """
 
         if isinstance(query, MemoryQuery):
@@ -744,9 +782,11 @@ class MemoryHandle:
 
         Raises:
             AccessDenied: If the requested child handle would increase access.
-            TypeError: If `principal` is not a principal, id string, or `None`.
-            ValueError: If the scope name is unknown or `default_scope`
-                requires a capability the child handle does not enable.
+            TypeError: If `root` is not a block or string id, or `principal`
+                is not a principal, id string, or `None`.
+            ValueError: If `root` is empty, the scope name is unknown, or
+                `default_scope` requires a capability the child handle does
+                not enable.
         """
 
         if principal is not None and Principal.coerce(principal) != self.principal:
@@ -931,20 +971,19 @@ def _boundary_attributes(
     return attributes
 
 
-@overload
-def _block_id(block: str | MemoryBlock) -> str: ...
+def _block_id(block: str | MemoryBlock) -> str:
+    """Return a validated block id from a block object or id string.
 
-
-@overload
-def _block_id(block: None) -> None: ...
-
-
-def _block_id(block: str | MemoryBlock | None) -> str | None:
-    """Return a block id from a block object, id string, or `None`."""
+    Raises:
+        TypeError: If `block` is neither a `MemoryBlock` nor a string.
+        ValueError: If `block` is an empty string.
+    """
 
     if isinstance(block, MemoryBlock):
         return block.id
-    return block
+    if not isinstance(block, str):
+        raise TypeError("A block reference must be a MemoryBlock or a string id.")
+    return require_non_empty_str(block, field_name="Block id")
 
 
 def _validate_default_scope(
