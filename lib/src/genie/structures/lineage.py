@@ -31,8 +31,10 @@ class LineageDAG:
 
         Args:
             access: Full or scoped graph access with atomic DAG insertion.
-            relation: Exact link relation that identifies this DAG. Use a
-                distinct relation for each independent lineage graph.
+            relation: Exact link relation that identifies this DAG. Relation
+                names are shared across the whole backend, so use a distinct,
+                prefixed name for each lineage graph, such as
+                `"billing.derived_from"`.
 
         Raises:
             TypeError: If `relation` is not a string.

@@ -91,6 +91,9 @@ lineage.add(source, summary)
 ```
 
 - **The backend must check reachability and insert the edge in one atomic step.** Reading first and then writing is not safe when several writers run at once.
+- **Protection covers the whole backend,** not one handle, subtree, or tenant. After the first `lineage.add`, a plain `add_link` with that relation raises `MemoryConflict` for every block. `RoutedBackend` without a shared link store protects each route separately; see the [composite guide](../backend/composite/README.md#acyclic-links).
+- **Write the relation only through `LineageDAG` or `add_acyclic_link`.** Plain links written before the first lineage edge are kept only when they have no cycle. Otherwise the first `lineage.add` raises `MemoryConflict`.
+- **Give each lineage graph its own prefixed relation name,** such as `"billing.derived_from"`, so another component or tenant cannot pick the same name by accident.
 
 ## Keys, logs, and time
 
@@ -154,6 +157,7 @@ records.append(address, second_revision)
 - **It does implement `BlockRouter`.** Passing it as the store resolves to the route that owns the container block. A route is one named backend inside the composite.
 - **An unknown container raises `MemoryNotFound`** instead of reporting a missing capability.
 - **Structure membership stays inside the resolved route.** See the [composite guide](../backend/composite/README.md).
+- **`LineageDAG` takes no store.** It writes through `Memory`, and `RoutedBackend` implements `AcyclicLinkStore` by sending each acyclic link to the store that holds its links.
 
 ### Composition
 

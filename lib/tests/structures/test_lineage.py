@@ -13,7 +13,6 @@ from genie import (
     AccessDenied,
     AccessRule,
     AcyclicLinkStore,
-    InMemoryBackend,
     LinkRelations,
     Memory,
     MemoryBlock,
@@ -21,10 +20,10 @@ from genie import (
     MemoryLink,
     MemoryNotFound,
     MemoryPolicy,
-    RoutedBackend,
     UnsupportedOperation,
 )
 from genie.structures import LineageAccess, LineageDAG, PropertyGraph
+from tests.backends.test_backend_contracts import CoreOnlyBackend
 
 
 def test_lineage_dag_uses_graph_edges_and_forward_lineage_traversal() -> None:
@@ -211,8 +210,7 @@ def test_lineage_dag_preserves_handle_scope_and_endpoint_policy() -> None:
 def test_lineage_dag_reports_missing_atomic_backend_capability() -> None:
     """Backends without atomic cycle protection fail before writing an edge."""
 
-    backend = RoutedBackend({"main": InMemoryBackend()})
-    memory = Memory(backend=backend)
+    memory = Memory(backend=CoreOnlyBackend())
     first = memory.put(type="artifact", value="first")
     second = memory.put(type="artifact", value="second")
     lineage = LineageDAG(memory, relation="derived_into")

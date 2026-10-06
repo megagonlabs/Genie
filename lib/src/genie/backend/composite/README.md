@@ -41,9 +41,18 @@ owner = backend.backend_for_block(block.id)
 - **A shared traversal or search index is only read.** Refreshing it after each committed write is the application's job, usually from a hook.
 - **A shared traversal index answers traversal reads from one place** instead of resolving a route on every call. It does not change where a block is placed, so it does not let a parent and a child sit in different routes.
 
+## Acyclic links
+
+- **`RoutedBackend` implements `AcyclicLinkStore`,** so `LineageDAG` and `Memory.add_acyclic_link` work over it. Links are part of the core contract, so the composite already routes them. `add_acyclic_link` goes where `add_link` goes.
+- **Without a shared link store,** the route that owns both endpoints checks for cycles. Links never cross routes in this mode, so a cycle can only form inside one route, and the route-local check is exact.
+- **A cross-route acyclic link raises `MemoryConflict`,** the same as a plain cross-route link.
+- **Each route protects a relation on its own.** A route rejects plain `add_link` calls for a relation only after its own first acyclic insertion, not after one in another route. To keep a relation acyclic in every route, write it only through `LineageDAG` or `add_acyclic_link`.
+- **With a shared link store,** that store checks cycles across all routes, so it must implement `AcyclicLinkStore`. `InMemoryLinkStore` does not, so acyclic insertion with it raises `UnsupportedOperation`.
+- **A route without `AcyclicLinkStore` raises `UnsupportedOperation`** and stores no link.
+
 ## Structure facades
 
-- **`RoutedBackend` owns no structural state,** so it implements the core contract and none of the optional structure capabilities.
+- **`RoutedBackend` owns no structural state,** so it implements none of the record-store capabilities: `KeyedStore`, `SequenceStore`, `TemporalStore`, and `TemporalIndex`.
 - **It does implement `BlockRouter`.** Pass the composite as the facade's store, and it resolves to the route that owns the container block.
 
 ```python

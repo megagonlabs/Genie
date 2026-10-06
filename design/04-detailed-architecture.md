@@ -461,6 +461,10 @@ Each adapter maps the same contracts onto its own store, with the same duties:
   resolve a container to a single adapter.
 - **Links and search may be route-local or shared.** A shared link store does
   not validate endpoints, so `RoutedBackend` checks them before writing.
+- **Acyclic links go where links go.** `RoutedBackend` implements
+  `AcyclicLinkStore` by forwarding to the shared link store, or else to the
+  route that owns both endpoints. Route-local links never cross routes, so a
+  route-local cycle check is exact. Each route protects a relation on its own.
 - **`BlockRouter` is not a storage claim.** Implementing it says only that the
   composite knows who owns a block; it still advertises only the capabilities
   it implements itself.

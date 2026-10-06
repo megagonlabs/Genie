@@ -30,6 +30,7 @@ edge = memory.update_link(edge, metadata={"confidence": 0.9})
 
 - **`update_link` merges metadata** and keeps the id, endpoints, relation, and creation time.
 - **Pick by intent:** ownership for containment and lifecycle; links for references, provenance, and relationships that cut across the tree.
+- **Relation names are shared across the whole backend.** One name means the same relation for every block, tenant, and handle. Add your own prefix, such as `"billing.derived_from"`, when two parts of an application could pick the same name.
 
 ## Trusted and restricted access
 

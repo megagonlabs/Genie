@@ -17,6 +17,7 @@ from typing import Literal, overload
 
 from genie.backend.base import MemoryBackend
 from genie.backend.capabilities import LinkStore, SearchIndex, TraversalIndex
+from genie.backend.structure_capabilities import AcyclicLinkStore
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryConflict, UnsupportedOperation
 from genie.memory.links import MemoryLink
@@ -161,11 +162,13 @@ class RoutedBackend:
     and link delegation is exact because of that invariant rather than
     approximate.
 
-    The composite implements the core `MemoryBackend` contract only. It owns no
-    structural state, so it does not implement the optional structure capability
-    protocols in `genie.backend.structure_capabilities`. It does implement
-    `BlockRouter`, so passing it as a structure facade's store resolves to the
-    route that does.
+    The composite implements the core `MemoryBackend` contract and
+    `AcyclicLinkStore`. Links are part of the core contract, so the composite
+    already routes them, and it routes acyclic insertion the same way. It owns
+    no structural state, so it does not implement the other optional structure
+    capability protocols in `genie.backend.structure_capabilities`. It does
+    implement `BlockRouter`, so passing it as a structure facade's store
+    resolves to the route that does.
     """
 
     def __init__(
@@ -462,6 +465,49 @@ class RoutedBackend:
             if source_route != target_route:
                 raise MemoryConflict("Cross-route links require a shared link_store.")
             return self._routes[source_route].add_link(link)
+
+    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
+        """Persist a link only when its relation stays acyclic.
+
+        The cycle check runs in the store that holds the links:
+
+        - With a shared link store, that store checks the relation across all
+          routes.
+        - Without one, the route that owns both endpoints checks it. Links
+          never cross routes in this mode, so a cycle can only form inside one
+          route, and the route-local check is exact.
+
+        Without a shared link store, each route protects a relation on its own.
+        A route rejects ordinary `add_link` calls for the relation only after
+        its own first acyclic insertion, not after one in another route.
+
+        Args:
+            link: Link to store. Its relation identifies the protected graph.
+
+        Returns:
+            Stored link.
+
+        Raises:
+            MemoryConflict: If the link id already exists, either endpoint is
+                missing, the link would close a cycle, or a cross-route link is
+                attempted without a shared link store.
+            UnsupportedOperation: If the store that would hold the link does
+                not support atomic acyclic links.
+        """
+
+        with self._lock:
+            source_route = self._route_for_existing_block(link.source_id)
+            target_route = self._route_for_existing_block(link.target_id)
+            if self.link_store is not None:
+                if not isinstance(self.link_store, AcyclicLinkStore):
+                    raise UnsupportedOperation("The shared link store does not support atomic acyclic links.")
+                return self.link_store.add_acyclic_link(link)
+            if source_route != target_route:
+                raise MemoryConflict("Cross-route links require a shared link_store.")
+            backend = self._routes[source_route]
+            if not isinstance(backend, AcyclicLinkStore):
+                raise UnsupportedOperation(f"Route {source_route!r} does not support atomic acyclic links.")
+            return backend.add_acyclic_link(link)
 
     def update_link(self, link: MemoryLink) -> MemoryLink:
         """Replace link metadata in the shared store or source route.

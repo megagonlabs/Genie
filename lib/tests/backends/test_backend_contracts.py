@@ -33,6 +33,32 @@ from genie.structures import (
 )
 
 
+class CoreOnlyBackend:
+    """Core `MemoryBackend` that implements no optional capability.
+
+    It forwards the core methods to an `InMemoryBackend`, so tests can check
+    what happens when a backend lacks a capability such as `AcyclicLinkStore`.
+    """
+
+    def __init__(self) -> None:
+        """Wrap a fresh in-memory backend."""
+
+        inner = InMemoryBackend()
+        self.put_block = inner.put_block
+        self.get_block = inner.get_block
+        self.update_block = inner.update_block
+        self.delete_block = inner.delete_block
+        self.children = inner.children
+        self.ancestors = inner.ancestors
+        self.descendants = inner.descendants
+        self.contains = inner.contains
+        self.search = inner.search
+        self.add_link = inner.add_link
+        self.update_link = inner.update_link
+        self.list_links = inner.list_links
+        self.delete_links_for_block = inner.delete_links_for_block
+
+
 class StructureBackendContract:
     """Factory hook shared by optional backend capability contracts."""
 

@@ -50,8 +50,9 @@ guarantee has a place where it is tested.
   not copy the tests.
 - **A capability the adapter does not claim is not tested against it.** The
   suites follow the capability protocols, so no adapter is expected to
-  implement every one. `RoutedBackend` has a test that checks it claims no
-  structure capability of its own.
+  implement every one. `RoutedBackend` routes links, so it runs
+  `LinkStoreContract` and `AcyclicLinkStoreContract`, and a test checks it
+  claims no record-store capability of its own.
 - **The contracts check relationships, not strategy.** `TraversalIndexContract`
   compares `children` and `descendants` as sets, because their order is
   backend-defined, and checks order only for `ancestors`, where the protocol

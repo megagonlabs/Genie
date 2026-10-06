@@ -362,6 +362,10 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 
 - **`LineageDAG` works on one relation.** An empty relation or
   `"genie.mount"` is a `ValueError`.
+- **Relation names are shared across the whole backend.** Protection starts
+  with the first acyclic insert and then covers every block with that
+  relation, across handles and tenants. Applications prefix lineage relations,
+  such as `"billing.derived_from"`, to avoid accidental clashes.
 - **`GraphNeighbor`:** `block`, `link`, `direction` (`"out"` or `"in"`).
   **`GraphPath`:** `block_ids`, `links`.
 
@@ -611,8 +615,9 @@ direct call skips handles, policies, hooks, and codecs.
 
 - **Every storage adapter implements every optional capability:**
   `AcyclicLinkStore`, `KeyedStore`, `SequenceStore`, `TemporalStore`, and
-  `TemporalIndex`. `RoutedBackend` implements only `BlockRouter`;
-  `InMemoryLinkStore` is a standalone `LinkStore`.
+  `TemporalIndex`. `RoutedBackend` implements `BlockRouter` and
+  `AcyclicLinkStore`, and sends each acyclic link to the store that holds its
+  links; `InMemoryLinkStore` is a standalone `LinkStore`.
 - **A missing driver raises `UnsupportedOperation`** at construction, naming
   the extra to install (for example `genie[postgres]`).
 - **`verify_*` flags** turn off a construction-time server check.

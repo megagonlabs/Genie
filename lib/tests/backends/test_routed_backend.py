@@ -38,8 +38,13 @@ from genie.backend.structure_capabilities import (
     TemporalStore,
 )
 from genie.memory.block import MemoryBlock
-from genie.memory.errors import MemoryConflict, MemoryNotFound
-from genie.structures import EventLog, KeyedCollection, MemoryAddress
+from genie.memory.errors import MemoryConflict, MemoryNotFound, UnsupportedOperation
+from genie.structures import EventLog, KeyedCollection, LineageDAG, MemoryAddress
+from tests.backends.test_backend_contracts import (
+    AcyclicLinkStoreContract,
+    CoreOnlyBackend,
+    LinkStoreContract,
+)
 
 
 def route_by_metadata(block: MemoryBlock) -> str | None:
@@ -143,6 +148,26 @@ class RecordingLinkStore:
 
         self.deleted_blocks.append(block_id)
         self.inner.delete_links_for_block(block_id)
+
+
+class AcyclicRecordingLinkStore(InMemoryLinkStore):
+    """Shared link store that claims `AcyclicLinkStore` and records its calls.
+
+    It does not check for cycles. It only proves that the composite delegates
+    acyclic insertion to a shared store instead of to a route.
+    """
+
+    def __init__(self) -> None:
+        """Create an empty recording link store."""
+
+        super().__init__()
+        self.acyclic_link_ids: list[str] = []
+
+    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
+        """Record the call and store the link."""
+
+        self.acyclic_link_ids.append(link.id)
+        return self.add_link(link)
 
 
 class RecordingTraversalIndex:
@@ -602,6 +627,79 @@ def test_routed_backend_rejects_cross_route_links_without_shared_link_store() ->
         memory.add_link(source, target, "references")
 
 
+def test_lineage_dag_checks_cycles_in_the_route_that_owns_the_links() -> None:
+    """Each route checks its own links, because route-local links never cross routes."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend)
+    lineage = LineageDAG(memory, relation="derived_from")
+    raw = memory.put(type="dataset", value="raw", metadata={"route": "a"})
+    clean = memory.put(type="dataset", value="clean", metadata={"route": "a"})
+    model = memory.put(type="model", value="model", metadata={"route": "b"})
+    report = memory.put(type="report", value="report", metadata={"route": "b"})
+
+    data_edge = lineage.add(raw, clean)
+    model_edge = lineage.add(model, report)
+
+    with pytest.raises(MemoryConflict, match="cycle"):
+        lineage.add(clean, raw)
+    with pytest.raises(MemoryConflict, match="Cross-route"):
+        lineage.add(clean, model)
+    assert route_a.list_links(raw.id, relation="derived_from") == [data_edge]
+    assert route_b.list_links(model.id, relation="derived_from") == [model_edge]
+
+
+def test_routed_acyclic_links_need_a_capable_route() -> None:
+    """A route without `AcyclicLinkStore` reports it and writes nothing."""
+
+    memory = Memory(backend=RoutedBackend({"plain": CoreOnlyBackend()}))
+    first = memory.put(type="artifact", value="first")
+    second = memory.put(type="artifact", value="second")
+
+    with pytest.raises(UnsupportedOperation, match="Route 'plain' does not support atomic acyclic links"):
+        LineageDAG(memory, relation="derived_from").add(first, second)
+    assert memory.list_links(first) == []
+
+
+def test_routed_acyclic_links_use_a_capable_shared_link_store() -> None:
+    """A shared store that claims `AcyclicLinkStore` checks links across routes."""
+
+    link_store = AcyclicRecordingLinkStore()
+    backend = RoutedBackend(
+        {"a": InMemoryBackend(), "b": InMemoryBackend()},
+        route_selector=route_by_metadata,
+        default_route="a",
+        link_store=link_store,
+    )
+    memory = Memory(backend=backend)
+    source = memory.put(type="dataset", value="raw", metadata={"route": "a"})
+    target = memory.put(type="model", value="model", metadata={"route": "b"})
+
+    edge = LineageDAG(memory, relation="derived_from").add(source, target)
+
+    assert link_store.acyclic_link_ids == [edge.id]
+    assert memory.list_links(source) == [edge]
+
+
+def test_routed_acyclic_links_refuse_a_shared_store_without_the_capability() -> None:
+    """Links live in the shared store, so the routes cannot check cycles for it."""
+
+    link_store = InMemoryLinkStore()
+    memory = Memory(backend=RoutedBackend({"a": InMemoryBackend()}, link_store=link_store))
+    first = memory.put(type="artifact", value="first")
+    second = memory.put(type="artifact", value="second")
+
+    with pytest.raises(UnsupportedOperation, match="shared link store does not support atomic acyclic links"):
+        LineageDAG(memory, relation="derived_from").add(first, second)
+    assert link_store.list_links(first.id, direction="both") == []
+
+
 def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
     """Route validation keeps each block owned by one backend route."""
 
@@ -882,13 +980,14 @@ def test_structure_facade_binds_through_backend_for_block() -> None:
     assert [item.block.id for item in events.read()] == [event.id]
 
 
-def test_routed_backend_does_not_claim_structure_capabilities() -> None:
-    """The composite satisfies the core contract and none of the optional ones."""
+def test_routed_backend_claims_only_the_link_capability() -> None:
+    """The composite routes links, so it claims `AcyclicLinkStore` and no record store."""
 
     backend = RoutedBackend({"a": InMemoryBackend()})
 
     assert isinstance(backend, MemoryBackend)
-    for capability in (AcyclicLinkStore, KeyedStore, SequenceStore, TemporalStore, TemporalIndex):
+    assert isinstance(backend, AcyclicLinkStore)
+    for capability in (KeyedStore, SequenceStore, TemporalStore, TemporalIndex):
         assert not isinstance(backend, capability)
 
 
@@ -1003,3 +1102,12 @@ def test_route_replacement_allows_a_genuinely_empty_route(tmp_path: Any) -> None
     backend.register_route("a", replacement, replace=True)
 
     assert backend.routes["a"] is replacement
+
+
+class TestRoutedStructureBackendContracts(LinkStoreContract, AcyclicLinkStoreContract):
+    """Run the link contracts against a composite with route-local links."""
+
+    def make_backend(self) -> RoutedBackend:
+        """Return a two-route composite. New root blocks go to route `a`."""
+
+        return RoutedBackend({"a": InMemoryBackend(), "b": InMemoryBackend()}, default_route="a")

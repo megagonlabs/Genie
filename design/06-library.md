@@ -123,7 +123,7 @@ details out of agent code.
 | What did this record say before? | `VersionedRecords` | `VersionedStore` (`KeyedStore` + `SequenceStore`) |
 
 - **Any subset works over the same blocks.** `DeskMemory` uses `KeyedCollection` and `EventLog`. `TaskMemory` uses `OwnershipTree`, `KeyedCollection`, `EventLog`, and `PropertyGraph`.
-- **Every shipped adapter supports all seven facades.** A facade given a `RoutedBackend` binds to the route that owns its container block.
+- **Every shipped adapter supports all seven facades.** A facade given a `RoutedBackend` binds to the route that owns its container block. `LineageDAG` writes through `Memory`, and `RoutedBackend` sends each acyclic link to the store that holds its links.
 - **A missing capability fails when the facade is constructed,** with `UnsupportedOperation`, not on its first write.
 
 ### Backend by deployment
