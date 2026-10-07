@@ -286,11 +286,11 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 
 | Name | Signature | Meaning |
 | --- | --- | --- |
-| `MemoryPolicy` | `(read, write, search, traverse_up, traverse_down, operations={})` | One `AccessRule` per built-in operation, plus named extra rules |
+| `MemoryPolicy` | `(read, write, search, traverse_up, traverse_down, operations={})` | One `AccessRule` per built-in operation, plus named extra rules; each built-in field defaults to `AccessRule.owner()` |
 | `MemoryPolicy.owner_private()` | classmethod | Only `created_by` may do anything; the default |
 | `MemoryPolicy.public()` | classmethod | Everyone may do everything |
 | `MemoryPolicy.owner_or(*, principals=None, roles=None)` | classmethod | The owner plus the listed principals and roles |
-| `AccessRule` | `(allow_all=True, principals=frozenset(), roles=frozenset(), allow_owner=False)` | One rule |
+| `AccessRule` | `(allow_all=False, principals=frozenset(), roles=frozenset(), allow_owner=False)` | One rule; `AccessRule()` denies everyone |
 | `AccessRule.allow()`, `.deny()`, `.owner()` | classmethods | Everyone, no one, the owner only |
 | `AccessRule.only(*, principals=None, roles=None, owner=False)` | classmethod | An explicit list |
 | `AccessRule.allows(principal, *, owner_id=None)` | method | `bool` |
@@ -302,6 +302,11 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 
 - **`Operation`** values: `READ`, `WRITE`, `SEARCH`, `TRAVERSE_UP`,
   `TRAVERSE_DOWN`. An `operation` argument also accepts a string name.
+- **Defaults fail closed.** `AccessRule()` denies everyone, and
+  `MemoryPolicy()` equals `MemoryPolicy.owner_private()`. A policy that sets
+  only some fields keeps the rest owner-only.
+- **`allow_all=True` with `principals`, `roles`, or `allow_owner` is a
+  `ValueError`,** because `allow_all` would make those grants have no effect.
 - **An unknown operation name is a `ValueError`,** never a silent allow.
 - **Extra rules cannot reuse a built-in name.** That is a `ValueError` at
   construction.

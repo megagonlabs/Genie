@@ -210,6 +210,66 @@ def test_policy_models_reject_malformed_runtime_container_values() -> None:
         MemoryPolicy(operations={"": AccessRule.allow()})
 
 
+def test_access_rule_defaults_deny_unless_a_grant_is_given() -> None:
+    """A bare rule denies everyone, and listed grants never fall back to allow-all."""
+
+    alice = Principal(id="alice")
+    mallory = Principal(id="mallory", roles=frozenset({"intruder"}))
+
+    assert AccessRule() == AccessRule.deny()
+    assert not AccessRule().allows(alice, owner_id="alice")
+
+    by_principal = AccessRule(principals=frozenset({"alice"}))
+    assert by_principal.allows(alice)
+    assert not by_principal.allows(mallory)
+
+    by_role = AccessRule(roles=frozenset({"reader"}))
+    assert by_role.allows(Principal(id="bob", roles=frozenset({"reader"})))
+    assert not by_role.allows(mallory)
+
+    by_owner = AccessRule(allow_owner=True)
+    assert by_owner == AccessRule.owner()
+    assert by_owner.allows(alice, owner_id="alice")
+    assert not by_owner.allows(mallory, owner_id="alice")
+
+
+def test_access_rule_rejects_allow_all_combined_with_grants() -> None:
+    """Grants next to `allow_all` would be ignored, so the rule refuses them."""
+
+    with pytest.raises(ValueError, match="allow_all cannot be combined"):
+        AccessRule(allow_all=True, principals=frozenset({"alice"}))
+    with pytest.raises(ValueError, match="allow_all cannot be combined"):
+        AccessRule(allow_all=True, roles=frozenset({"reader"}))
+    with pytest.raises(ValueError, match="allow_all cannot be combined"):
+        AccessRule(allow_all=True, allow_owner=True)
+
+
+def test_memory_policy_fields_default_to_owner_only() -> None:
+    """Fields left unset on a policy stay owner-only instead of opening to everyone."""
+
+    assert MemoryPolicy() == MemoryPolicy.owner_private()
+    public = MemoryPolicy.public()
+    assert all(getattr(public, name) == AccessRule.allow() for name in BUILTIN_OPERATION_NAMES)
+
+    alice = Memory(principal="alice")
+    block = alice.put(type="note", value="original", policy=MemoryPolicy(read=AccessRule.allow()))
+    mallory = Memory(backend=alice.backend, principal="mallory")
+
+    read_by_mallory = mallory.get(block)
+    assert read_by_mallory is not None
+    assert read_by_mallory.value == "original"
+    with pytest.raises(AccessDenied):
+        mallory.set(block, "overwritten")
+    with pytest.raises(AccessDenied):
+        mallory.update(block, value="updated")
+    with pytest.raises(AccessDenied):
+        mallory.delete(block)
+
+    retrieved = alice.get(block)
+    assert retrieved is not None
+    assert retrieved.value == "original"
+
+
 def test_memory_rejects_invalid_principals_and_policy_objects_at_entry() -> None:
     """Public memory construction and writes reject malformed policy inputs."""
 

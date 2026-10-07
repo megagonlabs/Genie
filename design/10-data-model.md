@@ -134,6 +134,9 @@ What is stored, and what each part answers:
   reuse a built-in name.
 - **An `AccessRule`** allows everyone (`allow_all`), or only the listed
   `principals`, `roles`, and optionally the owner (`allow_owner`).
+- **Defaults fail closed.** `allow_all` defaults to `False` and cannot be
+  combined with the other grants. Each unset built-in `MemoryPolicy` field is
+  `AccessRule.owner()`.
 
 ### Structure records
 

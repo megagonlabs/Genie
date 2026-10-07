@@ -16,6 +16,9 @@ both the handle's scope and the block's `MemoryPolicy`.
 | `AccessRule.owner()` | The block creator |
 | `AccessRule.only(...)` | Chosen `principals`, chosen `roles`, or those plus `owner=True` |
 
+- **Defaults fail closed.** `AccessRule()` denies everyone. A rule built directly from `principals`, `roles`, or `allow_owner` allows only those.
+- **`allow_all=True` cannot be combined** with `principals`, `roles`, or `allow_owner`. That raises `ValueError`, because `allow_all` would make those grants have no effect.
+
 ```python
 principal = Principal(id="agent:writer", roles=frozenset({"researcher"}))
 ```
@@ -34,6 +37,7 @@ policy = MemoryPolicy(
 )
 ```
 
+- **A field left out is `AccessRule.owner()`.** `MemoryPolicy()` equals `MemoryPolicy.owner_private()`, and `MemoryPolicy(read=AccessRule.allow())` lets everyone read but keeps `write`, `search`, and traversal owner-only.
 - **`MemoryPolicy.owner_private()`** is the default for new blocks, so only the creator passes every built-in operation.
 - **`MemoryPolicy.owner_or(...)`** is the common replacement, so that creators and a supervisor role keep access.
 - **`MemoryPolicy.public()`** only when every built-in operation should be open to everyone.

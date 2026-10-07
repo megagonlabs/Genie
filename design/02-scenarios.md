@@ -118,8 +118,9 @@ guide = maya.put(type="style_guide", value="Write election turnout as a whole pe
 - **One rule per operation.** A `MemoryPolicy` holds a separate `AccessRule`
   for `read`, `write`, `search`, `traverse_up`, and `traverse_down`, so "read
   but not edit" is one policy value, not a separate feature.
-- **A field left out allows everyone.** Every `MemoryPolicy` field defaults to
-  `AccessRule.allow()`, which is why `editors_may_read` names all five.
+- **A field left out stays owner-only.** Every `MemoryPolicy` field defaults to
+  `AccessRule.owner()`, so a forgotten field never opens a block to everyone.
+  `editors_may_read` still names all five so each grant is visible.
 - **Roles come from the `Principal`.** Genie reads `roles` from the acting
   principal. It does not know who is an editor.
 - **Search filters without telling.** Leo's search returns one result, and

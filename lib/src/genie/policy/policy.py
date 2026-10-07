@@ -24,6 +24,10 @@ BUILTIN_OPERATION_NAMES = frozenset(
 class AccessRule:
     """A rule that grants or denies one operation.
 
+    The defaults deny everyone. `AccessRule()` is the same as
+    `AccessRule.deny()`, and a rule built from `principals`, `roles`, or
+    `allow_owner` allows only those.
+
     Attributes:
         allow_all: Whether every principal is allowed.
         principals: Explicit principal ids allowed when `allow_all` is false.
@@ -35,10 +39,12 @@ class AccessRule:
     Raises:
         TypeError: If a flag is not a boolean, or `principals` or `roles` is
             not a set of strings.
-        ValueError: If `principals` or `roles` contains an empty string.
+        ValueError: If `principals` or `roles` contains an empty string, or
+            `allow_all` is combined with `principals`, `roles`, or
+            `allow_owner`.
     """
 
-    allow_all: bool = True
+    allow_all: bool = False
     principals: frozenset[str] = field(default_factory=frozenset)
     roles: frozenset[str] = field(default_factory=frozenset)
     allow_owner: bool = False
@@ -60,6 +66,11 @@ class AccessRule:
             "roles",
             _normalize_names(self.roles, field_name="roles"),
         )
+        if self.allow_all and (self.principals or self.roles or self.allow_owner):
+            raise ValueError(
+                "AccessRule allow_all cannot be combined with principals, roles, or allow_owner; "
+                "use AccessRule.allow() or AccessRule.only(...)."
+            )
 
     @classmethod
     def allow(cls) -> AccessRule:
@@ -185,6 +196,10 @@ class MemoryPolicy:
     separately by `MemoryHandle`. Applications can attach named custom
     operations through `operations` and evaluate them with `PolicyEngine`.
 
+    Every built-in field defaults to `AccessRule.owner()`, so `MemoryPolicy()`
+    is the same as `MemoryPolicy.owner_private()`. A policy that sets only
+    some fields keeps the other operations owner-only.
+
     Attributes:
         read: Permission to read the block value and metadata.
         write: Permission to update or delete the block.
@@ -201,11 +216,11 @@ class MemoryPolicy:
         ValueError: If `operations` reuses a name reserved by Genie.
     """
 
-    read: AccessRule = field(default_factory=AccessRule.allow)
-    write: AccessRule = field(default_factory=AccessRule.allow)
-    search: AccessRule = field(default_factory=AccessRule.allow)
-    traverse_up: AccessRule = field(default_factory=AccessRule.allow)
-    traverse_down: AccessRule = field(default_factory=AccessRule.allow)
+    read: AccessRule = field(default_factory=AccessRule.owner)
+    write: AccessRule = field(default_factory=AccessRule.owner)
+    search: AccessRule = field(default_factory=AccessRule.owner)
+    traverse_up: AccessRule = field(default_factory=AccessRule.owner)
+    traverse_down: AccessRule = field(default_factory=AccessRule.owner)
     operations: Mapping[str, AccessRule] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -230,7 +245,14 @@ class MemoryPolicy:
             A policy that allows every operation to every principal.
         """
 
-        return cls()
+        allow_rule = AccessRule.allow()
+        return cls(
+            read=allow_rule,
+            write=allow_rule,
+            search=allow_rule,
+            traverse_up=allow_rule,
+            traverse_down=allow_rule,
+        )
 
     @classmethod
     def owner_private(cls) -> MemoryPolicy:
