@@ -140,7 +140,8 @@ A search through a bounded handle shows the two checks working together:
    `TRAVERSE_DOWN`, `TRAVERSE_UP`, or `READ` depending on the scope.
 3. **`before_search` may rewrite the query.** The rewritten query is
    normalized and authorized again, so a hook cannot widen the root or the
-   scope.
+   scope. Through a handle, it also passes the handle checks from step 1
+   again, and a scope the handle does not allow is refused.
 4. **The backend searches** and applies `query.limit`.
 5. **`Memory` filters the results** against block policies and re-checks the
    query scope, then decodes the surviving blocks.

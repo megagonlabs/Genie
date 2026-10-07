@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import fields, replace
@@ -897,6 +897,49 @@ class Memory:
                 root id is empty, or a non-global scope has no root.
         """
 
+        _, results = self._search(
+            query,
+            text=text,
+            root=root,
+            scope=scope,
+            types=types,
+            filters=filters,
+            limit=limit,
+        )
+        return results
+
+    def _search(
+        self,
+        query: MemoryQuery | str | None,
+        *,
+        text: str | None,
+        root: str | MemoryBlock | None,
+        scope: Scope | str,
+        types: list[str] | tuple[str, ...],
+        filters: dict[str, Any] | None,
+        limit: int,
+        boundary: Callable[[HookContext, MemoryQuery], None] | None = None,
+    ) -> tuple[MemoryQuery, list[SearchResult]]:
+        """Run `search` and also return the query that the backend ran.
+
+        Args:
+            query: Optional `MemoryQuery` or text query string.
+            text: Text query when `query` is not a string.
+            root: Optional root block or id for scoped search.
+            scope: Search scope.
+            types: Optional block types to include.
+            filters: Optional metadata or block-field filters.
+            limit: Maximum result count.
+            boundary: Optional extra check for the query that `before_search`
+                hooks return. It runs inside this operation before the query
+                is authorized again, and raises `AccessDenied` to refuse.
+                `MemoryHandle` passes one so a hook cannot widen a search past
+                the handle's root or capabilities.
+
+        Returns:
+            The query after `before_search` hooks, and the visible results.
+        """
+
         with self._operation(HookOperation.SEARCH) as context:
             memory_query = self._coerce_query(
                 query,
@@ -913,6 +956,8 @@ class Memory:
             # backends receive canonical filter operators, then check access again
             # so hooks cannot pass through a wider query root or scope.
             memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
+            if boundary is not None:
+                boundary(context, memory_query)
             self._authorize_query(context, memory_query)
             raw_results = self.backend.search(memory_query)
             decoded_results = [
@@ -933,7 +978,7 @@ class Memory:
                 memory_query,
                 visible_results,
             )
-            return self._filter_visible_results(memory_query, hooked_results, verdicts)
+            return memory_query, self._filter_visible_results(memory_query, hooked_results, verdicts)
 
     def get_handle(
         self,

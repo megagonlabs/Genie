@@ -203,6 +203,12 @@ with self._operation(HookOperation.X) as context:   # 1 open context
   root and scope, so a prebuilt `MemoryQuery` cannot smuggle a wider one, and
   then filters the returned results by `contains` again for every scope except
   `global` and `ancestors`.
+- **A rewritten search is checked against the handle again.** The handle calls
+  `Memory._search` with a `boundary` check that runs on the query returned by
+  `before_search`, inside the search operation. It refuses the same scopes and
+  roots as the first check and reports them to `on_denied` in that operation.
+  The final `contains` filter follows the scope of the query that ran, not the
+  scope the caller asked for.
 
 | Handle capability | Flag | What it gates |
 | --- | --- | --- |
@@ -287,7 +293,8 @@ with self._operation(HookOperation.X) as context:   # 1 open context
    `traverse_up` for `ancestors`, and `read` for `links`. A non-global scope
    with no root is a `ValueError`.
 3. **`before_search`**, then normalize filters again and **authorize again**,
-   because a hook may have returned a freshly built query.
+   because a hook may have returned a freshly built query. A handle search
+   also runs the handle's `boundary` check on the rewritten query first.
 4. **`backend.search(query)`**, which resolves the scope, matches, and applies
    `query.limit`.
 5. **Decode** each result block.

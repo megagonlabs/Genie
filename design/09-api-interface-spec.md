@@ -204,7 +204,7 @@ and search methods, with these differences:
 | --- | --- |
 | **Boundary** | Every id has to be inside the root. An unknown id is refused as "outside the handle" before any lookup, so its existence is not revealed |
 | **Optional root argument** | `children()`, `ancestors()`, and `discover_mounts()` default to the handle root. On an unbounded handle, leaving it out is `AccessDenied` |
-| **Search** | `scope=None` uses `default_scope`; `root` has to be inside the handle; the query is rebuilt so a prebuilt `MemoryQuery` cannot widen it |
+| **Search** | `scope=None` uses `default_scope`; `root` has to be inside the handle; the query is rebuilt so a prebuilt `MemoryQuery` cannot widen it; a query rewritten by `before_search` is checked against the handle again |
 | **Explicit policy** | `put(policy=...)` needs `allow_policy_override` |
 | **No `contains`** | Not part of the handle surface |
 | **`attributes`** | Read-only property with the hook attributes this handle reports |

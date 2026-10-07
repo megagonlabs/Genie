@@ -19,6 +19,7 @@ from genie.policy.principal import Principal
 from genie.query import MemoryQuery, Scope, SearchResult
 
 if TYPE_CHECKING:
+    from genie.hooks import HookContext
     from genie.memory.memory import Memory
 
 
@@ -690,12 +691,14 @@ class MemoryHandle:
 
         Raises:
             AccessDenied: If the requested root or search mode would escape the
-                handle's access, or if an unbounded handle cannot infer a
-                non-global search root.
+                handle's access, if a `before_search` hook rewrites the query
+                to do so, or if an unbounded handle cannot infer a non-global
+                search root.
             MemoryNotFound: If the query root does not exist.
             TypeError: If `root` is not a block or string id.
-            ValueError: If the scope is invalid, the root id is empty, or limit
-                is negative.
+            ValueError: If the scope is invalid, the root id is empty, limit
+                is negative, or a `before_search` hook returns a non-global
+                query with no root.
         """
 
         if isinstance(query, MemoryQuery):
@@ -705,20 +708,9 @@ class MemoryHandle:
         else:
             selected_scope = Scope(scope or self.default_scope)
             root_id = _block_id(root) if root is not None else self.root_id
-        if selected_scope == Scope.GLOBAL and not self.allow_global:
-            self._deny(
-                HookOperation.SEARCH,
-                HandleCapability.GLOBAL_SEARCH,
-                self.root_id,
-                "This memory handle does not allow global search.",
-            )
-        if selected_scope == Scope.ANCESTORS and not self.allow_up:
-            self._deny(
-                HookOperation.SEARCH,
-                HandleCapability.ANCESTORS,
-                self.root_id,
-                "This memory handle does not allow ancestor search.",
-            )
+        refusal = self._search_refusal(selected_scope, root_id)
+        if refusal is not None:
+            self._deny(HookOperation.SEARCH, *refusal)
         if root_id is None and selected_scope != Scope.GLOBAL:
             self._deny(
                 HookOperation.SEARCH,
@@ -726,11 +718,12 @@ class MemoryHandle:
                 None,
                 "An unbounded memory handle cannot infer which subtree to search.",
             )
-        if root_id is not None and selected_scope != Scope.GLOBAL:
-            self._require_in_subtree(HookOperation.SEARCH, root_id)
         # Rebuild query objects with the selected scope/root so a caller cannot
         # pass a wider root or global scope through a prebuilt `MemoryQuery`.
-        results = self._as_principal().search(
+        # `before_search` hooks can still replace the query, so the query they
+        # return is checked against this handle again, and the final filter
+        # below follows the scope that actually ran.
+        executed, results = self._as_principal()._search(
             query,
             text=text,
             root=root_id,
@@ -738,8 +731,9 @@ class MemoryHandle:
             types=types,
             filters=filters,
             limit=limit,
+            boundary=self._require_hooked_search_inside,
         )
-        if self.root_id is None or selected_scope in {Scope.GLOBAL, Scope.ANCESTORS}:
+        if self.root_id is None or executed.scope in {Scope.GLOBAL, Scope.ANCESTORS}:
             return results
         return [
             result
@@ -912,6 +906,71 @@ class MemoryHandle:
                 self.root_id,
                 "This memory handle does not allow mount access.",
             )
+
+    def _search_refusal(
+        self,
+        scope: Scope,
+        root_id: str | None,
+    ) -> tuple[HandleCapability, str | None, str] | None:
+        """Return why a search leaves this handle, or `None` if it stays inside.
+
+        A missing root is not checked here. Before the search, `search` refuses
+        it as `ROOT_REQUIRED`. After `before_search` hooks, `Memory` refuses a
+        non-global query with no root as a `ValueError`.
+
+        Args:
+            scope: Search scope.
+            root_id: Search root, or `None` when the search has none.
+
+        Returns:
+            The capability that refuses, the block the refusal applies to, and
+            the refusal message, or `None` when the search is allowed.
+        """
+
+        if scope == Scope.GLOBAL:
+            if self.allow_global:
+                return None
+            return (
+                HandleCapability.GLOBAL_SEARCH,
+                self.root_id,
+                "This memory handle does not allow global search.",
+            )
+        if scope == Scope.ANCESTORS and not self.allow_up:
+            return (
+                HandleCapability.ANCESTORS,
+                self.root_id,
+                "This memory handle does not allow ancestor search.",
+            )
+        if self.root_id is not None and root_id is not None and not self._memory._contains_raw(self.root_id, root_id):
+            return (
+                HandleCapability.SUBTREE,
+                root_id,
+                f"Memory block {root_id!r} is outside memory handle root {self.root_id!r}.",
+            )
+        return None
+
+    def _require_hooked_search_inside(self, context: HookContext, query: MemoryQuery) -> None:
+        """Refuse a query from `before_search` hooks that leaves this handle.
+
+        This check runs inside the search operation, so the refusal is reported
+        to `on_denied` in that operation's context instead of a new one.
+
+        Args:
+            context: Active search operation context.
+            query: Query returned by the `before_search` hooks.
+
+        Raises:
+            AccessDenied: If the query uses a scope this handle does not allow
+                or a root outside this handle.
+        """
+
+        refusal = self._search_refusal(query.scope, query.root_id)
+        if refusal is None:
+            return
+        capability, subject_id, message = refusal
+        denied = AccessDenied(message)
+        self._hooks.on_denied(context, capability, subject_id, message, error=denied)
+        raise denied
 
     def _require_in_subtree(self, hook_operation: HookOperation, block_id: str | None) -> None:
         """Raise when a block id is outside the handle root."""

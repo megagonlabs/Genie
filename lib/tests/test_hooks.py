@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -393,6 +394,113 @@ def test_before_search_hook_cannot_widen_query_after_authorization() -> None:
 
     with pytest.raises(AccessDenied):
         reader.search("public", root=public_root, scope="subtree")
+
+
+class RewritingSearchHook(MemoryHook):
+    """Hook that rewrites every search query and records how searches end."""
+
+    def __init__(self) -> None:
+        self.rewrite: Callable[[MemoryQuery], MemoryQuery] = lambda query: query
+        self.outcomes: list[HookOutcome] = []
+
+    def before_search(self, context: HookContext, query: MemoryQuery) -> MemoryQuery:
+        """Return the query built by the current rewrite."""
+
+        return self.rewrite(query)
+
+    def on_operation_end(
+        self,
+        context: HookContext,
+        outcome: HookOutcome,
+        error: BaseException | None,
+    ) -> None:
+        """Record the outcome of each search operation."""
+
+        if context.operation == HookOperation.SEARCH:
+            self.outcomes.append(outcome)
+
+
+def _rewrite_to_global(query: MemoryQuery) -> MemoryQuery:
+    """Return a global query with the same text, like a query-expansion hook."""
+
+    return MemoryQuery(text=query.text, scope=Scope.GLOBAL, limit=query.limit)
+
+
+def test_before_search_hook_cannot_widen_handle_search() -> None:
+    """A rewritten handle search is checked against the handle's limits again."""
+
+    rewriting = RewritingSearchHook()
+    denials = RecordingDenialHook()
+    memory = Memory(principal="owner", hooks=[rewriting, denials])
+    root = memory.put(type="root", value="needle root")
+    task = memory.put(parent=root, type="task", value="needle task")
+    outside = memory.put(type="note", value="needle outside")
+    unbounded = memory.get_unbounded_handle()
+    upward = memory.get_handle(root=task, allow_up=True)
+    rooted = memory.get_handle(root=task)
+
+    def to_ancestors(query: MemoryQuery) -> MemoryQuery:
+        return MemoryQuery(text=query.text, root_id=query.root_id, scope=Scope.ANCESTORS, limit=query.limit)
+
+    def to_outside_root(query: MemoryQuery) -> MemoryQuery:
+        return MemoryQuery(text=query.text, root_id=outside.id, scope=Scope.SUBTREE, limit=query.limit)
+
+    attempts = [
+        (unbounded, {"root": task, "scope": "subtree"}, _rewrite_to_global),
+        (upward, {"scope": "ancestors"}, _rewrite_to_global),
+        (rooted, {}, to_ancestors),
+        (rooted, {}, to_outside_root),
+    ]
+    for handle, arguments, rewrite in attempts:
+        rewriting.rewrite = rewrite
+        with pytest.raises(AccessDenied):
+            handle.search("needle", **arguments)
+
+    assert denials.denials == [
+        (HookOperation.SEARCH, HandleCapability.GLOBAL_SEARCH, None),
+        (HookOperation.SEARCH, HandleCapability.GLOBAL_SEARCH, task.id),
+        (HookOperation.SEARCH, HandleCapability.ANCESTORS, task.id),
+        (HookOperation.SEARCH, HandleCapability.SUBTREE, outside.id),
+    ]
+    assert rewriting.outcomes == [HookOutcome.DENIED] * len(attempts)
+
+
+def test_handle_search_filters_results_by_the_rewritten_scope() -> None:
+    """A rewrite the handle allows returns what the same direct search returns."""
+
+    rewriting = RewritingSearchHook()
+    memory = Memory(hooks=[rewriting])
+    root = memory.put(type="root", value="needle root")
+    task = memory.put(parent=root, type="task", value="needle task")
+    outside = memory.put(type="note", value="needle outside")
+    memory.add_link(task, outside, "related")
+    handle = memory.get_handle(root=task, allow_up=True, allow_global=True)
+
+    def result_ids(**arguments: Any) -> list[str]:
+        return sorted(result.block.id for result in handle.search("needle", **arguments))
+
+    def to_links(query: MemoryQuery) -> MemoryQuery:
+        return MemoryQuery(text=query.text, root_id=task.id, scope=Scope.LINKS, limit=query.limit)
+
+    def to_ancestors(query: MemoryQuery) -> MemoryQuery:
+        return MemoryQuery(text=query.text, root_id=task.id, scope=Scope.ANCESTORS, limit=query.limit)
+
+    direct = {scope: result_ids(scope=scope) for scope in ("links", "ancestors", "global")}
+    rewritten: dict[str, list[str]] = {}
+    for scope, rewrite, selected in (
+        ("links", to_links, "global"),
+        ("ancestors", to_ancestors, "subtree"),
+        ("global", _rewrite_to_global, "subtree"),
+    ):
+        rewriting.rewrite = rewrite
+        rewritten[scope] = result_ids(scope=selected)
+
+    assert direct == {
+        "links": [task.id],
+        "ancestors": sorted([root.id, task.id]),
+        "global": sorted([root.id, task.id, outside.id]),
+    }
+    assert rewritten == direct
 
 
 def test_after_search_hook_results_are_rechecked_for_policy_and_scope() -> None:

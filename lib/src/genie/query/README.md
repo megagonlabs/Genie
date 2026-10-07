@@ -62,7 +62,7 @@ indexes, as long as the public meaning of a query stays the same.
 
 1. Genie checks the requested root and scope.
 2. `before_search` may change the normalized query.
-3. Genie authorizes the changed query again.
+3. Genie authorizes the changed query again. For a handle search, it also checks the changed query against the handle's root, `allow_global`, and `allow_up`.
 4. The backend searches.
 5. Genie decodes the results and filters them by policy.
 6. `after_search` may filter or reorder them.
