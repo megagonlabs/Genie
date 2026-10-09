@@ -2063,6 +2063,107 @@ def test_redis_read_only_script_probe_reports_transport_failures() -> None:
         backend._detect_readonly_scripts()
 
 
+def test_redis_initialization_reads_the_schema_record_and_namespace_keys_together() -> None:
+    """A constructor that races another one on an empty namespace still succeeds.
+
+    A competing constructor commits its schema record and the mutation guard
+    in one `EXEC`. The fake server lands that commit right after the first
+    round trip of `_initialize_schema`. Two separate reads would miss the
+    record and then see the guard, and refuse the namespace as unowned. One
+    atomic batch sees neither, and the write that follows merges with the
+    record that landed in between.
+    """
+
+    schema_key = "genie:schema"
+    guard_key = "genie:mutations"
+    competing = {"application_id": redis_module._APPLICATION_ID, "version": str(redis_module._SCHEMA_VERSION)}
+
+    class RacingPipeline:
+        def __init__(self, client: RacingClient) -> None:
+            self.client = client
+            self.names: list[str] = []
+            self.queued: list[Any] = []
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def watch(self, key: str) -> None:
+            return None
+
+        def multi(self) -> None:
+            return None
+
+        def get(self, key: str) -> str | None:
+            # After `WATCH` the pipeline answers at once, like the real client.
+            return self.client.round_trip(["get"], lambda: self.client.store.get(key))
+
+        def hgetall(self, key: str) -> None:
+            self.names.append("hgetall")
+            self.queued.append(lambda: dict(self.client.store.get(key, {})))
+
+        def exists(self, key: str) -> None:
+            self.names.append("exists")
+            self.queued.append(lambda: int(key in self.client.store))
+
+        def hset(self, key: str, mapping: dict[str, str]) -> None:
+            def write() -> int:
+                self.client.store[key] = {**self.client.store.get(key, {}), **mapping}
+                return len(mapping)
+
+            self.names.append("hset")
+            self.queued.append(write)
+
+        def set(self, key: str, value: str) -> None:
+            def write() -> bool:
+                self.client.store[key] = value
+                return True
+
+            self.names.append("set")
+            self.queued.append(write)
+
+        def execute(self) -> list[Any]:
+            names, self.names = self.names, []
+            queued, self.queued = self.queued, []
+            return self.client.round_trip(names, lambda: [command() for command in queued])
+
+    class RacingClient:
+        def __init__(self) -> None:
+            self.store: dict[str, Any] = {}
+            self.trips: list[list[str]] = []
+
+        def round_trip(self, names: list[str], run: Any) -> Any:
+            result = run()
+            self.trips.append(names)
+            if len(self.trips) == 1:
+                self.store[schema_key] = dict(competing)
+                self.store[guard_key] = "competing"
+            return result
+
+        def get(self, key: str) -> str | None:
+            return self.round_trip(["get"], lambda: self.store.get(key))
+
+        def hgetall(self, key: str) -> dict[str, str]:
+            return self.round_trip(["hgetall"], lambda: dict(self.store.get(key, {})))
+
+        def pipeline(self) -> RacingPipeline:
+            return RacingPipeline(self)
+
+        def close(self) -> None:
+            return None
+
+    client = RacingClient()
+    backend = _detached_backend(client)
+
+    backend._initialize_schema()
+
+    assert client.trips[0] == ["hgetall", "exists", "exists", "exists"]
+    assert client.store[schema_key] == competing
+    assert client.store[guard_key] != "competing"
+
+
 _LIVE_URL = os.environ.get("GENIE_REDIS_URL")
 _LIVE_PREFIX = os.environ.get("GENIE_REDIS_KEY_PREFIX", "genie-test")
 _LIVE_REPLICA_URL = os.environ.get("GENIE_REDIS_REPLICA_URL")
@@ -2907,14 +3008,19 @@ def test_live_redis_backend_rejects_future_and_incompatible_schema() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_coordinates_concurrent_initializers() -> None:
-    """Concurrent constructors leave one valid current schema record."""
+    """Concurrent constructors leave one valid current schema record.
+
+    Every constructor must succeed. The worker count is high enough that some
+    constructors read the namespace while another one commits its schema
+    record, which is the window a non-atomic read would fall into.
+    """
 
     first = _live_backend()
     _clear_live_data(first, include_schema=True)
     first.close()
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        backends = list(executor.map(lambda _: _live_backend(), range(4)))
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        backends = list(executor.map(lambda _: _live_backend(), range(16)))
     try:
         for backend in backends:
             backend._validate_schema()

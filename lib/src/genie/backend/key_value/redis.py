@@ -2161,10 +2161,18 @@ class RedisBackend:
             client.close()
 
     def _initialize_schema(self) -> None:
-        """Create or advance the Genie schema record, then validate it."""
+        """Create or advance the Genie schema record, then validate it.
 
-        state = self._read_schema_identity()
-        if state is None and self._has_unowned_state():
+        The schema record and the unowned-key check are read in one atomic
+        batch. A concurrent constructor commits its schema record and the
+        mutation guard in one `EXEC`, so one batch sees both or neither. Two
+        separate reads could miss the record, then see the guard of a commit
+        that landed in between, and refuse an empty namespace that another
+        constructor had just claimed.
+        """
+
+        state, unowned = self._read_schema_state()
+        if state is None and unowned:
             raise UnsupportedOperation(f"The Redis key namespace {self.key_prefix!r} holds Genie keys without a schema record; use an empty namespace or a validated Genie namespace.")
         version = 0 if state is None else self._schema_version(state, allow_older=True)
         for target_version in range(version + 1, _SCHEMA_VERSION + 1):
@@ -2218,10 +2226,7 @@ class RedisBackend:
     def _schema_record(self, client: Any) -> dict[str, str] | None:
         """Return the raw schema record, or `None` when it is absent."""
 
-        record = client.hgetall(self._schema_key())
-        if not record:
-            return None
-        return {str(field): str(value) for field, value in record.items()}
+        return _decode_schema_record(client.hgetall(self._schema_key()))
 
     def _validate_schema_identity(self, state: Mapping[str, str]) -> None:
         """Require the stored schema record to match this Genie version."""
@@ -2259,16 +2264,23 @@ class RedisBackend:
             raise UnsupportedOperation(f"No Redis migration is available from schema version {version}.")
         return version
 
-    def _has_unowned_state(self) -> bool:
-        """Return whether Genie keys exist without an owning schema record."""
+    def _read_schema_state(self) -> tuple[dict[str, str] | None, bool]:
+        """Read the schema record and whether Genie keys exist, in one atomic batch.
 
-        def operation(client: Any) -> bool:
+        Returns:
+            The stored schema record, or `None` when it is absent, and whether
+            the namespace holds Genie keys that a schema record should own.
+        """
+
+        def operation(client: Any) -> tuple[dict[str, str] | None, bool]:
             def plan(pipeline: Any) -> None:
+                pipeline.hgetall(self._schema_key())
                 pipeline.exists(self._blocks_key())
                 pipeline.exists(self._guard_key())
                 pipeline.exists(self._acyclic_key())
 
-            return any(bool(reply) for reply in self._batch(client, plan))
+            record, *replies = self._batch(client, plan)
+            return _decode_schema_record(record), any(bool(reply) for reply in replies)
 
         return self._direct(operation)
 
@@ -2757,6 +2769,14 @@ class _RedisTransaction:
 
         for write in self._writes:
             write(pipeline)
+
+
+def _decode_schema_record(record: Any) -> dict[str, str] | None:
+    """Return the stored schema record fields, or `None` when the hash is empty."""
+
+    if not record:
+        return None
+    return {str(field): str(value) for field, value in record.items()}
 
 
 def _encode_block(block: MemoryBlock) -> dict[str, Any]:
