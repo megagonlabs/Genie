@@ -31,6 +31,7 @@ from genie import (
     SQLiteBackend,
     UnsupportedOperation,
 )
+from genie.backend.relational import sqlite as sqlite_module
 from genie.structures import KeyBinding, MemoryAddress, TemporalEntry
 
 
@@ -831,3 +832,69 @@ def test_sqlite_backend_maps_read_only_writes_to_public_error(
             backend.put_block(MemoryBlock(type="note", value={}))
 
         assert isinstance(captured.value.__cause__, sqlite3.Error)
+
+
+def test_sqlite_backend_reads_its_schema_identity_in_one_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A constructor that races another one on an empty file still succeeds.
+
+    A competing constructor commits its tables and both identity pragmas in
+    one transaction. Here that commit lands after the first constructor read
+    the version and the application id and before it lists the schema
+    objects. Separate reads would see version 0 next to a complete schema and
+    refuse the file as unowned. One read transaction sees the state from
+    before the commit, and the migration that follows is idempotent.
+    """
+
+    path = tmp_path / "raced.db"
+    original = sqlite_module._user_schema_objects
+    competing_commits = 0
+
+    def list_objects_after_a_competing_commit(connection: sqlite3.Connection) -> set[str]:
+        nonlocal competing_commits
+        if competing_commits == 0:
+            competing_commits += 1
+            with SQLiteBackend(path):
+                pass
+        return original(connection)
+
+    monkeypatch.setattr(sqlite_module, "_user_schema_objects", list_objects_after_a_competing_commit)
+
+    with SQLiteBackend(path) as backend:
+        backend.put_block(MemoryBlock(id="note", type="note", value={}))
+
+    assert competing_commits == 1
+    connection = sqlite3.connect(path)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute("SELECT count(*) FROM blocks").fetchone()[0] == 1
+    connection.close()
+
+
+def test_sqlite_backend_waits_for_the_wal_switch_while_another_connection_holds_a_lock(
+    tmp_path: Path,
+) -> None:
+    """Opening a fresh file next to a locked connection waits instead of failing.
+
+    SQLite answers `PRAGMA journal_mode = WAL` with "database is locked" at
+    once while another connection holds a lock, without the busy wait every
+    other statement gets. The backend retries the switch within `timeout`.
+    """
+
+    path = tmp_path / "first-open.db"
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            opening = executor.submit(SQLiteBackend, path, timeout=5.0)
+            Event().wait(0.1)
+            holder.execute("COMMIT")
+            backend = opening.result(timeout=10)
+    finally:
+        holder.close()
+
+    try:
+        assert backend.get_block("missing") is None
+    finally:
+        backend.close()

@@ -1518,9 +1518,20 @@ class Neo4jBackend:
                 raise UnsupportedOperation(f"The Genie Neo4j index {name!r} is missing or incompatible.")
 
     def _schema_statement(self, statement: str) -> None:
-        """Run one schema DDL statement in its own write transaction."""
+        """Run one schema DDL statement in its own write transaction.
 
-        self._raw_write(lambda tx: _consume(tx, statement))
+        Two constructors can run the same `CREATE ... IF NOT EXISTS` statement
+        at the same time. Neo4j then answers one of them with an "already
+        exists" schema error instead of a no-op. That answer means the object
+        is there, so it counts as success. The validation step that follows
+        every migration still checks that the object has the expected shape.
+        """
+
+        try:
+            self._raw_write(lambda tx: _consume(tx, statement))
+        except GenieError as error:
+            if not _is_existing_schema_rule(error.__cause__):
+                raise
 
     def _raw_read(self, operation: Callable[[Any], _T]) -> _T:
         """Run one managed read transaction without the mutation guard."""
@@ -1774,6 +1785,13 @@ class Neo4jBackend:
             ORDER BY b.storage_order
             """,
         )
+
+
+def _is_existing_schema_rule(error: BaseException | None) -> bool:
+    """Return whether a driver error says a constraint or index already exists."""
+
+    code = str(getattr(error, "code", "") or "")
+    return code.startswith("Neo.ClientError.Schema.") and code.endswith("AlreadyExists")
 
 
 def _records(tx: Any, query: str, **parameters: Any) -> list[dict[str, Any]]:

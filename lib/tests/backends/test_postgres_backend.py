@@ -7,7 +7,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from threading import Event
+from threading import Event, RLock
 from typing import Any
 
 import pytest
@@ -363,6 +363,57 @@ def test_postgres_schema_expectations_cover_every_owned_object() -> None:
         assert statement.count("ON DELETE CASCADE") == len(foreign_keys), table
 
 
+def test_postgres_initialization_checks_the_namespace_inside_the_locked_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The record read, the table check, and the migration share one locked transaction.
+
+    Reading outside the advisory lock could miss the record and then see the
+    tables that another constructor committed in between. Inside the lock, a
+    constructor that waits reads the record the first one committed.
+    """
+
+    statements: list[str] = []
+
+    class RecordingCursor:
+        def fetchone(self) -> None:
+            return None
+
+        def fetchall(self) -> list[dict[str, Any]]:
+            return []
+
+    class RecordingConnection:
+        @contextmanager
+        def transaction(self) -> Any:
+            statements.append("BEGIN")
+            yield
+            statements.append("COMMIT")
+
+        def execute(self, sql: str, params: Any = None) -> RecordingCursor:
+            statements.append(" ".join(sql.split()))
+            return RecordingCursor()
+
+    backend = object.__new__(PostgresBackend)
+    backend.schema = "genie"
+    backend._schema_info = '"genie".schema_info'
+    backend._connection = RecordingConnection()
+    backend._exception_types = (_FakeError,)
+    backend._lock = RLock()
+    backend._advisory_lock_key = 1
+    monkeypatch.setattr(PostgresBackend, "_validate_schema", lambda self: None)
+
+    backend._initialize_schema()
+
+    assert statements[0] == "BEGIN"
+    assert statements[1].startswith("SELECT pg_advisory_xact_lock")
+    assert statements[-1] == "COMMIT"
+    assert statements.count("BEGIN") == 1
+    body = statements[2:-1]
+    assert body[0] == 'CREATE SCHEMA IF NOT EXISTS "genie"'
+    assert sum("information_schema.tables" in statement for statement in body) == 2
+    assert any(statement.startswith("INSERT INTO") and "schema_info" in statement for statement in body)
+
+
 _LIVE_DSN = os.environ.get("GENIE_POSTGRES_DSN")
 _LIVE_DRIVER_AVAILABLE = importlib.util.find_spec("psycopg") is not None
 _LIVE_REASON = "set GENIE_POSTGRES_DSN and install the postgres extra to run live PostgreSQL tests"
@@ -379,9 +430,11 @@ def _live_backend(*, initialize_schema: bool = True) -> PostgresBackend:
 
 
 def _clear_live_data(backend: PostgresBackend) -> None:
-    # Deleting every root block cascades to the whole dataset.
+    # Deleting every root block cascades to the whole dataset. The acyclic
+    # protections are not block-owned, so they are cleared on their own.
     with backend._write_transaction() as connection:
         connection.execute(f"DELETE FROM {backend._blocks}")
+        connection.execute(f"DELETE FROM {backend._acyclic_relations}")
 
 
 @pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
@@ -505,3 +558,59 @@ def test_live_postgres_backend_serves_the_public_memory_api() -> None:
     finally:
         _clear_live_data(backend)
         backend.close()
+
+
+_LIVE_INIT_SCHEMA = f"{_LIVE_SCHEMA}_init"
+
+
+def _live_init_backend() -> PostgresBackend:
+    """Open a backend on the schema reserved for initialization tests."""
+
+    assert _LIVE_DSN is not None
+    return PostgresBackend(_LIVE_DSN, schema=_LIVE_INIT_SCHEMA)
+
+
+def _drop_live_init_schema() -> None:
+    """Remove the initialization test schema so the next test starts empty."""
+
+    with _live_backend() as helper, helper._write_transaction() as connection:
+        connection.execute(f'DROP SCHEMA IF EXISTS "{_LIVE_INIT_SCHEMA}" CASCADE')
+
+
+@pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_postgres_backend_coordinates_concurrent_initializers() -> None:
+    """Concurrent constructors on one empty schema all succeed."""
+
+    _drop_live_init_schema()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        backends = list(executor.map(lambda _: _live_init_backend(), range(8)))
+    try:
+        for backend in backends:
+            backend._validate_schema()
+    finally:
+        for backend in backends:
+            backend.close()
+        _drop_live_init_schema()
+
+
+@pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_postgres_backend_refuses_a_schema_with_foreign_tables() -> None:
+    """Tables that no Genie record owns are refused and left alone."""
+
+    _drop_live_init_schema()
+    with _live_backend() as helper:
+        with helper._write_transaction() as connection:
+            connection.execute(f'CREATE SCHEMA "{_LIVE_INIT_SCHEMA}"')
+            connection.execute(f'CREATE TABLE "{_LIVE_INIT_SCHEMA}".notes (id integer)')
+        try:
+            with pytest.raises(UnsupportedOperation, match="no Genie schema record"):
+                _live_init_backend()
+            with helper._read_transaction() as connection:
+                rows = connection.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = %s",
+                    (_LIVE_INIT_SCHEMA,),
+                ).fetchall()
+            assert [row["table_name"] for row in rows] == ["notes"]
+        finally:
+            _drop_live_init_schema()

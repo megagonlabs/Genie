@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
+from time import monotonic, sleep
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Self
 
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
 
 
 _SCHEMA_VERSION = 1
+_WAL_RETRY_SECONDS = 0.005
 _APPLICATION_ID = 0x47454E49
 _BLOCK_COLUMNS = """
     id, parent_id, type, value_json, content_type, metadata_json, policy_json,
@@ -1375,8 +1377,7 @@ class SQLiteBackend:
         connection.execute(f"PRAGMA busy_timeout = {int(self.timeout * 1000)}")
         connection.execute("PRAGMA trusted_schema = OFF")
         if self.path != ":memory:":
-            journal_row = connection.execute("PRAGMA journal_mode = WAL").fetchone()
-            journal_mode = str(journal_row[0]).casefold() if journal_row else ""
+            journal_mode = self._enable_wal(connection)
             if journal_mode != "wal":
                 raise BackendUnavailable(f"SQLite WAL mode could not be enabled; active mode is {journal_mode!r}.")
         synchronous = "FULL" if self.durability == "full" else "NORMAL"
@@ -1386,19 +1387,47 @@ class SQLiteBackend:
         if synchronous_row is None or int(synchronous_row[0]) != expected_synchronous:
             raise BackendUnavailable(f"SQLite synchronous={synchronous} could not be enabled.")
 
+    def _enable_wal(self, connection: sqlite3.Connection) -> str:
+        """Switch the database file to WAL mode and return the active mode.
+
+        SQLite answers this pragma with "database is locked" at once when
+        another connection holds a lock, without calling the busy handler that
+        every other statement waits on. That happens when several connections
+        open one fresh file at the same time, so the pragma is retried for up
+        to `timeout` seconds, like any other busy statement.
+        """
+
+        deadline = monotonic() + self.timeout
+        while True:
+            try:
+                journal_row = connection.execute("PRAGMA journal_mode = WAL").fetchone()
+            except sqlite3.OperationalError as error:
+                if not _is_busy_error(error) or monotonic() >= deadline:
+                    raise
+                sleep(_WAL_RETRY_SECONDS)
+                continue
+            return str(journal_row[0]).casefold() if journal_row else ""
+
     def _initialize_schema(self) -> None:
-        """Identify, migrate, and validate the Genie SQLite schema."""
+        """Identify, migrate, and validate the Genie SQLite schema.
+
+        The version, the application id, and the object listing are read in
+        one read transaction, so they describe one state. Another constructor
+        commits its tables and both pragmas together, and separate reads could
+        see the version from before that commit and the tables from after it.
+        """
 
         connection = self._require_connection()
-        version_row = connection.execute("PRAGMA user_version").fetchone()
-        version = int(version_row[0]) if version_row is not None else 0
-        application_row = connection.execute("PRAGMA application_id").fetchone()
-        application_id = int(application_row[0]) if application_row is not None else 0
+        with self._read_connection() as snapshot:
+            version_row = snapshot.execute("PRAGMA user_version").fetchone()
+            version = int(version_row[0]) if version_row is not None else 0
+            application_row = snapshot.execute("PRAGMA application_id").fetchone()
+            application_id = int(application_row[0]) if application_row is not None else 0
+            user_objects = _user_schema_objects(snapshot)
         if version > _SCHEMA_VERSION:
             raise UnsupportedOperation(f"SQLite schema version {version} is newer than supported " f"version {_SCHEMA_VERSION}.")
         if application_id not in {0, _APPLICATION_ID}:
             raise UnsupportedOperation("The SQLite database belongs to another application " f"(application_id={application_id}).")
-        user_objects = _user_schema_objects(connection)
         legacy_schema = False
         if application_id == 0 and user_objects:
             if version == _SCHEMA_VERSION:
@@ -2301,6 +2330,15 @@ def _rollback_quietly(connection: sqlite3.Connection) -> None:
         pass
 
 
+def _is_busy_error(error: sqlite3.Error) -> bool:
+    """Return whether a driver error reports a lock another connection holds."""
+
+    code = getattr(error, "sqlite_errorcode", None)
+    primary_code = code & 0xFF if isinstance(code, int) else None
+    normalized = (str(error) or "").casefold()
+    return primary_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED} or any(text in normalized for text in ("database is locked", "database table is locked"))
+
+
 def _translate_sqlite_error(error: sqlite3.Error) -> BackendError:
     """Translate driver-specific failures into stable Genie backend errors."""
 
@@ -2309,7 +2347,7 @@ def _translate_sqlite_error(error: sqlite3.Error) -> BackendError:
     message = str(error) or error.__class__.__name__
     normalized = message.casefold()
 
-    if primary_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED} or any(text in normalized for text in ("database is locked", "database table is locked")):
+    if _is_busy_error(error):
         return BackendBusy(f"SQLite remained busy past the configured timeout: {message}")
     if primary_code in {sqlite3.SQLITE_READONLY, sqlite3.SQLITE_PERM} or "readonly" in normalized:
         return BackendReadOnly(f"SQLite storage is read-only: {message}")

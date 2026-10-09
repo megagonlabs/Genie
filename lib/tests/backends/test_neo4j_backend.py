@@ -461,6 +461,51 @@ def test_neo4j_backend_discards_driver_after_unexpected_initialization_error(
     assert closed.is_set()
 
 
+def test_neo4j_schema_statement_treats_an_existing_rule_as_success() -> None:
+    """A `CREATE ... IF NOT EXISTS` that loses a race to another constructor still counts as done.
+
+    Neo4j answers the loser with an "already exists" schema error. Any other
+    failure of a schema statement still reaches the caller.
+    """
+
+    class SchemaRuleExists(Exception):
+        code = "Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists"
+
+    class SyntaxFailure(Exception):
+        code = "Neo.ClientError.Statement.SyntaxError"
+
+    answers: list[Exception] = [SchemaRuleExists("An equivalent index already exists"), SyntaxFailure("Invalid input")]
+
+    class FakeSession:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute_write(self, operation: object) -> None:
+            raise answers.pop(0)
+
+    class FakeDriver:
+        def session(self, **kwargs: object) -> FakeSession:
+            return FakeSession()
+
+    backend = object.__new__(Neo4jBackend)
+    backend._driver = FakeDriver()
+    backend._bookmark_manager = object()
+    backend.database = "neo4j"
+    backend._lock = RLock()
+    backend._lifecycle = Condition(backend._lock)
+    backend._active_operations = 0
+    backend._closing = False
+    backend._exception_types = (SchemaRuleExists, SyntaxFailure)
+
+    backend._schema_statement("CREATE INDEX genie_block_type_idx IF NOT EXISTS FOR (n:GenieBlock) ON (n.type)")
+    with pytest.raises(BackendError, match="Invalid input"):
+        backend._schema_statement("CREATE INDEX")
+    assert answers == []
+
+
 _LIVE_URI = os.environ.get("GENIE_NEO4J_URI")
 _LIVE_DRIVER_AVAILABLE = importlib.util.find_spec("neo4j") is not None
 _LIVE_REASON = "set GENIE_NEO4J_URI and install the neo4j extra to run live Neo4j tests"
@@ -493,6 +538,21 @@ def _clear_live_data(backend: Neo4jBackend) -> None:
             "MATCH (n) WHERE any(label IN labels(n) WHERE label STARTS WITH 'Genie') AND NOT n:GenieSchema DETACH DELETE n",
         )
     )
+
+
+def _clear_live_schema(backend: Neo4jBackend) -> None:
+    """Remove every Genie node, constraint, and index, leaving an empty graph."""
+
+    backend._raw_write(
+        lambda tx: neo4j_module._consume(
+            tx,
+            "MATCH (n) WHERE any(label IN labels(n) WHERE label STARTS WITH 'Genie') DETACH DELETE n",
+        )
+    )
+    for name in neo4j_module._CONSTRAINTS:
+        backend._schema_statement(f"DROP CONSTRAINT {name} IF EXISTS")
+    for name in neo4j_module._INDEXES:
+        backend._schema_statement(f"DROP INDEX {name} IF EXISTS")
 
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
@@ -937,13 +997,21 @@ def test_live_neo4j_backend_rejects_future_and_incompatible_schema() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_coordinates_concurrent_initializers() -> None:
-    """Concurrent constructors leave one valid current schema."""
+    """Concurrent constructors on an empty graph all succeed and leave one valid schema.
+
+    The graph is emptied first, so every constructor runs the schema
+    statements at the same time. Neo4j answers some of them with an "already
+    exists" error, which the backend treats as success.
+    """
+
+    with _live_backend() as helper:
+        _clear_live_schema(helper)
 
     def initialize(_: int) -> Neo4jBackend:
         return _live_backend()
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        backends = list(executor.map(initialize, range(4)))
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        backends = list(executor.map(initialize, range(8)))
     try:
         for backend in backends:
             backend._validate_schema()

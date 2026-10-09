@@ -1501,12 +1501,31 @@ class MongoDBBackend:
         )
 
     def _initialize_schema(self) -> None:
-        """Create missing collections and indexes, then validate the result."""
+        """Claim the database, create missing collections and indexes, then validate.
+
+        The order protects constructors that start at the same time on one
+        empty database:
+
+        - The schema record is written before any other collection, at
+          version 0. A constructor that sees Genie collections with no record
+          re-reads the record once, because the constructor that created those
+          collections had already written it.
+        - A database that holds collections and still has no record after that
+          re-read belongs to someone else and is refused unchanged.
+        - Every migration step is idempotent, so a constructor that arrives in
+          the middle migrates forward through the same steps.
+        """
 
         state = self._read_schema_identity()
-        version = 0 if state is None else self._schema_version(state, allow_older=True)
         if state is None and self._database_collections() - {_SCHEMA_INFO}:
-            raise UnsupportedOperation(f"The MongoDB database {self.database!r} holds collections with no Genie schema record; use an empty database or a validated Genie database.")
+            state = self._read_schema_identity()
+            if state is None:
+                raise UnsupportedOperation(f"The MongoDB database {self.database!r} holds collections with no Genie schema record; use an empty database or a validated Genie database.")
+        if state is None:
+            self._write_schema_identity(0)
+            version = 0
+        else:
+            version = self._schema_version(state, allow_older=True)
         for target_version in range(version + 1, _SCHEMA_VERSION + 1):
             self._apply_schema_migration(target_version)
             self._write_schema_identity(target_version)

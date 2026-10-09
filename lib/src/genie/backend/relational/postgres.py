@@ -1542,16 +1542,21 @@ class PostgresBackend:
         )
 
     def _initialize_schema(self) -> None:
-        """Create the schema namespace, run migrations, then validate."""
+        """Create the schema namespace, run migrations, then validate.
 
-        connection = self._require_connection()
+        The namespace creation, the record read, the unowned-table check, and
+        the migration run in one transaction under the advisory lock. A
+        constructor that starts at the same time waits for the lock and then
+        reads the record the first one committed. Reading outside the lock
+        could miss the record and then see that constructor's tables.
+        """
+
         with self._write_transaction() as transaction:
             transaction.execute(f'CREATE SCHEMA IF NOT EXISTS "{self.schema}"')
-        state = self._read_schema_identity(connection)
-        version = 0 if state is None else self._schema_version(state, allow_older=True)
-        if state is None and self._namespace_tables(connection) - {"schema_info"}:
-            raise UnsupportedOperation(f"The PostgreSQL schema {self.schema!r} holds tables with no Genie schema record; use an empty schema or a validated Genie schema.")
-        with self._write_transaction() as transaction:
+            state = self._read_schema_identity(transaction)
+            version = 0 if state is None else self._schema_version(state, allow_older=True)
+            if state is None and self._namespace_tables(transaction) - {"schema_info"}:
+                raise UnsupportedOperation(f"The PostgreSQL schema {self.schema!r} holds tables with no Genie schema record; use an empty schema or a validated Genie schema.")
             for target_version in range(version + 1, _SCHEMA_VERSION + 1):
                 statements = _MIGRATIONS.get(target_version)
                 if statements is None:

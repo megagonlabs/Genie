@@ -7,6 +7,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event
+from time import sleep
 from typing import Any, Literal
 
 import pytest
@@ -804,3 +805,110 @@ def test_live_mongodb_backend_serves_the_public_memory_api() -> None:
     finally:
         _clear_live_data(backend)
         backend.close()
+
+
+_LIVE_INIT_DATABASE = f"{_LIVE_DATABASE}_init"
+
+
+def _live_init_backend() -> MongoDBBackend:
+    """Open a backend on the database reserved for initialization tests."""
+
+    assert _LIVE_URI is not None
+    return MongoDBBackend(_LIVE_URI, database=_LIVE_INIT_DATABASE)
+
+
+def _drop_live_init_database() -> None:
+    """Remove the initialization test database so the next test starts empty."""
+
+    with _live_backend() as helper:
+        helper._client.drop_database(_LIVE_INIT_DATABASE)
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_mongodb_backend_coordinates_concurrent_initializers() -> None:
+    """Constructors that start close together on one empty database all succeed.
+
+    The starts are staggered by a few milliseconds, so most constructors read
+    the database while another one is still creating collections. That is
+    the window a check without the record re-read fell into.
+    """
+
+    _drop_live_init_database()
+
+    def construct(index: int) -> MongoDBBackend:
+        sleep(index * 0.02)
+        return _live_init_backend()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        backends = list(executor.map(construct, range(8)))
+    try:
+        for backend in backends:
+            backend._validate_schema()
+    finally:
+        for backend in backends:
+            backend.close()
+        _drop_live_init_database()
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_mongodb_backend_writes_its_schema_record_before_other_collections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The record claims the database before the first migration creates collections."""
+
+    _drop_live_init_database()
+    seen: list[tuple[Any, set[str]]] = []
+    original = MongoDBBackend._apply_schema_migration
+
+    def observe(self: MongoDBBackend, target_version: int) -> None:
+        seen.append((self._read_schema_identity(), self._database_collections()))
+        original(self, target_version)
+
+    monkeypatch.setattr(MongoDBBackend, "_apply_schema_migration", observe)
+    try:
+        with _live_init_backend():
+            pass
+    finally:
+        _drop_live_init_database()
+
+    assert len(seen) == 1
+    state, collections = seen[0]
+    assert state is not None
+    assert state["application_id"] == mongodb_module._APPLICATION_ID
+    assert state["version"] == 0
+    assert collections == {mongodb_module._SCHEMA_INFO}
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_mongodb_backend_refuses_a_database_with_foreign_collections() -> None:
+    """Collections that no Genie record owns are refused and left alone."""
+
+    _drop_live_init_database()
+    with _live_backend() as helper:
+        foreign = helper._client[_LIVE_INIT_DATABASE]
+        foreign["notes"].insert_one({"_id": 1})
+        try:
+            with pytest.raises(UnsupportedOperation, match="no Genie schema record"):
+                _live_init_backend()
+            assert foreign.list_collection_names() == ["notes"]
+        finally:
+            helper._client.drop_database(_LIVE_INIT_DATABASE)
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_mongodb_backend_resumes_a_database_claimed_at_version_zero() -> None:
+    """A record at version 0 with no other collection is an initialization to finish."""
+
+    _drop_live_init_database()
+    with _live_backend() as helper:
+        claimed = helper._client[_LIVE_INIT_DATABASE]
+        claimed[mongodb_module._SCHEMA_INFO].insert_one(
+            {"_id": mongodb_module._SCHEMA_DOCUMENT_ID, "application_id": mongodb_module._APPLICATION_ID, "version": 0},
+        )
+        try:
+            with _live_init_backend() as resumed:
+                state = resumed._read_schema_identity()
+                assert state is not None
+                assert state["version"] == mongodb_module._SCHEMA_VERSION
+        finally:
+            helper._client.drop_database(_LIVE_INIT_DATABASE)
