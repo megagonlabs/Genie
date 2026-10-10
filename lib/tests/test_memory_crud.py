@@ -86,6 +86,29 @@ def test_delete_requires_write_access_to_the_target() -> None:
     assert [child.id for child in memory.children(root)] == [locked.id]
 
 
+def test_set_and_update_require_read_and_write_access() -> None:
+    """A principal that can write but not read a block cannot change it, because both calls return the stored block."""
+
+    owner = Memory(principal="owner")
+    drop_box = MemoryPolicy(read=AccessRule.owner(), write=AccessRule.allow())
+    box = owner.put(type="box", value={"secret": "owner only"}, metadata={"note": "private"}, policy=drop_box)
+    shared = owner.put(type="note", value="shared", policy=MemoryPolicy(read=AccessRule.allow()))
+    other = Memory(backend=owner.backend, principal="other")
+
+    with pytest.raises(AccessDenied, match="cannot 'read'"):
+        other.set(box, "overwritten")
+    with pytest.raises(AccessDenied, match="cannot 'read'"):
+        other.update(box, value={"hello": "hi"})
+    with pytest.raises(AccessDenied, match="cannot 'read'"):
+        other.update(box, metadata={"tampered": True})
+    with pytest.raises(AccessDenied, match="cannot 'write'"):
+        other.set(shared, "overwritten")
+
+    assert owner.get(box) == box
+    assert owner.get(shared) == shared
+    assert owner.set(box, {"secret": "rotated"}).version == 2
+
+
 def test_require_access_checks_a_policy_without_changing_the_block() -> None:
     """`require_access` raises `AccessDenied` on refusal and otherwise does nothing."""
 

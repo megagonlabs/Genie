@@ -78,6 +78,7 @@ target = memory.resolve_mount(mount)
 
 - **Default policy** is `MemoryPolicy.owner_private()`, so only the creator can `read`, `write`, `search`, `traverse_up`, and `traverse_down` a new block.
 - **Recursive deletion** needs `write` on the target block only.
+- **Changing a block in place** with `set` or `update` needs `read` and `write`, because both return the stored block. `update_link` needs `read` on the source for the same reason.
 - **Structure membership** changes need `write` on the container block. Facades check it with `require_access`, which runs one policy check and changes nothing.
 - **Stale writes fail.** A block update fails on a stale `version`, and a deletion fails if the subtree changed. Both raise `MemoryConflict`.
 - **Links hide** when an endpoint does not allow `read`.

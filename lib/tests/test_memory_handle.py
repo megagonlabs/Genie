@@ -389,6 +389,28 @@ def test_get_handle_requires_root_read_access_for_requested_principal() -> None:
     assert allowed.principal.id == "agent:allowed"
 
 
+def test_handle_set_and_update_need_read_on_the_block() -> None:
+    """A handle principal that can write but not read a block is refused instead of receiving the stored block."""
+
+    owner = Memory(principal="owner")
+    inbox = owner.put(type="inbox", value="inbox", policy=MemoryPolicy.public())
+    drop_box = MemoryPolicy(read=AccessRule.owner(), write=AccessRule.allow())
+    box = owner.put(parent=inbox, type="box", value={"secret": "owner only"}, metadata={"note": "private"}, policy=drop_box)
+    agent = owner.get_handle(root=inbox, principal="agent")
+
+    with pytest.raises(AccessDenied):
+        agent.get(box)
+    with pytest.raises(AccessDenied):
+        agent.set(box, "overwritten")
+    with pytest.raises(AccessDenied):
+        agent.update(box, value={"hello": "hi"})
+    dropped = agent.put(parent=inbox, type="box", value={"from": "agent"})
+
+    assert owner.get(box) == box
+    assert dropped.parent_id == inbox.id
+    assert dropped.created_by == "agent"
+
+
 def test_handle_require_access_checks_the_boundary_before_the_policy() -> None:
     """A handle refuses blocks outside its root, then applies the block policy."""
 

@@ -114,7 +114,8 @@ engine.require("export", block, principal)
 - **Use explicit principals** in shared systems.
 - **Prefer generated block ids** for untrusted input.
 - **Recursive deletion** needs `write` on the target block only, and it stops if the checked subtree changes.
-- **A link result** needs `read` on both endpoints.
+- **Changing a block in place** with `set` or `update` needs `read` and `write`, because both return the stored block. A write-only inbox is built with `put`: adding a block under a container needs `write` and `traverse_down` on the container, not `read`.
+- **A link result** needs `read` on both endpoints. `update_link` returns one, so it needs `read` and `write` on the source.
 
 ### A missing grant fails in two ways, and only one is loud
 

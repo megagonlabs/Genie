@@ -119,8 +119,8 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 | --- | --- | --- | --- |
 | `put(*, type, value, parent=None, metadata=None, policy=None, content_type=None, id=None)` | `MemoryBlock` | `write` and `traverse_down` on the parent | `AccessDenied`, `MemoryNotFound` (parent), `TypeError`, `ValueError` |
 | `get(block_id)` | `MemoryBlock \| None` | `read` | `AccessDenied`, `TypeError` (bad id or no codec), `ValueError` (empty id) |
-| `set(block_id, value, *, content_type=None)` | `MemoryBlock` | `write` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
-| `update(block_id, *, value=None, metadata=None)` | `MemoryBlock` | `write` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
+| `set(block_id, value, *, content_type=None)` | `MemoryBlock` | `write`, then `read` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
+| `update(block_id, *, value=None, metadata=None)` | `MemoryBlock` | `write`, then `read` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `delete(block_id)` | `None` | `write` on the target only | `AccessDenied`, `MemoryConflict`, `MemoryNotFound` |
 | `require_access(operation, block_id)` | `None` | the named operation | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` (empty id or unknown operation) |
 
@@ -136,6 +136,10 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
   `update(value=...)` on a non-`dict` value is a `TypeError`.
 - **Both `set` and `update` raise `version` by `1`** and fail with
   `MemoryConflict` when another writer changed the block first.
+- **Both `set` and `update` also need `read`,** because they return the
+  stored block. `write` is checked first. A write-only inbox is built with
+  `put`, which needs `write` and `traverse_down` on the container and
+  returns only the new block.
 - **`delete` removes the whole subtree** plus every link, key binding, log
   entry, and temporal entry that names a removed block.
 - **`metadata` is always a strict JSON `dict`**, whatever codec the value uses.
@@ -158,7 +162,7 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 | --- | --- | --- | --- |
 | `add_link(source, target, relation, *, metadata=None)` | `MemoryLink` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | same | also `MemoryConflict` (cycle), `UnsupportedOperation` (no `AcyclicLinkStore`) |
-| `update_link(link, *, metadata)` | `MemoryLink` | same | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
+| `update_link(link, *, metadata)` | `MemoryLink` | `write` then `read` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `list_links(block_id, *, relation=None, direction="out")` | `list[MemoryLink]` | `read` on the block and on both ends of each link | `AccessDenied`, `MemoryNotFound`, `ValueError` (direction) |
 | `add_mount(source, target, *, metadata=None)` | `MemoryLink` with relation `"genie.mount"` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `list_mounts(source)` | `list[MemoryLink]` | `read` on source | `AccessDenied`, `MemoryNotFound` |
@@ -167,7 +171,7 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 
 - **`direction`** is `"out"`, `"in"`, or `"both"` (`LinkDirection`).
 - **`update_link` merges metadata only.** Source, target, and relation never
-  change.
+  change. It returns the stored link, so it also needs `read` on the source.
 - **`add_acyclic_link` refuses `"genie.mount"`** with `ValueError`.
 - **Links do not imply ownership.** Recursive delete and subtree search do not
   follow them.

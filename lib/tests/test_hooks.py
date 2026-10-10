@@ -2537,6 +2537,43 @@ def test_on_denied_reports_the_checked_policy_operation_and_subject() -> None:
     assert all("cannot" in reason for reason in hook.reasons)
 
 
+def test_on_denied_names_read_for_a_principal_that_can_only_write() -> None:
+    """`set`, `update`, and `update_link` report the `read` check once `write` passes."""
+
+    hook = RecordingDenialHook()
+    owner = Memory(principal="owner")
+    drop_box = MemoryPolicy(read=AccessRule.owner(), write=AccessRule.allow())
+    box = owner.put(type="box", value={"secret": "owner only"}, policy=drop_box)
+    target = owner.put(type="note", value="target", policy=MemoryPolicy.public())
+    link = owner.add_link(box, target, "related")
+    writer = Memory(
+        backend=owner.backend,
+        principal="writer",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+    )
+
+    attempts = {
+        "set": lambda: writer.set(box, "overwritten"),
+        "update": lambda: writer.update(box, value={"hello": "hi"}),
+        "update_link": lambda: writer.update_link(link, metadata={"status": "updated"}),
+    }
+    denied: list[str] = []
+    for label, attempt in attempts.items():
+        try:
+            attempt()
+        except AccessDenied:
+            denied.append(label)
+
+    assert denied == list(attempts)
+    assert hook.denials == [
+        (HookOperation.SET, Operation.READ, box.id),
+        (HookOperation.UPDATE, Operation.READ, box.id),
+        (HookOperation.UPDATE_LINK, Operation.READ, box.id),
+    ]
+
+
 def test_on_denied_covers_calls_without_paired_callbacks() -> None:
     """Traversal, listing, handle creation, and access checks report refusals."""
 

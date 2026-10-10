@@ -78,13 +78,13 @@ with self._operation(HookOperation.X) as context:   # 1 open context
 | --- | --- | --- |
 | `put` | parent block, when there is one | `write` and `traverse_down` |
 | `get` | the block | `read` |
-| `set`, `update` | the block | `write` |
+| `set`, `update` | the block | `write`, then `read` |
 | `delete` | the target block only | `write` |
 | `children` | the parent | `traverse_down`, then `read` filters each child |
 | `ancestors` | the block | `traverse_up`, then `read` filters each ancestor |
 | `contains` | the root | `traverse_down`, plus `read` on the candidate |
 | `add_link`, `add_acyclic_link`, `add_mount` | both endpoints | `write` on source, `read` on target |
-| `update_link` | both endpoints | `write` on source, `read` on target |
+| `update_link` | both endpoints | `write` then `read` on source, `read` on target |
 | `list_links`, `list_mounts` | the block | `read`, plus `read` on both endpoints of each link |
 | `discover_mounts` | the subtree root | `search` and `traverse_down`, plus `read` per source block |
 | `resolve_mount` | the mount source | `read`, then the target goes through `get` |
@@ -99,6 +99,12 @@ with self._operation(HookOperation.X) as context:   # 1 open context
 - **`delete` is authorized on the target alone.** Descendant policies are
   never consulted, because write access to a container is already authority
   over what it contains.
+- **A call that returns stored content needs `read`.** `set`, `update`, and
+  `update_link` return what the store holds after the write, so they check
+  `read` after `write`. A principal that can write but not read a block
+  cannot change it in place. A write-only inbox is built with `put`: adding
+  a block under a container needs `write` and `traverse_down` on the
+  container, not `read`, and returns only the new block.
 
 ### Deletion
 

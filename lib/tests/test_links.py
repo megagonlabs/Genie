@@ -193,6 +193,22 @@ def test_update_link_requires_source_write_and_target_read_access() -> None:
         reader.update_link(target_link, metadata={"status": "updated"})
 
 
+def test_update_link_requires_source_read_access() -> None:
+    """A principal that can write but not read the source cannot update a link, because the stored link is returned."""
+
+    owner = Memory(principal="owner")
+    drop_box = MemoryPolicy(read=AccessRule.owner(), write=AccessRule.allow())
+    write_only_source = owner.put(type="note", value="source", policy=drop_box)
+    target = owner.put(type="note", value="target", policy=MemoryPolicy.public())
+    link = owner.add_link(write_only_source, target, "related", metadata={"note": "private"})
+    writer = Memory(backend=owner.backend, principal="writer")
+
+    with pytest.raises(AccessDenied, match="cannot 'read'"):
+        writer.update_link(link, metadata={"status": "updated"})
+
+    assert owner.list_links(write_only_source)[0].metadata == {"note": "private"}
+
+
 def test_scope_update_link_stays_inside_scope() -> None:
     """A scoped handle can update only regular links contained by its subtree."""
 

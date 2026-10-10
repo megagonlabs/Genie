@@ -227,7 +227,7 @@ class MemoryHandle:
 
         Raises:
             AccessDenied: If the block is outside the handle boundary or policy
-                denies write access. In rooted handles, unknown block ids are
+                denies write or read access. In rooted handles, unknown block ids are
                 treated as outside the handle before the underlying lookup is
                 reached.
             MemoryNotFound: If the underlying memory handle reaches a missing
@@ -262,7 +262,7 @@ class MemoryHandle:
 
         Raises:
             AccessDenied: If the block is outside the handle boundary or policy
-                denies write access. In rooted handles, unknown block ids are
+                denies write or read access. In rooted handles, unknown block ids are
                 treated as outside the handle before the underlying lookup is
                 reached.
             MemoryNotFound: If the underlying memory handle reaches a missing

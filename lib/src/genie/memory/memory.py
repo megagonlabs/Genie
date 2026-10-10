@@ -241,7 +241,9 @@ class Memory:
             Updated decoded block.
 
         Raises:
-            AccessDenied: If the principal cannot write the block.
+            AccessDenied: If the principal cannot write and read the block.
+                `write` is checked first. `read` is also needed because the
+                stored block is returned.
             MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
             TypeError: If `block_id` is not a block or string id, or no codec
@@ -254,6 +256,7 @@ class Memory:
         with self._operation(HookOperation.SET) as context:
             block = self._require_raw(_block_id(block_id))
             self._require_access(context, Operation.WRITE, block)
+            self._require_access(context, Operation.READ, block)
             encoded = self.codecs.encode(value, content_type)
             proposed = block.with_updates(
                 value=encoded.data,
@@ -287,7 +290,9 @@ class Memory:
             Updated decoded block.
 
         Raises:
-            AccessDenied: If the principal cannot write the block.
+            AccessDenied: If the principal cannot write and read the block.
+                `write` is checked first. `read` is also needed because the
+                stored block is returned.
             MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
             TypeError: If `block_id` is not a block or string id, `value` is
@@ -301,6 +306,7 @@ class Memory:
         with self._operation(HookOperation.UPDATE) as context:
             block = self._require_raw(_block_id(block_id))
             self._require_access(context, Operation.WRITE, block)
+            self._require_access(context, Operation.READ, block)
             decoded_value = self.codecs.decode(EncodedValue(block.content_type, block.value))
             if value is not None:
                 if not isinstance(decoded_value, dict):
@@ -477,9 +483,10 @@ class Memory:
             Stored replacement link.
 
         Raises:
-            AccessDenied: If the principal cannot write the source or read the
-                target. A pending mount without a registered target is governed
-                by its source policy.
+            AccessDenied: If the principal cannot write and read the source, or
+                read the target. `read` on the source is needed because the
+                stored link is returned. A pending mount without a registered
+                target is governed by its source policy.
             MemoryNotFound: If the link or a non-mount endpoint is missing.
             TypeError: If `link` is not a `MemoryLink`, or metadata is not a
                 strict JSON dictionary.
@@ -491,6 +498,7 @@ class Memory:
             stored = self._require_stored_link(link)
             source = self._require_raw(stored.source_id)
             self._require_access(context, Operation.WRITE, source)
+            self._require_access(context, Operation.READ, source)
             target = self.backend.get_block(stored.target_id)
             if target is None:
                 if stored.relation != LinkRelations.MOUNT:
