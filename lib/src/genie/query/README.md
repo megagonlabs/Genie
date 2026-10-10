@@ -44,7 +44,8 @@ results = memory.search(
 - **Address a block field or a metadata field** such as `metadata.priority`.
 - **A name with no prefix** matches a declared `MemoryBlock` field first, then metadata.
 - **`$in` needs a list-like collection.**
-- **An invalid or empty operator map fails closed,** which means it is rejected rather than ignored, so a broken filter can never widen the results.
+- **An unknown operator raises `ValueError`** when the query is built, so a typo such as `>>=` fails before any backend runs instead of returning an empty result.
+- **An empty operator map fails closed:** it matches nothing, so a broken filter can never widen the results.
 
 | Friendly | Canonical |
 | --- | --- |

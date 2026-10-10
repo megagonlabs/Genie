@@ -271,7 +271,7 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 - **Operators:** `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`. Aliases
   `==`, `=`, `!=`, `>`, `>=`, `<`, `<=`, and `in` are rewritten to them.
 - **A comparison of mismatched types is `False`,** not an error. An unknown
-  operator never matches.
+  operator raises `ValueError` when the query is built.
 - **`normalize_filters(filters)`** returns the canonical form.
   **`matches_filters(block, filters)`** is the portable matcher adapters reuse.
 

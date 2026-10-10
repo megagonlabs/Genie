@@ -71,8 +71,26 @@ def test_filter_operators_cover_common_comparisons() -> None:
     )
 
     assert [result.block.id for result in results] == [mid.id]
-    assert memory.search(filters={"metadata.priority": {"$unknown": 2}}) == []
     assert memory.search(filters={"owner": {"in": 3}}) == []
+
+
+def test_unknown_filter_operators_raise_before_any_backend_runs() -> None:
+    """A mistyped operator raises `ValueError` instead of returning an empty result."""
+
+    memory = Memory()
+    memory.put(type="note", value="note", metadata={"priority": 3})
+
+    assert len(memory.search(filters={"priority": {">=": 2}})) == 1
+    with pytest.raises(ValueError, match=r"filter operator '>>=' on field 'priority' is not supported"):
+        memory.search(filters={"priority": {">>=": 2}})
+    with pytest.raises(ValueError, match=r"Supported operators: ==, =, !=, >, >=, <, <=, in, \$eq"):
+        MemoryQuery(filters={"metadata.priority": {"$unknown": 2}})
+    with pytest.raises(ValueError, match="'between'"):
+        normalize_filters({"priority": {"$gte": 1, "between": (1, 3)}})
+
+    # The matcher keeps its own guard for adapters that skip normalization.
+    block = MemoryBlock(type="note", value="note", metadata={"priority": 3})
+    assert matches_filters(block, {"priority": {"$unknown": 2}}) is False
 
 
 def test_canonical_filter_operators_still_work() -> None:

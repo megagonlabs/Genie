@@ -20,6 +20,8 @@ OPERATOR_ALIASES = {
 }
 """Human-friendly filter operators and their canonical adapter-facing names."""
 
+_CANONICAL_OPERATORS = frozenset(OPERATOR_ALIASES.values())
+_SUPPORTED_OPERATORS_TEXT = ", ".join([*OPERATOR_ALIASES, *dict.fromkeys(OPERATOR_ALIASES.values())])
 _BLOCK_FILTER_FIELDS = frozenset(field.name for field in fields(MemoryBlock))
 
 
@@ -37,6 +39,9 @@ def normalize_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
     Raises:
         TypeError: If filters, field names, or operator names have invalid
             runtime types.
+        ValueError: If an operator is not a supported friendly or canonical
+            operator name, so a typo such as `">>="` fails before any backend
+            runs instead of returning an empty result.
     """
 
     if filters is None:
@@ -52,7 +57,10 @@ def normalize_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
             for operator, operand in expected.items():
                 if not isinstance(operator, str):
                     raise TypeError("filter operator names must be strings.")
-                operators[OPERATOR_ALIASES.get(operator, operator)] = deepcopy(operand)
+                canonical = OPERATOR_ALIASES.get(operator, operator)
+                if canonical not in _CANONICAL_OPERATORS:
+                    raise ValueError(f"filter operator {operator!r} on field {key!r} is not supported. Supported operators: {_SUPPORTED_OPERATORS_TEXT}.")
+                operators[canonical] = deepcopy(operand)
             normalized[key] = operators
         else:
             normalized[key] = deepcopy(expected)
@@ -99,6 +107,9 @@ def _matches_operator(actual: Any, operators: dict[str, Any]) -> bool:
     """Evaluate operator filters against one value.
 
     Incompatible comparisons return `False` instead of matching by mistake.
+    `normalize_filters` rejects unknown operators before a query is built; this
+    matcher still treats one as no match in case an adapter receives a filter
+    that skipped normalization.
     """
 
     if not operators:

@@ -894,7 +894,8 @@ class Memory:
             TypeError: If the text, root, types, filters, or limit arguments
                 have the wrong type.
             ValueError: If the scope is invalid, the limit is negative, the
-                root id is empty, or a non-global scope has no root.
+                root id is empty, a non-global scope has no root, or a filter
+                uses an unknown operator.
         """
 
         _, results = self._search(

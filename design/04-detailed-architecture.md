@@ -340,8 +340,13 @@ with self._operation(HookOperation.X) as context:   # 1 open context
   prefix reads metadata, then a real `MemoryBlock` field name reads the field,
   and anything else falls back to metadata.
 - **An incompatible comparison is `False`, not an error.** A `TypeError` from
-  comparing mismatched types is caught, and an unknown operator or an empty
-  operator map fails the match. A filter can never match by accident.
+  comparing mismatched types is caught, and an empty operator map fails the
+  match. A filter can never match by accident.
+- **An unknown operator is rejected before the match.** `normalize_filters`
+  raises `ValueError` for it when the query is built, so a typo such as `>>=`
+  fails loudly instead of returning an empty result. The matcher still treats
+  an unknown operator as no match if an adapter hands it a filter that skipped
+  normalization.
 - **This matcher is the portable floor.** `InMemoryBackend` and the shipped
   adapters use it for the subset they do not push into their own query
   language; a richer adapter may implement more, as long as the same query

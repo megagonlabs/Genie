@@ -53,7 +53,8 @@ class MemoryQuery:
         Raises:
             TypeError: If text, root, types, filters, or limit have invalid
                 runtime types.
-            ValueError: If `scope` is invalid or `limit` is negative.
+            ValueError: If `scope` is invalid, `limit` is negative, or a
+                filter uses an unknown operator.
         """
 
         if text is not None and not isinstance(text, str):
