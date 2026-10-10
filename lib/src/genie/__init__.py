@@ -98,6 +98,7 @@ from genie.query import (
     normalize_filters,
 )
 from genie.structures import (
+    AccessChecker,
     AcyclicLinkWriter,
     BlockReader,
     BlockRef,
@@ -138,6 +139,7 @@ from genie.structures import (
 )
 
 __all__ = [
+    "AccessChecker",
     "AccessDenied",
     "AccessRule",
     "AcyclicLinkStore",

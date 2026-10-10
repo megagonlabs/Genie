@@ -37,7 +37,7 @@ edge = memory.update_link(edge, metadata={"confidence": 0.9})
 **`Memory`** is the trusted interface. Keep it inside trusted application code.
 
 - **Holds:** one backend, `Principal`, `PolicyEngine`, `default_policy`, `CodecRegistry`, `HookRegistry`, and the `attributes` it reports to hooks.
-- **Offers:** block CRUD, traversal, links, mounts, search, and handle creation.
+- **Offers:** block CRUD, traversal, links, mounts, search, access checks, and handle creation.
 - **`hooks` is read-only.** You change which hooks run by editing that registry, not by replacing it, so nobody can detach a mandatory hook. See [hooks](../hooks/README.md#the-registry).
 
 ```python
@@ -78,6 +78,7 @@ target = memory.resolve_mount(mount)
 
 - **Default policy** is `MemoryPolicy.owner_private()`, so only the creator can `read`, `write`, `search`, `traverse_up`, and `traverse_down` a new block.
 - **Recursive deletion** needs `write` on the target block only.
+- **Structure membership** changes need `write` on the container block. Facades check it with `require_access`, which runs one policy check and changes nothing.
 - **Stale writes fail.** A block update fails on a stale `version`, and a deletion fails if the subtree changed. Both raise `MemoryConflict`.
 - **Links hide** when an endpoint does not allow `read`.
 - **A bounded handle** rejects references outside its scope.

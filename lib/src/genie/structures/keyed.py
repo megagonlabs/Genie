@@ -10,7 +10,7 @@ from genie.backend.structure_capabilities import KeyedStore
 from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryConflict, MemoryNotFound, UnsupportedOperation
-from genie.policy.engine import AccessDenied
+from genie.policy.engine import AccessDenied, Operation
 from genie.structures._hooks import (
     after_change,
     before_change,
@@ -20,12 +20,12 @@ from genie.structures._hooks import (
     resolve_hooks,
 )
 from genie.structures._routing import resolve_store
-from genie.structures.access import BlockReader, BlockRef
+from genie.structures.access import AccessChecker, BlockReader, BlockRef
 from genie.structures.records import KeyBinding, KeyedItem, MemoryAddress
 
 
 @runtime_checkable
-class KeyedAccess(BlockReader, Protocol):
+class KeyedAccess(BlockReader, AccessChecker, Protocol):
     """Small access surface required by `KeyedCollection`."""
 
 
@@ -35,6 +35,11 @@ class KeyedCollection:
     Blocks remain owned and stored by normal Genie memory. The keyed store owns
     only address-to-block bindings and enforces atomic uniqueness and
     compare-and-swap updates.
+
+    Reading needs `read` on the collection block and on each member. `bind`,
+    `rebind`, and `unbind` also need `write` on the collection block, checked
+    through the access object, so a principal that can only read the
+    collection cannot change what its addresses point to.
     """
 
     __slots__ = (
@@ -106,6 +111,8 @@ class KeyedCollection:
             Stored binding and resolved block.
 
         Raises:
+            AccessDenied: If the collection denies `write` or the block denies
+                `read`.
             MemoryConflict: If the address is already bound.
             MemoryNotFound: If the collection or block is missing.
         """
@@ -117,7 +124,7 @@ class KeyedCollection:
             attributes=self._attributes,
         ) as context:
             _require_address(address)
-            self._require_collection()
+            self._require_writable_collection()
             stored_block = self._require_block(block)
             proposed = KeyBinding(
                 collection_id=self.collection_id,
@@ -154,6 +161,8 @@ class KeyedCollection:
             Replacement binding and resolved new block.
 
         Raises:
+            AccessDenied: If the collection denies `write` or the new block
+                denies `read`.
             MemoryConflict: If the address is missing or changed.
         """
 
@@ -164,7 +173,7 @@ class KeyedCollection:
             attributes=self._attributes,
         ) as context:
             _require_address(address)
-            self._require_collection()
+            self._require_writable_collection()
             current = self.get_item(address)
             expected_id = _block_id(expected)
             if current is None or current.binding.block_id != expected_id:
@@ -309,6 +318,7 @@ class KeyedCollection:
             expected: Block or id that must currently own the address.
 
         Raises:
+            AccessDenied: If the collection denies `write`.
             MemoryConflict: If the address is missing or changed.
         """
 
@@ -319,7 +329,7 @@ class KeyedCollection:
             attributes=self._attributes,
         ) as context:
             _require_address(address)
-            self._require_collection()
+            self._require_writable_collection()
             current = self.get_item(address)
             expected_id = _block_id(expected)
             if current is None or current.binding.block_id != expected_id:
@@ -350,6 +360,13 @@ class KeyedCollection:
             raise MemoryNotFound(
                 f"Keyed collection block {self.collection_id!r} does not exist."
             )
+        return collection
+
+    def _require_writable_collection(self) -> MemoryBlock:
+        """Return the visible collection block after requiring `write` on it."""
+
+        collection = self._require_collection()
+        self._access.require_access(Operation.WRITE, collection.id)
         return collection
 
     def _require_block(self, block: BlockRef) -> MemoryBlock:

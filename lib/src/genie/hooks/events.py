@@ -21,9 +21,10 @@ _EMPTY_ATTRIBUTES: Mapping[str, str] = MappingProxyType({})
 class HookOperation(StrEnum):
     """Logical operations and spans that appear in a hook context.
 
-    Mount resolution and handle creation appear here so refusals can be
-    reported. They do not have paired before and after callbacks, so they reach
-    hooks only through `on_denied` and the matching terminal event.
+    Mount resolution, handle creation, and `require_access` checks appear
+    here so refusals can be reported. They do not have paired before and after
+    callbacks, so they reach hooks only through `on_denied` and the matching
+    terminal event.
 
     `SUPPRESS` is the registry disabling its own dispatch. It is an operation
     like any other, so a suppression window is announced by `on_suppressed`,
@@ -55,6 +56,7 @@ class HookOperation(StrEnum):
     DISCOVER_MOUNTS = "mount.discover"
     RESOLVE_MOUNT = "mount.resolve"
     CREATE_HANDLE = "handle.create"
+    REQUIRE_ACCESS = "access.require"
     KEY_BIND = "key.bind"
     KEY_REBIND = "key.rebind"
     KEY_UNBIND = "key.unbind"

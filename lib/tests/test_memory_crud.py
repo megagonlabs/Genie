@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from genie import AccessDenied, AccessRule, Memory, MemoryBlock, MemoryPolicy
+from genie import AccessDenied, AccessRule, Memory, MemoryBlock, MemoryPolicy, Operation, PolicyEngine
 from genie.memory.errors import MemoryConflict, MemoryNotFound
 
 
@@ -84,6 +84,32 @@ def test_delete_requires_write_access_to_the_target() -> None:
 
     assert memory.get(locked.id) is not None
     assert [child.id for child in memory.children(root)] == [locked.id]
+
+
+def test_require_access_checks_a_policy_without_changing_the_block() -> None:
+    """`require_access` raises `AccessDenied` on refusal and otherwise does nothing."""
+
+    engine = PolicyEngine(operations={"export": AccessRule.owner()})
+    owner = Memory(principal="owner", policy_engine=engine)
+    shared = owner.put(type="note", value="shared", policy=MemoryPolicy(read=AccessRule.allow()))
+    reader = Memory(backend=owner.backend, principal="reader", policy_engine=engine)
+
+    assert owner.require_access(Operation.WRITE, shared) is None
+    assert owner.require_access("export", shared.id) is None
+    assert reader.require_access("read", shared) is None
+    with pytest.raises(AccessDenied):
+        reader.require_access(Operation.WRITE, shared)
+    with pytest.raises(AccessDenied):
+        reader.require_access("export", shared)
+    with pytest.raises(MemoryNotFound):
+        reader.require_access(Operation.READ, "missing")
+    with pytest.raises(ValueError):
+        reader.require_access("unknown", shared)
+    with pytest.raises(ValueError):
+        reader.require_access(Operation.READ, "")
+    with pytest.raises(TypeError):
+        reader.require_access(Operation.READ, cast(Any, 123))
+    assert owner.get(shared) == shared
 
 
 def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:

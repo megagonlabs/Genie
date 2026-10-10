@@ -2538,7 +2538,7 @@ def test_on_denied_reports_the_checked_policy_operation_and_subject() -> None:
 
 
 def test_on_denied_covers_calls_without_paired_callbacks() -> None:
-    """Traversal, listing, and handle creation report refusals."""
+    """Traversal, listing, handle creation, and access checks report refusals."""
 
     hook = RecordingDenialHook()
     owner, attacker, root, child = _private_memory(hook)
@@ -2553,6 +2553,7 @@ def test_on_denied_covers_calls_without_paired_callbacks() -> None:
         "discover_mounts": lambda: attacker.discover_mounts(root),
         "resolve_mount": lambda: attacker.resolve_mount(mount),
         "get_handle": lambda: attacker.get_handle(root=root),
+        "require_access": lambda: attacker.require_access(Operation.WRITE, root),
     }
     denied: list[str] = []
     for label, attempt in attempts.items():
@@ -2571,6 +2572,7 @@ def test_on_denied_covers_calls_without_paired_callbacks() -> None:
         (HookOperation.DISCOVER_MOUNTS, Operation.SEARCH, root.id),
         (HookOperation.RESOLVE_MOUNT, Operation.READ, root.id),
         (HookOperation.CREATE_HANDLE, Operation.READ, root.id),
+        (HookOperation.REQUIRE_ACCESS, Operation.WRITE, root.id),
     ]
 
 
@@ -2595,6 +2597,7 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
         "add_link": lambda: handle.add_link(outside, inside, "related"),
         "add_mount": lambda: handle.add_mount(outside, inside),
         "search": lambda: handle.search("x", root=outside),
+        "require_access": lambda: handle.require_access("read", outside),
     }
     denied: list[str] = []
     for label, attempt in attempts.items():
@@ -2615,6 +2618,7 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
         HookOperation.ADD_LINK,
         HookOperation.ADD_MOUNT,
         HookOperation.SEARCH,
+        HookOperation.REQUIRE_ACCESS,
     ]
     assert {check for _, check, _ in hook.denials} == {HandleCapability.SUBTREE}
     assert {subject for _, _, subject in hook.denials} == {outside.id}

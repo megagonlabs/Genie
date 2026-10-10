@@ -24,6 +24,8 @@ from genie import OwnershipTree
 | `VersionedRecords` | Stable identity and revisions | Keys and log entries |
 
 - **Access object:** a facade takes either a `Memory` or a `MemoryHandle`. A handle keeps its usual subtree and policy limits.
+- **Changing membership needs `write` on the container.** `bind`, `rebind`, `unbind`, `append`, `add`, `replace`, and `remove` call `require_access` on the access object before they touch the store, so a principal that can only read a container cannot change what it holds. A refusal reaches `on_denied` under the `access.require` operation. Reading needs `read` on the container and on each member.
+- **`VersionedRecords` splits the rule.** `register` needs `write` on the collection block. `append` needs `write` on the identity block, because the identity anchors the revision log.
 - **Hook reuse:** explicit key, log, and temporal changes reuse the access object's hook registry, principal, and hook context attributes when those are available.
 
 ## Shared records

@@ -122,8 +122,13 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 | `set(block_id, value, *, content_type=None)` | `MemoryBlock` | `write` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `update(block_id, *, value=None, metadata=None)` | `MemoryBlock` | `write` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `delete(block_id)` | `None` | `write` on the target only | `AccessDenied`, `MemoryConflict`, `MemoryNotFound` |
+| `require_access(operation, block_id)` | `None` | the named operation | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` (empty id or unknown operation) |
 
 - **`put` without `parent` creates a root block.** No parent check runs.
+- **`require_access` changes nothing.** It runs the check the named operation
+  would run and reports a refusal to `on_denied` under `access.require`.
+  Structure facades call it to require `write` on a container before changing
+  membership.
 - **`id` is optional.** Without it, Genie generates a `mem_` id. An empty
   `id` is a `ValueError`; it does not fall back to a generated id.
 - **`set` replaces the value** and may change `content_type`. **`update`
@@ -317,6 +322,10 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 - **Every facade takes an access object first:** a `Memory` or a
   `MemoryHandle`. Block reads and writes go through it, so handle and policy
   checks still apply.
+- **Changing membership needs `write` on the container.** `bind`, `rebind`,
+  `unbind`, `append`, `add`, `replace`, and `remove` call `require_access` on
+  the container block first. `VersionedRecords.append` checks the identity
+  block, which anchors the revision log.
 - **Facades that keep records also take a store.** It is a backend with the
   named capability, or a `BlockRouter`, which resolves to the route that owns
   the container block.
@@ -463,6 +472,7 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | --- | --- |
 | `BlockReader` | `get` |
 | `BlockWriter` | `put`, `set`, `update`, `delete` |
+| `AccessChecker` | `require_access` |
 | `TreeReader` | `children`, `ancestors` |
 | `LinkReader` | `list_links` |
 | `LinkWriter` | `add_link`, `update_link` |
@@ -471,7 +481,7 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `OwnershipAccess` | `BlockReader` + `TreeReader` + `put`, `delete` |
 | `GraphAccess` | `BlockReader` + `LinkReader` + `LinkWriter` |
 | `LineageAccess` | `GraphAccess` + `AcyclicLinkWriter` |
-| `KeyedAccess`, `SequenceAccess`, `TemporalAccess`, `VersionedAccess` | `BlockReader` |
+| `KeyedAccess`, `SequenceAccess`, `TemporalAccess`, `VersionedAccess` | `BlockReader` + `AccessChecker` |
 | `MemoryAccess` | all of the above; `Memory` and `MemoryHandle` satisfy it |
 
 ## Hooks
@@ -541,7 +551,7 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | Type | Fields or values |
 | --- | --- |
 | `HookContext` | `operation_id`, `parent_operation_id`, `operation`, `origin`, `depth`, `principal_id`, `attributes`, `started_at`, `scope_name`; `is_scope` property |
-| `HookOperation` | `put`, `get`, `set`, `update`, `delete`, `search`, `children`, `ancestors`, `contains`, `link.add`, `link.add_acyclic`, `link.update`, `link.list`, `mount.add`, `mount.list`, `mount.discover`, `mount.resolve`, `handle.create`, `key.bind`, `key.rebind`, `key.unbind`, `log.append`, `temporal.add`, `temporal.replace`, `temporal.remove`, `hooks.suppress`, `scope` |
+| `HookOperation` | `put`, `get`, `set`, `update`, `delete`, `search`, `children`, `ancestors`, `contains`, `link.add`, `link.add_acyclic`, `link.update`, `link.list`, `mount.add`, `mount.list`, `mount.discover`, `mount.resolve`, `handle.create`, `access.require`, `key.bind`, `key.rebind`, `key.unbind`, `log.append`, `temporal.add`, `temporal.replace`, `temporal.remove`, `hooks.suppress`, `scope` |
 | `HookOrigin` | `"caller"`, `"hook"` |
 | `HookOutcome` | `SUCCESS`, `DENIED`, `ERROR` |
 | `Traversal` | `kind`, `origin_id`, `target_id`, `relation`, `direction`, `blocks`, `links`, `contained` |

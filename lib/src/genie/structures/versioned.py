@@ -12,7 +12,7 @@ from genie.memory.errors import MemoryNotFound, UnsupportedOperation
 from genie.structures._hooks import resolve_hooks
 from genie.structures._routing import block_id as _block_id
 from genie.structures._routing import resolve_store
-from genie.structures.access import BlockReader, BlockRef
+from genie.structures.access import AccessChecker, BlockReader, BlockRef
 from genie.structures.keyed import KeyedCollection
 from genie.structures.log import EventLog
 from genie.structures.records import (
@@ -25,7 +25,7 @@ from genie.structures.records import (
 
 
 @runtime_checkable
-class VersionedAccess(BlockReader, Protocol):
+class VersionedAccess(BlockReader, AccessChecker, Protocol):
     """Small access surface required by `VersionedRecords`."""
 
 
@@ -41,6 +41,10 @@ class VersionedRecords:
     block also anchors an event log of existing revision blocks. Log sequence
     zero maps to logical revision one. The facade never rebinds identities and
     does not create, update, or delete payload blocks.
+
+    `register` needs `write` on the collection block. `append` needs `write`
+    on the identity block, because the identity anchors the revision log.
+    Reading needs only `read` on those blocks and on each revision.
     """
 
     __slots__ = ("_access", "_hooks", "_identities", "_store", "collection_id")
@@ -110,6 +114,8 @@ class VersionedRecords:
             Created key binding and resolved identity block.
 
         Raises:
+            AccessDenied: If the collection denies `write` or the identity
+                denies `read`.
             MemoryConflict: If the address is already registered.
         """
 
@@ -169,6 +175,8 @@ class VersionedRecords:
             Allocated positive revision number and resolved revision block.
 
         Raises:
+            AccessDenied: If the identity denies `write` or the block denies
+                `read`.
             MemoryNotFound: If no identity is registered at `address`.
         """
 

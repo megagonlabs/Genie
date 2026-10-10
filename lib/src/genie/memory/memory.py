@@ -981,6 +981,31 @@ class Memory:
             )
             return memory_query, self._filter_visible_results(memory_query, hooked_results, verdicts)
 
+    def require_access(self, operation: Operation | str, block_id: str | MemoryBlock) -> None:
+        """Require that this principal may perform an operation on a block.
+
+        The block is not changed and nothing is returned. The check is the one
+        every operation runs before it touches the block, so code that has to
+        refuse early, such as a structure facade changing membership, can ask
+        it directly. A refusal is reported to `on_denied` under
+        `HookOperation.REQUIRE_ACCESS`. An allowed check is not reported.
+
+        Args:
+            operation: Built-in `Operation`, or the name of a custom operation
+                configured on the policy engine.
+            block_id: Block or block id carrying the policy.
+
+        Raises:
+            AccessDenied: If the block policy does not allow the operation.
+            MemoryNotFound: If the block does not exist.
+            TypeError: If `block_id` is not a block or string id.
+            ValueError: If `block_id` is empty, or `operation` is neither
+                built-in nor configured as a custom operation.
+        """
+
+        block = self._require_raw(_block_id(block_id))
+        self._require_access_outside_operation(HookOperation.REQUIRE_ACCESS, operation, block)
+
     def get_handle(
         self,
         *,
@@ -1268,9 +1293,9 @@ class Memory:
     ) -> None:
         """Require policy access for a call that starts no operation.
 
-        Mount resolution and handle creation have no paired callbacks, so a
-        refusal opens one operation context to carry the denial and its terminal
-        event. Allowed calls stay unobserved.
+        Mount resolution, handle creation, and `require_access` have no paired
+        callbacks, so a refusal opens one operation context to carry the denial
+        and its terminal event. Allowed calls stay unobserved.
 
         Args:
             hook_operation: Logical operation to report the refusal under.

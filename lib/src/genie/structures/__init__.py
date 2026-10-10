@@ -1,6 +1,7 @@
 """Optional structural building blocks for memory systems."""
 
 from genie.structures.access import (
+    AccessChecker,
     AcyclicLinkWriter,
     BlockReader,
     BlockRef,
@@ -35,6 +36,7 @@ from genie.structures.tree import OwnershipAccess, OwnershipTree
 from genie.structures.versioned import VersionedAccess, VersionedRecords, VersionedStore
 
 __all__ = [
+    "AccessChecker",
     "AcyclicLinkWriter",
     "BlockReader",
     "BlockRef",

@@ -13,6 +13,7 @@ from genie import (
     MemoryNotFound,
     MemoryPolicy,
     MemoryQuery,
+    Operation,
     Scope,
 )
 
@@ -386,6 +387,27 @@ def test_get_handle_requires_root_read_access_for_requested_principal() -> None:
 
     assert allowed.root_id == shared_root.id
     assert allowed.principal.id == "agent:allowed"
+
+
+def test_handle_require_access_checks_the_boundary_before_the_policy() -> None:
+    """A handle refuses blocks outside its root, then applies the block policy."""
+
+    memory = Memory(principal="owner")
+    readable = MemoryPolicy(read=AccessRule.allow())
+    root = memory.put(type="root", value="root", policy=readable)
+    inside = memory.put(parent=root, type="note", value="inside", policy=readable)
+    outside = memory.put(type="note", value="outside", policy=MemoryPolicy.public())
+    handle = memory.get_handle(root=root, principal="agent:reader")
+
+    assert handle.require_access(Operation.READ, inside) is None
+    with pytest.raises(AccessDenied, match="cannot 'write'"):
+        handle.require_access(Operation.WRITE, inside)
+    with pytest.raises(AccessDenied, match="outside memory handle root"):
+        handle.require_access(Operation.READ, outside)
+    with pytest.raises(AccessDenied, match="outside memory handle root"):
+        handle.require_access(Operation.READ, "missing")
+    with pytest.raises(MemoryNotFound):
+        memory.get_unbounded_handle().require_access(Operation.READ, "missing")
 
 
 def test_handle_delete_and_unbounded_ancestor_lookup_keep_explicit_boundaries() -> None:

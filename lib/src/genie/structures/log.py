@@ -9,7 +9,7 @@ from genie.backend.structure_capabilities import SequenceStore
 from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryNotFound, UnsupportedOperation
-from genie.policy.engine import AccessDenied
+from genie.policy.engine import AccessDenied, Operation
 from genie.structures._hooks import (
     after_change,
     before_change,
@@ -19,12 +19,12 @@ from genie.structures._hooks import (
     resolve_hooks,
 )
 from genie.structures._routing import resolve_store
-from genie.structures.access import BlockReader, BlockRef
+from genie.structures.access import AccessChecker, BlockReader, BlockRef
 from genie.structures.records import LogEntry, LogItem
 
 
 @runtime_checkable
-class SequenceAccess(BlockReader, Protocol):
+class SequenceAccess(BlockReader, AccessChecker, Protocol):
     """Small access surface required by `EventLog`."""
 
 
@@ -34,6 +34,10 @@ class EventLog:
     The sequence store atomically allocates stable positions. Blocks remain
     owned and stored through normal Genie memory and may appear in more than one
     log or structure.
+
+    Reading needs `read` on the log block and on each member. `append` also
+    needs `write` on the log block, checked through the access object, so a
+    principal that can only read the log cannot add to it.
     """
 
     __slots__ = (
@@ -95,6 +99,10 @@ class EventLog:
 
         Returns:
             Allocated log entry and resolved block.
+
+        Raises:
+            AccessDenied: If the log denies `write` or the block denies `read`.
+            MemoryNotFound: If the log or block is missing.
         """
 
         with hook_operation(
@@ -103,7 +111,7 @@ class EventLog:
             principal=self._principal_id,
             attributes=self._attributes,
         ) as context:
-            self._require_log()
+            self._require_writable_log()
             stored_block = self._require_block(block)
             change = StructureChange[LogEntry](
                 kind=StructureKind.EVENT_LOG,
@@ -256,6 +264,13 @@ class EventLog:
         log = self._access.get(self.log_id)
         if log is None:
             raise MemoryNotFound(f"Event log block {self.log_id!r} does not exist.")
+        return log
+
+    def _require_writable_log(self) -> MemoryBlock:
+        """Return the visible log block after requiring `write` on it."""
+
+        log = self._require_log()
+        self._access.require_access(Operation.WRITE, log.id)
         return log
 
     def _require_block(self, block: BlockRef) -> MemoryBlock:

@@ -11,7 +11,7 @@ from genie.backend.structure_capabilities import TemporalIndex, TemporalStore
 from genie.hooks import HookOperation, HookRegistry, StructureAction, StructureChange, StructureKind
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryNotFound, UnsupportedOperation
-from genie.policy.engine import AccessDenied
+from genie.policy.engine import AccessDenied, Operation
 from genie.structures._hooks import (
     after_change,
     before_change,
@@ -21,12 +21,12 @@ from genie.structures._hooks import (
     resolve_hooks,
 )
 from genie.structures._routing import resolve_store
-from genie.structures.access import BlockReader, BlockRef
+from genie.structures.access import AccessChecker, BlockReader, BlockRef
 from genie.structures.records import TemporalEntry, TemporalItem, ValidityInterval
 
 
 @runtime_checkable
-class TemporalAccess(BlockReader, Protocol):
+class TemporalAccess(BlockReader, AccessChecker, Protocol):
     """Small access surface required by `TemporalCollection`."""
 
 
@@ -38,6 +38,11 @@ class TemporalCollection:
     Queries scan the portable store unless a compatible temporal index is
     supplied. Both paths resolve results through normal memory access so scope
     and block policies remain in effect.
+
+    Reading needs `read` on the collection block and on each member. `add`,
+    `replace`, and `remove` also need `write` on the collection block, checked
+    through the access object, so a principal that can only read the
+    collection cannot change its membership.
     """
 
     __slots__ = (
@@ -128,6 +133,8 @@ class TemporalCollection:
             Created temporal entry and resolved block.
 
         Raises:
+            AccessDenied: If the collection denies `write` or the block denies
+                `read`.
             MemoryConflict: If the block is already in this collection.
         """
 
@@ -137,7 +144,7 @@ class TemporalCollection:
             principal=self._principal_id,
             attributes=self._attributes,
         ) as context:
-            self._require_collection()
+            self._require_writable_collection()
             stored_block = self._require_block(block)
             proposed = TemporalEntry(
                 collection_id=self.collection_id,
@@ -175,6 +182,8 @@ class TemporalCollection:
             Replacement temporal entry and resolved block.
 
         Raises:
+            AccessDenied: If the collection denies `write` or the block denies
+                `read`.
             MemoryConflict: If the block is not in this collection.
         """
 
@@ -184,7 +193,7 @@ class TemporalCollection:
             principal=self._principal_id,
             attributes=self._attributes,
         ) as context:
-            self._require_collection()
+            self._require_writable_collection()
             stored_block = self._require_block(block)
             current = self._store.get_temporal_entry(
                 self.collection_id,
@@ -237,6 +246,8 @@ class TemporalCollection:
             block: Existing visible temporal member.
 
         Raises:
+            AccessDenied: If the collection denies `write` or the block denies
+                `read`.
             MemoryConflict: If the block is not in this collection.
         """
 
@@ -246,7 +257,7 @@ class TemporalCollection:
             principal=self._principal_id,
             attributes=self._attributes,
         ) as context:
-            self._require_collection()
+            self._require_writable_collection()
             stored_block = self._require_block(block)
             current = self._store.get_temporal_entry(
                 self.collection_id,
@@ -486,6 +497,13 @@ class TemporalCollection:
         collection = self._access.get(self.collection_id)
         if collection is None:
             raise MemoryNotFound(f"Temporal collection block {self.collection_id!r} does not exist.")
+        return collection
+
+    def _require_writable_collection(self) -> MemoryBlock:
+        """Return the visible collection block after requiring `write` on it."""
+
+        collection = self._require_collection()
+        self._access.require_access(Operation.WRITE, collection.id)
         return collection
 
     def _require_block(self, block: BlockRef) -> MemoryBlock:

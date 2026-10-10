@@ -13,7 +13,7 @@ from genie.memory._validation import require_non_empty_str
 from genie.memory.block import MemoryBlock
 from genie.memory.errors import HookRecursionError
 from genie.memory.links import LinkRelations, MemoryLink
-from genie.policy.engine import AccessDenied
+from genie.policy.engine import AccessDenied, Operation
 from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
 from genie.query import MemoryQuery, Scope, SearchResult
@@ -740,6 +740,33 @@ class MemoryHandle:
             for result in results
             if self._memory._contains_raw(self.root_id, result.block.id)
         ]
+
+    def require_access(self, operation: Operation | str, block_id: str | MemoryBlock) -> None:
+        """Require that this handle may perform an operation on a block.
+
+        The block is not changed and nothing is returned. The handle boundary
+        is checked first, then the block policy, as for any other call.
+
+        Args:
+            operation: Built-in `Operation`, or the name of a custom operation
+                configured on the policy engine.
+            block_id: Block or id carrying the policy.
+
+        Raises:
+            AccessDenied: If the block is outside the handle boundary or policy
+                denies the operation. In rooted handles, unknown block ids are
+                treated as outside the handle before the underlying lookup is
+                reached.
+            MemoryNotFound: If the underlying memory handle reaches a missing
+                block.
+            TypeError: If `block_id` is not a block or string id.
+            ValueError: If `block_id` is empty, or `operation` is neither
+                built-in nor configured as a custom operation.
+        """
+
+        actual_id = _block_id(block_id)
+        self._require_in_subtree(HookOperation.REQUIRE_ACCESS, actual_id)
+        self._as_principal().require_access(operation, actual_id)
 
     def get_handle(
         self,

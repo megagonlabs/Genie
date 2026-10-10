@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol, TypeAlias, runtime_checkable
 
 from genie.memory.block import MemoryBlock
 from genie.memory.links import MemoryLink
+from genie.policy.engine import Operation
 from genie.policy.policy import MemoryPolicy
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
@@ -118,6 +119,26 @@ class BlockWriter(Protocol):
         Args:
             block_id: Block or block id to delete, together with everything it
                 owns.
+        """
+
+        ...
+
+
+@runtime_checkable
+class AccessChecker(Protocol):
+    """Policy check access needed by facades that change membership."""
+
+    def require_access(self, operation: Operation | str, block_id: BlockRef) -> None:
+        """Require that the acting principal may perform an operation on a block.
+
+        Args:
+            operation: Built-in `Operation`, or the name of a custom operation
+                configured on the policy engine.
+            block_id: Block or block id carrying the policy.
+
+        Raises:
+            AccessDenied: If the operation is not allowed.
+            MemoryNotFound: If the block does not exist.
         """
 
         ...
@@ -270,6 +291,7 @@ class SearchAccess(Protocol):
 class MemoryAccess(
     BlockReader,
     BlockWriter,
+    AccessChecker,
     TreeReader,
     LinkReader,
     LinkWriter,

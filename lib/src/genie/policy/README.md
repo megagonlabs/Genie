@@ -52,6 +52,7 @@ inside handle scope AND allowed by block policy
 - **`allow_policy_override=True`** is required before a handle can attach an explicit policy to a new block. This stops ordinary agents from making their writes public.
 - **Ownership is the one exception, and it runs through `write`.** Creating a child already needs `write` on the parent, and deleting a block removes everything it owns without consulting the descendants' own policies.
 - **So `write` on a block is authority over the existence of its subtree, not over its contents.** Descendants still decide who reads, searches, and traverses them, but they cannot outlive their owner.
+- **Structure membership also runs through `write` on the container.** Binding, appending, replacing, or removing a member checks the container block's `write` rule. The member only has to be readable, and its own policy does not change.
 - **A block that must survive its owner** belongs outside the subtree, reached through a link or a mount instead of being owned.
 
 ## Delegating to sub-agents

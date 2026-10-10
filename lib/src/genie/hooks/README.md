@@ -109,6 +109,7 @@ class SecurityHook(MemoryHook):
 
 - **The `operation` argument names what refused.** Policy operations are the plain values `read`, `write`, `search`, `traverse_up`, and `traverse_down`. `MemoryHandle` boundaries are `HandleCapability` values with a namespace.
 - **The two can never collide,** so an attempt to leave a sandbox is never mistaken for an ordinary permission failure.
+- **`access.require` is a check without a change.** `Memory.require_access` and `MemoryHandle.require_access` run one policy check and report a refusal under that operation. An allowed check is not reported.
 
 | Capability | Refused because |
 | --- | --- |
@@ -120,7 +121,7 @@ class SecurityHook(MemoryHook):
 | `handle.root_required` | An unbounded handle has no `root` to infer. |
 | `handle.principal` | A child handle tried to change `principal`. |
 
-- **Coverage of the security boundary is complete.** Policy refusals are reported for block operations, search, links, mounts, traversal, listing, `contains`, and handle creation. Handle refusals are reported for every boundary and capability check, including child handles that try to widen access. Every refusal comes with a `denied` terminal event that shares its operation id.
+- **Coverage of the security boundary is complete.** Policy refusals are reported for block operations, search, links, mounts, traversal, listing, `contains`, handle creation, and `require_access` checks, which structure facades run before changing membership. Handle refusals are reported for every boundary and capability check, including child handles that try to widen access. Every refusal comes with a `denied` terminal event that shares its operation id.
 - **Ordinary visibility filtering is not a refusal.** Search and traversal results that a principal cannot read are left out without reporting anything, so `on_denied` stays a signal instead of becoming a stream.
 - **Refusals raised inside an `OwnershipTree` facade root are not reported.** That bound is a view over an access object the caller already holds, so leaving it cannot widen access. The underlying handle and policy still refuse.
 
