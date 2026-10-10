@@ -261,7 +261,7 @@ def test_memory_policy_fields_default_to_owner_only() -> None:
     with pytest.raises(AccessDenied):
         mallory.set(block, "overwritten")
     with pytest.raises(AccessDenied):
-        mallory.update(block, value="updated")
+        mallory.update(block, value={"text": "updated"})
     with pytest.raises(AccessDenied):
         mallory.delete(block)
 

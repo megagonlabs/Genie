@@ -821,7 +821,7 @@ def _drop_live_init_database() -> None:
     """Remove the initialization test database so the next test starts empty."""
 
     with _live_backend() as helper:
-        helper._client.drop_database(_LIVE_INIT_DATABASE)
+        helper._require_client().drop_database(_LIVE_INIT_DATABASE)
 
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
@@ -885,14 +885,14 @@ def test_live_mongodb_backend_refuses_a_database_with_foreign_collections() -> N
 
     _drop_live_init_database()
     with _live_backend() as helper:
-        foreign = helper._client[_LIVE_INIT_DATABASE]
+        foreign = helper._require_client()[_LIVE_INIT_DATABASE]
         foreign["notes"].insert_one({"_id": 1})
         try:
             with pytest.raises(UnsupportedOperation, match="no Genie schema record"):
                 _live_init_backend()
             assert foreign.list_collection_names() == ["notes"]
         finally:
-            helper._client.drop_database(_LIVE_INIT_DATABASE)
+            helper._require_client().drop_database(_LIVE_INIT_DATABASE)
 
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
@@ -901,7 +901,7 @@ def test_live_mongodb_backend_resumes_a_database_claimed_at_version_zero() -> No
 
     _drop_live_init_database()
     with _live_backend() as helper:
-        claimed = helper._client[_LIVE_INIT_DATABASE]
+        claimed = helper._require_client()[_LIVE_INIT_DATABASE]
         claimed[mongodb_module._SCHEMA_INFO].insert_one(
             {"_id": mongodb_module._SCHEMA_DOCUMENT_ID, "application_id": mongodb_module._APPLICATION_ID, "version": 0},
         )
@@ -911,4 +911,4 @@ def test_live_mongodb_backend_resumes_a_database_claimed_at_version_zero() -> No
                 assert state is not None
                 assert state["version"] == mongodb_module._SCHEMA_VERSION
         finally:
-            helper._client.drop_database(_LIVE_INIT_DATABASE)
+            helper._require_client().drop_database(_LIVE_INIT_DATABASE)
