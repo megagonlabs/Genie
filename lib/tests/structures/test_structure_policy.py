@@ -1,4 +1,4 @@
-"""Composition-level scope and policy tests for optional structures."""
+"""Scope and policy tests for optional structures that work together."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from genie.structures import (
 
 
 class _DenialHook(MemoryHook):
-    """Record every refusal reported to `on_denied`."""
+    """Record every denial that `on_denied` reports."""
 
     def __init__(self) -> None:
         self.denials: list[tuple[HookOperation, str, str | None]] = []
@@ -43,13 +43,13 @@ class _DenialHook(MemoryHook):
         subject_id: str | None,
         reason: str,
     ) -> None:
-        """Record the attempted operation, the refusing check, and the subject."""
+        """Record the attempted operation, the check that denied it, and the subject."""
 
         self.denials.append((context.operation, str(operation), subject_id))
 
 
 def test_compound_facades_apply_one_handle_scope_and_block_policy() -> None:
-    """A compound view consistently omits hidden and out-of-scope blocks."""
+    """Every facade over one handle omits hidden blocks and blocks outside the scope in the same way."""
 
     backend = InMemoryBackend()
     owner = Memory(backend=backend, principal="agent:owner")

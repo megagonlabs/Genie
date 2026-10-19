@@ -1,4 +1,4 @@
-"""Cross-facade composition tests for optional memory structures."""
+"""Tests that use several optional structure facades over the same blocks."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from genie.structures import (
 
 
 def test_one_block_can_participate_in_all_seven_structures() -> None:
-    """Structures compose by reference without copying a block's value."""
+    """The 7 structures refer to the same block and do not copy its value."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -87,7 +87,7 @@ def test_one_block_can_participate_in_all_seven_structures() -> None:
 
 
 def test_versioned_records_interoperate_with_keyed_collection_and_event_log() -> None:
-    """Versioned records and their two base facades share the same state."""
+    """`VersionedRecords` and its 2 base facades, `KeyedCollection` and `EventLog`, share the same state."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)

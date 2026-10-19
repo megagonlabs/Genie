@@ -1,4 +1,4 @@
-"""Unit and opt-in live tests for the pymongo MongoDB backend."""
+"""Unit tests and optional live tests for the MongoDB backend that uses `pymongo`."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ from tests.backends.test_backend_contracts import (
 
 
 def test_mongodb_backend_implements_every_backend_protocol() -> None:
-    """The class exposes the complete core and optional capability surface."""
+    """`MongoDBBackend` implements `MemoryBackend` and every optional capability protocol."""
 
     backend = object.__new__(MongoDBBackend)
 
@@ -91,7 +91,7 @@ def test_mongodb_backend_rejects_invalid_configuration_before_loading_driver(
     error: type[Exception],
     message: str,
 ) -> None:
-    """Invalid public configuration never attempts a network connection."""
+    """`MongoDBBackend` rejects an invalid configuration before it loads the driver, so it does not open a network connection."""
 
     monkeypatch.setattr(
         mongodb_module,
@@ -106,7 +106,7 @@ def test_mongodb_backend_rejects_invalid_configuration_before_loading_driver(
 def test_mongodb_backend_explains_its_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Missing driver installations produce an actionable public error."""
+    """If the environment does not have the driver, `MongoDBBackend` raises `UnsupportedOperation` that names the `genie[mongodb]` extra."""
 
     def missing() -> tuple[Any, Any, Any, tuple[type[BaseException], ...]]:
         raise UnsupportedOperation("install 'genie[mongodb]'")
@@ -118,7 +118,7 @@ def test_mongodb_backend_explains_its_optional_dependency(
 
 
 def test_mongodb_serialization_is_strict_and_defensive() -> None:
-    """The stored document representation preserves JSON value types."""
+    """The stored document form keeps the JSON value types of a block."""
 
     original = MemoryBlock(
         id="note",
@@ -141,7 +141,7 @@ def test_mongodb_serialization_is_strict_and_defensive() -> None:
 
 
 def test_mongodb_keeps_caller_data_out_of_field_names() -> None:
-    """A dotted or dollar-prefixed key stays inside stored JSON text."""
+    """The backend keeps a dotted key or a key with a `$` prefix inside stored JSON text, not in a field name."""
 
     block = MemoryBlock(id="note", type="note", value={"$set": 1, "a.b": 2})
 
@@ -166,7 +166,7 @@ def test_mongodb_keeps_caller_data_out_of_field_names() -> None:
 
 
 def test_mongodb_link_and_temporal_documents_round_trip() -> None:
-    """Links and temporal entries survive the stored document encoding."""
+    """A link and a temporal entry do not change after a round trip through the stored document encoding."""
 
     from genie.structures import ValidityInterval
 
@@ -186,7 +186,7 @@ def test_mongodb_link_and_temporal_documents_round_trip() -> None:
 
 
 def test_mongodb_rejects_values_that_are_not_strict_json() -> None:
-    """A value that cannot round-trip through JSON is refused on the way in."""
+    """The backend raises `TypeError` for a value that cannot make a JSON round trip, before it writes the value."""
 
     with pytest.raises(TypeError, match="must be strict JSON data"):
         mongodb_module._dump_json({1: "integer key"}, field_name="block value")
@@ -195,7 +195,7 @@ def test_mongodb_rejects_values_that_are_not_strict_json() -> None:
 
 
 def test_mongodb_reports_corrupt_stored_documents() -> None:
-    """Unreadable stored data raises a corruption error, not a decode error."""
+    """Stored data that the backend cannot read raises `BackendCorruption`, not a decode error."""
 
     with pytest.raises(BackendCorruption, match="JSON is invalid"):
         mongodb_module._load_json("{not json")
@@ -206,7 +206,7 @@ def test_mongodb_reports_corrupt_stored_documents() -> None:
 
 
 def test_mongodb_identities_separate_neighbouring_records() -> None:
-    """A composite `_id` cannot be produced by two different field pairs."""
+    """Two different field pairs cannot make the same composite `_id`."""
 
     assert mongodb_module._identity("a", "bc") != mongodb_module._identity("ab", "c")
     assert mongodb_module._identity("log", 1) == mongodb_module._identity("log", 1)
@@ -249,10 +249,10 @@ def test_mongodb_rejects_non_string_ids_before_querying(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> None:
-    """A non-string id is refused before MongoDB can read it as an operator.
+    """The backend rejects an id that is not a string before MongoDB can read it as an operator.
 
-    The backend is never connected, so a call that got past the check would
-    fail with `AttributeError` instead of `TypeError`.
+    If a call passes the check, it fails with `AttributeError` instead of
+    `TypeError`, because the backend has no connection.
     """
 
     backend = object.__new__(MongoDBBackend)
@@ -262,7 +262,7 @@ def test_mongodb_rejects_non_string_ids_before_querying(
 
 
 def test_mongodb_chunking_bounds_every_command_document() -> None:
-    """Long id lists are split so one `$in` list cannot outgrow a command."""
+    """The backend splits a long id list into chunks, so one `$in` list cannot make a command document too large."""
 
     values = [str(index) for index in range(1201)]
 
@@ -274,29 +274,29 @@ def test_mongodb_chunking_bounds_every_command_document() -> None:
 
 
 def test_mongodb_schema_expectations_describe_one_consistent_schema() -> None:
-    """Every owned index is named once and indexes an owned collection."""
+    """Each index that Genie owns has a unique name and belongs to a collection that Genie owns."""
 
     names: set[str] = set()
     for collection, indexes in mongodb_module._SCHEMA_COLLECTIONS.items():
         assert collection.islower()
         for index in indexes:
-            # An index name must be unique across the database, not only
-            # inside its own collection.
+            # Each index name is unique in the whole database, not only in its
+            # own collection.
             assert index.name not in names, index.name
             assert index.keys, index.name
             assert len({field for field, _ in index.keys}) == len(index.keys), index.name
             assert all(direction in {1, -1} for _, direction in index.keys)
             names.add(index.name)
-    # MongoDB adds `_id_` on its own, so Genie must never declare it.
+    # MongoDB adds `_id_` automatically, so Genie does not declare it.
     assert "_id_" not in names
 
-    # The control collections the adapter writes to must be part of the schema.
+    # The schema includes each control collection that the adapter writes to.
     for collection in (mongodb_module._SCHEMA_INFO, mongodb_module._GUARD, mongodb_module._COUNTERS):
         assert collection in mongodb_module._SCHEMA_COLLECTIONS
 
 
 class _FakeMongoError(Exception):
-    """Stand-in for a pymongo error carrying a server error code."""
+    """Test double for a `pymongo` error that carries a server error code."""
 
     def __init__(self, code: int | None = None, message: str = "failed") -> None:
         super().__init__(message)
@@ -307,29 +307,29 @@ class _FakeMongoError(Exception):
         return label in self.labels
 
 
-# A transport failure carries no server error code, so the translator
-# recognizes it by class name. These stand-ins therefore use the exact names
-# `pymongo` and `bson` give their own classes.
+# A transport failure has no server error code, so the translator identifies
+# it by its class name. For this reason, these test doubles use the exact
+# class names of `pymongo` and `bson`.
 
 
 class DuplicateKeyError(_FakeMongoError):
-    """Stand-in for `pymongo.errors.DuplicateKeyError`."""
+    """Test double for `pymongo.errors.DuplicateKeyError`."""
 
 
 class NotPrimaryError(_FakeMongoError):
-    """Stand-in for `pymongo.errors.NotPrimaryError`."""
+    """Test double for `pymongo.errors.NotPrimaryError`."""
 
 
 class ServerSelectionTimeoutError(_FakeMongoError):
-    """Stand-in for `pymongo.errors.ServerSelectionTimeoutError`."""
+    """Test double for `pymongo.errors.ServerSelectionTimeoutError`."""
 
 
 class DocumentTooLarge(_FakeMongoError):
-    """Stand-in for `pymongo.errors.DocumentTooLarge`."""
+    """Test double for `pymongo.errors.DocumentTooLarge`."""
 
 
 class InvalidBSON(_FakeMongoError):
-    """Stand-in for `bson.errors.InvalidBSON`."""
+    """Test double for `bson.errors.InvalidBSON`."""
 
 
 @pytest.mark.parametrize(
@@ -358,7 +358,7 @@ def test_mongodb_translates_driver_failures_to_stable_errors(
     error: BaseException,
     expected: type[Exception],
 ) -> None:
-    """Every mapped error code and driver type becomes the documented error."""
+    """The backend translates each mapped error code and driver error type to the documented Genie error."""
 
     assert type(mongodb_module._translate_mongodb_error(error)) is expected
 
@@ -376,7 +376,7 @@ def test_mongodb_translates_driver_failures_to_stable_errors(
     ids=["primary", "older-primary", "mongos", "null", "missing-field", "no-reply"],
 )
 def test_mongodb_server_role_probe_passes_unless_a_refusal_is_proven(description: Any) -> None:
-    """Anything short of a proven non-writable node lets construction continue."""
+    """Construction continues unless the reply proves that the node does not accept writes."""
 
     object.__new__(MongoDBBackend)._verify_server_role(description)
 
@@ -387,7 +387,7 @@ def test_mongodb_server_role_probe_passes_unless_a_refusal_is_proven(description
     ids=["hello", "ismaster"],
 )
 def test_mongodb_server_role_probe_refuses_a_node_that_refuses_writes(description: Any) -> None:
-    """A server that reports it is not writable is refused with a clear message."""
+    """The backend raises `UnsupportedOperation` with a clear message for a server that reports that it is not writable."""
 
     with pytest.raises(UnsupportedOperation, match="does not accept writes"):
         object.__new__(MongoDBBackend)._verify_server_role(description)
@@ -412,7 +412,7 @@ def test_mongodb_transaction_probe_passes_unless_standalone_is_proven(descriptio
 
 
 def test_mongodb_transaction_probe_refuses_a_standalone_server() -> None:
-    """A standalone `mongod` cannot run transactions, so it is refused."""
+    """The backend rejects a standalone `mongod` because it cannot run transactions."""
 
     with pytest.raises(UnsupportedOperation, match="standalone server"):
         object.__new__(MongoDBBackend)._verify_transaction_support({"isWritablePrimary": True})
@@ -445,7 +445,7 @@ class _ProbeClient:
 
 
 def _probe_backend(answers: dict[str, Any]) -> tuple[MongoDBBackend, _ProbeClient]:
-    """Return a backend wired to a probe client, plus that client."""
+    """Return a backend that uses a probe client, together with that client."""
 
     from threading import Condition, RLock
 
@@ -460,7 +460,7 @@ def _probe_backend(answers: dict[str, Any]) -> tuple[MongoDBBackend, _ProbeClien
 
 
 def test_mongodb_server_description_falls_back_to_the_older_command() -> None:
-    """A server without `hello` is still described through `ismaster`."""
+    """If a server does not support `hello`, the backend describes it through `ismaster`."""
 
     backend, client = _probe_backend({"ismaster": {"ismaster": True, "setName": "rs0"}})
 
@@ -469,7 +469,7 @@ def test_mongodb_server_description_falls_back_to_the_older_command() -> None:
 
 
 def test_mongodb_server_description_is_unknown_when_both_commands_fail() -> None:
-    """A blocked command leaves the deployment unknown instead of refused."""
+    """If both description commands fail, the backend treats the deployment as unknown and does not reject it."""
 
     backend, _ = _probe_backend({})
 
@@ -477,7 +477,7 @@ def test_mongodb_server_description_is_unknown_when_both_commands_fail() -> None
 
 
 def test_mongodb_server_description_lets_a_connection_failure_through() -> None:
-    """An unreachable deployment is reported instead of treated as unknown."""
+    """For a deployment that it cannot reach, the backend raises the connection error and does not treat the deployment as unknown."""
 
     backend, _ = _probe_backend({"hello": ServerSelectionTimeoutError(None, "no server")})
 
@@ -493,14 +493,14 @@ class _FakeCollection:
 
 
 class _FakeDatabase:
-    """Database that hands out empty collections."""
+    """Database test double that returns empty collections."""
 
     def __getitem__(self, name: str) -> _FakeCollection:
         return _FakeCollection()
 
 
 class _FakeConcern:
-    """Stand-in for a pymongo read or write concern."""
+    """Test double for a `pymongo` read concern or write concern."""
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.args = args
@@ -510,7 +510,7 @@ class _FakeConcern:
 def test_mongodb_backend_discards_client_after_unexpected_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unexpected schema failure closes the new client before escaping."""
+    """If `_initialize_schema` fails with an unexpected error, the backend closes the new client before the error reaches the caller."""
 
     closed = Event()
 
@@ -576,8 +576,9 @@ def _live_backend(
 
 
 def _clear_live_data(backend: MongoDBBackend) -> None:
-    # MongoDB has no cascading reference, so every owned collection is cleared.
-    # The counters go too, which keeps storage order deterministic per test.
+    # MongoDB does not cascade a delete through references, so this function
+    # clears every owned collection. It also clears the counters, so each test
+    # starts with the same storage order.
     for collection in (
         backend._blocks,
         backend._links,
@@ -621,15 +622,15 @@ class TestMongoDBNormalDurabilityStructureBackendContracts(TestMongoDBStructureB
     """Run every capability contract against `durability="normal"`.
 
     - **A different pair of concerns.** `"normal"` acknowledges a write on the
-      primary alone (`w=1`) and reads with the `local` read concern. The base
-      class uses the `"full"` default, so it never exercises this path.
-    - **What the contracts catch here is read-your-own-writes.** A `w=1` write
-      is not majority-committed yet, so reading it back under the wrong concern
-      could miss it. Every contract writes and then reads the result back.
+      primary only (`w=1`) and reads with the `local` read concern. The base
+      class uses the `"full"` default, so it does not test this path.
+    - **The contracts check read-your-own-writes.** A `w=1` write is not
+      majority-committed yet. A read under the wrong concern can miss it.
+      Every contract writes a result and then reads it again.
     """
 
     def setup_method(self) -> None:
-        """Open one backend that acknowledges writes on the primary alone."""
+        """Open one backend that acknowledges writes on the primary only."""
 
         self.backend = _live_backend(durability="normal")
         _clear_live_data(self.backend)
@@ -649,7 +650,7 @@ def test_live_mongodb_durability_selects_its_concerns(
     read_concern: str,
     transaction_read_concern: str,
 ) -> None:
-    """Each durability mode hands the driver the concerns it documents."""
+    """Each durability mode gives the driver the concerns that it documents."""
 
     backend = _live_backend(durability=durability)
     try:
@@ -657,8 +658,8 @@ def test_live_mongodb_durability_selects_its_concerns(
         assert backend._write_concern.document == write_concern
         assert backend._read_concern.level == read_concern
         assert backend._transaction_read_concern.level == transaction_read_concern
-        # Every command inherits from the database handle, so the concerns must
-        # reach it and not only the backend attributes.
+        # Every command inherits its concerns from the database handle. This check
+        # proves that the handle has the concerns, not only the backend attributes.
         assert backend._database_handle.write_concern.document == write_concern
         assert backend._database_handle.read_concern.level == read_concern
     finally:
@@ -676,8 +677,8 @@ def test_live_mongodb_normal_durability_reads_back_its_own_write() -> None:
 
         assert backend.get_block(block.id) == block
 
-        # A second connection must see the commit too, so the visibility does
-        # not depend on reusing the session that wrote it.
+        # A second connection also reads the commit. This proves that the commit
+        # is visible without a reuse of the session that wrote it.
         reader = _live_backend(initialize_schema=False, durability="normal")
         try:
             assert reader.get_block(block.id) == block
@@ -690,7 +691,7 @@ def test_live_mongodb_normal_durability_reads_back_its_own_write() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_mongodb_backend_persists_and_coordinates_instances() -> None:
-    """Committed state survives reconnects and concurrent instances share the guard."""
+    """Committed state stays after a reconnect, and concurrent instances share the guard."""
 
     first = _live_backend()
     _clear_live_data(first)
@@ -740,7 +741,7 @@ def test_live_mongodb_backend_persists_and_coordinates_instances() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_mongodb_deletes_a_subtree_with_its_dependent_records() -> None:
-    """One transaction removes the subtree and everything that referenced it."""
+    """One transaction deletes the subtree and every record that refers to it."""
 
     backend = _live_backend()
     _clear_live_data(backend)
@@ -766,14 +767,14 @@ def test_live_mongodb_deletes_a_subtree_with_its_dependent_records() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_mongodb_orders_text_by_bytes_not_by_locale() -> None:
-    """Paging uses byte order, so it matches the other shipped adapters."""
+    """Pages sort text by byte order, not by locale, so the order matches the other shipped adapters."""
 
     backend = _live_backend()
     _clear_live_data(backend)
     try:
         collection = backend.put_block(MemoryBlock(id="collection", type="timeline", value={}))
-        # Under a locale collation these ids sort in a different order than
-        # plain byte order puts them in.
+        # A locale collation sorts these ids in a different order from plain
+        # byte order.
         ids = ["a-1", "A-2", "a_3", "AB", "ab"]
         moment = datetime(2024, 1, 1, tzinfo=UTC)
         for block_id in ids:
@@ -790,7 +791,7 @@ def test_live_mongodb_orders_text_by_bytes_not_by_locale() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_mongodb_backend_serves_the_public_memory_api() -> None:
-    """The adapter works behind `Memory` with scoped search and ownership."""
+    """`Memory` can use the adapter for ownership and scoped search."""
 
     backend = _live_backend()
     _clear_live_data(backend)
@@ -826,11 +827,13 @@ def _drop_live_init_database() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_mongodb_backend_coordinates_concurrent_initializers() -> None:
-    """Constructors that start close together on one empty database all succeed.
+    """Constructors that start at almost the same time on one empty database all succeed.
 
-    The starts are staggered by a few milliseconds, so most constructors read
-    the database while another one is still creating collections. That is
-    the window a check without the record re-read fell into.
+    - **Staggered starts.** Each constructor starts a few milliseconds after the
+      one before it, so most constructors read the database while another
+      constructor creates collections.
+    - **The old failure.** A check that did not read the record again failed in
+      this time window.
     """
 
     _drop_live_init_database()
@@ -854,7 +857,7 @@ def test_live_mongodb_backend_coordinates_concurrent_initializers() -> None:
 def test_live_mongodb_backend_writes_its_schema_record_before_other_collections(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The record claims the database before the first migration creates collections."""
+    """The backend writes its schema record at version 0 before the first migration creates any other collection."""
 
     _drop_live_init_database()
     seen: list[tuple[Any, set[str]]] = []
@@ -881,7 +884,7 @@ def test_live_mongodb_backend_writes_its_schema_record_before_other_collections(
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_mongodb_backend_refuses_a_database_with_foreign_collections() -> None:
-    """Collections that no Genie record owns are refused and left alone."""
+    """The backend rejects a database with collections that no Genie record owns, and it does not change them."""
 
     _drop_live_init_database()
     with _live_backend() as helper:
@@ -897,7 +900,7 @@ def test_live_mongodb_backend_refuses_a_database_with_foreign_collections() -> N
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_mongodb_backend_resumes_a_database_claimed_at_version_zero() -> None:
-    """A record at version 0 with no other collection is an initialization to finish."""
+    """The backend finishes the initialization of a database that has only a schema record at version 0."""
 
     _drop_live_init_database()
     with _live_backend() as helper:

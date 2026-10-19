@@ -110,7 +110,7 @@ def test_task_agent_interprets_memory_and_selects_an_action() -> None:
 
 @pytest.mark.parametrize("example", RUNNABLE_EXAMPLES)
 def test_example_matches_its_captured_output(example: str) -> None:
-    """Every example runs from the repository root and prints what was captured."""
+    """Every example runs from the repository root and prints its captured output."""
 
     expected = expected_path_for(example)
     assert expected.exists(), f"{example} has no captured output. Create it with: {CAPTURE_SCRIPT}"
@@ -131,14 +131,14 @@ def test_example_matches_its_captured_output(example: str) -> None:
 
 
 def test_every_example_script_has_smoke_coverage() -> None:
-    """Keep newly added scripts and lamp demos in the runnable test set."""
+    """`RUNNABLE_EXAMPLES` lists each example script and lamp demo exactly once, new ones included."""
 
     assert len(RUNNABLE_EXAMPLES) == len(set(RUNNABLE_EXAMPLES))
     assert set(RUNNABLE_EXAMPLES) == set(discover_examples())
 
 
 def test_no_orphan_captured_output() -> None:
-    """No captured-output file is left behind after its example is removed."""
+    """Every captured-output file belongs to an example that still exists."""
 
     owned = {expected_path_for(example) for example in discover_examples()}
     orphans = sorted(path.relative_to(REPO_ROOT).as_posix() for path in EXPECTED_ROOT.rglob("*.out") if path not in owned)

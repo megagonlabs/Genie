@@ -29,7 +29,7 @@ from genie.structures import (
 
 
 class ScanOnlyTemporalStore:
-    """Expose temporal persistence without the optional index protocol."""
+    """Expose the `TemporalStore` methods without the optional `TemporalIndex` protocol."""
 
     def __init__(self, backend: InMemoryBackend) -> None:
         """Wrap the reference backend."""
@@ -62,7 +62,7 @@ class ScanOnlyTemporalStore:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Delegate portable temporal listing."""
+        """Delegate `list_temporal_entries` to the backend."""
 
         return self.backend.list_temporal_entries(
             collection_id,
@@ -82,7 +82,7 @@ class ScanOnlyTemporalStore:
 
 
 class RecordingTemporalIndex:
-    """Record index use while delegating query behavior to the backend."""
+    """Count index calls and delegate each query to the backend."""
 
     def __init__(self, backend: InMemoryBackend) -> None:
         """Wrap the reference backend's temporal query implementation."""
@@ -222,7 +222,7 @@ def test_portable_scan_and_optional_index_return_the_same_results() -> None:
 
 
 def test_temporal_collection_reads_across_bounded_portable_pages() -> None:
-    """Portable scans fill a visible limit across multiple store pages."""
+    """A portable scan reads more than one store page to return the full `limit` of visible items."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -247,7 +247,7 @@ def test_temporal_collection_reads_across_bounded_portable_pages() -> None:
 
 
 def test_temporal_collection_preserves_handle_scope_and_policy() -> None:
-    """Exact reads propagate denial while scans omit inaccessible members."""
+    """For a scoped viewer, `get` raises `AccessDenied` for a private or outside block, and scans omit those blocks."""
 
     backend = InMemoryBackend()
     owner = Memory(backend=backend, principal="agent:owner")
@@ -284,7 +284,7 @@ def test_temporal_collection_preserves_handle_scope_and_policy() -> None:
 
 
 def test_temporal_entries_are_cleaned_when_blocks_are_deleted() -> None:
-    """Deleting a target or collection removes dependent temporal state."""
+    """A delete of a target block or of the collection block removes the temporal state that depends on it."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -305,13 +305,13 @@ def test_temporal_entries_are_cleaned_when_blocks_are_deleted() -> None:
 
 
 def test_temporal_collection_handles_a_stale_backend_entry_defensively() -> None:
-    """Exact reads report stale entries while scans omit their missing targets."""
+    """If a backend keeps a stale entry, `get` raises `MemoryNotFound` and `scan` omits the deleted target."""
 
     class StaleTemporalBackend(InMemoryBackend):
         """Simulate an adapter that leaves temporal entries after target deletion."""
 
         def delete_temporal_entries_for_block(self, block_id: str) -> None:
-            """Deliberately retain temporal state for the integrity-path test."""
+            """Keep the temporal entries on purpose so that the test can check stale state."""
 
     backend = StaleTemporalBackend()
     memory = Memory(backend=backend)
@@ -327,7 +327,7 @@ def test_temporal_collection_handles_a_stale_backend_entry_defensively() -> None
 
 
 def test_portable_temporal_scan_covers_negative_half_open_boundaries() -> None:
-    """Portable scans reject absent event times and disjoint validity intervals."""
+    """Portable scans exclude entries that have no event time or a validity interval outside the half-open bounds."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -379,7 +379,7 @@ def test_portable_temporal_scan_covers_negative_half_open_boundaries() -> None:
 def test_temporal_collection_rejects_invalid_queries(
     operation: Callable[[TemporalCollection], object],
 ) -> None:
-    """Temporal bounds and limits fail with predictable exceptions."""
+    """Invalid temporal bounds and limits raise `TypeError` or `ValueError`."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -393,7 +393,7 @@ def test_temporal_collection_rejects_invalid_queries(
 
 
 def test_temporal_collection_requires_store_and_valid_optional_index() -> None:
-    """Unsupported temporal capabilities fail clearly at construction."""
+    """The constructor raises `UnsupportedOperation` for a store or an index that does not support the temporal protocols."""
 
     memory = Memory()
     root = memory.put(type="temporal_collection", value="timeline")
@@ -418,7 +418,7 @@ def test_temporal_collection_requires_store_and_valid_optional_index() -> None:
 
 
 def test_memory_and_handle_implement_temporal_access() -> None:
-    """Public access and reference backend objects satisfy temporal protocols."""
+    """`Memory` and `MemoryHandle` satisfy `TemporalAccess`, and the reference backend satisfies `TemporalStore` and `TemporalIndex`."""
 
     memory = Memory()
     root = memory.put(type="temporal_collection", value="timeline")

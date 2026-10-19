@@ -1,4 +1,4 @@
-"""Unit and opt-in live tests for the official-driver Neo4j backend."""
+"""Unit tests and optional live tests for the Neo4j backend that uses the official driver."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ from tests.backends.test_backend_contracts import (
 
 
 def test_neo4j_backend_implements_every_backend_protocol() -> None:
-    """The class exposes the complete core and optional capability surface."""
+    """`Neo4jBackend` implements `MemoryBackend` and every optional capability protocol."""
 
     backend = object.__new__(Neo4jBackend)
 
@@ -84,7 +84,7 @@ def test_neo4j_backend_rejects_invalid_configuration_before_loading_driver(
     error: type[Exception],
     message: str,
 ) -> None:
-    """Invalid public configuration never attempts a network connection."""
+    """`Neo4jBackend` rejects an invalid configuration before it loads the driver, so it does not open a network connection."""
 
     monkeypatch.setattr(
         neo4j_module,
@@ -99,7 +99,7 @@ def test_neo4j_backend_rejects_invalid_configuration_before_loading_driver(
 def test_neo4j_backend_explains_its_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Missing driver installations produce an actionable public error."""
+    """If the environment does not have the driver, `Neo4jBackend` raises `UnsupportedOperation` that names the `genie[neo4j]` extra."""
 
     def missing() -> tuple[Any, tuple[type[BaseException], ...]]:
         raise UnsupportedOperation("install 'genie[neo4j]'")
@@ -111,7 +111,7 @@ def test_neo4j_backend_explains_its_optional_dependency(
 
 
 def test_neo4j_serialization_is_strict_and_defensive() -> None:
-    """The graph property representation preserves JSON value types."""
+    """The graph property form keeps the JSON value types of a block."""
 
     original = MemoryBlock(
         id="note",
@@ -130,7 +130,7 @@ def test_neo4j_serialization_is_strict_and_defensive() -> None:
 
 
 def test_neo4j_serialization_reports_corrupt_stored_values() -> None:
-    """Malformed database properties fail as corruption, not incidental parser errors."""
+    """Malformed database properties raise `BackendCorruption`, not an unrelated parser error."""
 
     properties = neo4j_module._block_properties(MemoryBlock(id="note", type="note", value={}))
     properties["value_json"] = "{not-json"
@@ -140,7 +140,7 @@ def test_neo4j_serialization_reports_corrupt_stored_values() -> None:
 
 
 def test_neo4j_serialization_rejects_non_strict_json_and_policy_booleans() -> None:
-    """Stored non-finite values and truthy policy strings are corruption."""
+    """A stored non-finite value or a policy boolean stored as a truthy string raises `BackendCorruption`."""
 
     properties = neo4j_module._block_properties(
         MemoryBlock(
@@ -156,7 +156,7 @@ def test_neo4j_serialization_rejects_non_strict_json_and_policy_booleans() -> No
 
 
 def test_neo4j_serialization_rejects_invalid_versions_times_and_namespaces() -> None:
-    """Malformed caller values and stored primitives fail at stable boundaries."""
+    """Malformed caller values raise `TypeError` or `ValueError`, and malformed stored primitives raise `BackendCorruption`."""
 
     with pytest.raises(ValueError, match="block version"):
         neo4j_module._block_properties(MemoryBlock(id="note", type="note", value={}, version=0))
@@ -193,7 +193,7 @@ def test_neo4j_record_decoders_translate_malformed_shapes(
     record: dict[str, dict[str, object]],
     message: str,
 ) -> None:
-    """Every optional stored-record decoder maps malformed shapes to corruption."""
+    """Each decoder for an optional stored record translates a malformed shape to `BackendCorruption`."""
 
     with pytest.raises(BackendCorruption, match=message):
         decoder(record)
@@ -230,7 +230,7 @@ def test_neo4j_driver_errors_map_to_public_errors(
     message: str,
     expected: type[Exception],
 ) -> None:
-    """Driver-specific failure details do not leak through the backend API."""
+    """The backend translates driver errors to public errors, so driver-specific details do not reach the caller."""
 
     class DriverFailure(Exception):
         def __init__(self) -> None:
@@ -244,7 +244,7 @@ def test_neo4j_driver_errors_map_to_public_errors(
 
 
 def test_neo4j_driver_error_mapping_handles_retryable_and_unknown_failures() -> None:
-    """Retry hints and unknown driver failures retain stable public categories."""
+    """A retryable driver error becomes `BackendUnavailable`, and an unknown driver error becomes `BackendError`."""
 
     class RetryableFailure(Exception):
         def is_retryable(self) -> bool:
@@ -265,7 +265,7 @@ def test_neo4j_driver_error_mapping_handles_retryable_and_unknown_failures() -> 
 
 
 def test_neo4j_backend_close_is_idempotent_and_enforces_lifecycle() -> None:
-    """Closing releases the owned driver and rejects later operations."""
+    """`close` releases the owned driver only one time, and later operations raise `RuntimeError`."""
 
     class FakeDriver:
         def __init__(self) -> None:
@@ -292,7 +292,7 @@ def test_neo4j_backend_close_is_idempotent_and_enforces_lifecycle() -> None:
 
 
 def test_neo4j_backend_close_waits_for_active_operations() -> None:
-    """Closing never races a session that already leased the driver."""
+    """`close` waits until a session that already leased the driver finishes."""
 
     operation_started = Event()
     release_operation = Event()
@@ -344,7 +344,7 @@ def test_neo4j_backend_close_waits_for_active_operations() -> None:
 
 
 def test_neo4j_backend_translates_driver_close_failures() -> None:
-    """Driver shutdown failures clear lifecycle state and use public errors."""
+    """If the driver fails to close, the backend clears its lifecycle state and raises a public error."""
 
     class DriverFailure(Exception):
         code = "Neo.TransientError.Network.CommunicationError"
@@ -424,7 +424,7 @@ def test_neo4j_backend_forwards_production_driver_configuration(
 def test_neo4j_backend_discards_driver_after_unexpected_initialization_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unexpected schema failures close the newly created driver before escape."""
+    """If `_initialize_schema` fails with an unexpected error, the backend closes the new driver before the error reaches the caller."""
 
     closed = Event()
 
@@ -462,10 +462,12 @@ def test_neo4j_backend_discards_driver_after_unexpected_initialization_error(
 
 
 def test_neo4j_schema_statement_treats_an_existing_rule_as_success() -> None:
-    """A `CREATE ... IF NOT EXISTS` that loses a race to another constructor still counts as done.
+    """The backend treats a `CREATE ... IF NOT EXISTS` statement that loses a race to another constructor as a success.
 
-    Neo4j answers the loser with an "already exists" schema error. Any other
-    failure of a schema statement still reaches the caller.
+    - **The lost race.** Neo4j answers the constructor that loses the race with
+      an "already exists" schema error.
+    - **Other failures.** Any other failure of a schema statement still goes to
+      the caller.
     """
 
     class SchemaRuleExists(Exception):
@@ -541,7 +543,7 @@ def _clear_live_data(backend: Neo4jBackend) -> None:
 
 
 def _clear_live_schema(backend: Neo4jBackend) -> None:
-    """Remove every Genie node, constraint, and index, leaving an empty graph."""
+    """Remove every Genie node, constraint, and index, so that the graph is empty."""
 
     backend._raw_write(
         lambda tx: neo4j_module._consume(
@@ -582,7 +584,7 @@ class TestNeo4jStructureBackendContracts(
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_persists_and_coordinates_instances() -> None:
-    """Committed state survives reconnects and concurrent instances share locks."""
+    """Committed state stays after a reconnect, and concurrent instances share locks."""
 
     first = _live_backend()
     _clear_live_data(first)
@@ -632,7 +634,7 @@ def test_live_neo4j_backend_persists_and_coordinates_instances() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_preserves_link_identity_and_rolls_back_conflicts() -> None:
-    """Failed topology changes are atomic and link metadata remains isolated."""
+    """A failed topology change is atomic, and a change to returned link metadata does not change the stored link."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -652,7 +654,7 @@ def test_live_neo4j_backend_preserves_link_identity_and_rolls_back_conflicts() -
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_rejects_invalid_link_mutations_and_directions() -> None:
-    """Link identity, existence, and directional reads are enforced by Neo4j."""
+    """The Neo4j backend enforces link identity, link existence, and valid read directions."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -674,7 +676,7 @@ def test_live_neo4j_backend_rejects_invalid_link_mutations_and_directions() -> N
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_searches_every_scope_and_filters_candidates() -> None:
-    """Portable search applies scope, type, and text exclusion on real records."""
+    """Portable search on real records filters candidates by scope, type, and text."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -711,7 +713,7 @@ def test_live_neo4j_backend_searches_every_scope_and_filters_candidates() -> Non
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_reports_corrupt_persisted_record_types() -> None:
-    """Malformed Neo4j properties fail through the backend corruption boundary."""
+    """Malformed Neo4j properties raise `BackendCorruption` for blocks, links, keys, log entries, and temporal entries."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -786,7 +788,7 @@ def test_live_neo4j_backend_reports_corrupt_persisted_record_types() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_matches_core_ownership_search_and_delete_behavior() -> None:
-    """Ownership, scoped search, policies, and recursive cleanup match core behavior."""
+    """Ownership, scoped search, policies, and recursive cleanup match the core behavior."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -874,7 +876,7 @@ def test_live_neo4j_backend_explicit_cleanup_capabilities() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_rejects_stale_writes_across_instances() -> None:
-    """Database-resident locking protects CAS and subtree snapshots across drivers."""
+    """Locks in the database protect compare-and-swap (CAS) writes and subtree snapshots across drivers."""
 
     first = _live_backend()
     _clear_live_data(first)
@@ -999,9 +1001,10 @@ def test_live_neo4j_backend_rejects_future_and_incompatible_schema() -> None:
 def test_live_neo4j_backend_coordinates_concurrent_initializers() -> None:
     """Concurrent constructors on an empty graph all succeed and leave one valid schema.
 
-    The graph is emptied first, so every constructor runs the schema
-    statements at the same time. Neo4j answers some of them with an "already
-    exists" error, which the backend treats as success.
+    - **Empty graph first.** The test empties the graph, so every constructor
+      runs the schema statements at the same time.
+    - **Expected errors.** Neo4j answers some statements with an "already
+      exists" error, and the backend treats that error as a success.
     """
 
     with _live_backend() as helper:
@@ -1022,7 +1025,7 @@ def test_live_neo4j_backend_coordinates_concurrent_initializers() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_resumes_version_zero_migration() -> None:
-    """An interrupted or legacy version-zero schema migrates to the current version."""
+    """The backend migrates an interrupted or legacy schema at version 0 to the current version."""
 
     backend = _live_backend()
     _clear_live_data(backend)
@@ -1050,7 +1053,7 @@ def test_live_neo4j_backend_resumes_version_zero_migration() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_rejects_wrong_credentials() -> None:
-    """A real authentication failure uses Genie's public backend error."""
+    """A real authentication failure raises `BackendError`, the public Genie error."""
 
     assert _LIVE_URI is not None
     with pytest.raises(BackendError, match="authentication or authorization"):

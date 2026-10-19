@@ -1,4 +1,4 @@
-"""Tests for the Graphiti-inspired bi-temporal knowledge graph lamp."""
+"""Tests for the Graphiti-inspired lamp, a bi-temporal knowledge graph."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def make_graph(*, ontology: Ontology = ONTOLOGY) -> TemporalKnowledgeGraph:
 
 
 def populate(graph: TemporalKnowledgeGraph) -> None:
-    """Ingest the shared four-episode scenario used by several tests."""
+    """Add the shared scenario of 4 episodes and their facts that several tests use."""
 
     first = graph.add_episode(
         name="chat/1",
@@ -194,7 +194,7 @@ def populate(graph: TemporalKnowledgeGraph) -> None:
 
 
 def test_prescribed_ontology_rejects_undeclared_types_and_endpoints() -> None:
-    """A declared ontology validates entities and both fact endpoints."""
+    """A prescribed ontology rejects an undeclared entity type, an undeclared relation, and an endpoint that the relation does not connect."""
 
     graph = make_graph()
     episode = graph.add_episode(
@@ -229,7 +229,7 @@ def test_prescribed_ontology_rejects_undeclared_types_and_endpoints() -> None:
 
 
 def test_single_valued_relation_closes_both_time_axes() -> None:
-    """A contradiction invalidates the old fact instead of deleting it."""
+    """For a single-valued relation, a contradiction invalidates the old fact on both time axes and does not delete it."""
 
     graph = make_graph()
     populate(graph)
@@ -255,7 +255,7 @@ def test_single_valued_relation_closes_both_time_axes() -> None:
 
 
 def test_bitemporal_queries_separate_truth_from_knowledge() -> None:
-    """Valid time and transaction time answer different questions."""
+    """Valid time selects what was true at a moment, and transaction time selects what the graph knew at that moment."""
 
     graph = make_graph()
     populate(graph)
@@ -271,7 +271,7 @@ def test_bitemporal_queries_separate_truth_from_knowledge() -> None:
 
 
 def test_repeated_triplet_merges_provenance_without_duplicating() -> None:
-    """Re-asserting an on-record triplet adds evidence to the same fact."""
+    """If a triplet is already on record, a second assertion adds its episode as evidence to the same fact."""
 
     graph = make_graph()
     first = graph.add_episode(
@@ -318,7 +318,7 @@ def test_repeated_triplet_merges_provenance_without_duplicating() -> None:
 
 
 def test_learned_ontology_keeps_every_fact_active() -> None:
-    """Without declared cardinality nothing is invalidated automatically."""
+    """Without a declared cardinality, the graph does not invalidate a fact automatically."""
 
     graph = make_graph(ontology=Ontology.learned())
     episode = graph.add_episode(
@@ -370,7 +370,7 @@ def test_entity_summaries_keep_every_revision() -> None:
 
 
 def test_episodes_anchor_provenance_in_both_directions() -> None:
-    """Episodes mention entities and are cited by the facts they produced."""
+    """An episode mentions entities, and the facts that the episode produced cite it as their source."""
 
     graph = make_graph()
     populate(graph)
@@ -398,7 +398,7 @@ def test_episodes_anchor_provenance_in_both_directions() -> None:
 
 
 def test_time_order_rules_are_explicit() -> None:
-    """Naive, reversed, and out-of-order timestamps are rejected."""
+    """The graph rejects naive, reversed, and out-of-order timestamps."""
 
     graph = make_graph()
     episode = graph.add_episode(
@@ -465,7 +465,7 @@ def test_time_order_rules_are_explicit() -> None:
 
 
 def test_wrong_block_kinds_are_refused() -> None:
-    """Structural roles check the application-defined block type."""
+    """The graph checks the application-defined block type of each block that it uses as an episode or a fact."""
 
     graph = make_graph()
     alice = graph.resolve_entity("Alice", entity_type="person")
@@ -523,7 +523,7 @@ def test_communities_group_the_entities_a_slice_connects() -> None:
 
 
 def test_communities_follow_the_slice_they_are_built_from() -> None:
-    """Rebuilding at an earlier time yields the earlier grouping."""
+    """A community build at an earlier time gives the communities of that earlier time."""
 
     graph = make_graph()
     populate(graph)
@@ -542,7 +542,7 @@ def test_communities_follow_the_slice_they_are_built_from() -> None:
 
 
 def test_hybrid_search_fuses_its_retrievers() -> None:
-    """Keyword, similarity, and graph rankings combine into one order."""
+    """The search combines the results of the keyword, similarity, and graph retrievers into one order."""
 
     graph = make_graph()
     populate(graph)
@@ -574,11 +574,14 @@ def test_hybrid_search_fuses_its_retrievers() -> None:
 
 
 def test_search_ranking_never_depends_on_block_ids() -> None:
-    """Two identical graphs rank identically despite fresh block ids.
+    """The search gives the same order and scores for 2 identical graphs, although their block ids are different.
 
-    Ranking ties must break on fact content. Falling back on `MemoryBlock.id`
-    would move a fact's rank inside a retriever, change its reciprocal-rank
-    contribution, and make both the scores and the order differ run to run.
+    - **Ties use fact content.** The search breaks a tie between equal ranks on
+      the content of the fact.
+    - **Block ids change on each run.** `MemoryBlock.id` is a new value on each
+      run. If a tie break uses it, the rank of a fact inside a retriever
+      changes. Its reciprocal-rank contribution then changes too, so the scores
+      and the order are different from run to run.
     """
 
     runs = []
@@ -621,7 +624,7 @@ def test_search_filters_restrict_the_candidate_set() -> None:
 
 
 def test_graph_partitions_stay_isolated() -> None:
-    """Two roots behave like two Graphiti group ids."""
+    """Each graph root acts like a Graphiti group id, so graphs under different roots do not share entities or facts."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend, principal="test")
@@ -661,7 +664,7 @@ def test_graph_partitions_stay_isolated() -> None:
 
 
 def test_structures_reopen_instead_of_duplicating() -> None:
-    """Rebuilding the structure bundle reuses the existing tier anchors."""
+    """A second `GraphitiStructures.create` call on the same handle reuses the tier anchors that the first call made."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend, principal="test")
@@ -713,7 +716,7 @@ def test_agent_learns_and_answers_only_through_tools() -> None:
 
 
 def test_agent_rejects_unknown_tools() -> None:
-    """The tool boundary validates names before touching memory."""
+    """The tool boundary rejects an unknown tool name or an unknown argument before it uses memory."""
 
     tools = TemporalGraphTools(make_graph())
     agent = TemporalGraphAgent(name="test-agent", tools=tools)
@@ -726,7 +729,7 @@ def test_agent_rejects_unknown_tools() -> None:
 
 
 def test_demo_runs_as_a_module() -> None:
-    """The lamp is runnable from the repository root."""
+    """The demo runs as a module from the repository root."""
 
     result = subprocess.run(
         [sys.executable, "-m", "examples.lamps.graphiti.demo"],

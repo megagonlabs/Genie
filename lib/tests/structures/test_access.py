@@ -1,4 +1,4 @@
-"""Tests for shared structure access protocols."""
+"""Tests for the access protocols that the structure facades share."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from genie.structures import (
 
 
 def test_memory_implements_shared_structure_access_protocols() -> None:
-    """The trusted Memory API satisfies every shared access protocol."""
+    """The trusted `Memory` API satisfies every shared access protocol."""
 
     memory = Memory()
 
@@ -31,7 +31,7 @@ def test_memory_implements_shared_structure_access_protocols() -> None:
 
 
 def test_memory_handle_implements_shared_structure_access_protocols() -> None:
-    """A scoped `MemoryHandle` can be passed to the same structure facades."""
+    """A scoped `MemoryHandle` satisfies every shared access protocol, so the structure facades accept it too."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

@@ -27,7 +27,7 @@ from genie.structures import (
 
 
 def test_key_binding_uses_a_stable_namespaced_address() -> None:
-    """Key bindings reference a block without copying its value."""
+    """A `KeyBinding` refers to a block by id and does not copy its value."""
 
     address = MemoryAddress(namespace=("users", "alice"), key="language")
     binding = KeyBinding(
@@ -58,14 +58,14 @@ def test_memory_address_rejects_invalid_names(
     key: object,
     error: type[Exception],
 ) -> None:
-    """Namespace segments and keys must be non-empty strings."""
+    """`MemoryAddress` accepts only non-empty strings as namespace segments and keys."""
 
     with pytest.raises(error):
         MemoryAddress(namespace=namespace, key=key)  # type: ignore[arg-type]
 
 
 def test_log_entry_accepts_non_negative_integer_sequences() -> None:
-    """A log position is stable, integral, and may start at zero."""
+    """A `LogEntry` position is a stable integer that can start at 0."""
 
     assert LogEntry(log_id="conversation", sequence=0, block_id="mem_event").sequence == 0
 
@@ -109,7 +109,7 @@ def test_validity_interval_normalizes_aware_times_to_utc() -> None:
 
 
 def test_validity_interval_rejects_naive_or_reversed_bounds() -> None:
-    """Invalid temporal boundaries fail when the record is created."""
+    """The `ValidityInterval` constructor rejects a naive start and an end that is not later than the start."""
 
     with pytest.raises(ValueError, match="timezone-aware"):
         ValidityInterval(valid_at=datetime(2026, 1, 1))  # noqa: DTZ001 - invalid input
@@ -149,7 +149,7 @@ def test_temporal_entry_supports_event_time_validity_or_both() -> None:
 
 
 def test_temporal_item_requires_matching_block_id() -> None:
-    """Resolved temporal membership cannot be paired with another block."""
+    """A `TemporalItem` cannot pair an entry with a block that has a different id."""
 
     entry = TemporalEntry(
         "timeline",
@@ -167,7 +167,7 @@ def test_temporal_item_requires_matching_block_id() -> None:
 
 
 def test_graph_path_validates_forward_and_reverse_traversal() -> None:
-    """A graph path may follow directed links in either traversal direction."""
+    """A graph path can follow each directed link forward or in reverse."""
 
     first = MemoryLink(
         id="link_first",
@@ -192,7 +192,7 @@ def test_graph_path_validates_forward_and_reverse_traversal() -> None:
 
 
 def test_graph_path_rejects_broken_paths() -> None:
-    """Every path link must connect its neighboring block ids."""
+    """`GraphPath` rejects a path with the wrong link count, no block ids, or a link that does not connect its 2 adjacent block ids."""
 
     link = MemoryLink(
         id="link_unrelated",
@@ -210,7 +210,7 @@ def test_graph_path_rejects_broken_paths() -> None:
 
 
 def test_graph_neighbor_validates_direction_and_endpoint() -> None:
-    """A resolved neighbor must match one endpoint and a valid direction."""
+    """`GraphNeighbor` rejects an invalid direction and a block that is not the link endpoint for that direction."""
 
     source = MemoryBlock(type="node", value="source", id="mem_source")
     target = MemoryBlock(type="node", value="target", id="mem_target")
@@ -289,7 +289,7 @@ def test_graph_neighbor_validates_direction_and_endpoint() -> None:
 def test_structural_records_reject_wrong_component_types(
     record: Callable[[], object],
 ) -> None:
-    """Resolved records fail early when nested components have the wrong type."""
+    """Structural records raise `TypeError` at construction when a nested component has the wrong type."""
 
     with pytest.raises(TypeError):
         record()
@@ -308,7 +308,7 @@ def test_revision_entry_has_a_separate_positive_revision_number() -> None:
 
 
 def test_revision_item_requires_matching_block_id() -> None:
-    """Resolved revision membership cannot be paired with another block."""
+    """A `RevisionItem` cannot pair an entry with a block that has a different id."""
 
     entry = RevisionEntry(record_id="favorite_color", revision=1, block_id="mem_blue")
     block = MemoryBlock(type="revision", value="blue", id="mem_blue")

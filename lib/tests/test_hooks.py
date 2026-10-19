@@ -56,7 +56,7 @@ from genie.structures import (
 
 
 def test_default_hook_is_a_complete_noop_extension() -> None:
-    """The base hook can observe every operation family without changing behavior."""
+    """The base `MemoryHook` can observe every family of operations and does not change their behavior."""
 
     memory = Memory(hooks=[MemoryHook()])
     root = memory.put(type="collection", value="root")
@@ -117,7 +117,7 @@ def test_hooks_can_transform_and_observe_blocks() -> None:
 
 
 def test_before_put_hook_cannot_change_parent_after_authorization() -> None:
-    """Put hooks cannot reparent a block after scope and policy checks."""
+    """A put hook cannot change the parent of a block after the scope and policy checks."""
 
     class ReparentHook(MemoryHook):
         """Hook that tries to move new blocks to another parent."""
@@ -175,10 +175,10 @@ def test_before_put_hook_cannot_change_protected_block_fields(field: str, value:
 
 
 def test_before_put_hook_may_change_value_metadata_content_type_and_policy() -> None:
-    """Put hooks keep every field their contract allows them to change."""
+    """A put hook can change `value`, `metadata`, `content_type`, and `policy`, and `Memory` stores those changes."""
 
     class ReplaceHook(MemoryHook):
-        """Hook that replaces every field a put hook may change."""
+        """Hook that replaces every field that a put hook can change."""
 
         def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
             """Store a decimal payload with new metadata and a public policy."""
@@ -207,7 +207,7 @@ def test_before_put_hook_may_change_value_metadata_content_type_and_policy() -> 
 
 
 def test_before_put_hook_policy_must_be_a_memory_policy() -> None:
-    """A hook-chosen policy is checked before the block is stored."""
+    """`Memory` checks a policy that a hook sets before it stores the block."""
 
     class BadPolicyHook(MemoryHook):
         """Hook that attaches a value that is not a policy."""
@@ -226,7 +226,7 @@ def test_before_put_hook_policy_must_be_a_memory_policy() -> None:
 
 
 def test_before_put_hook_may_set_block_policy() -> None:
-    """Create-time hooks choose a policy the writing handle cannot pass itself."""
+    """A put hook can set a policy that the handle which writes the block cannot pass itself."""
 
     class GrantHook(MemoryHook):
         """Grant an orchestrator access to blocks written inside its scope."""
@@ -266,13 +266,13 @@ def test_before_put_hook_may_set_block_policy() -> None:
 
 
 def test_update_hooks_cannot_change_block_policy() -> None:
-    """A policy is chosen when a block is created and stays stable afterwards."""
+    """A block keeps the policy that it gets at creation, and an update hook cannot change it."""
 
     class WidenHook(MemoryHook):
-        """Attempt to make an existing block public during an update."""
+        """Attempt to make a stored block public during an update."""
 
         def before_update(self, context: HookContext, current, proposed):
-            """Return a replacement block carrying a wider policy."""
+            """Return a replacement block that has a wider policy."""
 
             return proposed.with_updates(policy=MemoryPolicy.public())
 
@@ -288,10 +288,10 @@ def test_update_hooks_cannot_change_block_policy() -> None:
 
 
 def test_transforming_hooks_cannot_store_nonportable_metadata() -> None:
-    """Hook-produced metadata still follows the public strict JSON contract."""
+    """Metadata that a hook returns also follows the strict JSON contract of the public API."""
 
     class InvalidMetadataHook(MemoryHook):
-        """Hook that returns a value forbidden by the metadata contract."""
+        """Hook that returns a value that the metadata contract does not allow."""
 
         def before_put(
             self,
@@ -323,7 +323,7 @@ def test_search_hooks_can_rewrite_and_trim_results() -> None:
             context: HookContext,
             query: MemoryQuery,
         ) -> MemoryQuery:
-            """Replace the incoming text query with a known needle."""
+            """Replace the text of the caller query with `"needle"`."""
 
             self.calls.append(("before", query.text))
             return MemoryQuery(text="needle", limit=query.limit)
@@ -351,7 +351,7 @@ def test_search_hooks_can_rewrite_and_trim_results() -> None:
 
 
 def test_before_search_hook_cannot_widen_query_after_authorization() -> None:
-    """Search hooks cannot switch a query to an unauthorized root after checks."""
+    """A search hook cannot move a query to an unauthorized root after the access checks."""
 
     class EscalatingHook(MemoryHook):
         """Hook that tries to redirect search into a private subtree."""
@@ -404,7 +404,7 @@ class RewritingSearchHook(MemoryHook):
         self.outcomes: list[HookOutcome] = []
 
     def before_search(self, context: HookContext, query: MemoryQuery) -> MemoryQuery:
-        """Return the query built by the current rewrite."""
+        """Return the query that the current rewrite builds."""
 
         return self.rewrite(query)
 
@@ -421,13 +421,13 @@ class RewritingSearchHook(MemoryHook):
 
 
 def _rewrite_to_global(query: MemoryQuery) -> MemoryQuery:
-    """Return a global query with the same text, like a query-expansion hook."""
+    """Return a global query with the same text, as a query-expansion hook does."""
 
     return MemoryQuery(text=query.text, scope=Scope.GLOBAL, limit=query.limit)
 
 
 def test_before_search_hook_cannot_widen_handle_search() -> None:
-    """A rewritten handle search is checked against the handle's limits again."""
+    """The handle checks a rewritten search against its limits again."""
 
     rewriting = RewritingSearchHook()
     denials = RecordingDenialHook()
@@ -466,7 +466,7 @@ def test_before_search_hook_cannot_widen_handle_search() -> None:
 
 
 def test_handle_search_filters_results_by_the_rewritten_scope() -> None:
-    """A rewrite the handle allows returns what the same direct search returns."""
+    """A rewrite that the handle allows returns the same results as the equivalent direct search."""
 
     rewriting = RewritingSearchHook()
     memory = Memory(hooks=[rewriting])
@@ -504,7 +504,7 @@ def test_handle_search_filters_results_by_the_rewritten_scope() -> None:
 
 
 def test_after_search_hook_results_are_rechecked_for_policy_and_scope() -> None:
-    """Search results returned by hooks stay inside policy and query scope."""
+    """`Memory` checks search results from hooks again, so they stay inside the policy and the query scope."""
 
     class InjectingHook(MemoryHook):
         """Hook that tries to add unreadable and out-of-scope results."""
@@ -518,7 +518,7 @@ def test_after_search_hook_results_are_rechecked_for_policy_and_scope() -> None:
             query: MemoryQuery,
             results: list[SearchResult],
         ) -> list[SearchResult]:
-            """Append injected results after normal policy filtering."""
+            """Append injected results after the normal policy filter."""
 
             return [*results, *self.injected]
 
@@ -555,7 +555,7 @@ def test_after_search_hook_results_are_rechecked_for_policy_and_scope() -> None:
 
 
 def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
-    """Hooks observe missing gets and every deleted subtree block."""
+    """Hooks observe a `get` for a block that does not exist and every block of a deleted subtree."""
 
     class LifecycleHook(MemoryHook):
         """Hook that records get and delete events."""
@@ -572,7 +572,7 @@ def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
             self.before_get_calls.append(block_id)
 
         def after_get(self, context: HookContext, block: Any) -> None:
-            """Record looked-up block ids or missing values."""
+            """Record the id of each found block, or `None` for a block that does not exist."""
 
             self.after_get_calls.append(block.id if block is not None else None)
 
@@ -601,7 +601,7 @@ def test_get_and_delete_hooks_observe_missing_and_deleted_blocks() -> None:
 
 
 def test_hook_registry_runs_hooks_in_registration_order() -> None:
-    """`HookRegistry` applies transformations in deterministic order."""
+    """`HookRegistry` applies transformations in a deterministic order, which is the order of registration."""
 
     class OrderedHook(MemoryHook):
         """Hook that appends a marker to block metadata."""
@@ -629,7 +629,7 @@ def test_hook_registry_runs_hooks_in_registration_order() -> None:
 
 
 def test_hook_registry_dispatch_requires_an_active_explicit_context() -> None:
-    """Registry dispatch never creates a compatibility operation implicitly."""
+    """Registry dispatch needs an active `HookRegistry.operation` context and never creates a compatibility operation implicitly."""
 
     registry = HookRegistry()
     block = MemoryBlock(type="note", value="encoded")
@@ -645,7 +645,7 @@ def test_hook_registry_dispatch_requires_an_active_explicit_context() -> None:
 
 
 def test_transforming_hooks_reject_values_outside_their_contracts() -> None:
-    """Transform callbacks fail clearly instead of passing invalid values onward."""
+    """Transform callbacks that return invalid values raise a clear `TypeError` and do not send the values to the next step."""
 
     class BadPutHook(MemoryHook):
         """Return the wrong type from a block transformation."""
@@ -671,7 +671,7 @@ def test_transforming_hooks_reject_values_outside_their_contracts() -> None:
         Memory(hooks=[BadSearchHook()]).search()
 
     class BadSearchElementHook(MemoryHook):
-        """Return a list containing a value outside the result contract."""
+        """Return a list that contains a value outside the result contract."""
 
         def after_search(
             self,
@@ -686,7 +686,7 @@ def test_transforming_hooks_reject_values_outside_their_contracts() -> None:
 
 
 def test_recursive_hook_put_skips_only_the_active_callback() -> None:
-    """A hook-generated PUT completes without invoking the same callback again."""
+    """A PUT that a hook starts completes, and the registry does not call the active callback again."""
 
     class AuditHook(MemoryHook):
         """Write one audit block for an outer PUT."""
@@ -696,7 +696,7 @@ def test_recursive_hook_put_skips_only_the_active_callback() -> None:
             self.contexts: list[HookContext] = []
 
         def after_put(self, context: HookContext, block) -> None:
-            """Record context and create an audit block."""
+            """Record the context and create an audit block."""
 
             self.contexts.append(context)
             assert self.memory is not None
@@ -746,7 +746,7 @@ def test_alternating_put_update_recursion_stops_at_active_callback() -> None:
             self.calls: list[tuple[HookOperation, int]] = []
 
         def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-            """Turn every observed PUT into an UPDATE while enabled."""
+            """Run an UPDATE for every observed PUT when `enabled` is true."""
 
             if not self.enabled:
                 return
@@ -761,7 +761,7 @@ def test_alternating_put_update_recursion_stops_at_active_callback() -> None:
             previous: MemoryBlock,
             stored: MemoryBlock,
         ) -> None:
-            """Turn the nested UPDATE back into a PUT."""
+            """Run a PUT for the nested UPDATE."""
 
             self.calls.append((context.operation, context.depth))
             assert self.memory is not None
@@ -790,7 +790,7 @@ def test_hook_suppression_is_scoped_and_resets_after_exit() -> None:
     """Trusted code can suppress one hook or a complete registry temporarily."""
 
     class CountingHook(MemoryHook):
-        """Count stored blocks observed after commit."""
+        """Count the stored blocks that the hook observes after commit."""
 
         def __init__(self) -> None:
             self.calls = 0
@@ -824,7 +824,7 @@ class RecordingRegistryHook(MemoryHook):
         self.contexts: list[HookContext] = []
 
     def on_suppressed(self, context: HookContext, suppression: Suppression) -> None:
-        """Record a window this hook was told about."""
+        """Record a window that the registry announces to this hook."""
 
         self.windows.append((context, suppression))
 
@@ -841,7 +841,7 @@ class RecordingRegistryHook(MemoryHook):
 
 
 def test_registry_lists_its_hooks_and_registers_each_one_once() -> None:
-    """Registration is by identity, so one hook cannot report an operation twice."""
+    """The registry registers a hook by identity, so one hook cannot report an operation twice."""
 
     first = RecordingRegistryHook()
     second = RecordingRegistryHook()
@@ -864,7 +864,7 @@ def test_registry_lists_its_hooks_and_registers_each_one_once() -> None:
 
 
 def test_unregistering_a_hook_stops_its_dispatch() -> None:
-    """A removed hook observes nothing further and cannot be removed twice."""
+    """After `unregister`, a hook observes nothing more, and a second `unregister` of it raises `ValueError`."""
 
     first = RecordingRegistryHook()
     second = RecordingRegistryHook()
@@ -882,10 +882,10 @@ def test_unregistering_a_hook_stops_its_dispatch() -> None:
 
 
 def test_registry_changes_take_effect_on_the_next_event() -> None:
-    """A callback that reshapes the registry cannot cut short the event it is in."""
+    """A callback that changes the registry does not stop the current event, and the change applies from the next event."""
 
     class CountingPutHook(MemoryHook):
-        """Count the stored blocks this hook is told about."""
+        """Count the stored blocks that the registry reports to this hook."""
 
         def __init__(self) -> None:
             self.calls = 0
@@ -896,14 +896,14 @@ def test_registry_changes_take_effect_on_the_next_event() -> None:
             self.calls += 1
 
     class DetachingHook(MemoryHook):
-        """Unregister another hook from inside a dispatching callback."""
+        """Unregister another hook from inside a callback during dispatch."""
 
         def __init__(self, registry: HookRegistry, target: MemoryHook) -> None:
             self.registry = registry
             self.target = target
 
         def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-            """Remove the target hook while the event is still dispatching."""
+            """Remove the target hook during the dispatch of the current event."""
 
             if self.target in self.registry.hooks:
                 self.registry.unregister(self.target)
@@ -922,7 +922,7 @@ def test_registry_changes_take_effect_on_the_next_event() -> None:
 
 
 def test_a_mandatory_hook_cannot_be_detached_or_suppressed() -> None:
-    """A mandatory hook survives unregistration and every suppression window."""
+    """The registry rejects `unregister` and `suppress` for a mandatory hook, and a registry-wide window does not silence it."""
 
     audit = RecordingRegistryHook()
     ordinary = RecordingRegistryHook()
@@ -950,7 +950,7 @@ def test_a_mandatory_hook_cannot_be_detached_or_suppressed() -> None:
 
 
 def test_a_memory_keeps_the_registry_it_dispatches_through() -> None:
-    """Auditing cannot be detached by replacing the registry that reports it."""
+    """Code cannot replace the registry of a `Memory`, so it cannot detach the audit hooks."""
 
     audit = RecordingRegistryHook()
     registry = HookRegistry()
@@ -970,7 +970,7 @@ def test_a_memory_keeps_the_registry_it_dispatches_through() -> None:
 
 
 def test_suppressing_selected_hooks_announces_a_bounded_window() -> None:
-    """A suppressed hook is told the window opens and observes it close."""
+    """The registry tells a suppressed hook that the window opens, and the hook observes the window close."""
 
     silenced = RecordingRegistryHook()
     observer = RecordingRegistryHook()
@@ -999,7 +999,7 @@ def test_suppressing_selected_hooks_announces_a_bounded_window() -> None:
 
 
 def test_suppressing_the_registry_names_what_goes_quiet() -> None:
-    """A registry-wide window names the silenced hooks and the ones left."""
+    """A window for the full registry names the silenced hooks and the mandatory hooks that stay active."""
 
     audit = RecordingRegistryHook()
     first = RecordingRegistryHook()
@@ -1026,17 +1026,17 @@ def test_suppressing_the_registry_names_what_goes_quiet() -> None:
 
 
 def test_a_suppression_no_hook_can_record_does_not_happen() -> None:
-    """A failing announcement leaves dispatch enabled and the window unopened."""
+    """If the announcement of a window fails, dispatch stays enabled and the window does not open."""
 
     class FailingSuppressionHook(MemoryHook):
-        """Sink that cannot record the one event it exists to record."""
+        """Sink that fails on the only event that it exists to record."""
 
         def on_suppressed(
             self,
             context: HookContext,
             suppression: Suppression,
         ) -> None:
-            """Fail while the window is being announced."""
+            """Fail during the announcement of the window."""
 
             raise RuntimeError("audit sink down")
 
@@ -1061,10 +1061,10 @@ def test_a_suppression_no_hook_can_record_does_not_happen() -> None:
 def test_a_fail_open_sink_cannot_block_a_suppression(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A best-effort sink's outage is contained when a window opens."""
+    """If a fail-open sink fails when a window opens, the registry logs the failure and the window opens."""
 
     class FlakySuppressionHook(MemoryHook):
-        """Best-effort sink that must not break callers when it fails."""
+        """Best-effort sink whose failures do not break callers."""
 
         fail_open = True
 
@@ -1073,7 +1073,7 @@ def test_a_fail_open_sink_cannot_block_a_suppression(
             context: HookContext,
             suppression: Suppression,
         ) -> None:
-            """Fail without blocking the window."""
+            """Fail, but do not block the window."""
 
             raise RuntimeError("audit sink down")
 
@@ -1091,7 +1091,7 @@ def test_a_fail_open_sink_cannot_block_a_suppression(
 
 
 def test_only_registered_hooks_can_be_suppressed() -> None:
-    """Suppressing a hook the registry never dispatches is refused."""
+    """The registry rejects the suppression of a hook that it does not dispatch."""
 
     registered = RecordingRegistryHook()
     stranger = RecordingRegistryHook()
@@ -1104,7 +1104,7 @@ def test_only_registered_hooks_can_be_suppressed() -> None:
 
 
 def test_suppression_windows_are_opened_only_by_suppress() -> None:
-    """The suppression operation cannot be forged through the generic context."""
+    """Code cannot forge the suppression operation through the generic `operation` context."""
 
     registry = HookRegistry([RecordingRegistryHook()])
 
@@ -1114,7 +1114,7 @@ def test_suppression_windows_are_opened_only_by_suppress() -> None:
 
 
 def test_hook_depth_limit_and_exception_cleanup() -> None:
-    """Depth limits fail clearly and context always resets after exceptions."""
+    """The depth limit raises a clear error, and the context always resets after an exception."""
 
     class DeepHook(MemoryHook):
         """Attempt operations beyond the hook-originated depth limit."""
@@ -1161,7 +1161,7 @@ def test_hook_depth_limit_and_exception_cleanup() -> None:
 
 
 def test_max_depth_rejects_an_alternating_memory_operation_before_it_runs() -> None:
-    """The depth guard stops a cross-operation chain before backend mutation."""
+    """The depth guard stops a cross-operation chain before the chain changes the backend."""
 
     class DepthHook(MemoryHook):
         """Create a PUT-to-UPDATE-to-PUT chain."""
@@ -1186,7 +1186,7 @@ def test_max_depth_rejects_an_alternating_memory_operation_before_it_runs() -> N
             previous: MemoryBlock,
             stored: MemoryBlock,
         ) -> None:
-            """Attempt a depth-two PUT that must be rejected."""
+            """Attempt a depth-two PUT that the depth guard rejects."""
 
             assert self.memory is not None
             self.memory.put(type="forbidden", value="must not persist")
@@ -1210,7 +1210,7 @@ def test_max_depth_rejects_an_alternating_memory_operation_before_it_runs() -> N
 
 @pytest.mark.parametrize("max_depth", [True, 1.5, "1"])
 def test_hook_registry_rejects_non_integer_max_depth(max_depth: object) -> None:
-    """The depth limit accepts integers but not bools or coercible values."""
+    """`max_depth` accepts integers and rejects bools and other values that can convert to an integer."""
 
     with pytest.raises(TypeError, match="max_depth must be an integer"):
         HookRegistry(max_depth=max_depth)  # type: ignore[arg-type]
@@ -1227,7 +1227,7 @@ def test_hook_context_is_isolated_across_threads() -> None:
     """Concurrent callers receive independent operation ids and callbacks."""
 
     class ContextHook(MemoryHook):
-        """Collect top-level PUT contexts safely."""
+        """Collect top-level PUT contexts under a lock."""
 
         def __init__(self) -> None:
             self.contexts: list[HookContext] = []
@@ -1252,7 +1252,7 @@ def test_hook_context_is_isolated_across_threads() -> None:
 
 
 def test_set_and_update_hooks_transform_and_observe_committed_blocks() -> None:
-    """Both block update forms share typed callbacks and distinct operations."""
+    """`set` and `update` use the same typed update callbacks but report different operations."""
 
     class UpdateHook(MemoryHook):
         """Annotate updates and collect causal contexts."""
@@ -1262,7 +1262,7 @@ def test_set_and_update_hooks_transform_and_observe_committed_blocks() -> None:
             self.after: list[HookContext] = []
 
         def before_update(self, context: HookContext, current, proposed):
-            """Add metadata without changing protected block fields."""
+            """Add metadata and do not change protected block fields."""
 
             self.before.append(context)
             return proposed.with_updates(metadata={**proposed.metadata, "hooked": True})
@@ -1290,7 +1290,7 @@ def test_set_and_update_hooks_transform_and_observe_committed_blocks() -> None:
 
 
 def test_update_hooks_cannot_change_protected_block_fields() -> None:
-    """Update hooks cannot reparent or rewrite block identity and history."""
+    """An update hook cannot change the parent, identity, or history of a block."""
 
     class ReparentHook(MemoryHook):
         """Attempt an invalid ownership change."""
@@ -1312,13 +1312,13 @@ def test_update_hooks_cannot_change_protected_block_fields() -> None:
 
 
 def test_update_link_hooks_cannot_change_topology() -> None:
-    """Link update hooks may change metadata but cannot retarget a relationship."""
+    """A link update hook can change metadata but cannot change the endpoints of a link."""
 
     class RetargetHook(MemoryHook):
-        """Attempt to change a protected link endpoint during metadata update."""
+        """Attempt to change a protected link endpoint during a metadata update."""
 
         def before_update_link(self, context, current, proposed):
-            """Return a link whose target no longer matches stored topology."""
+            """Return a link whose target does not match the stored topology."""
 
             return type(proposed)(
                 source_id=proposed.source_id,
@@ -1341,7 +1341,7 @@ def test_update_link_hooks_cannot_change_topology() -> None:
 
 
 def test_link_hooks_cover_regular_acyclic_mount_and_update_operations() -> None:
-    """All link mutation paths share callbacks without losing operation type."""
+    """All link mutation paths use the same callbacks and keep their own operation type."""
 
     class LinkHook(MemoryHook):
         """Annotate new links and record link operation contexts."""
@@ -1405,7 +1405,7 @@ def test_link_hooks_cover_regular_acyclic_mount_and_update_operations() -> None:
 
 
 def test_structure_hooks_cover_keys_logs_and_temporal_membership() -> None:
-    """Atomic facade writes emit one before and after structural event."""
+    """Each atomic facade write emits one structural event before and one after the change."""
 
     class StructureHook(MemoryHook):
         """Collect structural events and their contexts."""
@@ -1555,7 +1555,7 @@ def test_after_hooks_run_only_after_successful_mutations() -> None:
 
 
 class RecordingSinkHook(MemoryHook):
-    """Hook that records the committed work and reads reported to it."""
+    """Hook that records the committed work and the reads that the registry reports to it."""
 
     def __init__(self) -> None:
         self.stored: list[str] = []
@@ -1579,26 +1579,26 @@ class RecordingSinkHook(MemoryHook):
 
 
 class BrokenSinkHook(MemoryHook):
-    """Hook whose observing callbacks fail like an unreachable audit sink."""
+    """Hook whose observer callbacks fail as an unreachable audit sink does."""
 
     def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-        """Fail after the block is already stored."""
+        """Fail after `Memory` stores the block."""
 
         raise RuntimeError("audit sink down")
 
     def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
-        """Fail after the block is already deleted."""
+        """Fail after `Memory` deletes the block."""
 
         raise RuntimeError("audit sink down")
 
     def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
-        """Fail after the read has already disclosed its blocks."""
+        """Fail after the read discloses its blocks."""
 
         raise RuntimeError("audit sink down")
 
 
 def test_recursive_delete_records_every_block_when_one_sink_fails() -> None:
-    """A sink that drops out mid-subtree costs no block and no hook its record."""
+    """If a sink fails during a subtree delete, `Memory` still deletes every block, and every hook still records every block."""
 
     class FlakySinkHook(MemoryHook):
         """Record every deletion but fail on one of them."""
@@ -1631,7 +1631,7 @@ def test_recursive_delete_records_every_block_when_one_sink_fails() -> None:
 
 
 def test_after_hook_failure_does_not_skip_the_hooks_behind_it() -> None:
-    """One failing observer cannot cost the hooks behind it their record."""
+    """If one observer fails, the hooks after it in the registry still record the event."""
 
     first = RecordingSinkHook()
     second = RecordingSinkHook()
@@ -1649,7 +1649,7 @@ def test_after_hook_failure_does_not_skip_the_hooks_behind_it() -> None:
 
 
 def test_after_hook_failures_are_reported_together() -> None:
-    """Every collected observer failure surfaces instead of hiding the rest."""
+    """The registry raises the first observer failure and adds every other failure to it as a note."""
 
     class NamedFailingHook(MemoryHook):
         """Fail with an identifiable message."""
@@ -1658,7 +1658,7 @@ def test_after_hook_failures_are_reported_together() -> None:
             self.name = name
 
         def after_update(self, context: HookContext, previous, stored) -> None:
-            """Fail so the registry must report this hook."""
+            """Fail, so that the registry reports this hook."""
 
             raise RuntimeError(f"sink {self.name} down")
 
@@ -1680,20 +1680,20 @@ def test_transforming_callbacks_stop_at_the_first_failure() -> None:
     """A failed transform never passes an unreviewed value to the next hook."""
 
     class BrokenTransformHook(MemoryHook):
-        """Fail while transforming a proposed block and search results."""
+        """Fail in the transform of a proposed block and of search results."""
 
         def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
-            """Fail before the block is authorized to be stored."""
+            """Fail before `Memory` authorizes the block for storage."""
 
             raise RuntimeError("transform down")
 
         def after_search(self, context: HookContext, query, results) -> list[SearchResult]:
-            """Fail before results can be redacted."""
+            """Fail before the hook can redact the results."""
 
             raise RuntimeError("transform down")
 
     class CountingHook(MemoryHook):
-        """Count the transforming callbacks that reach this hook."""
+        """Count the transform callbacks that reach this hook."""
 
         def __init__(self) -> None:
             self.proposed = 0
@@ -1725,10 +1725,10 @@ def test_transforming_callbacks_stop_at_the_first_failure() -> None:
 def test_fail_open_sink_failures_never_reach_the_caller(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A fail-open sink's outage is logged instead of breaking the operation."""
+    """The registry logs the failure of a fail-open sink, and the operation continues."""
 
     class FlakyAuditHook(BrokenSinkHook):
-        """Best-effort sink that must not break callers when it fails."""
+        """Best-effort sink whose failures do not break callers."""
 
         fail_open = True
 
@@ -1753,20 +1753,20 @@ def test_fail_open_sink_failures_never_reach_the_caller(
 
 
 def test_fail_open_does_not_contain_transforming_failures() -> None:
-    """A fail-open hook that fails while transforming still stops the operation."""
+    """If a fail-open hook fails in a transform callback, the operation still stops."""
 
     class FlakyTransformHook(MemoryHook):
-        """Declare fail-open while failing in transforming callbacks."""
+        """Declare fail-open and fail in the transform callbacks."""
 
         fail_open = True
 
         def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
-            """Fail while rewriting a proposed block."""
+            """Fail during the rewrite of a proposed block."""
 
             raise RuntimeError("transform down")
 
         def after_search(self, context: HookContext, query, results) -> list[SearchResult]:
-            """Fail while filtering results the caller would receive."""
+            """Fail when the hook filters the results for the caller."""
 
             raise RuntimeError("transform down")
 
@@ -1779,7 +1779,7 @@ def test_fail_open_does_not_contain_transforming_failures() -> None:
 
 
 def test_fail_open_is_decided_per_hook() -> None:
-    """Containing one sink's failure does not contain another hook's failure."""
+    """The registry contains only the failures of a fail-open hook and still raises the failure of a strict hook."""
 
     class FlakyAuditHook(BrokenSinkHook):
         """Sink whose failures stay contained."""
@@ -1787,10 +1787,10 @@ def test_fail_open_is_decided_per_hook() -> None:
         fail_open = True
 
     class StrictAuditHook(MemoryHook):
-        """Sink whose failures must still reach the caller."""
+        """Sink whose failures still reach the caller."""
 
         def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-            """Fail as a hook that has not opted out of breaking callers."""
+            """Fail as a hook that does not set `fail_open`."""
 
             raise RuntimeError("strict sink down")
 
@@ -1803,7 +1803,7 @@ def test_fail_open_is_decided_per_hook() -> None:
 
 
 class RecordingTraversalHook(MemoryHook):
-    """Hook that records every structural read reported to it."""
+    """Hook that records every structural read that the registry reports to it."""
 
     def __init__(self) -> None:
         self.before: list[Traversal] = []
@@ -1811,7 +1811,7 @@ class RecordingTraversalHook(MemoryHook):
         self.contexts: list[HookContext] = []
 
     def before_traverse(self, context: HookContext, traversal: Traversal) -> None:
-        """Record the read that is about to run."""
+        """Record the read before it runs."""
 
         self.before.append(traversal)
         self.contexts.append(context)
@@ -1858,7 +1858,7 @@ def test_traverse_hooks_cover_children_ancestors_links_and_containment() -> None
 
 
 def test_before_traverse_names_a_read_that_has_disclosed_nothing_yet() -> None:
-    """The before callback describes the read; only the after callback carries results."""
+    """The before callback describes the read, and only the after callback carries the results."""
 
     hook = RecordingTraversalHook()
     memory = Memory(hooks=[hook])
@@ -1876,7 +1876,7 @@ def test_before_traverse_names_a_read_that_has_disclosed_nothing_yet() -> None:
 
 
 def test_traverse_hooks_separate_one_block_of_mounts_from_a_subtree_scan() -> None:
-    """Mount reads name the mount relation and distinguish a scan from a listing."""
+    """Mount reads name the mount relation and use different kinds for a subtree scan and a one-block list."""
 
     hook = RecordingTraversalHook()
     memory = Memory(hooks=[hook])
@@ -1906,17 +1906,17 @@ def test_traverse_hooks_separate_one_block_of_mounts_from_a_subtree_scan() -> No
 
 
 def test_traversal_events_report_only_what_policy_disclosed() -> None:
-    """Filtered blocks are absent from the traversal rather than reported as refusals."""
+    """The traversal does not include blocks that the policy filter removes, and it does not report them as refusals."""
 
     class DenialAwareHook(RecordingTraversalHook):
-        """Record refusals alongside the reads that were allowed."""
+        """Record refusals together with the allowed reads."""
 
         def __init__(self) -> None:
             super().__init__()
             self.denials: list[HookOperation] = []
 
         def on_denied(self, context: HookContext, operation, subject_id, reason) -> None:
-            """Record the operation that was refused."""
+            """Record the operation that the policy refused."""
 
             self.denials.append(context.operation)
 
@@ -2029,7 +2029,7 @@ def test_refused_traversal_reports_no_disclosure() -> None:
 
 
 def test_subtree_walk_reports_one_traversal_per_visited_block() -> None:
-    """A facade walk over a subtree is audited as the reads it performs."""
+    """A facade walk over a subtree reports one traversal for each read that it performs."""
 
     hook = RecordingTraversalHook()
     memory = Memory(hooks=[hook])
@@ -2049,7 +2049,7 @@ def test_subtree_walk_reports_one_traversal_per_visited_block() -> None:
 
 
 def test_traversal_through_a_handle_reports_its_sandbox() -> None:
-    """Reads performed through a handle carry the handle's boundary labels."""
+    """A read through a handle carries the boundary labels of the handle."""
 
     hook = RecordingTraversalHook()
     memory = Memory(hooks=[hook])
@@ -2113,10 +2113,10 @@ def test_operation_end_reports_success_for_committed_operations() -> None:
 
 
 def test_operation_end_shares_the_operation_id_with_paired_callbacks() -> None:
-    """The terminal event carries the same context as before and after callbacks."""
+    """The terminal event carries the same context as the before and after callbacks."""
 
     class PairedHook(MemoryHook):
-        """Record operation ids seen by each put callback."""
+        """Record the operation id that each put callback sees."""
 
         def __init__(self) -> None:
             self.ids: list[str] = []
@@ -2211,23 +2211,23 @@ def test_operation_end_separates_refusals_from_other_failures() -> None:
 
 
 def test_operation_end_always_releases_state_stashed_by_a_before_callback() -> None:
-    """A failing operation still reaches the terminal callback, so state cannot leak."""
+    """The terminal callback also runs after a failed operation, so a hook can always release the state that its before callback stored."""
 
     class TimingHook(MemoryHook):
-        """Track in-flight operations between the before and terminal callbacks."""
+        """Track each operation from its before callback to its terminal callback."""
 
         def __init__(self) -> None:
             self.in_flight: dict[str, HookOperation] = {}
             self.completed = 0
 
         def before_put(self, context: HookContext, block):
-            """Start tracking one operation."""
+            """Start to track one operation."""
 
             self.in_flight[context.operation_id] = context.operation
             return block
 
         def on_operation_end(self, context: HookContext, outcome, error) -> None:
-            """Stop tracking the operation regardless of outcome."""
+            """Remove the operation from the tracked set for every outcome."""
 
             self.in_flight.pop(context.operation_id, None)
             self.completed += 1
@@ -2236,7 +2236,7 @@ def test_operation_end_always_releases_state_stashed_by_a_before_callback() -> N
         """Reject every proposed block."""
 
         def before_put(self, context: HookContext, block):
-            """Fail after the tracking hook has already started."""
+            """Fail after `TimingHook` starts to track the operation."""
 
             raise RuntimeError("veto")
 
@@ -2251,7 +2251,7 @@ def test_operation_end_always_releases_state_stashed_by_a_before_callback() -> N
 
 
 def test_operation_end_failure_does_not_mask_the_operation_error() -> None:
-    """A failing terminal hook cannot replace the exception leaving the operation."""
+    """If a terminal hook fails, the operation still raises its own exception, and the hook failure becomes a note."""
 
     class BrokenTerminalHook(MemoryHook):
         """Fail inside the terminal callback."""
@@ -2274,7 +2274,7 @@ def test_operation_end_failure_does_not_mask_the_operation_error() -> None:
 
 
 def test_operation_end_failure_does_not_skip_other_hooks() -> None:
-    """One unreliable terminal hook cannot cost another hook its terminal event."""
+    """If one terminal hook fails, the other hooks still get their terminal events."""
 
     class BrokenTerminalHook(MemoryHook):
         """Fail inside the terminal callback."""
@@ -2296,7 +2296,7 @@ def test_operation_end_failure_does_not_skip_other_hooks() -> None:
 
 
 def test_operation_end_reports_every_terminal_hook_failure_once() -> None:
-    """Multiple terminal failures surface together instead of hiding each other."""
+    """The registry raises the first terminal hook failure and adds the other failures to it as notes."""
 
     class NamedFailingHook(MemoryHook):
         """Fail with an identifiable message."""
@@ -2305,7 +2305,7 @@ def test_operation_end_reports_every_terminal_hook_failure_once() -> None:
             self.name = name
 
         def on_operation_end(self, context: HookContext, outcome, error) -> None:
-            """Fail so the registry must report this hook."""
+            """Fail, so that the registry reports this hook."""
 
             raise RuntimeError(f"sink {self.name} down")
 
@@ -2323,17 +2323,17 @@ def test_fail_open_contains_terminal_and_denial_failures(
     """A fail-open sink adds no note to a refusal and no error to a success."""
 
     class FlakyTerminalHook(MemoryHook):
-        """Fail in both unpaired callbacks without breaking callers."""
+        """Fail in both unpaired callbacks, but do not break callers."""
 
         fail_open = True
 
         def on_denied(self, context: HookContext, operation, subject_id, reason) -> None:
-            """Fail while reporting a refusal."""
+            """Fail during the report of a refusal."""
 
             raise RuntimeError("audit sink down")
 
         def on_operation_end(self, context: HookContext, outcome, error) -> None:
-            """Fail while reporting a terminal event."""
+            """Fail during the report of a terminal event."""
 
             raise RuntimeError("audit sink down")
 
@@ -2388,7 +2388,7 @@ def test_operation_end_respects_suppression() -> None:
 
 
 def test_operation_end_can_write_derived_records_without_recursing() -> None:
-    """A terminal callback may use memory again; its own callback is skipped."""
+    """A terminal callback can use `Memory` again, and the registry does not call that callback for the nested operation."""
 
     class AuditingHook(MemoryHook):
         """Write one audit block per caller operation."""
@@ -2434,7 +2434,7 @@ def test_operation_end_covers_structure_facade_operations() -> None:
 
 
 def test_no_terminal_event_when_an_operation_never_starts() -> None:
-    """An operation rejected by the depth guard reports no terminal event."""
+    """An operation that the depth guard rejects reports no terminal event."""
 
     class DeepHook(MemoryHook):
         """Start a nested operation beyond the configured depth."""
@@ -2465,7 +2465,7 @@ def test_no_terminal_event_when_an_operation_never_starts() -> None:
 
 
 class RecordingDenialHook(MemoryHook):
-    """Hook that records every refusal reported to it."""
+    """Hook that records every refusal that the registry reports to it."""
 
     def __init__(self) -> None:
         self.denials: list[tuple[HookOperation, str, str | None]] = []
@@ -2479,7 +2479,7 @@ class RecordingDenialHook(MemoryHook):
         subject_id: str | None,
         reason: str,
     ) -> None:
-        """Record the attempted operation, the refusing check, and the subject."""
+        """Record the attempted operation, the check that refused it, and the subject."""
 
         self.denials.append((context.operation, str(operation), subject_id))
         self.reasons.append(reason)
@@ -2487,7 +2487,7 @@ class RecordingDenialHook(MemoryHook):
 
 
 def _private_memory(hook: MemoryHook) -> tuple[Memory, Memory, MemoryBlock, MemoryBlock]:
-    """Return an owner memory, a denied memory, and two owner-private blocks."""
+    """Return an owner memory, a denied memory, and two blocks with the default `MemoryPolicy.owner_private()` policy."""
 
     owner = Memory(principal="owner")
     root = owner.put(type="root", value="root")
@@ -2503,7 +2503,7 @@ def _private_memory(hook: MemoryHook) -> tuple[Memory, Memory, MemoryBlock, Memo
 
 
 def test_on_denied_reports_the_checked_policy_operation_and_subject() -> None:
-    """Policy refusals name the operation that was checked and the block."""
+    """A policy refusal names the checked operation and the block."""
 
     hook = RecordingDenialHook()
     _owner, attacker, root, child = _private_memory(hook)
@@ -2538,7 +2538,7 @@ def test_on_denied_reports_the_checked_policy_operation_and_subject() -> None:
 
 
 def test_on_denied_names_read_for_a_principal_that_can_only_write() -> None:
-    """`set`, `update`, and `update_link` report the `read` check once `write` passes."""
+    """`set`, `update`, and `update_link` report the `read` check after the `write` check passes."""
 
     hook = RecordingDenialHook()
     owner = Memory(principal="owner")
@@ -2575,7 +2575,7 @@ def test_on_denied_names_read_for_a_principal_that_can_only_write() -> None:
 
 
 def test_on_denied_covers_calls_without_paired_callbacks() -> None:
-    """Traversal, listing, handle creation, and access checks report refusals."""
+    """Traversal calls, list calls, handle creation, and access checks report refusals."""
 
     hook = RecordingDenialHook()
     owner, attacker, root, child = _private_memory(hook)
@@ -2662,7 +2662,7 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
 
 
 def test_on_denied_reports_handle_capability_refusals() -> None:
-    """Disabled handle capabilities report the capability rather than a policy."""
+    """A disabled handle capability reports the capability instead of a policy."""
 
     hook = RecordingDenialHook()
     memory = Memory(principal="owner", hooks=[hook])
@@ -2784,10 +2784,10 @@ def test_on_denied_pairs_with_a_denied_terminal_event() -> None:
 
 
 def test_on_denied_hook_failure_cannot_replace_the_refusal() -> None:
-    """A failing denial hook never converts a refusal into another error."""
+    """If a denial hook fails, the caller still gets `AccessDenied`, and the hook failure becomes a note."""
 
     class BrokenDenialHook(MemoryHook):
-        """Fail while reporting a refusal."""
+        """Fail during the report of a refusal."""
 
         def on_denied(self, context: HookContext, operation, subject_id, reason) -> None:
             """Simulate an unreachable audit sink."""
@@ -2811,7 +2811,7 @@ def test_on_denied_hook_failure_cannot_replace_the_refusal() -> None:
 
 
 def test_on_denied_is_not_dispatched_for_allowed_or_filtered_operations() -> None:
-    """Allowed work and ordinary search filtering report no refusal."""
+    """Allowed operations and the normal search filter report no refusal."""
 
     hook = RecordingDenialHook()
     owner = Memory(principal="owner")
@@ -2835,7 +2835,7 @@ def test_on_denied_is_not_dispatched_for_allowed_or_filtered_operations() -> Non
 
 
 def test_on_denied_respects_suppression() -> None:
-    """Suppressed hooks and registries skip refusal reporting."""
+    """Suppressed hooks and suppressed registries do not report refusals."""
 
     first = RecordingDenialHook()
     second = RecordingDenialHook()
@@ -2857,7 +2857,7 @@ def test_on_denied_respects_suppression() -> None:
 
 
 def test_recursive_delete_reports_a_refused_target() -> None:
-    """A denied subtree delete names the target block that refused it."""
+    """A denied subtree delete names the target block whose policy refused it."""
 
     hook = RecordingDenialHook()
     owner = Memory(principal="owner")
@@ -2951,10 +2951,10 @@ class RecordingContextHook(MemoryHook):
 
 
 def test_context_reports_no_attributes_and_one_shared_start_time_by_default() -> None:
-    """A context carries an immutable empty mapping and the operation's start."""
+    """By default, a context carries an immutable empty `attributes` mapping and one start time for all callbacks of the operation."""
 
     class PairedContextHook(MemoryHook):
-        """Collect the context seen by each put callback."""
+        """Collect the context that each put callback sees."""
 
         def __init__(self) -> None:
             self.contexts: list[HookContext] = []
@@ -3017,7 +3017,7 @@ def test_memory_attributes_reach_every_operation_it_opens() -> None:
     [{"run": 7}, {7: "run"}, "run=7", [("run", "7")]],
 )
 def test_memory_rejects_attributes_that_are_not_string_pairs(attributes: object) -> None:
-    """Attributes are validated when memory is configured, not at first use."""
+    """`Memory` validates `attributes` at construction, not at first use."""
 
     with pytest.raises(TypeError, match="attributes must be a mapping"):
         Memory(attributes=cast(Any, attributes))
@@ -3049,7 +3049,7 @@ def test_scope_groups_the_operations_of_one_caller_defined_span() -> None:
 
 
 def test_scope_attributes_reach_nested_and_hook_originated_operations() -> None:
-    """Everything caused inside a scope inherits it, whatever the nesting depth."""
+    """Every operation that starts inside a scope inherits its attributes at any depth, also when a hook starts it."""
 
     class DerivingHook(RecordingContextHook):
         """Write one derived block from inside a callback."""
@@ -3083,7 +3083,7 @@ def test_scope_attributes_reach_nested_and_hook_originated_operations() -> None:
 
 
 def test_scope_dispatches_no_callbacks_of_its_own() -> None:
-    """A scope opens context without becoming an observable operation."""
+    """A scope opens a context but is not an observable operation."""
 
     class CountingHook(RecordingContextHook):
         """Count every callback the registry dispatches."""
@@ -3136,7 +3136,7 @@ def test_nested_scopes_inherit_and_override_attributes() -> None:
 
 
 def test_operation_attributes_extend_the_ones_a_scope_provides() -> None:
-    """Operation attributes and principals refine what the scope established."""
+    """Operation attributes and principals add to or replace the values that the scope sets."""
 
     registry = HookRegistry()
     with registry.scope(
@@ -3158,7 +3158,7 @@ def test_operation_attributes_extend_the_ones_a_scope_provides() -> None:
 
 
 def test_operations_cannot_be_opened_as_spans() -> None:
-    """`HookOperation.SCOPE` belongs to `scope`, which dispatches nothing."""
+    """Only `scope` can open `HookOperation.SCOPE`, and `scope` dispatches no callbacks."""
 
     registry = HookRegistry()
     for operation in (HookOperation.SCOPE, "scope"):
@@ -3192,7 +3192,7 @@ def test_context_pairs_the_scope_name_with_the_scope_operation(
 
 
 def test_scope_context_cannot_dispatch_hook_callbacks() -> None:
-    """Scopes group operations, so they cannot stand in for one."""
+    """A scope groups operations, so the registry cannot dispatch callbacks with a scope context."""
 
     registry = HookRegistry([MemoryHook()])
     block = MemoryBlock(type="note", value="one")
@@ -3215,7 +3215,7 @@ def test_scope_rejects_names_that_are_not_strings(name: object) -> None:
 
 @pytest.mark.parametrize("name", ["", "   "])
 def test_scope_rejects_empty_names(name: str) -> None:
-    """An unnamed scope would group operations under nothing."""
+    """The registry rejects an empty or blank scope name, because such a scope groups operations under no name."""
 
     registry = HookRegistry()
     with pytest.raises(ValueError, match="Scope name must not be empty"), registry.scope(name):
@@ -3223,7 +3223,7 @@ def test_scope_rejects_empty_names(name: str) -> None:
 
 
 def test_scope_context_is_released_after_an_error() -> None:
-    """A failing scope leaves later operations at the top level."""
+    """After a scope fails, later operations run at the top level again."""
 
     hook = RecordingContextHook()
     memory = Memory(hooks=[hook])
@@ -3239,7 +3239,7 @@ def test_scope_context_is_released_after_an_error() -> None:
 
 
 def test_scopes_are_isolated_across_concurrent_runs() -> None:
-    """Concurrent agent runs never observe each other's grouping labels."""
+    """Concurrent agent runs never see the scope labels of other runs."""
 
     hook = RecordingContextHook()
     memory = Memory(hooks=[hook])
@@ -3259,7 +3259,7 @@ def test_scopes_are_isolated_across_concurrent_runs() -> None:
 
 
 def test_scope_opened_inside_a_hook_respects_the_depth_limit() -> None:
-    """Hook-originated scopes are bounded like hook-originated operations."""
+    """The depth limit applies to a scope that a hook opens, as it does to an operation that a hook starts."""
 
     class ScopingHook(MemoryHook):
         """Open a scope from inside a callback."""
@@ -3284,7 +3284,7 @@ def test_scope_opened_inside_a_hook_respects_the_depth_limit() -> None:
 
 
 def test_handle_attributes_distinguish_sandboxes_that_share_a_principal() -> None:
-    """The trail records which handle performed the work, not only who did."""
+    """The audit trail records which handle did the work, not only which principal did it."""
 
     hook = RecordingContextHook()
     memory = Memory(principal="agent", hooks=[hook], attributes={"service": "genie"})
@@ -3319,7 +3319,7 @@ def test_handle_attributes_distinguish_sandboxes_that_share_a_principal() -> Non
 
 
 def test_handle_attributes_describe_unbounded_and_narrowed_handles() -> None:
-    """Capabilities and roots are reported as the boundary actually stands."""
+    """Handle attributes report the capabilities and the root that a handle actually has."""
 
     hook = RecordingContextHook()
     memory = Memory(hooks=[hook])

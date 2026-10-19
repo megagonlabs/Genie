@@ -36,7 +36,7 @@ from genie.structures import KeyBinding, MemoryAddress, TemporalEntry
 
 
 def test_sqlite_backend_implements_the_core_backend_protocol() -> None:
-    """SQLite exposes every method required by `MemoryBackend`."""
+    """`SQLiteBackend` has every method that `MemoryBackend` requires."""
 
     with SQLiteBackend() as backend:
         assert isinstance(backend, MemoryBackend)
@@ -57,14 +57,14 @@ def test_sqlite_backend_rejects_invalid_configuration(
     error: type[Exception],
     message: str,
 ) -> None:
-    """Connection and durability options fail before opening a database."""
+    """`SQLiteBackend` rejects invalid `timeout` and `durability` values before it opens a database."""
 
     with pytest.raises(error, match=message):
         SQLiteBackend(**kwargs)
 
 
 def test_sqlite_backend_persists_core_memory_state(tmp_path: Path) -> None:
-    """Blocks, policies, ownership, links, and search survive a restart."""
+    """Blocks, policies, ownership, links, and search results stay the same after a restart."""
 
     path = tmp_path / "memory.db"
     policy = MemoryPolicy.owner_or(roles={"reviewer"})
@@ -125,7 +125,7 @@ def test_sqlite_backend_persists_core_memory_state(tmp_path: Path) -> None:
 
 
 def test_sqlite_backend_searches_every_core_scope() -> None:
-    """SQLite candidate selection covers global, ownership, ancestor, and link scopes."""
+    """`SQLiteBackend.search` selects the correct candidates for the global, self, subtree, ancestors, and links scopes."""
 
     with SQLiteBackend() as backend:
         root = backend.put_block(MemoryBlock(id="root", type="node", value="root"))
@@ -166,7 +166,7 @@ def test_sqlite_backend_searches_every_core_scope() -> None:
 
 
 def test_sqlite_backend_rejects_conflicts_without_partial_changes() -> None:
-    """Failed writes roll back and preserve the previous ownership tree."""
+    """The backend rejects a duplicate block and a parent cycle without a partial change to the ownership tree."""
 
     with SQLiteBackend() as backend:
         root = backend.put_block(MemoryBlock(id="root", type="root", value={}))
@@ -185,7 +185,7 @@ def test_sqlite_backend_rejects_conflicts_without_partial_changes() -> None:
 
 
 def test_sqlite_backend_preserves_link_identity_and_isolates_values() -> None:
-    """Link updates preserve topology and reads cannot mutate stored JSON."""
+    """`update_link` keeps the link endpoints and relation, and a change to a returned value does not change the stored JSON."""
 
     with SQLiteBackend() as backend:
         source = backend.put_block(
@@ -277,7 +277,7 @@ def test_sqlite_backend_coordinates_separate_connections(tmp_path: Path) -> None
 
 
 def test_sqlite_backend_rejects_non_json_storage_values() -> None:
-    """SQLite persistence does not silently change custom encoded value types."""
+    """`SQLiteBackend` rejects a value that is not strict JSON and an invalid `created_at`, and does not change the value type."""
 
     with SQLiteBackend() as backend:
         with pytest.raises(TypeError, match="strict JSON"):
@@ -315,7 +315,7 @@ def test_sqlite_backend_reports_invalid_stored_block_data_as_corruption(
     column: str,
     stored_value: object,
 ) -> None:
-    """Malformed rows fail through the documented backend error boundary."""
+    """A malformed stored block row raises `BackendCorruption`, the documented backend error."""
 
     with SQLiteBackend() as backend:
         block = backend.put_block(MemoryBlock(id="note", type="note", value={}))
@@ -330,7 +330,7 @@ def test_sqlite_backend_reports_invalid_stored_block_data_as_corruption(
 
 
 def test_sqlite_backend_rejects_corrupt_policy_boolean_values() -> None:
-    """Truthy strings in stored policies cannot silently widen access."""
+    """A truthy string in a stored policy raises `BackendCorruption` and does not widen access."""
 
     with SQLiteBackend() as backend:
         block = backend.put_block(
@@ -358,7 +358,7 @@ def test_sqlite_backend_rejects_corrupt_policy_boolean_values() -> None:
 
 
 def test_sqlite_backend_reports_corrupt_structure_records() -> None:
-    """Invalid optional-capability records use the same corruption boundary."""
+    """An invalid record of an optional capability also raises `BackendCorruption`."""
 
     with SQLiteBackend() as backend:
         collection = backend.put_block(
@@ -377,7 +377,7 @@ def test_sqlite_backend_reports_corrupt_structure_records() -> None:
 
 
 def test_sqlite_backend_reports_corrupt_link_log_and_temporal_records() -> None:
-    """Every persisted optional record type maps malformed rows to corruption."""
+    """A malformed stored link, log entry, or temporal entry raises `BackendCorruption`."""
 
     with SQLiteBackend() as backend:
         container = backend.put_block(
@@ -417,7 +417,7 @@ def test_sqlite_backend_reports_corrupt_link_log_and_temporal_records() -> None:
 
 
 def test_sqlite_backend_context_manager_closes_connection() -> None:
-    """The backend owns and closes its SQLite connection."""
+    """The context manager closes the SQLite connection, a later read raises `RuntimeError`, and a second `close` is safe."""
 
     with SQLiteBackend() as backend:
         backend.put_block(MemoryBlock(type="note", value={}))
@@ -428,7 +428,7 @@ def test_sqlite_backend_context_manager_closes_connection() -> None:
 
 
 def test_sqlite_backend_rejects_newer_schema(tmp_path: Path) -> None:
-    """Opening an unknown future schema fails instead of corrupting it."""
+    """`SQLiteBackend` raises `UnsupportedOperation` for a newer schema version and does not corrupt the file."""
 
     path = tmp_path / "future.db"
     connection = sqlite3.connect(path)
@@ -472,7 +472,7 @@ def test_sqlite_backend_rejects_stale_block_replacement(tmp_path: Path) -> None:
 
 
 def test_memory_updates_do_not_silently_lose_concurrent_changes(tmp_path: Path) -> None:
-    """The public Memory workflow passes its read version into the write."""
+    """`Memory.update` passes the version that it read into the write, so one of two concurrent updates fails."""
 
     snapshots_read = Barrier(2)
 
@@ -522,7 +522,7 @@ def test_memory_updates_do_not_silently_lose_concurrent_changes(tmp_path: Path) 
 
 
 def test_memory_delete_rejects_a_concurrently_changed_subtree(tmp_path: Path) -> None:
-    """A policy-checked subtree cannot gain an unchecked child before deletion."""
+    """`Memory.delete` raises `MemoryConflict` if another writer adds an unchecked child after the policy check, and deletes nothing."""
 
     descendants_read = Event()
     continue_delete = Event()
@@ -569,7 +569,7 @@ def test_memory_delete_rejects_a_concurrently_changed_subtree(tmp_path: Path) ->
 
 
 def test_sqlite_backend_deletes_trees_deeper_than_trigger_limit() -> None:
-    """Leaf-first deletion does not depend on SQLite cascade recursion depth."""
+    """The backend deletes leaves first, so the delete of a deep tree does not depend on the SQLite cascade recursion depth."""
 
     with SQLiteBackend() as backend:
         parent_id: str | None = None
@@ -606,7 +606,7 @@ def test_sqlite_backend_uses_full_durability_by_default(tmp_path: Path) -> None:
 
 
 def test_sqlite_backend_identifies_and_validates_its_schema(tmp_path: Path) -> None:
-    """Fresh databases receive Genie identity and incompatible schemas fail."""
+    """A new database gets the Genie `application_id`, and the backend rejects a schema with incompatible columns."""
 
     path = tmp_path / "identified.db"
     with SQLiteBackend(path):
@@ -625,7 +625,7 @@ def test_sqlite_backend_identifies_and_validates_its_schema(tmp_path: Path) -> N
 def test_sqlite_backend_rejects_an_unowned_schema_without_changing_it(
     tmp_path: Path,
 ) -> None:
-    """An unrelated schema is rejected before any Genie migration runs."""
+    """The backend rejects a schema that Genie does not own before a Genie migration can change it."""
 
     path = tmp_path / "other-application.db"
     connection = sqlite3.connect(path)
@@ -644,7 +644,7 @@ def test_sqlite_backend_rejects_an_unowned_schema_without_changing_it(
 
 
 def test_sqlite_backend_adopts_a_valid_legacy_schema(tmp_path: Path) -> None:
-    """A validated pre-identity schema is adopted without changing its data."""
+    """The backend adopts a valid schema from before the identity pragma and keeps its data."""
 
     path = tmp_path / "legacy.db"
     with SQLiteBackend(path) as backend:
@@ -740,7 +740,7 @@ def test_sqlite_schema_migration_rolls_back_as_one_transaction(
 
 
 def test_sqlite_backend_maps_invalid_database_file_to_corruption(tmp_path: Path) -> None:
-    """Constructor failures also use stable backend error types."""
+    """A file that is not a SQLite database raises `BackendCorruption` from the constructor, with the driver error as the cause."""
 
     path = tmp_path / "corrupt.db"
     path.write_bytes(b"this is not a SQLite database")
@@ -752,7 +752,7 @@ def test_sqlite_backend_maps_invalid_database_file_to_corruption(tmp_path: Path)
 
 
 def test_sqlite_backend_maps_unopenable_path_to_unavailable(tmp_path: Path) -> None:
-    """An unusable database path raises a stable availability error."""
+    """A database path that SQLite cannot open raises `BackendUnavailable`, with the driver error as the cause."""
 
     with pytest.raises(BackendUnavailable) as captured:
         SQLiteBackend(tmp_path)
@@ -761,7 +761,7 @@ def test_sqlite_backend_maps_unopenable_path_to_unavailable(tmp_path: Path) -> N
 
 
 def test_sqlite_backend_maps_lock_timeout_to_retryable_busy_error(tmp_path: Path) -> None:
-    """Lock timeouts expose a stable retryable Genie error with driver cause."""
+    """A lock timeout raises `BackendBusy`, which is retryable and has the driver error as its cause."""
 
     path = tmp_path / "busy.db"
     with SQLiteBackend(path):
@@ -781,7 +781,7 @@ def test_sqlite_backend_maps_lock_timeout_to_retryable_busy_error(tmp_path: Path
 
 
 def test_sqlite_backend_maps_full_database_to_capacity_error(tmp_path: Path) -> None:
-    """SQLite's real full-database result maps to a stable capacity error."""
+    """A real full database in SQLite raises `BackendCapacityExceeded`, with the driver error as the cause."""
 
     path = tmp_path / "full.db"
     with SQLiteBackend(path) as backend:
@@ -799,10 +799,10 @@ def test_sqlite_backend_maps_read_only_writes_to_public_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A driver read-only failure is exposed through the public backend API."""
+    """A read-only failure from the driver raises `BackendReadOnly`, with the driver error as the cause."""
 
     class ReadOnlyConnection(sqlite3.Connection):
-        """Connection that can simulate storage becoming read-only."""
+        """Connection that can simulate storage that changes to read-only."""
 
         deny_writes = False
 
@@ -838,14 +838,16 @@ def test_sqlite_backend_reads_its_schema_identity_in_one_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A constructor that races another one on an empty file still succeeds.
+    """A constructor that runs at the same time as another constructor on an empty file still succeeds.
 
-    A competing constructor commits its tables and both identity pragmas in
-    one transaction. Here that commit lands after the first constructor read
-    the version and the application id and before it lists the schema
-    objects. Separate reads would see version 0 next to a complete schema and
-    refuse the file as unowned. One read transaction sees the state from
-    before the commit, and the migration that follows is idempotent.
+    - **The race.** A second constructor commits its tables and both identity
+      pragmas in one transaction. In this test, that commit occurs after the
+      first constructor reads the version and the application id, and before
+      it lists the schema objects.
+    - **Why one snapshot.** With separate reads, the first constructor sees
+      version 0 next to a complete schema and rejects the file as unowned.
+      One read transaction sees the state from before the commit.
+    - **Safe repeat.** The migration that follows is idempotent.
     """
 
     path = tmp_path / "raced.db"
@@ -875,11 +877,14 @@ def test_sqlite_backend_reads_its_schema_identity_in_one_snapshot(
 def test_sqlite_backend_waits_for_the_wal_switch_while_another_connection_holds_a_lock(
     tmp_path: Path,
 ) -> None:
-    """Opening a fresh file next to a locked connection waits instead of failing.
+    """If another connection holds a lock, the constructor waits on a new file and does not fail.
 
-    SQLite answers `PRAGMA journal_mode = WAL` with "database is locked" at
-    once while another connection holds a lock, without the busy wait every
-    other statement gets. The backend retries the switch within `timeout`.
+    - **SQLite behavior.** While another connection holds a lock, SQLite
+      answers `PRAGMA journal_mode = WAL` with "database is locked" at once.
+      This statement does not get the busy wait that every other statement
+      gets.
+    - **Backend behavior.** The backend tries the switch again until `timeout`
+      ends.
     """
 
     path = tmp_path / "first-open.db"

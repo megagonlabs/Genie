@@ -1,4 +1,4 @@
-"""Unit and opt-in live tests for the official-client Redis backend."""
+"""Unit tests and optional live tests for the Redis backend that uses the official `redis` client."""
 
 from __future__ import annotations
 
@@ -52,23 +52,23 @@ from tests.backends.test_backend_contracts import (
 
 
 class _FakeWatchError(Exception):
-    """Stand-in for the client's optimistic conflict error."""
+    """Test double for the client's optimistic conflict error."""
 
 
 class _FakeNoScriptError(Exception):
-    """Stand-in for the client's missing cached script error."""
+    """Test double for the client error that reports a script that is not in the server cache."""
 
 
 class _FakeConnectionError(Exception):
-    """Stand-in for the client's dropped connection error."""
+    """Test double for the client error that reports a dropped connection."""
 
 
 class _FakeBackoff:
-    """Stand-in for the client's exponential backoff."""
+    """Test double for the client's exponential backoff."""
 
 
 class _FakeRetry:
-    """Stand-in for the client's retry policy."""
+    """Test double for the client's retry policy."""
 
     def __init__(self, backoff: object, retries: int) -> None:
         self.backoff = backoff
@@ -76,7 +76,7 @@ class _FakeRetry:
 
 
 class _FakeClientModule:
-    """Stand-in for the parts of the `redis` package the backend reads."""
+    """Test double for the parts of the `redis` package that the backend reads."""
 
     retry = SimpleNamespace(Retry=_FakeRetry)
     backoff = SimpleNamespace(ExponentialBackoff=_FakeBackoff)
@@ -84,7 +84,7 @@ class _FakeClientModule:
 
 
 def test_redis_backend_implements_every_backend_protocol() -> None:
-    """The class exposes the complete core and optional capability surface."""
+    """`RedisBackend` implements the core protocol and every optional capability protocol."""
 
     backend = object.__new__(RedisBackend)
 
@@ -126,7 +126,7 @@ def test_redis_backend_rejects_invalid_configuration_before_loading_client(
     error: type[Exception],
     message: str,
 ) -> None:
-    """Invalid public configuration never attempts a network connection."""
+    """The constructor rejects an invalid configuration before it loads the client, so it opens no network connection."""
 
     monkeypatch.setattr(
         redis_module,
@@ -141,7 +141,7 @@ def test_redis_backend_rejects_invalid_configuration_before_loading_client(
 def test_redis_backend_explains_its_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Missing client installations produce an actionable public error."""
+    """If the `redis` client package is absent, the constructor raises an `UnsupportedOperation` that names the `genie[redis]` extra."""
 
     def missing() -> tuple[Any, tuple[type[BaseException], ...], type[BaseException], type[BaseException]]:
         raise UnsupportedOperation("install 'genie[redis]'")
@@ -153,7 +153,7 @@ def test_redis_backend_explains_its_optional_dependency(
 
 
 def test_redis_serialization_is_strict_and_defensive() -> None:
-    """The stored document representation preserves JSON value types."""
+    """The stored document form of a block keeps its JSON value types."""
 
     original = MemoryBlock(
         id="note",
@@ -173,7 +173,7 @@ def test_redis_serialization_is_strict_and_defensive() -> None:
 
 
 def test_redis_serialization_reports_corrupt_stored_values() -> None:
-    """Malformed stored documents fail as corruption, not parser errors."""
+    """A malformed stored document raises `BackendCorruption`, not a parser error."""
 
     with pytest.raises(BackendCorruption, match="memory block JSON is invalid"):
         redis_module._load_document("{not-json", name="memory block")
@@ -186,7 +186,7 @@ def test_redis_serialization_reports_corrupt_stored_values() -> None:
 
 
 def test_redis_serialization_rejects_invalid_versions_times_and_namespaces() -> None:
-    """Malformed caller values and stored primitives fail at stable boundaries."""
+    """Malformed caller values raise `ValueError` or `TypeError`, and malformed stored primitives raise `BackendCorruption`."""
 
     with pytest.raises(ValueError, match="block version"):
         redis_module._encode_block(MemoryBlock(id="note", type="note", value={}, version=0))
@@ -231,14 +231,14 @@ def test_redis_member_decoders_translate_malformed_shapes(
     stored: str,
     message: str,
 ) -> None:
-    """Every stored composite identity maps malformed shapes to corruption."""
+    """Each decoder for a stored composite identity raises `BackendCorruption` for a malformed shape."""
 
     with pytest.raises(BackendCorruption, match=message):
         decoder(stored)
 
 
 def test_redis_document_decoders_translate_malformed_shapes() -> None:
-    """Stored block, link, and temporal documents report their own corruption."""
+    """A malformed stored block, link, or temporal document raises `BackendCorruption` with its own message."""
 
     with pytest.raises(BackendCorruption, match="memory block is invalid"):
         redis_module._block_from_document({})
@@ -282,7 +282,7 @@ def test_redis_client_errors_map_to_public_errors(
     message: str,
     expected: type[Exception],
 ) -> None:
-    """Client-specific failure details do not leak through the backend API."""
+    """The backend translates client-specific failures into public Genie errors, so the client error types do not reach the caller."""
 
     failure = type(class_name, (Exception,), {})(message)
 
@@ -290,7 +290,7 @@ def test_redis_client_errors_map_to_public_errors(
 
 
 def test_redis_cluster_replies_name_the_unsupported_deployment() -> None:
-    """A cluster reply reports a wrong target instead of a retryable failure."""
+    """The backend reports a Redis Cluster reply as a wrong target with `UnsupportedOperation`, not as a failure that the caller can retry."""
 
     failure = type("ResponseError", (Exception,), {})("MOVED 3999 127.0.0.1:6381")
     translated = redis_module._translate_redis_error(failure)
@@ -301,7 +301,7 @@ def test_redis_cluster_replies_name_the_unsupported_deployment() -> None:
 
 
 def test_redis_backend_close_is_idempotent_and_enforces_lifecycle() -> None:
-    """Closing releases the owned client and rejects later operations."""
+    """`close` releases the owned client, and the backend rejects every later operation."""
 
     class FakeClient:
         def __init__(self) -> None:
@@ -324,7 +324,7 @@ def test_redis_backend_close_is_idempotent_and_enforces_lifecycle() -> None:
 
 
 def test_redis_backend_close_waits_for_active_operations() -> None:
-    """Closing never races an operation that already leased the client."""
+    """`close` waits for an operation that already leased the client."""
 
     operation_started = Event()
     release_operation = Event()
@@ -355,7 +355,7 @@ def test_redis_backend_close_waits_for_active_operations() -> None:
 
 
 def test_redis_backend_translates_client_close_failures() -> None:
-    """Client shutdown failures clear lifecycle state and use public errors."""
+    """If the client fails to close, the backend clears its lifecycle state and raises a public Genie error."""
 
     class ClientFailure(Exception):
         pass
@@ -376,7 +376,7 @@ def test_redis_backend_translates_client_close_failures() -> None:
 def test_redis_backend_forwards_production_client_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Connection, timeout, decoding, and auth settings reach the client."""
+    """The backend passes the connection, timeout, `decode_responses`, and auth options to the client."""
 
     calls: dict[str, Any] = {}
 
@@ -435,7 +435,7 @@ def test_redis_backend_forwards_production_client_configuration(
 def test_redis_backend_can_disable_the_health_check_and_transport_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Zero for both settings leaves the client at its own defaults."""
+    """If `health_check_interval` and `transport_retries` are zero, the client keeps its own defaults."""
 
     calls: dict[str, Any] = {}
 
@@ -481,9 +481,10 @@ def test_redis_backend_checks_the_eviction_policy_before_it_touches_the_schema(
     verify_eviction_policy: bool,
     expected_sections: list[str],
 ) -> None:
-    """The eviction check runs before schema work, and the flag can skip it.
+    """The eviction check runs before the schema work, and the flag can skip it.
 
-    The role check is off here so the recorded sections cover eviction only.
+    The test sets `verify_server_role=False`, so the recorded `INFO` sections
+    come only from the eviction check.
     """
 
     steps: list[str] = []
@@ -538,9 +539,10 @@ def test_redis_backend_checks_the_server_role_before_eviction_and_schema(
 ) -> None:
     """The role check runs first, and the flag can skip it.
 
-    A replica that also evicts must be reported as a replica. The eviction
-    message would point the caller at a setting on a server it should not be
-    talking to.
+    - **Replica first.** The backend reports a replica that also evicts keys as
+      a replica.
+    - **Reason.** The eviction message tells the caller to change the
+      configuration of a server that is the wrong target for the backend.
     """
 
     steps: list[str] = []
@@ -586,7 +588,7 @@ def test_redis_backend_checks_the_server_role_before_eviction_and_schema(
 def test_redis_backend_discards_client_after_unexpected_initialization_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unexpected schema failures close the newly created client before escape."""
+    """If the schema work fails unexpectedly, the backend closes the new client before the error reaches the caller."""
 
     closed = Event()
 
@@ -623,7 +625,7 @@ def test_redis_backend_discards_client_after_unexpected_initialization_error(
 
 
 def test_redis_writes_report_a_spent_optimistic_retry_budget() -> None:
-    """A write that keeps losing its optimistic conflict reports contention."""
+    """A write that loses every optimistic conflict reports contention with `BackendBusy` when no retry budget remains."""
 
     class ConflictingPipeline:
         def __enter__(self) -> Self:
@@ -671,7 +673,7 @@ def test_redis_writes_report_a_spent_optimistic_retry_budget() -> None:
 
 
 def test_redis_reads_report_a_spent_optimistic_retry_budget() -> None:
-    """A read that never sees a stable guard value reports contention."""
+    """A read that never sees a stable guard value reports contention with `BackendBusy`."""
 
     class MovingClient:
         def __init__(self) -> None:
@@ -691,7 +693,7 @@ def test_redis_reads_report_a_spent_optimistic_retry_budget() -> None:
 
 
 def test_redis_writes_do_not_retry_expected_memory_conflicts() -> None:
-    """A staged conflict reaches the caller instead of consuming retries."""
+    """A staged `MemoryConflict` goes directly to the caller and does not use the retry budget."""
 
     class UnusedClient:
         def get(self, key: str) -> None:
@@ -710,7 +712,7 @@ def test_redis_writes_do_not_retry_expected_memory_conflicts() -> None:
 
 
 class _LostReplyPipeline:
-    """Pipeline whose `EXEC` is applied by the server but never answered."""
+    """Pipeline whose `EXEC` the server applies but never answers."""
 
     def __init__(self, client: _LostReplyClient) -> None:
         self.client = client
@@ -743,14 +745,14 @@ class _LostReplyPipeline:
         self.client.guard = self.token
         if len(self.client.applied) > 1:
             return
-        # The server committed, then the connection died before the reply
-        # arrived. The client reports that as a watch conflict.
+        # The server committed, and then the client lost the connection before
+        # the reply arrived. The client reports this as a watch conflict.
         self.client.guard = self.client.guard_after_first_commit(str(self.token))
         raise _FakeWatchError("connection lost during EXEC")
 
 
 class _LostReplyClient:
-    """Client whose first commit lands without its caller ever hearing back."""
+    """Client whose first commit succeeds on the server, but the caller never gets the reply."""
 
     def __init__(self, *, competing_token: str | None = None) -> None:
         self.guard: str | None = None
@@ -758,8 +760,8 @@ class _LostReplyClient:
         self.competing_token = competing_token
 
     def guard_after_first_commit(self, token: str) -> str:
-        # A competing write replaces the token, which is what hides the proof
-        # that our own commit landed.
+        # A write from another client replaces the token. This removes the proof
+        # that our own commit succeeded.
         return self.competing_token or token
 
     def get(self, key: str) -> str | None:
@@ -774,7 +776,7 @@ class _LostReplyClient:
 
 
 def test_redis_write_does_not_repeat_a_commit_whose_reply_was_lost() -> None:
-    """The guard token proves the commit landed, so the retry returns it."""
+    """The guard token proves that the commit succeeded, so the retry returns its result and does not apply it again."""
 
     client = _LostReplyClient()
     backend = _detached_backend(client)
@@ -792,7 +794,7 @@ def test_redis_write_does_not_repeat_a_commit_whose_reply_was_lost() -> None:
 
 
 def test_redis_write_repeats_a_lost_commit_once_another_write_replaces_the_token() -> None:
-    """The proof only holds while no other client has committed since."""
+    """The guard token is proof only if no other client commits after the lost commit."""
 
     client = _LostReplyClient(competing_token="written-by-another-client")
     backend = _detached_backend(client)
@@ -806,12 +808,12 @@ def test_redis_write_repeats_a_lost_commit_once_another_write_replaces_the_token
 
     assert backend._transact(operation) == "result-2"
     assert runs == 2
-    # The known limit: the same work is applied twice.
+    # The known limit: the backend applies the same work 2 times.
     assert client.applied == [["member-1"], ["member-2"]]
 
 
 def test_redis_write_returns_a_lost_commit_found_on_the_last_attempt() -> None:
-    """A spent budget still reports a commit the guard token can prove."""
+    """When no retry budget remains, the backend still returns a commit that the guard token proves."""
 
     client = _LostReplyClient()
     backend = _detached_backend(client, max_retry_time=0.0)
@@ -829,7 +831,7 @@ def test_redis_write_returns_a_lost_commit_found_on_the_last_attempt() -> None:
 
 
 def test_redis_write_reports_a_spent_budget_when_the_token_is_gone() -> None:
-    """Without that proof a spent budget still reports contention."""
+    """Without the guard token proof, the backend reports contention with `BackendBusy` when no retry budget remains."""
 
     client = _LostReplyClient(competing_token="written-by-another-client")
     backend = _detached_backend(client, max_retry_time=0.0)
@@ -849,7 +851,7 @@ def _detached_backend(
     max_retry_time: float = 5.0,
     readonly_scripts: bool = False,
 ) -> RedisBackend:
-    """Build a backend around a fake client without touching a server."""
+    """Build a backend around a fake client, with no server connection."""
 
     backend = object.__new__(RedisBackend)
     backend.url = "redis://example"
@@ -870,7 +872,7 @@ def _detached_backend(
 
 
 def test_redis_contains_runs_as_one_read_only_script() -> None:
-    """A supported server answers containment with a single atomic script."""
+    """On a server that supports read-only scripts, `contains` runs as one atomic script."""
 
     class ScriptedClient:
         def __init__(self) -> None:
@@ -912,13 +914,13 @@ def _stored_link_payload(link: MemoryLink, storage_order: int) -> str:
 
 
 def _endpoint_member(link: MemoryLink) -> str:
-    """Return the endpoint index member one link is stored under."""
+    """Return the member that represents one link in an endpoint index."""
 
     return redis_module._identity(link.id, link.source_id, link.target_id, link.relation)
 
 
 def test_redis_ancestors_runs_as_one_read_only_script() -> None:
-    """A supported server returns the whole parent chain from one script."""
+    """On a server that supports read-only scripts, `ancestors` returns the full parent chain from one script."""
 
     root = MemoryBlock(id="root", type="project", value={})
     middle = MemoryBlock(id="middle", parent_id=root.id, type="step", value={})
@@ -941,13 +943,13 @@ def test_redis_ancestors_runs_as_one_read_only_script() -> None:
     client = ScriptedClient()
     backend = _detached_backend(client, readonly_scripts=True)
 
-    # The script returns the starting block first, and `ancestors` drops it.
+    # The script returns the start block first, and `ancestors` removes it from the result.
     assert backend.ancestors("leaf") == [middle, root]
     assert client.calls == [(redis_module._LUA_DIGESTS["ancestors"], 1, "genie:block:leaf", "genie", "leaf")]
 
 
 def test_redis_ancestors_returns_nothing_for_a_missing_block() -> None:
-    """An empty scripted reply means the starting block itself is gone."""
+    """An empty script reply means that the start block does not exist, so `ancestors` returns an empty list."""
 
     class ScriptedClient:
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
@@ -962,7 +964,7 @@ def test_redis_ancestors_returns_nothing_for_a_missing_block() -> None:
 
 
 def test_redis_children_runs_as_one_read_only_script() -> None:
-    """A supported server returns the child page from one script."""
+    """On a server that supports read-only scripts, `children` returns the child page from one script."""
 
     first = MemoryBlock(id="first", parent_id="root", type="step", value={})
     second = MemoryBlock(id="second", parent_id="root", type="step", value={})
@@ -989,7 +991,7 @@ def test_redis_children_runs_as_one_read_only_script() -> None:
 
 
 def test_redis_children_falls_back_without_read_only_script_support() -> None:
-    """A server without scripting keeps the guarded two-command read."""
+    """On a server without read-only scripts, `children` uses the guarded two-command read."""
 
     child = MemoryBlock(id="child", parent_id="root", type="step", value={})
 
@@ -1021,7 +1023,7 @@ def test_redis_children_falls_back_without_read_only_script_support() -> None:
 
 
 def test_redis_list_links_runs_as_one_read_only_script() -> None:
-    """A supported server returns connected links from one script."""
+    """On a server that supports read-only scripts, `list_links` returns the connected links from one script."""
 
     outgoing = MemoryLink("root", "child", "owns", id="outgoing")
     incoming = MemoryLink("other", "root", "notes", id="incoming")
@@ -1053,7 +1055,7 @@ def test_redis_list_links_runs_as_one_read_only_script() -> None:
 
 
 def test_redis_list_links_filters_the_relation_inside_the_script() -> None:
-    """The relation reaches the script, so it reads only matching documents."""
+    """The backend sends the relation to the script, so the script reads only the documents that match."""
 
     incoming = MemoryLink("other", "root", "notes", id="incoming")
 
@@ -1078,7 +1080,7 @@ def test_redis_list_links_filters_the_relation_inside_the_script() -> None:
 
 
 def test_redis_list_links_treats_an_empty_relation_as_a_filter() -> None:
-    """An empty string is a valid relation, so the filter flag stays set."""
+    """An empty string is a valid relation, so the backend sets the filter flag for it."""
 
     class ScriptedClient:
         def __init__(self) -> None:
@@ -1101,7 +1103,7 @@ def test_redis_list_links_treats_an_empty_relation_as_a_filter() -> None:
 
 
 def test_redis_list_links_falls_back_without_read_only_script_support() -> None:
-    """A server without scripting keeps the guarded two-command read."""
+    """On a server without read-only scripts, `list_links` uses the guarded two-command read."""
 
     link = MemoryLink("root", "child", "owns", id="link")
     removed = MemoryLink("root", "gone", "owns", id="removed")
@@ -1134,10 +1136,12 @@ def test_redis_list_links_falls_back_without_read_only_script_support() -> None:
 
 
 def test_redis_link_cleanup_reads_only_the_endpoint_index() -> None:
-    """Removing links uses the endpoint members, so no link document is read.
+    """`delete_links_for_block` uses the endpoint members, so it reads no link document.
 
-    A link document that is already gone would otherwise leave its index
-    entries behind, because a missing document is skipped instead of reported.
+    - **Skipped documents.** A read of link documents skips a document that
+      does not exist and does not report it.
+    - **Left-over entries.** A cleanup based on that read leaves the index
+      entries of an already deleted link document in place.
     """
 
     kept = MemoryLink("root", "child", "cites", id="kept")
@@ -1210,8 +1214,8 @@ def test_redis_link_cleanup_reads_only_the_endpoint_index() -> None:
 
     backend.delete_links_for_block("root")
 
-    # Both links share the `cites` relation, so that index loses exactly two
-    # members instead of being dropped whole.
+    # Both links have the `cites` relation, so the backend removes exactly 2
+    # members from that index and does not delete the whole index.
     assert client.commands == [
         ("delete", "genie:outlinks:root", "genie:inlinks:root"),
         ("delete", "genie:link:kept", "genie:link:shared"),
@@ -1223,7 +1227,7 @@ def test_redis_link_cleanup_reads_only_the_endpoint_index() -> None:
 
 
 def test_redis_list_links_filters_the_relation_before_reading_documents() -> None:
-    """Without scripting the filter runs on the index, so one document is read."""
+    """Without read-only scripts, the relation filter runs on the index, so the backend reads only one document."""
 
     kept = MemoryLink("root", "child", "notes", id="kept")
     skipped = MemoryLink("root", "other", "owns", id="skipped")
@@ -1255,7 +1259,7 @@ def test_redis_list_links_filters_the_relation_before_reading_documents() -> Non
 
 
 def test_redis_temporal_page_runs_as_one_read_only_script() -> None:
-    """A supported server returns one entry page from one script."""
+    """On a server that supports read-only scripts, `list_temporal_entries` returns one entry page from one script."""
 
     first = TemporalEntry("collection", "first", occurred_at=datetime(2026, 1, 1, tzinfo=UTC))
     second = TemporalEntry("collection", "second", occurred_at=datetime(2026, 2, 1, tzinfo=UTC))
@@ -1293,7 +1297,7 @@ def test_redis_temporal_page_runs_as_one_read_only_script() -> None:
 
 
 def test_redis_temporal_page_script_is_skipped_for_an_empty_page() -> None:
-    """A zero limit answers without any call, on either read path."""
+    """With a zero limit, `list_temporal_entries` returns an empty list and makes no server call on either read path."""
 
     class UnusedClient:
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
@@ -1310,7 +1314,7 @@ def test_redis_temporal_page_script_is_skipped_for_an_empty_page() -> None:
 
 
 def test_redis_temporal_page_rejects_an_unpaired_script_reply() -> None:
-    """A reply that lost half of a pair fails as corruption, not an index error."""
+    """A script reply that has only one half of a pair raises `BackendCorruption`, not `IndexError`."""
 
     class ScriptedClient:
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[Any]:
@@ -1326,7 +1330,7 @@ def test_redis_temporal_page_rejects_an_unpaired_script_reply() -> None:
 
 
 def test_redis_temporal_page_rejects_a_reply_without_a_scanned_count() -> None:
-    """A page reply must carry the scanned count beside its pairs."""
+    """A page reply without the scanned count beside its pairs raises `BackendCorruption`."""
 
     class ScriptedClient:
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[Any]:
@@ -1342,7 +1346,7 @@ def test_redis_temporal_page_rejects_a_reply_without_a_scanned_count() -> None:
 
 
 def test_redis_temporal_query_answers_one_page_through_the_script() -> None:
-    """A collection that fits in one page is filtered from one atomic read."""
+    """For a collection that fits in one page, `query_temporal_entries` filters the result of one atomic script read."""
 
     kept = TemporalEntry("collection", "kept", occurred_at=datetime(2026, 1, 1, tzinfo=UTC))
     later = TemporalEntry("collection", "later", occurred_at=datetime(2026, 6, 1, tzinfo=UTC))
@@ -1383,7 +1387,7 @@ def test_redis_temporal_query_answers_one_page_through_the_script() -> None:
 
 
 def test_redis_temporal_query_falls_back_when_one_page_is_not_the_whole_collection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A full first page cannot end the query, so the guarded scan takes over."""
+    """More entries can follow a full first page, so `query_temporal_entries` uses the guarded scan instead."""
 
     monkeypatch.setattr(redis_module, "_TEMPORAL_SCAN_PAGE", 2)
     early = TemporalEntry("collection", "a", occurred_at=datetime(2026, 1, 1, tzinfo=UTC))
@@ -1426,7 +1430,7 @@ def test_redis_temporal_query_falls_back_when_one_page_is_not_the_whole_collecti
 
 
 def test_redis_temporal_page_falls_back_without_read_only_script_support() -> None:
-    """A server without scripting keeps the guarded two-command page read."""
+    """On a server without read-only scripts, `list_temporal_entries` uses the guarded two-command page read."""
 
     entry = TemporalEntry("collection", "kept", occurred_at=datetime(2026, 3, 1, tzinfo=UTC))
 
@@ -1458,7 +1462,7 @@ def test_redis_temporal_page_falls_back_without_read_only_script_support() -> No
 
 
 def test_redis_descendants_orders_one_scripted_subtree_reply() -> None:
-    """Edges from the script become depth-first creation order in Python."""
+    """The backend sorts the edges from the script into depth-first creation order in Python."""
 
     root = MemoryBlock(id="root", type="project", value={})
     first = MemoryBlock(id="first", parent_id="root", type="step", value={})
@@ -1472,8 +1476,8 @@ def test_redis_descendants_orders_one_scripted_subtree_reply() -> None:
 
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[list[str]]:
             self.calls.append((digest, numkeys, *arguments))
-            # "gone" is listed as a child of "root" but its document is missing,
-            # so the walk keeps following it and only drops it from the result.
+            # The edges list "gone" as a child of "root", but "gone" has no document.
+            # The walk continues through "gone" and only removes it from the result.
             edges = ["root", "first", "root", "second", "root", "gone", "first", "nested", "gone", "orphaned"]
             documents = [
                 "root",
@@ -1504,7 +1508,7 @@ def test_redis_descendants_orders_one_scripted_subtree_reply() -> None:
 
 
 def test_redis_descendants_returns_nothing_for_a_missing_root() -> None:
-    """An empty scripted reply answers with no blocks, as the guarded read does."""
+    """An empty script reply gives no blocks, the same result as the guarded read."""
 
     class ScriptedClient:
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[list[str]]:
@@ -1527,7 +1531,7 @@ def test_redis_descendants_returns_nothing_for_a_missing_root() -> None:
     ],
 )
 def test_redis_descendants_rejects_a_malformed_script_reply(reply: list[list[str]]) -> None:
-    """A reply that is not two paired lists fails as corruption."""
+    """A script reply that is not two paired lists raises `BackendCorruption`."""
 
     class ScriptedClient:
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[list[str]]:
@@ -1543,7 +1547,7 @@ def test_redis_descendants_rejects_a_malformed_script_reply(reply: list[list[str
 
 
 def test_redis_ancestors_reports_a_corrupt_document_from_a_script() -> None:
-    """A malformed payload fails through the corruption boundary as before."""
+    """A malformed payload from the script raises `BackendCorruption`, as the guarded read does."""
 
     class ScriptedClient:
         def evalsha_ro(self, digest: str, numkeys: int, *arguments: str) -> list[str]:
@@ -1559,7 +1563,7 @@ def test_redis_ancestors_reports_a_corrupt_document_from_a_script() -> None:
 
 
 def test_redis_ancestors_falls_back_without_read_only_script_support() -> None:
-    """A server without scripting keeps the guarded parent-chain walk."""
+    """On a server without read-only scripts, `ancestors` uses the guarded walk up the parent chain."""
 
     root = MemoryBlock(id="root", type="project", value={})
     leaf = MemoryBlock(id="leaf", parent_id=root.id, type="step", value={})
@@ -1586,7 +1590,7 @@ def test_redis_ancestors_falls_back_without_read_only_script_support() -> None:
 
 
 def test_redis_self_scope_search_reads_one_key_without_a_guard_or_a_script() -> None:
-    """A `Scope.SELF` search is a single GET, so it can never report contention."""
+    """A `Scope.SELF` search is one `GET`, so it cannot report contention."""
 
     block = MemoryBlock(id="child", type="step", value={"text": "alpha"})
 
@@ -1614,7 +1618,7 @@ def test_redis_self_scope_search_reads_one_key_without_a_guard_or_a_script() -> 
 
 
 def test_redis_subtree_scope_search_runs_as_one_read_only_script() -> None:
-    """A `Scope.SUBTREE` search reuses the scripted subtree read."""
+    """A `Scope.SUBTREE` search uses the same scripted subtree read as `descendants`."""
 
     root = MemoryBlock(id="root", type="project", value={"text": "alpha"})
     child = MemoryBlock(id="child", parent_id="root", type="step", value={"text": "alpha"})
@@ -1641,7 +1645,7 @@ def test_redis_subtree_scope_search_runs_as_one_read_only_script() -> None:
 
 
 def test_redis_ancestors_scope_search_keeps_the_starting_block() -> None:
-    """A `Scope.ANCESTORS` search keeps the block the shared script returns first."""
+    """A `Scope.ANCESTORS` search keeps the first block from the shared script, which is the start block."""
 
     root = MemoryBlock(id="root", type="project", value={"text": "alpha"})
     leaf = MemoryBlock(id="leaf", parent_id="root", type="step", value={"text": "alpha"})
@@ -1668,7 +1672,7 @@ def test_redis_ancestors_scope_search_keeps_the_starting_block() -> None:
 
 
 def test_redis_ancestors_scope_search_falls_back_to_the_guard() -> None:
-    """Without scripting the scoped search keeps the guarded parent-chain walk."""
+    """Without read-only scripts, a `Scope.ANCESTORS` search uses the guarded walk up the parent chain."""
 
     root = MemoryBlock(id="root", type="project", value={"text": "alpha"})
     leaf = MemoryBlock(id="leaf", parent_id="root", type="step", value={"text": "alpha"})
@@ -1696,7 +1700,7 @@ def test_redis_ancestors_scope_search_falls_back_to_the_guard() -> None:
 
 
 def test_redis_global_scope_search_keeps_the_mutation_guard() -> None:
-    """A global search reads every stored block, so a script must not hold the server."""
+    """A global search reads every stored block, so the backend uses the mutation guard and does not block the server with a script."""
 
     first = MemoryBlock(id="first", type="item", value={"text": "alpha"})
     second = MemoryBlock(id="second", type="item", value={"text": "alpha"})
@@ -1732,7 +1736,7 @@ def test_redis_global_scope_search_keeps_the_mutation_guard() -> None:
 
 
 def test_redis_links_scope_search_keeps_the_mutation_guard() -> None:
-    """One block can carry any number of links, so this scope stays guarded."""
+    """One block can have any number of links, so a `Scope.LINKS` search uses the mutation guard and not a script."""
 
     first = MemoryBlock(id="first", type="item", value={"text": "alpha"})
     second = MemoryBlock(id="second", type="item", value={"text": "alpha"})
@@ -1787,7 +1791,7 @@ def test_redis_links_scope_search_keeps_the_mutation_guard() -> None:
 
 
 def test_redis_contains_reloads_a_script_the_server_dropped() -> None:
-    """A flushed script cache is refilled by sending the body once."""
+    """After a `NOSCRIPT` error, the backend sends the script body once, which loads the script into the cache again."""
 
     class ScriptedClient:
         def __init__(self) -> None:
@@ -1811,7 +1815,7 @@ def test_redis_contains_reloads_a_script_the_server_dropped() -> None:
 
 
 def test_redis_contains_falls_back_without_read_only_script_support() -> None:
-    """A server without scripting keeps the guarded multi-command read."""
+    """On a server without read-only scripts, `contains` uses the guarded multi-command read."""
 
     class GuardedClient:
         def __init__(self) -> None:
@@ -1834,7 +1838,7 @@ def test_redis_contains_falls_back_without_read_only_script_support() -> None:
 
 
 def test_redis_read_only_script_probe_detects_server_support() -> None:
-    """The probe runs a trivial script instead of reading a version string."""
+    """The probe runs a trivial script and does not read a version string."""
 
     class ScriptingClient:
         def eval_ro(self, body: str, numkeys: int, *arguments: str) -> int:
@@ -1848,10 +1852,10 @@ def test_redis_read_only_script_probe_detects_server_support() -> None:
 
 
 def test_redis_read_only_script_probe_accepts_servers_without_support() -> None:
-    """A refused command turns the scripted reads off without failing."""
+    """If the server rejects the command, the probe disables the scripted reads and does not fail."""
 
     class ResponseError(Exception):
-        """Stand-in for the client's command rejection error."""
+        """Test double for the client error that reports a rejected command."""
 
     class OldServerClient:
         def eval_ro(self, body: str, numkeys: int, *arguments: str) -> int:
@@ -1882,7 +1886,7 @@ def test_redis_role_probe_refuses_only_a_server_it_can_prove_is_a_replica(
     report: Any,
     is_replica: bool,
 ) -> None:
-    """A proven replica role fails; every unknown reading is accepted."""
+    """The probe fails only for a proven replica role and accepts every unknown result."""
 
     class ReportingClient:
         def info(self, section: str) -> Any:
@@ -1902,10 +1906,10 @@ def test_redis_role_probe_refuses_only_a_server_it_can_prove_is_a_replica(
 
 
 def test_redis_role_probe_accepts_a_server_that_blocks_the_info_command() -> None:
-    """A refused `INFO` leaves the role unknown instead of failing."""
+    """If the server rejects `INFO`, the role stays unknown and the probe does not fail."""
 
     class ResponseError(Exception):
-        """Stand-in for the client's command rejection error."""
+        """Test double for the client error that reports a rejected command."""
 
     class RestrictedClient:
         def info(self, section: str) -> dict[str, Any]:
@@ -1930,10 +1934,10 @@ def test_redis_role_probe_accepts_clients_without_support() -> None:
 
 
 def test_redis_role_probe_reports_an_unreachable_server() -> None:
-    """A transport failure reaches the caller instead of passing the check."""
+    """The probe gives a transport failure to the caller and does not treat it as a pass."""
 
     class ConnectionError(Exception):
-        """Stand-in for the client's transport failure."""
+        """Test double for the client's transport failure."""
 
     class UnreachableClient:
         def info(self, section: str) -> dict[str, Any]:
@@ -1968,7 +1972,7 @@ def test_redis_eviction_probe_refuses_only_a_server_it_can_prove_evicts(
     report: Any,
     evicts: bool,
 ) -> None:
-    """A proven eviction setting fails; every unknown reading is accepted."""
+    """The probe fails only for a proven eviction configuration and accepts every unknown result."""
 
     class ReportingClient:
         def info(self, section: str) -> Any:
@@ -1988,10 +1992,10 @@ def test_redis_eviction_probe_refuses_only_a_server_it_can_prove_evicts(
 
 
 def test_redis_eviction_probe_accepts_a_server_that_blocks_the_info_command() -> None:
-    """A refused `INFO` leaves the setting unknown instead of failing."""
+    """If the server rejects `INFO`, the eviction configuration stays unknown and the probe does not fail."""
 
     class ResponseError(Exception):
-        """Stand-in for the client's command rejection error."""
+        """Test double for the client error that reports a rejected command."""
 
     class RestrictedClient:
         def info(self, section: str) -> dict[str, Any]:
@@ -2006,7 +2010,7 @@ def test_redis_eviction_probe_accepts_a_server_that_blocks_the_info_command() ->
 
 
 def test_redis_eviction_probe_accepts_clients_without_support() -> None:
-    """A client library with no `info` leaves the setting unknown."""
+    """A client library with no `info` leaves the eviction configuration unknown."""
 
     class MinimalClient:
         def close(self) -> None:
@@ -2016,10 +2020,10 @@ def test_redis_eviction_probe_accepts_clients_without_support() -> None:
 
 
 def test_redis_eviction_probe_reports_an_unreachable_server() -> None:
-    """A transport failure reaches the caller instead of passing the check."""
+    """The probe gives a transport failure to the caller and does not treat it as a pass."""
 
     class ConnectionError(Exception):
-        """Stand-in for the client's transport failure."""
+        """Test double for the client's transport failure."""
 
     class UnreachableClient:
         def info(self, section: str) -> dict[str, Any]:
@@ -2035,7 +2039,7 @@ def test_redis_eviction_probe_reports_an_unreachable_server() -> None:
 
 
 def test_redis_read_only_script_probe_accepts_clients_without_support() -> None:
-    """A client library with no `eval_ro` turns the scripted reads off."""
+    """A client library with no `eval_ro` disables the scripted reads."""
 
     class OldLibraryClient:
         def close(self) -> None:
@@ -2064,14 +2068,18 @@ def test_redis_read_only_script_probe_reports_transport_failures() -> None:
 
 
 def test_redis_initialization_reads_the_schema_record_and_namespace_keys_together() -> None:
-    """A constructor that races another one on an empty namespace still succeeds.
+    """A constructor that runs at the same time as another one on an empty namespace still succeeds.
 
-    A competing constructor commits its schema record and the mutation guard
-    in one `EXEC`. The fake server lands that commit right after the first
-    round trip of `_initialize_schema`. Two separate reads would miss the
-    record and then see the guard, and refuse the namespace as unowned. One
-    atomic batch sees neither, and the write that follows merges with the
-    record that landed in between.
+    - **Other constructor.** A second constructor commits its schema record and
+      the mutation guard in one `EXEC`.
+    - **Order of events.** The fake server applies that commit directly after
+      the first round trip of `_initialize_schema`.
+    - **Two separate reads fail.** With two reads, the first read does not find
+      the record and the second read finds the guard. The backend then rejects
+      the namespace as unowned.
+    - **One atomic batch works.** One atomic batch sees neither key. The write
+      after it merges with the record that the other constructor committed in
+      between.
     """
 
     schema_key = "genie:schema"
@@ -2097,7 +2105,7 @@ def test_redis_initialization_reads_the_schema_record_and_namespace_keys_togethe
             return None
 
         def get(self, key: str) -> str | None:
-            # After `WATCH` the pipeline answers at once, like the real client.
+            # After `WATCH`, the pipeline answers immediately, as the real client does.
             return self.client.round_trip(["get"], lambda: self.client.store.get(key))
 
         def hgetall(self, key: str) -> None:
@@ -2176,11 +2184,11 @@ _CLIENT_CONTRACT_REASON = "install the redis extra to check the client retry con
 
 @pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
 def test_redis_transport_options_retry_a_dropped_connection() -> None:
-    """The retry options reach the installed client and take effect.
+    """The installed client gets the retry options and uses them.
 
-    The client retries nothing by default, so this checks that the options the
-    backend passes replace that default. It needs the client installed but no
-    running server.
+    - **Client default.** The client does not retry by default. This test
+      checks that the options from the backend replace that default.
+    - **Requirements.** The test needs the installed client but no live server.
     """
 
     import redis
@@ -2190,9 +2198,9 @@ def test_redis_transport_options_retry_a_dropped_connection() -> None:
     assert redis_module._transport_options(redis, 0) == {}
 
     client = redis.Redis(**redis_module._transport_options(redis, 2))
-    # The pool declares the narrow `ConnectionInterface`, which carries no
-    # retry attributes. The pool builds a `Connection` for a `redis://` URL,
-    # and that is the class holding the settings this test reads.
+    # The pool declares the narrow `ConnectionInterface` type, which has no retry
+    # attributes. For a `redis://` URL, the pool builds a `Connection`. That
+    # class holds the options that this test reads.
     connection = cast(redis.connection.Connection, client.connection_pool.make_connection())
     attempts: list[int] = []
 
@@ -2210,12 +2218,15 @@ def test_redis_transport_options_retry_a_dropped_connection() -> None:
 
 @pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
 def test_redis_client_does_not_retry_a_command_that_timed_out() -> None:
-    """A command that timed out is sent once, because it may still be running.
+    """The client sends a command that timed out only one time, because the command can still run on the server.
 
-    The retry policy catches a timeout as well, so the gate that keeps it to
-    one attempt is the client's own: it re-raises every error that
-    `retry_on_error` does not list, and `_transport_options` lists a dropped
-    connection only. This test fails if the client ever widens that gate.
+    - **Client rule.** The retry policy also catches a timeout. Only the client
+      itself limits a timeout to one attempt.
+    - **How the client does it.** The client raises again every error that
+      `retry_on_error` does not list. `_transport_options` lists only a dropped
+      connection.
+    - **Regression check.** This test fails if the client starts to retry more
+      error types.
     """
 
     import redis
@@ -2233,12 +2244,14 @@ def test_redis_client_does_not_retry_a_command_that_timed_out() -> None:
 
 @pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
 def test_redis_client_retries_opening_a_connection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Opening a connection is retried, which multiplies `connect_timeout`.
+    """The client retries a connection attempt, so the total wait can be a multiple of `connect_timeout`.
 
-    A server that answers nothing holds each try for the connect timeout, so
-    the documented worst case is that timeout times `transport_retries` plus
-    one. A server that refuses the connection is not in this case: it answers
-    with an `OSError` the retry policy does not cover, so it is tried once.
+    - **Silent server.** A server that does not answer holds each attempt for
+      the full connect timeout. The documented worst case is `connect_timeout`
+      times (`transport_retries` + 1).
+    - **Server that rejects the connection.** This server answers with an
+      `OSError` that the retry policy does not cover. The client tries to
+      connect only one time.
     """
 
     import redis
@@ -2258,8 +2271,8 @@ def test_redis_client_retries_opening_a_connection(monkeypatch: pytest.MonkeyPat
         refusing_attempts.append(1)
         raise OSError(61, "Connection refused")
 
-    # Replace the one step that opens the socket, so the retry around it is
-    # what the attempt counts measure.
+    # Replace only the step that opens the socket. Then the attempt counts
+    # measure the retry around that step.
     monkeypatch.setattr(silent, "_connect", times_out)
     monkeypatch.setattr(refusing, "_connect", refuses)
 
@@ -2276,13 +2289,15 @@ def test_redis_client_retries_opening_a_connection(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.skipif(not _LIVE_CLIENT_AVAILABLE, reason=_CLIENT_CONTRACT_REASON)
 def test_redis_client_turns_a_dropped_watched_connection_into_a_conflict() -> None:
-    """Transport retry cannot repeat a write, because an open watch blocks it.
+    """A transport retry cannot repeat a write, because an open watch blocks it.
 
-    Every Genie write runs inside `WATCH`/`MULTI`/`EXEC`. Transport retry is
-    safe only because the client refuses to send those commands again while a
-    watch is open, and raises a watch conflict instead. `RedisBackend._transact`
-    answers that conflict with a fresh attempt, so the write is never applied
-    twice. This test fails if the client ever drops that rule.
+    - **Write commands.** Every Genie write runs inside `WATCH`/`MULTI`/`EXEC`.
+    - **Why transport retry is safe.** Transport retry is safe only because the
+      client does not send those commands again while a watch is open. The
+      client raises a watch conflict instead.
+    - **Backend answer.** `RedisBackend._transact` starts a new attempt after
+      that conflict, so the backend never applies the write twice.
+    - **Regression check.** This test fails if the client removes that rule.
     """
 
     import redis
@@ -2346,10 +2361,10 @@ def _live_replica_backend(**options: Any) -> RedisBackend:
 def _wait_for_replicated_key(key: str, *, present: bool = True) -> None:
     """Wait until one change made on the primary reaches the replica.
 
-    The wait uses a plain client instead of a backend, because a backend
-    opened against the replica validates the schema record during
-    construction, and that record is itself something the primary has to
-    replicate first.
+    - **Plain client.** The wait uses a plain client and not a backend.
+    - **Reason.** A backend on the replica validates the schema record during
+      construction. That record also comes from the primary through
+      replication, so it can be absent on the replica at first.
 
     Args:
         key: Full Redis key to watch.
@@ -2407,9 +2422,10 @@ class TestRedisStructureBackendContracts(
 ):
     """Run every reusable capability contract against a live Redis server.
 
-    This class uses the read path the server supports. On Redis 7.0 or newer
-    that is the read-only script path, so
-    `TestRedisGuardedReadStructureBackendContracts` covers the other one.
+    - **Read path.** This class uses the read path that the server supports. On
+      Redis 7.0 or newer, that is the read-only script path.
+    - **Other path.** `TestRedisGuardedReadStructureBackendContracts` covers
+      the guarded read path.
     """
 
     def setup_method(self) -> None:
@@ -2434,18 +2450,21 @@ class TestRedisStructureBackendContracts(
 class TestRedisGuardedReadStructureBackendContracts(TestRedisStructureBackendContracts):
     """Run every capability contract against the guarded read path.
 
-    - `RedisBackend` implements `children`, `ancestors`, `descendants`,
-      `contains`, `list_links`, and `list_temporal_entries` twice: as one
-      read-only script where the server can run one, and as several commands
-      under the mutation guard otherwise. `query_temporal_entries` splits the
-      same way for a collection that fits in one page.
-    - Which one runs is decided once during construction, so a live Redis 7
-      server always exercises the script path and would leave the guarded path
-      untested here.
-    - `test_live_redis_scripted_and_guarded_reads_agree` already checks that
+    - **Two read paths.** `RedisBackend` implements `children`, `ancestors`,
+      `descendants`, `contains`, `list_links`, and `list_temporal_entries` in
+      two ways. One way is a read-only script, if the server can run one. The
+      other way is several commands under the mutation guard.
+      `query_temporal_entries` has the same two paths for a collection that
+      fits in one page.
+    - **One choice per backend.** The constructor selects the path one time. A
+      live Redis 7 server always uses the script path, so without this class
+      the guarded path has no live test.
+    - **What these contracts add.**
+      `test_live_redis_scripted_and_guarded_reads_agree` already checks that
       both paths return the same values for the same stored state. These
-      contracts add what that comparison cannot: paging, empty pages, ordering,
-      and dependent cleanup after a write, all against the guarded path.
+      contracts check what that comparison cannot: reads across pages, empty
+      pages, order, and dependent cleanup after a write. All of them use the
+      guarded path.
     """
 
     def setup_method(self) -> None:
@@ -2457,7 +2476,7 @@ class TestRedisGuardedReadStructureBackendContracts(TestRedisStructureBackendCon
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_persists_and_coordinates_instances() -> None:
-    """Committed state survives reconnects and concurrent instances agree."""
+    """Committed state stays after a reconnect, and concurrent instances agree on log positions and acyclic links."""
 
     first = _live_backend()
     _clear_live_data(first)
@@ -2507,7 +2526,7 @@ def test_live_redis_backend_persists_and_coordinates_instances() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_isolates_separate_key_prefixes() -> None:
-    """Two prefixes share one Redis database without seeing each other."""
+    """Two key prefixes share one Redis database, and neither prefix sees the data of the other."""
 
     first = _live_backend(key_prefix=f"{_LIVE_PREFIX}-a")
     second = _live_backend(key_prefix=f"{_LIVE_PREFIX}-b")
@@ -2528,7 +2547,7 @@ def test_live_redis_backend_isolates_separate_key_prefixes() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_preserves_link_identity_and_rolls_back_conflicts() -> None:
-    """Failed topology changes are atomic and link metadata remains isolated."""
+    """A failed topology change is atomic, and a change to a returned link does not change the stored link metadata."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -2548,7 +2567,7 @@ def test_live_redis_backend_preserves_link_identity_and_rolls_back_conflicts() -
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_rejects_invalid_link_mutations_and_directions() -> None:
-    """Link identity, existence, and directional reads are enforced by Redis."""
+    """The Redis backend enforces link identity, link existence, and the direction rules of link reads."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -2688,7 +2707,7 @@ def test_live_redis_scripted_and_guarded_reads_agree() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_reports_corrupt_persisted_record_types() -> None:
-    """Malformed stored values fail through the backend corruption boundary."""
+    """Malformed stored values raise `BackendCorruption`."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -2807,13 +2826,13 @@ def test_live_redis_backend_explicit_cleanup_capabilities() -> None:
         _clear_live_data(backend)
 
 
-# Key kinds that always exist once the schema record is written. They belong to
-# the dataset rather than to any one block or link.
+# Key kinds that always exist after the backend writes the schema record. They
+# belong to the dataset, not to one block or link.
 _SHARED_KEY_KINDS = frozenset({"schema", "mutations", "blocks", "acyclic", "order"})
 
-# Key kinds whose last segment is the id of the block that owns them. The two
-# endpoint index kinds are owned by a block too, but they are checked on their
-# own because their members must resolve as well.
+# Key kinds whose last segment is the id of the block that owns them. A block
+# also owns the 2 endpoint index kinds. Those kinds have a separate check,
+# because the check also resolves each of their members to a stored link.
 _BLOCK_KEY_KINDS = frozenset(
     {
         "block",
@@ -2848,13 +2867,13 @@ def _stored_members(backend: RedisBackend, key: str) -> list[str]:
 def _orphan_keys(backend: RedisBackend) -> list[str]:
     """Return every stored Genie key that no live block or link still owns.
 
-    - The check walks the keys the server actually holds and resolves each one
-      back to a live owner, including the members an index holds.
-    - It compares against no written list of expected keys, so a cleanup path
-      that forgets a key fails here even when nobody remembers to update the
-      test.
-    - A key kind this helper does not know is reported too, so a new key pattern
-      cannot be added without classifying it.
+    - **Real keys.** The check reads the keys that the server holds. It finds
+      the live owner of each key and of each member in an index.
+    - **No expected list.** The check does not compare against a written list
+      of expected keys. A cleanup path that forgets a key fails here, even if
+      nobody updates the test.
+    - **Unknown kinds.** The helper also reports a key kind that it does not
+      know. A new key pattern fails this check until the helper classifies it.
     """
 
     prefix = backend.key_prefix
@@ -2874,7 +2893,7 @@ def _orphan_keys(backend: RedisBackend) -> list[str]:
         if kind in _SHARED_KEY_KINDS:
             continue
         if kind in _ENDPOINT_KEY_KINDS:
-            # A live block can still point at a link whose document is gone.
+            # A live block can still refer to a link that has no document.
             members = [redis_module._decode_endpoint_member(member)[0] for member in endpoints[key]]
             if name not in live_blocks or any(link_id not in stored_links for link_id in members):
                 orphans.append(key)
@@ -2895,7 +2914,7 @@ def _orphan_keys(backend: RedisBackend) -> list[str]:
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_leaves_no_orphan_keys_after_deletion() -> None:
-    """A deleted subtree removes every index and reverse-index key it owned."""
+    """When the backend deletes a subtree, it removes every index and reverse-index key that the subtree owned."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -2905,9 +2924,9 @@ def test_live_redis_backend_leaves_no_orphan_keys_after_deletion() -> None:
         neighbor = backend.put_block(MemoryBlock(id="neighbor", type="other", value={}))
         backend.add_link(MemoryLink(child.id, outside.id, "cites"))
         backend.add_link(MemoryLink(outside.id, child.id, "references"))
-        # A link between two surviving blocks shares the `cites` relation with a
-        # deleted one, so the relation index has to lose one member and keep the
-        # other instead of being dropped whole.
+        # A link between 2 blocks that the delete keeps has the same `cites`
+        # relation as a link that the delete removes. The backend removes only 1
+        # member from the relation index, and it does not delete the whole index.
         survivor = backend.add_link(MemoryLink(outside.id, neighbor.id, "cites"))
         backend.bind_key(KeyBinding(root.id, MemoryAddress((), "child"), child.id))
         backend.bind_key(KeyBinding(outside.id, MemoryAddress((), "child"), child.id))
@@ -2926,7 +2945,7 @@ def test_live_redis_backend_leaves_no_orphan_keys_after_deletion() -> None:
         assert backend.list_log_entries(outside.id) == []
         assert backend.list_temporal_entries(outside.id) == []
 
-        # Deleting the last endpoints must also empty the relation index.
+        # A delete of the last endpoints also empties the relation index.
         backend.delete_block(outside.id)
         backend.delete_block(neighbor.id)
         assert _orphan_keys(backend) == []
@@ -3010,9 +3029,10 @@ def test_live_redis_backend_rejects_future_and_incompatible_schema() -> None:
 def test_live_redis_backend_coordinates_concurrent_initializers() -> None:
     """Concurrent constructors leave one valid current schema record.
 
-    Every constructor must succeed. The worker count is high enough that some
-    constructors read the namespace while another one commits its schema
-    record, which is the window a non-atomic read would fall into.
+    - **Result.** Every constructor succeeds.
+    - **Overlap.** The worker count is high enough that some constructors read
+      the namespace while another constructor commits its schema record. A
+      non-atomic read can fail in that time window.
     """
 
     first = _live_backend()
@@ -3032,7 +3052,7 @@ def test_live_redis_backend_coordinates_concurrent_initializers() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
 def test_live_redis_backend_rejects_wrong_credentials() -> None:
-    """A real authentication failure uses Genie's public backend error."""
+    """A real authentication failure raises `BackendError`, the public Genie backend error."""
 
     assert _LIVE_URL is not None
     with pytest.raises(BackendError, match="authentication or authorization"):
@@ -3047,7 +3067,7 @@ def test_live_redis_backend_rejects_wrong_credentials() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_REPLICA_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REPLICA_REASON)
 def test_live_redis_backend_refuses_a_connection_that_lands_on_a_replica() -> None:
-    """A real replica fails construction with the role message."""
+    """The constructor rejects a real replica with the role message."""
 
     with pytest.raises(UnsupportedOperation, match="lands on a replica"):
         _live_replica_backend()
@@ -3055,11 +3075,13 @@ def test_live_redis_backend_refuses_a_connection_that_lands_on_a_replica() -> No
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_REPLICA_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REPLICA_REASON)
 def test_live_redis_backend_role_check_runs_before_the_schema_check() -> None:
-    """A replica is reported as a replica, not as a missing schema record.
+    """The backend reports a replica as a replica, not as a namespace without a schema record.
 
-    The empty namespace is what makes this an order test. With the role check
-    off the same connection fails on the missing schema record, so the role
-    message only appears when the role check runs first.
+    - **Order test.** Because the namespace is empty, this test checks the
+      order of the role check and the schema check.
+    - **Proof.** With the role check off, the same connection fails because the
+      schema record does not exist. The role message appears only if the role
+      check runs first.
     """
 
     primary = _live_backend()
@@ -3078,19 +3100,18 @@ def test_live_redis_backend_role_check_runs_before_the_schema_check() -> None:
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_REPLICA_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REPLICA_REASON)
 def test_live_redis_backend_on_a_replica_reads_replicated_data_and_refuses_writes() -> None:
-    """The opt-out flag opens a replica, which reads but never writes.
+    """With `verify_server_role=False`, the backend opens a replica, which reads data but rejects every write.
 
-    This is the behavior the flag accepts, and the reason the check is on by
-    default: the replica answers reads with no signal that they may be stale,
-    while every write fails.
+    - **Accepted risk.** This is the behavior that the flag accepts.
+    - **Default.** The check is on by default because the replica answers reads
+      with no signal that the data can be stale, and every write fails.
     """
 
     primary = _live_backend()
     _clear_live_data(primary)
     block = primary.put_block(MemoryBlock(id="replicated", type="event", value={"seen": True}))
-    # Replication keeps the order of the primary's writes, so the block key
-    # arriving also means the schema record the replica backend validates has
-    # arrived.
+    # Replication keeps the order of the primary's writes. So when the block key
+    # arrives, the schema record that the replica backend validates is also there.
     _wait_for_replicated_key(f"{_LIVE_PREFIX}:block:{block.id}")
 
     replica = _live_replica_backend(verify_server_role=False, initialize_schema=False)

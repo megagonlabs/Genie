@@ -1,4 +1,4 @@
-"""Unit and opt-in live tests for the psycopg PostgreSQL backend."""
+"""Unit tests and optional live tests for the PostgreSQL backend that uses `psycopg`."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ from tests.backends.test_backend_contracts import (
 
 
 def test_postgres_backend_implements_every_backend_protocol() -> None:
-    """The class exposes the complete core and optional capability surface."""
+    """`PostgresBackend` implements `MemoryBackend` and every optional capability protocol."""
 
     backend = object.__new__(PostgresBackend)
 
@@ -89,7 +89,7 @@ def test_postgres_backend_rejects_invalid_configuration_before_loading_driver(
     error: type[Exception],
     message: str,
 ) -> None:
-    """Invalid public configuration never attempts a network connection."""
+    """`PostgresBackend` rejects an invalid configuration before it loads the driver, so it does not open a network connection."""
 
     monkeypatch.setattr(
         postgres_module,
@@ -104,7 +104,7 @@ def test_postgres_backend_rejects_invalid_configuration_before_loading_driver(
 def test_postgres_backend_explains_its_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Missing driver installations produce an actionable public error."""
+    """If the environment does not have the driver, `PostgresBackend` raises `UnsupportedOperation` that names the `genie[postgres]` extra."""
 
     def missing() -> tuple[Any, Any, tuple[type[BaseException], ...], tuple[type[BaseException], ...]]:
         raise UnsupportedOperation("install 'genie[postgres]'")
@@ -116,7 +116,7 @@ def test_postgres_backend_explains_its_optional_dependency(
 
 
 def test_postgres_serialization_is_strict_and_defensive() -> None:
-    """The stored column representation preserves JSON value types."""
+    """The stored column form keeps the JSON value types of a block."""
 
     original = MemoryBlock(
         id="note",
@@ -151,7 +151,7 @@ def test_postgres_serialization_is_strict_and_defensive() -> None:
 
 
 def test_postgres_rejects_values_that_are_not_strict_json() -> None:
-    """A value that cannot round-trip through JSON is refused on the way in."""
+    """The backend raises `TypeError` for a value that cannot make a JSON round trip, before it writes the value."""
 
     with pytest.raises(TypeError, match="must be strict JSON data"):
         postgres_module._dump_json({1: "integer key"}, field_name="block value")
@@ -160,7 +160,7 @@ def test_postgres_rejects_values_that_are_not_strict_json() -> None:
 
 
 def test_postgres_reports_corrupt_stored_rows() -> None:
-    """Unreadable stored data raises a corruption error, not a decode error."""
+    """Stored data that the backend cannot read raises `BackendCorruption`, not a decode error."""
 
     with pytest.raises(BackendCorruption, match="JSON is invalid"):
         postgres_module._load_json("{not json")
@@ -171,7 +171,7 @@ def test_postgres_reports_corrupt_stored_rows() -> None:
 
 
 def test_postgres_advisory_lock_key_is_stable_and_schema_scoped() -> None:
-    """The lock key is reproducible across processes and fits a signed int32."""
+    """The lock key is the same in every process, is different for each schema, and fits in a signed int32."""
 
     key = postgres_module._advisory_lock_key("genie")
 
@@ -182,7 +182,7 @@ def test_postgres_advisory_lock_key_is_stable_and_schema_scoped() -> None:
 
 
 class _FakeError(Exception):
-    """Stand-in for a psycopg error carrying a SQLSTATE code."""
+    """Test double for a `psycopg` error that carries a SQLSTATE code."""
 
     def __init__(self, sqlstate: str | None, message: str = "failed") -> None:
         super().__init__(message)
@@ -190,7 +190,7 @@ class _FakeError(Exception):
 
 
 class _FakeOperationalError(_FakeError):
-    """Stand-in for a dropped connection, which carries no SQLSTATE."""
+    """Test double for a dropped connection error, which has no SQLSTATE."""
 
     __name__ = "OperationalError"
 
@@ -223,7 +223,7 @@ def test_postgres_translates_sqlstate_codes_to_stable_errors(
     sqlstate: str,
     expected: type[Exception],
 ) -> None:
-    """Every mapped SQLSTATE class becomes the documented Genie error."""
+    """The backend translates each mapped SQLSTATE class to the documented Genie error."""
 
     translated = postgres_module._translate_postgres_error(_FakeError(sqlstate))
 
@@ -231,7 +231,7 @@ def test_postgres_translates_sqlstate_codes_to_stable_errors(
 
 
 def test_postgres_treats_a_dropped_connection_as_unavailable() -> None:
-    """A driver failure with no SQLSTATE still reports storage as unavailable."""
+    """A dropped connection has no SQLSTATE, but the backend still translates it to `BackendUnavailable`."""
 
     error = _FakeOperationalError(None, "server closed the connection")
     error.__class__.__name__ = "OperationalError"
@@ -284,20 +284,20 @@ def _probe_backend(answer: Any) -> PostgresBackend:
     ids=["primary", "null", "missing-field", "no-row", "unreadable", "command-refused"],
 )
 def test_postgres_server_role_probe_passes_unless_recovery_is_proven(answer: Any) -> None:
-    """Anything short of a proven replica lets construction continue."""
+    """Construction continues unless the reply proves that the server is a replica."""
 
     _probe_backend(answer)._verify_server_role()
 
 
 def test_postgres_server_role_probe_refuses_a_replica() -> None:
-    """A server that reports recovery is refused with an actionable message."""
+    """The backend rejects a server in recovery with a message that says it is a read-only replica."""
 
     with pytest.raises(UnsupportedOperation, match="read-only replica"):
         _probe_backend({"in_recovery": True})._verify_server_role()
 
 
 def test_postgres_server_role_probe_lets_a_connection_failure_through() -> None:
-    """An unreachable server is reported instead of being treated as unknown."""
+    """For a server that it cannot reach, the backend raises the connection error and does not treat the server as unknown."""
 
     with pytest.raises(_FakeError):
         _probe_backend(_FakeError("08006", "connection failed"))._verify_server_role()
@@ -306,7 +306,7 @@ def test_postgres_server_role_probe_lets_a_connection_failure_through() -> None:
 def test_postgres_backend_discards_connection_after_unexpected_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unexpected schema failure closes the new connection before escaping."""
+    """If `_initialize_schema` fails with an unexpected error, the backend closes the new connection before the error reaches the caller."""
 
     closed = Event()
 
@@ -369,9 +369,11 @@ def test_postgres_initialization_checks_the_namespace_inside_the_locked_migratio
 ) -> None:
     """The record read, the table check, and the migration share one locked transaction.
 
-    Reading outside the advisory lock could miss the record and then see the
-    tables that another constructor committed in between. Inside the lock, a
-    constructor that waits reads the record the first one committed.
+    - **Outside the lock.** A read outside the advisory lock can miss the
+      record. Then it can see the tables that another constructor committed
+      after that read.
+    - **Inside the lock.** A constructor that waits reads the record that the
+      first constructor committed.
     """
 
     statements: list[str] = []
@@ -431,8 +433,8 @@ def _live_backend(*, initialize_schema: bool = True) -> PostgresBackend:
 
 
 def _clear_live_data(backend: PostgresBackend) -> None:
-    # Deleting every root block cascades to the whole dataset. The acyclic
-    # protections are not block-owned, so they are cleared on their own.
+    # A delete of every root block cascades to the whole dataset. No block owns
+    # the acyclic protections, so this function clears them separately.
     with backend._write_transaction() as connection:
         connection.execute(f"DELETE FROM {backend._blocks}")
         connection.execute(f"DELETE FROM {backend._acyclic_relations}")
@@ -465,7 +467,7 @@ class TestPostgresStructureBackendContracts(
 
 @pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_postgres_backend_persists_and_coordinates_instances() -> None:
-    """Committed state survives reconnects and concurrent instances share the lock."""
+    """Committed state stays after a reconnect, and concurrent instances share the lock."""
 
     first = _live_backend()
     _clear_live_data(first)
@@ -515,14 +517,14 @@ def test_live_postgres_backend_persists_and_coordinates_instances() -> None:
 
 @pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_postgres_orders_text_by_bytes_not_by_locale() -> None:
-    """Paging uses byte order, so it matches the other relational backend."""
+    """Pages sort text by byte order, not by locale, so the order matches the other relational backend."""
 
     backend = _live_backend()
     _clear_live_data(backend)
     try:
         collection = backend.put_block(MemoryBlock(id="collection", type="timeline", value={}))
-        # Under a locale collation such as en_US.UTF-8 these ids sort in a
-        # different order than plain byte order puts them in.
+        # A locale collation such as `en_US.UTF-8` sorts these ids in a different
+        # order from plain byte order.
         ids = ["a-1", "A-2", "a_3", "AB", "ab"]
         moment = datetime(2024, 1, 1, tzinfo=UTC)
         for block_id in ids:
@@ -544,7 +546,7 @@ def test_live_postgres_orders_text_by_bytes_not_by_locale() -> None:
 
 @pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_postgres_backend_serves_the_public_memory_api() -> None:
-    """The adapter works behind `Memory` with scoped search and ownership."""
+    """`Memory` can use the adapter for ownership and scoped search."""
 
     backend = _live_backend()
     _clear_live_data(backend)
@@ -597,7 +599,7 @@ def test_live_postgres_backend_coordinates_concurrent_initializers() -> None:
 
 @pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_postgres_backend_refuses_a_schema_with_foreign_tables() -> None:
-    """Tables that no Genie record owns are refused and left alone."""
+    """The backend rejects a schema with tables that no Genie record owns, and it does not change them."""
 
     _drop_live_init_schema()
     with _live_backend() as helper:

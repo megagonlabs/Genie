@@ -22,7 +22,7 @@ from genie.structures import GraphAccess, LinkDirection, PropertyGraph
 
 
 def test_graph_creates_lists_and_updates_typed_edges() -> None:
-    """The facade delegates edge persistence to existing memory links."""
+    """The facade stores, lists, and updates edges as ordinary memory links."""
 
     memory = Memory()
     alice = memory.put(type="person", value="Alice")
@@ -48,7 +48,7 @@ def test_graph_creates_lists_and_updates_typed_edges() -> None:
 
 
 def test_graph_neighbors_keep_direction_and_parallel_edges() -> None:
-    """Neighbor results preserve the edge and its direction relative to the node."""
+    """Each neighbor result keeps its edge and its direction relative to the node, and parallel edges stay separate."""
 
     memory = Memory()
     center = memory.put(type="node", value="center")
@@ -75,7 +75,7 @@ def test_graph_neighbors_keep_direction_and_parallel_edges() -> None:
 
 
 def test_graph_neighbors_handle_self_links_in_requested_direction() -> None:
-    """A self-link is one edge and can be viewed from either direction."""
+    """A self-link is one edge, and the neighbor direction matches the requested direction."""
 
     memory = Memory()
     node = memory.put(type="node", value="node")
@@ -165,7 +165,7 @@ def test_graph_shortest_path_is_depth_bounded() -> None:
 
 
 def test_graph_walk_terminates_on_cycles_and_self_links() -> None:
-    """Property graphs allow cycles while each returned path remains simple."""
+    """A property graph allows cycles, but each path that `walk` returns is a simple path."""
 
     memory = Memory()
     a = memory.put(type="node", value="A")
@@ -183,10 +183,10 @@ def test_graph_walk_terminates_on_cycles_and_self_links() -> None:
 
 
 def test_graph_rejects_an_unrelated_edge_returned_by_an_adapter() -> None:
-    """Graph traversal detects a backend edge that is unrelated to its requested node."""
+    """Graph traversal raises `MemoryConflict` if the backend returns an edge that does not connect to the requested node."""
 
     class UnrelatedEdgeBackend(InMemoryBackend):
-        """Append one visible but unrelated edge to every link listing."""
+        """Add one visible but unrelated edge to every `list_links` result."""
 
         unrelated: MemoryLink | None = None
 
@@ -197,7 +197,7 @@ def test_graph_rejects_an_unrelated_edge_returned_by_an_adapter() -> None:
             relation: str | None = None,
             direction: LinkDirection = "out",
         ) -> list[MemoryLink]:
-            """Return normal links plus the deliberately invalid adapter result."""
+            """Return the normal links and the invalid edge that the test adds on purpose."""
 
             links = super().list_links(
                 block_id,
@@ -245,7 +245,7 @@ def test_graph_preserves_memory_handle_scope() -> None:
 
 
 def test_graph_hides_edges_with_unreadable_endpoints() -> None:
-    """Neighbor traversal keeps normal endpoint policy filtering."""
+    """`edges`, `neighbors`, and `walk` hide an edge when the principal cannot read its other endpoint."""
 
     owner = Memory(principal="owner")
     source = owner.put(type="node", value="source", policy=MemoryPolicy.public())
@@ -297,7 +297,7 @@ def test_graph_rejects_invalid_traversal_options(
     method: Callable[[PropertyGraph, MemoryBlock], object],
     error: type[Exception],
 ) -> None:
-    """Traversal bounds and directions fail with predictable exceptions."""
+    """Invalid traversal bounds and directions raise `ValueError` or `TypeError`."""
 
     memory = Memory()
     node = memory.put(type="node", value="node")
@@ -308,7 +308,7 @@ def test_graph_rejects_invalid_traversal_options(
 
 
 def test_graph_missing_nodes_raise_clear_errors() -> None:
-    """Path operations distinguish a missing node from a missing path."""
+    """Graph operations raise `MemoryNotFound` for a node that does not exist, but `shortest_path` returns `None` when no path exists."""
 
     memory = Memory()
     node = memory.put(type="node", value="node")
@@ -323,7 +323,7 @@ def test_graph_missing_nodes_raise_clear_errors() -> None:
 
 
 def test_memory_and_handle_implement_graph_access() -> None:
-    """Both public access objects can be supplied to `PropertyGraph`."""
+    """`Memory` and `MemoryHandle` both satisfy `GraphAccess`, so `PropertyGraph` accepts both."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

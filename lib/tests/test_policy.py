@@ -21,7 +21,7 @@ from genie.policy.policy import BUILTIN_OPERATION_NAMES
 
 
 def test_block_policy_denies_read_to_other_principal() -> None:
-    """Read policies deny principals that are not explicitly allowed."""
+    """A read policy denies a principal that it does not explicitly allow."""
 
     owner_memory = Memory(principal="owner")
     private_policy = MemoryPolicy(read=AccessRule.only(principals={"owner"}))
@@ -40,13 +40,13 @@ def test_block_policy_denies_read_to_other_principal() -> None:
 
 
 def test_builtin_operation_names_match_reserved_policy_names() -> None:
-    """The engine enum and policy reserved-name set stay in sync."""
+    """The `Operation` enum and `BUILTIN_OPERATION_NAMES` contain the same names."""
 
     assert {operation.value for operation in Operation} == BUILTIN_OPERATION_NAMES
 
 
 def test_write_policy_blocks_set_update_and_delete() -> None:
-    """Write policies protect set, update, and delete operations."""
+    """A write policy protects the `set`, `update`, and `delete` operations."""
 
     owner = Memory(principal="owner")
     block = owner.put(
@@ -75,7 +75,7 @@ def test_write_policy_blocks_set_update_and_delete() -> None:
 
 
 def test_children_ancestors_and_search_filter_inaccessible_blocks() -> None:
-    """Traversal and search filter results by read and search policies."""
+    """`children`, `ancestors`, and search filter their results by the read and search policies."""
 
     owner = Memory(principal="owner")
     root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
@@ -124,7 +124,7 @@ def test_children_ancestors_and_search_filter_inaccessible_blocks() -> None:
 
 
 def test_policy_roles_allow_access_without_principal_id_match() -> None:
-    """Role-based policies allow matching roles without id matches."""
+    """A role-based policy allows a principal with a role that the policy lists, even if the principal id does not match."""
 
     owner = Memory(principal="owner")
     policy = MemoryPolicy(read=AccessRule.only(roles={"reader"}))
@@ -162,7 +162,7 @@ def test_principals_validate_identity_and_isolate_caller_containers() -> None:
 
 
 def test_access_rules_and_policies_validate_and_freeze_their_inputs() -> None:
-    """Policy data cannot retain mutable sets or malformed rule values."""
+    """Policy objects freeze the input sets and reject malformed rule values."""
 
     principals = {"agent:reader"}
     rule = AccessRule.only(principals=principals)
@@ -180,7 +180,7 @@ def test_access_rules_and_policies_validate_and_freeze_their_inputs() -> None:
 
 
 def test_policy_models_reject_malformed_runtime_container_values() -> None:
-    """Runtime callers cannot bypass typed policy and principal container contracts."""
+    """`Principal`, `AccessRule`, and `MemoryPolicy` reject malformed container values at runtime, also if the caller ignores the type hints."""
 
     with pytest.raises(TypeError, match="id must be a string"):
         Principal(id=cast(str, 7))
@@ -211,7 +211,7 @@ def test_policy_models_reject_malformed_runtime_container_values() -> None:
 
 
 def test_access_rule_defaults_deny_unless_a_grant_is_given() -> None:
-    """A bare rule denies everyone, and listed grants never fall back to allow-all."""
+    """A rule with no grants denies everyone, and a rule with listed grants allows only those grants, not everyone."""
 
     alice = Principal(id="alice")
     mallory = Principal(id="mallory", roles=frozenset({"intruder"}))
@@ -234,7 +234,7 @@ def test_access_rule_defaults_deny_unless_a_grant_is_given() -> None:
 
 
 def test_access_rule_rejects_allow_all_combined_with_grants() -> None:
-    """Grants next to `allow_all` would be ignored, so the rule refuses them."""
+    """`AccessRule` rejects grants together with `allow_all`, because `allow_all` makes the grants have no effect."""
 
     with pytest.raises(ValueError, match="allow_all cannot be combined"):
         AccessRule(allow_all=True, principals=frozenset({"alice"}))
@@ -245,7 +245,7 @@ def test_access_rule_rejects_allow_all_combined_with_grants() -> None:
 
 
 def test_memory_policy_fields_default_to_owner_only() -> None:
-    """Fields left unset on a policy stay owner-only instead of opening to everyone."""
+    """A policy field that the caller does not set stays owner-only and does not allow everyone."""
 
     assert MemoryPolicy() == MemoryPolicy.owner_private()
     public = MemoryPolicy.public()
@@ -271,7 +271,7 @@ def test_memory_policy_fields_default_to_owner_only() -> None:
 
 
 def test_memory_rejects_invalid_principals_and_policy_objects_at_entry() -> None:
-    """Public memory construction and writes reject malformed policy inputs."""
+    """The `Memory` constructor and `put` reject malformed principals, policies, and other components."""
 
     with pytest.raises(TypeError, match="principal must be"):
         Memory(principal=object())  # type: ignore[arg-type]
@@ -290,7 +290,7 @@ def test_memory_rejects_invalid_principals_and_policy_objects_at_entry() -> None
 
 
 def test_policy_engine_rejects_malformed_evaluation_inputs() -> None:
-    """Policy evaluation fails clearly for invalid operation and record values."""
+    """`PolicyEngine.allows` raises a clear error for an invalid operation, block, principal, or policy."""
 
     engine = PolicyEngine()
     principal = Principal(id="agent")
@@ -313,7 +313,7 @@ def test_policy_engine_rejects_malformed_evaluation_inputs() -> None:
 
 
 def test_policy_rule_can_allow_roles_and_block_owner() -> None:
-    """A rule can allow both matching roles and the block creator."""
+    """A rule can allow both the listed roles and the block creator."""
 
     owner = Memory(principal="owner")
     policy = MemoryPolicy(read=AccessRule.only(roles={"reader"}, owner=True))
@@ -340,7 +340,7 @@ def test_policy_rule_can_allow_roles_and_block_owner() -> None:
 
 
 def test_memory_defaults_new_blocks_to_owner_private_policy() -> None:
-    """Blocks are owner-private when no default policy is configured."""
+    """If the application does not set `default_policy`, new blocks use `MemoryPolicy.owner_private()`."""
 
     owner = Memory(principal="agent:owner")
     block = owner.put(type="note", value="owner default")
@@ -376,7 +376,7 @@ def test_memory_default_policy_can_be_configured_to_public() -> None:
 
 
 def test_owner_or_policy_allows_creator_and_configured_principal() -> None:
-    """Managed defaults can allow both block creators and a supervisor."""
+    """`MemoryPolicy.owner_or` can allow both the block creator and a supervisor principal."""
 
     memory = Memory(
         principal="service:memory",
@@ -407,7 +407,7 @@ def test_owner_or_policy_allows_creator_and_configured_principal() -> None:
 
 
 def test_owner_or_policy_allows_configured_roles() -> None:
-    """Managed defaults can use roles instead of fixed principal ids."""
+    """`MemoryPolicy.owner_or` can allow roles instead of fixed principal ids."""
 
     writer = Memory(principal="agent:writer", default_policy=MemoryPolicy.owner_or(roles={"memory_admin"}))
     block = writer.put(type="note", value="role-admin visible")
@@ -445,7 +445,7 @@ def test_handle_writes_preserve_configured_default_policy() -> None:
 
 
 def test_owner_rules_use_block_created_by_for_missing_policy_fallback() -> None:
-    """No-policy blocks are still owner-private through the policy engine."""
+    """The policy engine uses `created_by` to treat a block with no policy as owner-private."""
 
     engine = PolicyEngine()
     block = MemoryBlock(id="imported", type="note", value="stored", created_by="agent:owner")
@@ -487,7 +487,7 @@ def test_builtin_operations_can_be_checked_by_enum_or_string() -> None:
 
 
 def test_policy_engine_supports_block_level_custom_operations() -> None:
-    """Application-defined operations can be attached directly to a block policy."""
+    """An application can attach its own operations directly to a block policy."""
 
     owner = Memory(principal="agent:owner")
     block = owner.put(
@@ -508,7 +508,7 @@ def test_policy_engine_supports_block_level_custom_operations() -> None:
 
 
 def test_policy_engine_custom_operation_defaults_can_be_registered() -> None:
-    """Engine-level custom operation defaults apply when a block has no override."""
+    """A custom operation default on the engine applies if the block policy has no override."""
 
     engine = PolicyEngine(operations={"export": AccessRule.only(roles={"auditor"})})
     memory = Memory(policy_engine=engine)
@@ -530,7 +530,7 @@ def test_policy_engine_custom_operation_defaults_can_be_registered() -> None:
 
 
 def test_custom_operation_rules_are_deepcopy_friendly() -> None:
-    """Policy objects with custom operations can be copied by adapters."""
+    """Adapters can copy policy objects that have custom operations with `deepcopy`."""
 
     policy = MemoryPolicy(operations={"export": AccessRule.only(roles={"auditor"})})
     engine = PolicyEngine(operations={"export": AccessRule.only(roles={"auditor"})})
@@ -544,7 +544,7 @@ def test_custom_operation_rules_are_deepcopy_friendly() -> None:
 
 
 def test_policy_engine_rejects_unknown_and_reserved_custom_operations() -> None:
-    """Unknown custom operations are denied with clear configuration errors."""
+    """The policy engine raises `ValueError` for an unknown custom operation, and policies reject a custom operation that overrides a built-in."""
 
     memory = Memory()
     block = memory.put(type="note", value="hello")

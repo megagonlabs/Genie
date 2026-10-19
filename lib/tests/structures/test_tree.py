@@ -18,7 +18,7 @@ from genie.structures import OwnershipAccess, OwnershipTree
 
 
 def test_tree_creates_children_under_root_or_selected_parent() -> None:
-    """Child creation defaults to the root and supports nested members."""
+    """`create_child` uses the root as the default parent and can also create nested members."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -62,10 +62,10 @@ def test_tree_traversal_is_bounded_at_the_facade_root() -> None:
 
 
 def test_tree_detects_inconsistent_ancestor_and_child_indexes() -> None:
-    """The facade fails closed when an adapter returns broken ownership indexes."""
+    """The facade fails closed and raises `AccessDenied` or `MemoryConflict` when an adapter returns broken ownership indexes."""
 
     class CorruptTreeBackend(InMemoryBackend):
-        """Allow individual ownership index reads to be made inconsistent."""
+        """Let the test make single ownership index reads inconsistent."""
 
         broken_ancestor_id: str | None = None
         repeated_child_id: str | None = None
@@ -79,7 +79,7 @@ def test_tree_detects_inconsistent_ancestor_and_child_indexes() -> None:
             return super().ancestors(block_id)
 
         def children(self, block_id: str) -> list[MemoryBlock]:
-            """Repeat the root beneath a configured child."""
+            """Repeat the root under a configured child."""
 
             children = super().children(block_id)
             if block_id == self.repeated_child_id and self.repeated_root_id is not None:
@@ -106,7 +106,7 @@ def test_tree_detects_inconsistent_ancestor_and_child_indexes() -> None:
 
 
 def test_tree_rejects_operations_outside_its_root() -> None:
-    """A facade remains bounded even when it uses an unbounded Memory object."""
+    """The facade stays bounded to its root even when it uses an unbounded `Memory` object."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -127,7 +127,7 @@ def test_tree_rejects_operations_outside_its_root() -> None:
 
 
 def test_tree_preserves_handle_upward_traversal_limits() -> None:
-    """The facade does not bypass a `MemoryHandle`'s `allow_up` setting."""
+    """The facade does not bypass the `allow_up` flag of a `MemoryHandle`."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -147,7 +147,7 @@ def test_tree_preserves_handle_upward_traversal_limits() -> None:
 
 
 def test_tree_returns_only_visible_children_and_descendants() -> None:
-    """Traversal keeps the access object's normal block policy filtering."""
+    """Tree traversal applies the normal block policy, so a reader does not see a hidden child."""
 
     owner = Memory(principal="owner")
     root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
@@ -181,7 +181,7 @@ def test_tree_returns_only_visible_children_and_descendants() -> None:
 
 
 def test_tree_does_not_follow_normal_links() -> None:
-    """Non-owning relationships do not change ownership-tree membership."""
+    """A normal link does not make a block a member of the ownership tree."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -195,7 +195,7 @@ def test_tree_does_not_follow_normal_links() -> None:
 
 
 def test_tree_delete_subtree_uses_existing_recursive_delete() -> None:
-    """Deleting a member removes its owned descendants but keeps siblings."""
+    """`delete_subtree` removes a member and its owned descendants, but keeps its siblings."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -212,7 +212,7 @@ def test_tree_delete_subtree_uses_existing_recursive_delete() -> None:
 
 
 def test_tree_delete_authorizes_the_target_branch_only() -> None:
-    """Deleting a branch checks that branch and not its protected descendants."""
+    """`delete_subtree` checks `write` on the target branch only, not on its protected descendants."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -243,7 +243,7 @@ def test_tree_delete_authorizes_the_target_branch_only() -> None:
 
 
 def test_tree_requires_an_existing_visible_root() -> None:
-    """Facade construction and later access fail clearly for a missing root."""
+    """The constructor and later reads of `root` raise `MemoryNotFound` if the root does not exist."""
 
     memory = Memory()
 
@@ -259,7 +259,7 @@ def test_tree_requires_an_existing_visible_root() -> None:
 
 
 def test_memory_and_handle_implement_ownership_access() -> None:
-    """Both public access objects can be supplied to `OwnershipTree`."""
+    """`Memory` and `MemoryHandle` both satisfy `OwnershipAccess`, so `OwnershipTree` accepts both."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

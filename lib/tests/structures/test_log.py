@@ -20,7 +20,7 @@ from genie.structures import EventLog, SequenceAccess
 
 
 def test_event_log_appends_and_reads_stable_sequences() -> None:
-    """Append assigns stable positions and range reads use half-open bounds."""
+    """`append` gives each entry a stable position, and range reads use half-open bounds."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -42,7 +42,7 @@ def test_event_log_appends_and_reads_stable_sequences() -> None:
 
 
 def test_event_log_can_append_the_same_block_more_than_once() -> None:
-    """Log membership records occurrences rather than unique block identity."""
+    """A log records each occurrence of a block, so the same block can have 2 positions."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -59,7 +59,7 @@ def test_event_log_can_append_the_same_block_more_than_once() -> None:
 
 
 def test_event_log_reads_across_bounded_backend_pages() -> None:
-    """The facade fills its visible limit across multiple store pages."""
+    """The facade reads more than one store page to return the full `limit` of visible items."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -75,7 +75,7 @@ def test_event_log_reads_across_bounded_backend_pages() -> None:
 
 
 def test_event_log_does_not_reuse_sequences_after_target_deletion() -> None:
-    """Cleanup may leave gaps, but later appends remain monotonically increasing."""
+    """Cleanup can leave a gap, but each later append still gets a higher position."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -91,7 +91,7 @@ def test_event_log_does_not_reuse_sequences_after_target_deletion() -> None:
 
 
 def test_event_log_preserves_handle_scope() -> None:
-    """Exact reads propagate denial while scans omit inaccessible entries."""
+    """In a scoped log, `get` and `append` raise `AccessDenied` for an outside block, and `read` omits it."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -111,7 +111,7 @@ def test_event_log_preserves_handle_scope() -> None:
 
 
 def test_event_log_append_is_atomic_under_concurrent_writers() -> None:
-    """Concurrent appends receive unique monotonically increasing sequences."""
+    """100 concurrent appends get unique positions that fill 0 to 99 with no gap."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -129,7 +129,7 @@ def test_event_log_append_is_atomic_under_concurrent_writers() -> None:
 
 
 def test_event_log_cleanup_removes_deleted_log_state() -> None:
-    """Deleting the log block removes entries and its sequence allocator."""
+    """A delete of the log block removes its entries and its sequence allocator."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -146,13 +146,13 @@ def test_event_log_cleanup_removes_deleted_log_state() -> None:
 
 
 def test_event_log_handles_a_stale_backend_entry_defensively() -> None:
-    """Exact reads report stale entries while scans omit their missing targets."""
+    """If a backend keeps a stale entry, `get` raises `MemoryNotFound` and `read` omits the deleted target."""
 
     class StaleLogBackend(InMemoryBackend):
         """Simulate an adapter that leaves log entries after target deletion."""
 
         def delete_log_entries_for_block(self, block_id: str) -> None:
-            """Deliberately retain log state for the integrity-path test."""
+            """Keep the log entries on purpose so that the test can check stale state."""
 
     backend = StaleLogBackend()
     memory = Memory(backend=backend)
@@ -183,7 +183,7 @@ def test_event_log_handles_a_stale_backend_entry_defensively() -> None:
 def test_event_log_rejects_invalid_ranges(
     operation: Callable[[EventLog], object],
 ) -> None:
-    """Sequence ranges and limits fail with predictable exceptions."""
+    """Invalid positions, ranges, limits, and flags raise `TypeError` or `ValueError`."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -195,7 +195,7 @@ def test_event_log_rejects_invalid_ranges(
 
 
 def test_event_log_requires_the_optional_backend_capability() -> None:
-    """A backend without sequence operations fails clearly at construction."""
+    """The constructor raises `UnsupportedOperation` for a backend without sequence operations."""
 
     memory = Memory()
     root = memory.put(type="log", value="events")
@@ -214,7 +214,7 @@ def test_event_log_requires_the_optional_backend_capability() -> None:
 
 
 def test_memory_and_handle_implement_sequence_access() -> None:
-    """Both public access objects can resolve blocks for an event log."""
+    """`Memory` and `MemoryHandle` both satisfy `SequenceAccess`, and the reference backend satisfies `SequenceStore`."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

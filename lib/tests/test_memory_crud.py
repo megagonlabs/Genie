@@ -13,7 +13,7 @@ from genie.memory.errors import MemoryConflict, MemoryNotFound
 
 
 def test_put_get_and_update_memory_block() -> None:
-    """Memory blocks can be created, read, updated, and versioned."""
+    """`Memory` creates, reads, and updates a block, and each update increases its `version`."""
 
     memory = Memory()
 
@@ -29,7 +29,7 @@ def test_put_get_and_update_memory_block() -> None:
 
 
 def test_set_delete_and_recursive_cleanup() -> None:
-    """Set and recursive delete update blocks, children, and links."""
+    """`set` replaces a block value, and a recursive `delete` removes the block, its descendants, and its links."""
 
     memory = Memory()
     root = memory.put(type="root", value="old")
@@ -50,7 +50,7 @@ def test_set_delete_and_recursive_cleanup() -> None:
 
 
 def test_delete_authorizes_the_target_and_not_its_descendants() -> None:
-    """A descendant that denies write no longer strands its owner branch."""
+    """A descendant that denies `write` does not block the delete of the branch that owns it."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -70,7 +70,7 @@ def test_delete_authorizes_the_target_and_not_its_descendants() -> None:
 
 
 def test_delete_requires_write_access_to_the_target() -> None:
-    """A target that denies write refuses deletion and leaves the tree intact."""
+    """If the target denies `write`, `delete` raises `AccessDenied` and does not change the tree."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -89,7 +89,7 @@ def test_delete_requires_write_access_to_the_target() -> None:
 
 
 def test_set_and_update_require_read_and_write_access() -> None:
-    """A principal that can write but not read a block cannot change it, because both calls return the stored block."""
+    """A principal that can write but not read a block cannot change it, because `set` and `update` return the stored block."""
 
     owner = Memory(principal="owner")
     drop_box = MemoryPolicy(read=AccessRule.owner(), write=AccessRule.allow())
@@ -112,7 +112,7 @@ def test_set_and_update_require_read_and_write_access() -> None:
 
 
 def test_require_access_checks_a_policy_without_changing_the_block() -> None:
-    """`require_access` raises `AccessDenied` on refusal and otherwise does nothing."""
+    """`require_access` raises `AccessDenied` when the policy denies access, and otherwise returns `None` and changes nothing."""
 
     engine = PolicyEngine(operations={"export": AccessRule.owner()})
     owner = Memory(principal="owner", policy_engine=engine)
@@ -138,7 +138,7 @@ def test_require_access_checks_a_policy_without_changing_the_block() -> None:
 
 
 def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
-    """Missing ids and duplicate ids raise explicit memory errors."""
+    """An unknown id raises `MemoryNotFound` (but `get` returns `None`), and a duplicate id raises `MemoryConflict`."""
 
     memory = Memory()
     block = memory.put(type="note", value="exists", id="fixed")
@@ -165,7 +165,7 @@ def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
 
 
 def test_contains_enforces_root_traversal_and_candidate_read_policy() -> None:
-    """Public containment does not expose private ownership membership."""
+    """`contains` does not tell a reader that a private block is in a subtree."""
 
     owner = Memory(principal="owner")
     public_root = owner.put(
@@ -197,7 +197,7 @@ def test_contains_enforces_root_traversal_and_candidate_read_policy() -> None:
 
 
 def test_update_requires_dict_values() -> None:
-    """Value updates are accepted only for dictionary values."""
+    """`update` accepts a new value only when the stored value is a dictionary."""
 
     memory = Memory()
     block = memory.put(type="note", value="plain text")
@@ -207,7 +207,7 @@ def test_update_requires_dict_values() -> None:
 
 
 def test_metadata_only_update_preserves_value_and_versions() -> None:
-    """Metadata-only updates leave values intact while versioning the block."""
+    """An `update` with only metadata keeps the value and increases the block `version`."""
 
     memory = Memory()
     block = memory.put(type="note", value=["keep"], metadata={"source": "initial"})
@@ -224,7 +224,7 @@ def test_metadata_only_update_preserves_value_and_versions() -> None:
 
 
 def test_block_metadata_requires_a_strict_json_dictionary() -> None:
-    """In-memory use enforces the same portable metadata shape as persistence."""
+    """In-memory use applies the same strict JSON dictionary rule for metadata as persistent backends."""
 
     memory = Memory()
 
@@ -247,7 +247,7 @@ def test_block_metadata_requires_a_strict_json_dictionary() -> None:
 
 
 def test_block_metadata_nested_past_the_limit_is_a_value_error() -> None:
-    """Metadata may nest up to `MAX_NESTING_DEPTH` levels, counting the metadata dictionary."""
+    """Metadata can nest to `MAX_NESTING_DEPTH` levels, with the metadata dictionary as level 1."""
 
     memory = Memory()
     root = memory.put(type="root", value={})
@@ -296,7 +296,7 @@ def test_returned_blocks_do_not_mutate_stored_values_or_metadata() -> None:
 
 
 def test_memory_block_defaults_and_updates_are_safe_value_objects() -> None:
-    """Block helpers create unique UTC identities and normalize cleared metadata."""
+    """`MemoryBlock` creates a unique id and UTC timestamps, and `with_updates(metadata=None)` sets metadata to `{}`."""
 
     first = MemoryBlock(type="note", value="first", metadata={"source": "test"})
     second = MemoryBlock(type="note", value="second")
@@ -330,7 +330,7 @@ def test_put_rejects_invalid_type_id_and_parent(
     error: type[Exception],
     message: str,
 ) -> None:
-    """A bad block type, id, or parent fails before anything is stored."""
+    """`put` rejects a bad block type, id, or parent before it stores anything."""
 
     memory = Memory()
 
@@ -371,7 +371,7 @@ def test_block_references_must_be_blocks_or_non_empty_string_ids() -> None:
 
 
 def test_memory_block_requires_string_id_type_and_parent() -> None:
-    """The block record rejects bad identity fields, including in copies."""
+    """`MemoryBlock` rejects bad identity fields, and `with_updates` also rejects them."""
 
     block = MemoryBlock(type="note", value="value")
 

@@ -38,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def at(value: str) -> datetime:
-    """Parse a test timestamp, defaulting to midnight UTC."""
+    """Parse a test timestamp into UTC, and read a date without a time as midnight UTC."""
 
     parsed = datetime.fromisoformat(value)
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
@@ -76,7 +76,7 @@ def draft(
     belief: str | None = None,
     stance: str = "supports",
 ) -> FactDraft:
-    """Build one extracted-fact draft with test-friendly defaults."""
+    """Build one draft of an extracted fact, with default values that suit the tests."""
 
     return FactDraft(
         text=text,
@@ -94,7 +94,7 @@ def draft(
 
 
 def test_bank_tiers_are_owned_and_reopen_instead_of_duplicating() -> None:
-    """One root owns every tier, and rebuilding the bundle finds them again."""
+    """One root owns every tier, and a second `HindsightStructures.create` call reuses the same tiers."""
 
     fixture = Bank()
     tiers = {child.metadata["tier"]: child for child in fixture.handle.children()}
@@ -110,7 +110,7 @@ def test_bank_tiers_are_owned_and_reopen_instead_of_duplicating() -> None:
 
 
 def test_retain_stores_the_document_and_both_time_axes_of_each_fact() -> None:
-    """One temporal entry carries when the bank learned a fact and what it describes."""
+    """One temporal entry records when the bank learned a fact and, if known, the time that the fact describes."""
 
     fixture = Bank()
     result = fixture.bank.retain(
@@ -151,7 +151,7 @@ def test_retain_stores_the_document_and_both_time_axes_of_each_fact() -> None:
 
 
 def test_a_repeated_fact_gains_provenance_instead_of_a_duplicate() -> None:
-    """Re-attesting a fact raises its evidence rather than the size of the bank."""
+    """If a new document repeats a stored fact, the bank adds the document as provenance and does not store a duplicate."""
 
     fixture = Bank()
     first = fixture.bank.retain(
@@ -177,7 +177,7 @@ def test_a_repeated_fact_gains_provenance_instead_of_a_duplicate() -> None:
 
 
 def test_entity_resolution_binds_every_surface_form_to_one_entity() -> None:
-    """A resolved alias becomes a keyed address, so the next lookup is a read."""
+    """The bank stores a resolved alias as a keyed address, so the next lookup of that alias is a read."""
 
     fixture = Bank()
     fixture.bank.register_entity("Alice Chen", kind="person", aliases=("Alice",))
@@ -204,7 +204,7 @@ def test_entity_resolution_binds_every_surface_form_to_one_entity() -> None:
 
 
 def test_an_ambiguous_name_starts_a_new_entity_rather_than_guessing() -> None:
-    """Abbreviations only resolve when exactly one canonical name matches."""
+    """An abbreviation resolves only if exactly one canonical name matches, and otherwise the bank creates a new entity."""
 
     fixture = Bank()
     fixture.bank.register_entity("Alice Chen", kind="person")
@@ -217,7 +217,7 @@ def test_an_ambiguous_name_starts_a_new_entity_rather_than_guessing() -> None:
 
 
 def test_mentions_are_graph_edges_from_facts_to_entities() -> None:
-    """Entity connections are stored links, not a repeated name in a payload."""
+    """The bank stores each connection from a fact to an entity as a link, not as a repeated name in a payload."""
 
     fixture = Bank()
     fixture.bank.retain(
@@ -241,7 +241,7 @@ def test_mentions_are_graph_edges_from_facts_to_entities() -> None:
 
 
 def test_invalidation_retires_a_fact_without_deleting_it() -> None:
-    """A corrected fact stops being recalled but stays readable and linked."""
+    """After `invalidate`, recall and `facts` do not return the fact, but the fact stays readable and keeps its provenance."""
 
     fixture = Bank()
     result = fixture.bank.retain(
@@ -263,7 +263,7 @@ def test_invalidation_retires_a_fact_without_deleting_it() -> None:
 
 
 def test_consolidation_strengthens_extends_and_reconciles_one_belief() -> None:
-    """Evidence raises the proof count; a reversal writes a version that keeps the old one."""
+    """New evidence raises the proof count, and a reversal writes a new version that keeps the old text."""
 
     fixture = Bank()
     fixture.bank.retain(
@@ -326,7 +326,7 @@ def test_consolidation_strengthens_extends_and_reconciles_one_belief() -> None:
 
 
 def test_a_proof_count_is_counted_off_the_lineage_graph() -> None:
-    """Evidence is stored as edges, so the count cannot drift from the facts."""
+    """The bank stores evidence as lineage edges, so the proof count always agrees with the facts."""
 
     fixture = Bank()
     result = fixture.bank.retain(
@@ -348,7 +348,7 @@ def test_a_proof_count_is_counted_off_the_lineage_graph() -> None:
 
 
 def test_an_observation_reports_itself_stale_until_the_next_consolidation() -> None:
-    """The retention cursor is what tells a belief that newer evidence is waiting."""
+    """The retention cursor marks an observation as stale until the next consolidation reads the newer evidence."""
 
     fixture = Bank()
     fixture.bank.retain(
@@ -377,7 +377,7 @@ def test_an_observation_reports_itself_stale_until_the_next_consolidation() -> N
 
 
 def test_invalidated_facts_are_skipped_by_consolidation() -> None:
-    """A retired fact stops backing the belief it was extracted for."""
+    """Consolidation skips an invalidated fact, so that fact no longer supports the belief of its claim."""
 
     fixture = Bank()
     result = fixture.bank.retain(
@@ -398,7 +398,7 @@ def test_invalidated_facts_are_skipped_by_consolidation() -> None:
 
 
 def test_a_mental_model_is_rebuilt_only_when_its_answer_changes() -> None:
-    """More evidence for a belief already on file does not write a new version."""
+    """`refresh` writes a new mental model version only if the answer changes, not for more evidence on a known belief."""
 
     fixture = Bank()
     fixture.models.create(
@@ -455,7 +455,7 @@ def test_a_mental_model_is_rebuilt_only_when_its_answer_changes() -> None:
 
 
 def test_a_mental_model_reads_only_the_memories_in_its_scope() -> None:
-    """Scope tags decide which beliefs reach a standing answer."""
+    """The scope tags of a mental model decide which beliefs its answer includes."""
 
     fixture = Bank()
     fixture.models.create(name="web", question="Frontend?", tags=("web",))
@@ -522,7 +522,7 @@ def seed_recall_bank() -> Bank:
 
 
 def test_recall_reports_which_retrievers_reached_each_result() -> None:
-    """Four retrievers run at once and reciprocal rank fusion combines them."""
+    """Recall runs 4 retrievers for each query, combines them with reciprocal rank fusion, and reports which retrievers reached each hit."""
 
     fixture = seed_recall_bank()
 
@@ -546,7 +546,7 @@ def test_recall_reports_which_retrievers_reached_each_result() -> None:
 
 
 def test_recall_stops_at_its_token_budget() -> None:
-    """Hindsight fills a token budget rather than returning a fixed row count."""
+    """Like Hindsight, recall fills a token budget and does not return a fixed number of rows."""
 
     fixture = seed_recall_bank()
 
@@ -560,7 +560,7 @@ def test_recall_stops_at_its_token_budget() -> None:
 
 
 def test_recall_filters_by_type_and_tag() -> None:
-    """Observations ride along with raw facts unless the caller excludes them."""
+    """Recall returns observations together with raw facts if the caller does not exclude them."""
 
     fixture = seed_recall_bank()
 
@@ -574,7 +574,7 @@ def test_recall_filters_by_type_and_tag() -> None:
 
 
 def test_the_temporal_retriever_reads_both_axes() -> None:
-    """A window matches facts learned inside it and facts describing it."""
+    """A recall window matches facts that the bank learned inside it and facts that describe a time inside it."""
 
     fixture = Bank()
     fixture.bank.retain(
@@ -604,7 +604,7 @@ def test_the_temporal_retriever_reads_both_axes() -> None:
 
 
 def test_reflection_answers_from_the_highest_layer_that_knows() -> None:
-    """Mental model first, then observations, then raw facts."""
+    """Reflection answers from the mental model first, then from observations, and then from raw facts."""
 
     fixture = seed_recall_bank()
 
@@ -636,7 +636,7 @@ def test_reflection_answers_from_the_highest_layer_that_knows() -> None:
 
 
 def test_reflection_reports_the_provenance_of_every_piece_of_evidence() -> None:
-    """Each layer names what it was derived from by walking the lineage relation."""
+    """For each layer of evidence, reflection follows the lineage relation and names the sources of that layer."""
 
     fixture = seed_recall_bank()
     fixture.models.create(name="brief", question="What should I know?", tags=("billing",))
@@ -661,7 +661,7 @@ def test_reflection_reports_the_provenance_of_every_piece_of_evidence() -> None:
 
 
 def test_reflection_warns_when_a_belief_has_unconsolidated_evidence() -> None:
-    """A stale observation is reported rather than quietly answered from."""
+    """Reflection adds an `Unverified:` note to the answer when it uses a stale observation."""
 
     fixture = seed_recall_bank()
     fixture.bank.retain(
@@ -689,7 +689,7 @@ def test_reflection_warns_when_a_belief_has_unconsolidated_evidence() -> None:
 
 
 def test_one_bank_cannot_read_another() -> None:
-    """A bounded handle is what makes a memory bank an isolated brain."""
+    """A bounded handle isolates each memory bank, so one bank cannot read the facts of another bank."""
 
     first = Bank("first")
     second = Bank("second")
@@ -707,7 +707,7 @@ def test_one_bank_cannot_read_another() -> None:
 
 
 def test_validation_keeps_the_lamp_model_explicit() -> None:
-    """Taxonomy, time, relation, and claim errors fail predictably."""
+    """The lamp raises `ValueError` for a bad fact type, a bad time value, an unknown relation, a bad claim stance, or an unknown memory."""
 
     fixture = Bank()
     with pytest.raises(ValueError, match="fact_type"):
@@ -746,7 +746,7 @@ def test_validation_keeps_the_lamp_model_explicit() -> None:
 
 
 def test_agent_learns_and_answers_only_through_tools() -> None:
-    """The agent reaches memory through named JSON-compatible tools alone."""
+    """The agent uses memory only through named tools that take and return JSON-compatible values."""
 
     agent = build_agent()
     assert [tool.name for tool in agent.tools] == [
@@ -791,7 +791,7 @@ def test_agent_learns_and_answers_only_through_tools() -> None:
 
 
 def test_tool_results_stay_json_compatible() -> None:
-    """The tool boundary is the same shape a model function-calling loop needs."""
+    """Tool arguments and results survive a JSON round trip, which is the form that a model uses when it calls functions."""
 
     agent = build_agent()
     agent.learn(DOCUMENTS[:1], entities=ENTITIES, models=MODELS)
@@ -805,7 +805,7 @@ def test_tool_results_stay_json_compatible() -> None:
 
 
 def test_observation_revisions_are_owned_by_their_belief() -> None:
-    """Deleting a belief deletes its history, because revisions are owned blocks."""
+    """A delete of a belief also deletes its history, because the belief owns its revision blocks."""
 
     fixture = Bank()
     fixture.bank.retain(
@@ -824,7 +824,7 @@ def test_observation_revisions_are_owned_by_their_belief() -> None:
 
 
 def test_demo_runs_as_a_module() -> None:
-    """The lamp is runnable from the repository root."""
+    """The demo runs as a module from the repository root."""
 
     result = subprocess.run(
         [sys.executable, "-m", "examples.lamps.hindsight.demo"],
@@ -845,7 +845,7 @@ def test_demo_runs_as_a_module() -> None:
 
 
 def test_demo_output_is_stable_between_runs() -> None:
-    """Nothing reads a clock, a network, or a block id, so runs match."""
+    """The demo does not read a clock, a network, or a block id, so 2 runs give the same output."""
 
     outputs = [
         subprocess.run(

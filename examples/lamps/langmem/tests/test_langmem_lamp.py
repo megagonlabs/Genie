@@ -1,4 +1,4 @@
-"""Behavioral evidence for the LangMem-inspired Genie lamp."""
+"""Tests for the LangMem-inspired Genie lamp."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ PROFILE_DEFAULT = {"name": "Dana", "language": "python", "review_tone": "neutral
 
 @dataclass(frozen=True, slots=True)
 class Lamp:
-    """The wired pieces one test works against."""
+    """The connected parts that one test uses."""
 
     handle: MemoryHandle
     structures: LangMemStructures
@@ -285,7 +285,7 @@ def test_forgetting_a_namespace_takes_its_profile_and_queued_work_with_it() -> N
     assert lamp.queue.pending(base=DANA) == []
     assert lamp.queue.history() == []
 
-    # Nothing is left that could write into the namespace after it is retired.
+    # After `forget`, the queue has no work that can write into the namespace.
     assert lamp.queue.run_due(now=NOON) == []
     assert lamp.store.get((*DANA, "semantic"), "tests") is None
     assert lamp.store.namespace_node(DANA) is None

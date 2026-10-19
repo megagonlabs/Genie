@@ -24,7 +24,7 @@ from genie.structures import (
 
 
 def test_keyed_collection_binds_and_resolves_exact_addresses() -> None:
-    """A collection maps one namespaced address to an existing memory block."""
+    """A collection binds a namespaced address to a stored block, and an unbound address returns `None`."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -44,7 +44,7 @@ def test_keyed_collection_binds_and_resolves_exact_addresses() -> None:
 
 
 def test_keyed_collection_lists_exact_and_recursive_namespaces() -> None:
-    """Namespace listing is stable and can use an exact namespace or prefix."""
+    """`items` lists bindings in a stable order for an exact namespace or, with `recursive`, a namespace prefix."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -91,7 +91,7 @@ def test_keyed_collection_lists_exact_and_recursive_namespaces() -> None:
 
 
 def test_keyed_collection_uses_atomic_compare_and_swap_updates() -> None:
-    """Rebind and unbind fail when another value owns the expected address."""
+    """`rebind` and `unbind` raise `MemoryConflict` if the address holds a block other than `expected`."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -119,7 +119,7 @@ def test_keyed_collection_uses_atomic_compare_and_swap_updates() -> None:
 
 
 def test_same_address_is_independent_between_collections() -> None:
-    """Address uniqueness is scoped by collection id."""
+    """An address is unique only inside one collection id, so 2 collections can bind it to different blocks."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -139,7 +139,7 @@ def test_same_address_is_independent_between_collections() -> None:
 
 
 def test_keyed_collection_reads_across_bounded_backend_pages() -> None:
-    """The facade fills its visible limit across multiple store pages."""
+    """The facade reads more than one store page to return the full `limit` of visible items."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -156,7 +156,7 @@ def test_keyed_collection_reads_across_bounded_backend_pages() -> None:
 
 
 def test_keyed_collection_preserves_handle_scope() -> None:
-    """Exact lookup propagates denial while listing omits inaccessible targets."""
+    """In a scoped collection, `get` and `bind` raise `AccessDenied` for an outside block, and `items` omits it."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -179,7 +179,7 @@ def test_keyed_collection_preserves_handle_scope() -> None:
 
 
 def test_key_bindings_are_cleaned_when_blocks_are_deleted() -> None:
-    """Deleting a target or collection removes its dependent binding state."""
+    """A delete of a target block or of the collection block removes the bindings that depend on it."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -201,13 +201,13 @@ def test_key_bindings_are_cleaned_when_blocks_are_deleted() -> None:
 
 
 def test_keyed_collection_handles_a_stale_backend_binding_defensively() -> None:
-    """Exact reads report stale bindings while listings omit their missing targets."""
+    """If a backend keeps a stale binding, `get_item` raises `MemoryNotFound` and `items` omits the deleted target."""
 
     class StaleKeyBackend(InMemoryBackend):
         """Simulate an adapter that leaves a binding after target deletion."""
 
         def delete_key_bindings_for_block(self, block_id: str) -> None:
-            """Deliberately retain keyed state for the integrity-path test."""
+            """Keep the key bindings on purpose so that the test can check stale state."""
 
     backend = StaleKeyBackend()
     memory = Memory(backend=backend)
@@ -224,7 +224,7 @@ def test_keyed_collection_handles_a_stale_backend_binding_defensively() -> None:
 
 
 def test_key_binding_is_atomic_under_concurrent_writers() -> None:
-    """Only one concurrent create-only bind can claim an address."""
+    """Of many concurrent `bind` calls for one unused address, only 1 call succeeds."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -248,7 +248,7 @@ def test_key_binding_is_atomic_under_concurrent_writers() -> None:
 
 
 def test_key_rebind_compare_and_swap_is_atomic_under_concurrent_writers() -> None:
-    """Only one writer can replace a binding from the same expected block."""
+    """Of many concurrent `rebind` calls with the same `expected` block, only 1 call succeeds."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -276,7 +276,7 @@ def test_key_rebind_compare_and_swap_is_atomic_under_concurrent_writers() -> Non
 
 
 def test_keyed_collection_requires_the_optional_backend_capability() -> None:
-    """A backend without keyed operations fails clearly at construction."""
+    """The constructor raises `UnsupportedOperation` for a backend without keyed operations."""
 
     memory = Memory()
     root = memory.put(type="collection", value="preferences")
@@ -297,7 +297,7 @@ def test_keyed_collection_requires_the_optional_backend_capability() -> None:
 
 
 def test_memory_and_handle_implement_keyed_access() -> None:
-    """Both public access objects can resolve blocks for a keyed collection."""
+    """`Memory` and `MemoryHandle` both satisfy `KeyedAccess`, and the reference backend satisfies `KeyedStore`."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

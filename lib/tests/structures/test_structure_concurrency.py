@@ -1,4 +1,4 @@
-"""Concurrency tests that cross optional structure boundaries."""
+"""Concurrency tests that use more than one optional structure."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from genie.structures import LineageDAG, PropertyGraph, TemporalCollection
 
 
 def test_graph_write_and_first_lineage_write_cannot_race_into_a_cycle() -> None:
-    """Ordinary and protected link writes coordinate on one relation."""
+    """A graph write and the first lineage write on one relation cannot both commit and make a cycle."""
 
     memory = Memory()
     first = memory.put(type="artifact", value="first")

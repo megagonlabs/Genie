@@ -22,7 +22,7 @@ from genie.codecs import MAX_NESTING_DEPTH
 
 
 def test_public_link_api_uses_explicit_operation_names() -> None:
-    """The public API exposes add/list link names without old aliases."""
+    """`Memory` and its handles expose explicit link and mount method names, without the old `link` and `links` aliases."""
 
     memory = Memory()
     scope = memory.get_unbounded_handle()
@@ -48,7 +48,7 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
 
 
 def test_links_support_direction_filters_and_link_scope_search() -> None:
-    """Links support direction filtering and linked-memory search."""
+    """`list_links` filters by relation and direction, and a search with the `links` scope returns linked blocks."""
 
     memory = Memory()
     source = memory.put(type="note", value="source")
@@ -70,7 +70,7 @@ def test_links_support_direction_filters_and_link_scope_search() -> None:
 
 
 def test_link_metadata_is_defensively_copied() -> None:
-    """Link metadata cannot be mutated through input or returned objects."""
+    """A change to the input or to a returned link does not change the stored link metadata."""
 
     memory = Memory()
     source = memory.put(type="note", value="source")
@@ -89,7 +89,7 @@ def test_link_metadata_is_defensively_copied() -> None:
 
 
 def test_link_metadata_requires_a_strict_json_dictionary() -> None:
-    """Link creation and updates reject nonportable metadata."""
+    """`add_link` and `update_link` reject metadata that is not a strict JSON dictionary."""
 
     memory = Memory()
     source = memory.put(type="note", value="source")
@@ -128,7 +128,7 @@ def test_link_metadata_nested_past_the_limit_is_a_value_error() -> None:
 
 
 def test_update_link_merges_canonical_metadata_and_preserves_identity() -> None:
-    """Link updates persist merged metadata without changing link identity."""
+    """`update_link` stores merged metadata and does not change the identity of the link."""
 
     memory = Memory()
     source = memory.put(type="note", value="source")
@@ -172,7 +172,7 @@ def test_update_link_merges_canonical_metadata_and_preserves_identity() -> None:
 
 
 def test_update_link_rejects_missing_links() -> None:
-    """Link updates require a canonical stored link rather than trusting input."""
+    """`update_link` uses the stored link and does not trust the input, so a forged link raises `MemoryNotFound`."""
 
     memory = Memory()
     source = memory.put(type="note", value="source")
@@ -184,7 +184,7 @@ def test_update_link_rejects_missing_links() -> None:
 
 
 def test_update_link_requires_source_write_and_target_read_access() -> None:
-    """Link updates enforce the same endpoint permissions as link creation."""
+    """`update_link` enforces the same endpoint permissions as `add_link`."""
 
     owner = Memory(principal="owner")
     locked_source = owner.put(
@@ -216,7 +216,7 @@ def test_update_link_requires_source_write_and_target_read_access() -> None:
 
 
 def test_update_link_requires_source_read_access() -> None:
-    """A principal that can write but not read the source cannot update a link, because the stored link is returned."""
+    """A principal that can write the source but cannot read it cannot update a link, because `update_link` returns the stored link."""
 
     owner = Memory(principal="owner")
     drop_box = MemoryPolicy(read=AccessRule.owner(), write=AccessRule.allow())
@@ -232,7 +232,7 @@ def test_update_link_requires_source_read_access() -> None:
 
 
 def test_scope_update_link_stays_inside_scope() -> None:
-    """A scoped handle can update only regular links contained by its subtree."""
+    """A scoped handle can update only the regular links that its subtree contains."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -251,7 +251,7 @@ def test_scope_update_link_stays_inside_scope() -> None:
 
 
 def test_list_links_hides_links_to_unreadable_endpoints() -> None:
-    """Link listing hides links whose endpoints are unreadable."""
+    """`list_links` hides a link if the caller cannot read one of its endpoints."""
 
     owner = Memory(principal="owner")
     source = owner.put(type="note", value="source", policy=MemoryPolicy.public())
@@ -274,7 +274,7 @@ def test_list_links_hides_links_to_unreadable_endpoints() -> None:
 
 
 def test_scope_list_links_and_link_search_stay_inside_scope() -> None:
-    """Scoped link listing and search do not expose out-of-scope blocks."""
+    """In a scoped handle, `list_links` and link search do not show blocks outside the scope."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -292,7 +292,7 @@ def test_scope_list_links_and_link_search_stay_inside_scope() -> None:
 
 
 def test_links_reject_invalid_directions() -> None:
-    """Invalid link directions are rejected."""
+    """`list_links` rejects an invalid direction."""
 
     memory = Memory()
     block = memory.put(type="note", value="source")
@@ -315,7 +315,7 @@ def test_scope_linking_cannot_cross_scope_boundaries() -> None:
 
 
 def test_mounts_are_symbolic_and_not_recursive_ownership() -> None:
-    """Mounts resolve explicitly without changing subtree ownership."""
+    """A mount resolves only on an explicit call and does not change subtree ownership."""
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
@@ -343,7 +343,7 @@ def test_mounts_are_symbolic_and_not_recursive_ownership() -> None:
 
 
 def test_discover_mounts_scans_subtree_without_following_targets() -> None:
-    """Mount discovery finds local mount sources without entering mounted trees."""
+    """`discover_mounts` finds mount sources in the local subtree and does not go into mounted trees."""
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
@@ -363,7 +363,7 @@ def test_discover_mounts_scans_subtree_without_following_targets() -> None:
 
 
 def test_discover_mounts_hides_unreadable_sources_and_targets() -> None:
-    """Mount discovery returns only links whose source and target are readable."""
+    """`discover_mounts` returns only mounts with a source and a target that the caller can read."""
 
     owner = Memory(principal="owner")
     root = owner.put(type="project", value="local", policy=MemoryPolicy.public())
@@ -401,7 +401,7 @@ def test_discover_mounts_hides_unreadable_sources_and_targets() -> None:
 
 
 def test_scope_mounts_require_explicit_mount_access() -> None:
-    """Scopes need explicit mount access before creating or resolving mounts."""
+    """A scope needs explicit mount access before it can create, list, update, or resolve mounts."""
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
@@ -429,7 +429,7 @@ def test_scope_mounts_require_explicit_mount_access() -> None:
 
 
 def test_scope_discover_mounts_requires_mount_access_and_stays_in_scope() -> None:
-    """Scoped mount discovery is explicit and cannot scan outside its root."""
+    """A scoped `discover_mounts` call needs explicit mount access and cannot scan outside the handle root."""
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
@@ -457,7 +457,7 @@ def test_scope_discover_mounts_requires_mount_access_and_stays_in_scope() -> Non
 
 
 def test_resolve_mount_requires_stored_mount_link() -> None:
-    """Mount resolution does not trust a forged in-memory link object."""
+    """`resolve_mount` does not trust a forged in-memory link object and returns `None` for it."""
 
     memory = Memory()
     local_root = memory.put(type="project", value="local")
@@ -492,7 +492,7 @@ def test_scope_mount_resolution_requires_local_mount_source() -> None:
 
 
 def test_child_handles_cannot_add_mount_access() -> None:
-    """Child handles cannot add mount access when the parent handle lacks it."""
+    """A child handle cannot add mount access if the parent handle does not have it."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -509,7 +509,7 @@ def test_child_handles_cannot_add_mount_access() -> None:
 
 
 def test_reserved_mount_relation_is_rejected_by_non_mount_operations() -> None:
-    """Mount topology cannot enter the DAG API or be resolved from an ordinary link."""
+    """The acyclic link API rejects the reserved mount relation, and `resolve_mount` rejects an ordinary link."""
 
     memory = Memory()
     source = memory.put(type="node", value="source")
@@ -526,10 +526,10 @@ def test_update_link_rejects_a_dangling_non_mount_target() -> None:
     """The memory layer detects a stale non-mount link returned by an adapter."""
 
     class DanglingLinkBackend(InMemoryBackend):
-        """Simulate an adapter that failed to clean links during block deletion."""
+        """Simulate an adapter that does not delete the links of a block when it deletes the block."""
 
         def delete_links_for_block(self, block_id: str) -> None:
-            """Deliberately retain links so the public integrity check is exercised."""
+            """Keep the links on purpose, so that the test runs the public integrity check."""
 
     backend = DanglingLinkBackend()
     memory = Memory(backend=backend)
@@ -543,7 +543,7 @@ def test_update_link_rejects_a_dangling_non_mount_target() -> None:
 
 
 def test_link_relations_and_endpoints_must_be_non_empty_strings() -> None:
-    """Link calls reject a bad relation or endpoint before anything is stored."""
+    """Link calls reject a bad relation or endpoint before they store anything."""
 
     memory = Memory()
     source = memory.put(type="note", value="source")
@@ -570,7 +570,7 @@ def test_link_relations_and_endpoints_must_be_non_empty_strings() -> None:
 
 
 def test_link_arguments_must_be_memory_links() -> None:
-    """Update and mount resolution reject values that are not links."""
+    """`update_link` and `resolve_mount` reject values that are not `MemoryLink` objects."""
 
     memory = Memory()
     scope = memory.get_unbounded_handle(allow_mounts=True)
@@ -584,7 +584,7 @@ def test_link_arguments_must_be_memory_links() -> None:
 
 
 def test_memory_link_requires_string_endpoints_relation_and_id() -> None:
-    """The link record rejects bad fields, including in copies."""
+    """`MemoryLink` rejects bad fields, also in copies made with `replace`."""
 
     link = MemoryLink(source_id="mem_a", target_id="mem_b", relation="related")
 

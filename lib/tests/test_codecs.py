@@ -26,7 +26,7 @@ from genie.codecs.stdlib import (
 
 @dataclass(frozen=True)
 class Preference:
-    """Custom value used to exercise codec round-tripping."""
+    """Custom value for tests of the codec round trip."""
 
     topic: str
     value: str
@@ -50,7 +50,7 @@ class UnsupportedDataclass:
 
 @dataclass(frozen=True)
 class DataclassWithDerivedField:
-    """Dataclass whose non-init field must not enter the portable payload."""
+    """Dataclass with a non-init field that `DataclassCodec` does not put in the portable payload."""
 
     value: str
     derived: str = field(init=False, default="computed")
@@ -88,7 +88,7 @@ class PreferenceCodec(MemoryCodec):
 
 
 def test_custom_codec_round_trips_user_types() -> None:
-    """Custom codecs round-trip user-level objects."""
+    """`Memory` stores and returns a user-level object through a custom codec."""
 
     codecs = CodecRegistry([JsonCodec(), PreferenceCodec()])
     memory = Memory(codecs=codecs)
@@ -102,7 +102,7 @@ def test_custom_codec_round_trips_user_types() -> None:
 
 
 def test_codec_registry_reports_unknown_encoders_and_decoders() -> None:
-    """The codec registry raises clear errors for unknown codecs."""
+    """The codec registry raises `TypeError` if no codec can encode a value or decode a content type."""
 
     registry = CodecRegistry()
 
@@ -113,7 +113,7 @@ def test_codec_registry_reports_unknown_encoders_and_decoders() -> None:
 
 
 def test_codec_registry_reports_unknown_requested_content_type() -> None:
-    """Explicit missing content types fail during writes."""
+    """A write that names a content type with no registered codec raises `TypeError`."""
 
     memory = Memory()
 
@@ -122,7 +122,7 @@ def test_codec_registry_reports_unknown_requested_content_type() -> None:
 
 
 def test_codec_registry_validates_codec_and_encoded_value_contracts() -> None:
-    """Invalid codec objects and dishonest encode results fail at the boundary."""
+    """The registry rejects an invalid codec, a wrong encode result or content type, and a decode input that is not an `EncodedValue`."""
 
     class WrongResultCodec:
         content_type = "application/vnd.test.wrong-result"
@@ -154,7 +154,7 @@ def test_codec_registry_validates_codec_and_encoded_value_contracts() -> None:
 
 
 def test_encoded_values_require_a_non_empty_string_content_type() -> None:
-    """Codec dispatch identities cannot be missing or use another value type."""
+    """`EncodedValue` rejects a `content_type` that is empty or is not a string."""
 
     with pytest.raises(TypeError, match="content_type must be a string"):
         EncodedValue(1, {})  # type: ignore[arg-type]
@@ -215,7 +215,7 @@ def _self_containing_list() -> list[Any]:
     ids=["lists", "dicts"],
 )
 def test_json_codec_accepts_values_at_the_nesting_limit(value: Any) -> None:
-    """A value nested exactly `MAX_NESTING_DEPTH` levels deep round-trips."""
+    """`Memory` stores and returns, without change, a value nested exactly `MAX_NESTING_DEPTH` levels deep."""
 
     memory = Memory()
 
@@ -239,7 +239,7 @@ def test_json_codec_accepts_values_at_the_nesting_limit(value: Any) -> None:
     ids=["lists past the limit", "dicts past the limit", "5000 lists", "5000 dicts", "cycle"],
 )
 def test_json_codec_rejects_values_nested_past_the_limit(value: Any) -> None:
-    """Too deep nesting is a `ValueError` on every encode path, not a `RecursionError`."""
+    """Each encode path raises `ValueError`, not `RecursionError`, for a value nested more than `MAX_NESTING_DEPTH` levels deep."""
 
     codec = JsonCodec()
     registry = CodecRegistry([JsonCodec()])
@@ -256,7 +256,7 @@ def test_json_codec_rejects_values_nested_past_the_limit(value: Any) -> None:
         lambda item: handle.put(type="deep", value=item),
     )
 
-    # `can_encode` claims the value, so the registry reports the depth and not "no codec registered".
+    # `can_encode` accepts the value, so the registry reports the depth error and not "no codec registered".
     assert codec.can_encode(value) is True
     for encode in encode_paths:
         with pytest.raises(ValueError, match=f"nest more than {MAX_NESTING_DEPTH} levels deep"):
@@ -268,7 +268,7 @@ def test_json_codec_rejects_values_nested_past_the_limit(value: Any) -> None:
 
 
 def test_memory_defaults_to_json_codec_only() -> None:
-    """Stdlib codecs are opt-in and are not registered by default."""
+    """The stdlib codecs are optional, and `Memory` does not register them by default."""
 
     memory = Memory()
 
@@ -299,7 +299,7 @@ def test_bytes_codec_round_trips_base64_payloads() -> None:
 
 
 def test_stdlib_codecs_reject_malformed_encoded_payloads() -> None:
-    """Stdlib codecs fail clearly when stored payloads are malformed."""
+    """Each stdlib codec raises a clear error for a malformed stored payload."""
 
     malformed_cases = [
         (BytesCodec(), EncodedValue(BytesCodec.content_type, "not base64!"), ValueError),
@@ -347,7 +347,7 @@ def test_stdlib_codecs_reject_malformed_encoded_payloads() -> None:
 
 
 def test_codecs_reject_wrong_encoded_objects_and_nested_payload_shapes() -> None:
-    """Direct decode calls validate both the wrapper and nested payload structure."""
+    """A direct `decode` call validates the `EncodedValue` wrapper and the structure of the nested payload."""
 
     codecs = [
         BytesCodec(),
@@ -392,7 +392,7 @@ def test_stdlib_codecs_reject_wrong_direct_encode_types(
     codec: Any,
     value: object,
 ) -> None:
-    """Direct codec use enforces the same input types as registry selection."""
+    """A direct `encode` call rejects the same input types that registry selection rejects."""
 
     with pytest.raises(TypeError):
         codec.encode(value)
@@ -418,7 +418,7 @@ def test_codecs_reject_payloads_owned_by_another_content_type(codec: Any) -> Non
 
 
 def test_datetime_codec_round_trips_datetime_date_and_time() -> None:
-    """`DatetimeCodec` preserves concrete datetime/date/time value classes."""
+    """`DatetimeCodec` keeps the concrete class of each `datetime`, `date`, and `time` value."""
 
     memory = Memory(codecs=CodecRegistry([DatetimeCodec(), JsonCodec()]))
     values = [
@@ -467,7 +467,7 @@ def test_uuid_codec_round_trips_uuid_values() -> None:
 
 
 def test_dataclass_codec_round_trips_registered_dataclasses_defensively() -> None:
-    """`DataclassCodec` round-trips registered dataclasses with copied fields."""
+    """`DataclassCodec` stores and returns a registered dataclass with copies of its fields."""
 
     codec = DataclassCodec([DataclassPreference])
     memory = Memory(codecs=CodecRegistry([codec, JsonCodec()]))
@@ -506,7 +506,7 @@ def test_dataclass_codec_requires_registered_json_compatible_types() -> None:
 
 
 def test_dataclass_codec_omits_derived_fields_and_rejects_nonportable_nesting() -> None:
-    """Only constructor fields enter payloads, and nested values remain strict JSON."""
+    """The payload contains only constructor fields, and the codec rejects nested values that are not strict JSON."""
 
     codec = DataclassCodec([DataclassWithDerivedField, DataclassPreference])
 
@@ -524,7 +524,7 @@ def test_dataclass_codec_omits_derived_fields_and_rejects_nonportable_nesting() 
 
 
 def test_dataclass_codec_bounds_field_nesting_like_json_codec() -> None:
-    """Each field may nest up to `MAX_NESTING_DEPTH` levels, on both encode and decode."""
+    """Each field can nest up to `MAX_NESTING_DEPTH` levels, on both encode and decode."""
 
     codec = DataclassCodec([DataclassPreference])
     memory = Memory(codecs=CodecRegistry([codec, JsonCodec()]))
@@ -564,7 +564,7 @@ def test_enum_codec_round_trips_registered_enum_members() -> None:
 
 
 def test_enum_codec_requires_registered_enum_types() -> None:
-    """`EnumCodec` does not encode or decode enum types that were not registered."""
+    """`EnumCodec` does not encode or decode an enum type that is not in its registered types."""
 
     codec = EnumCodec([Priority])
     encoded = codec.encode(Priority.LOW)

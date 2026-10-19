@@ -27,7 +27,7 @@ from tests.backends.test_backend_contracts import CoreOnlyBackend
 
 
 def test_lineage_dag_uses_graph_edges_and_forward_lineage_traversal() -> None:
-    """Lineage edges remain ordinary links with predecessor-first direction."""
+    """Lineage edges are ordinary links that point from a predecessor to its successor."""
 
     memory = Memory()
     a = memory.put(type="artifact", value="A")
@@ -64,7 +64,7 @@ def test_lineage_dag_uses_graph_edges_and_forward_lineage_traversal() -> None:
 
 
 def test_lineage_dag_rejects_self_links_and_closing_edges() -> None:
-    """A proposed edge is rejected when its target already reaches its source."""
+    """`add` raises `MemoryConflict` for a self-link and for an edge whose target already reaches its source."""
 
     memory = Memory()
     a = memory.put(type="artifact", value="A")
@@ -100,7 +100,7 @@ def test_lineage_relation_is_independent_from_other_graph_relations() -> None:
 
 
 def test_first_lineage_write_adopts_existing_acyclic_relation_edges() -> None:
-    """Existing graph links join the protected relation when already acyclic."""
+    """If the links that already use the relation have no cycle, the first lineage write adds them to the protected relation."""
 
     memory = Memory()
     a = memory.put(type="artifact", value="A")
@@ -118,7 +118,7 @@ def test_first_lineage_write_adopts_existing_acyclic_relation_edges() -> None:
 
 
 def test_lineage_dag_refuses_to_adopt_an_existing_cyclic_relation() -> None:
-    """A relation containing a prior cycle cannot become a lineage DAG."""
+    """A relation that already contains a cycle cannot become a lineage DAG."""
 
     memory = Memory()
     a = memory.put(type="artifact", value="A")
@@ -133,7 +133,7 @@ def test_lineage_dag_refuses_to_adopt_an_existing_cyclic_relation() -> None:
 
 
 def test_opposite_concurrent_edges_cannot_both_commit() -> None:
-    """Atomic check-and-insert prevents a two-writer cycle race."""
+    """Of 2 concurrent writers that add opposite edges, only 1 succeeds because the check and the insert are atomic."""
 
     memory = Memory()
     a = memory.put(type="artifact", value="A")
@@ -161,7 +161,7 @@ def test_opposite_concurrent_edges_cannot_both_commit() -> None:
 
 
 def test_three_concurrent_edges_cannot_commit_a_cycle() -> None:
-    """At most two sides of a concurrent three-node cycle are accepted."""
+    """`add` accepts at most 2 of 3 concurrent edges that together make a cycle of 3 nodes."""
 
     memory = Memory()
     nodes = [memory.put(type="artifact", value=value) for value in "ABC"]
@@ -183,7 +183,7 @@ def test_three_concurrent_edges_cannot_commit_a_cycle() -> None:
 
 
 def test_lineage_dag_preserves_handle_scope_and_endpoint_policy() -> None:
-    """Atomic insertion keeps normal handle and endpoint authorization checks."""
+    """The atomic insert still applies the normal handle scope and endpoint policy checks."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -208,7 +208,7 @@ def test_lineage_dag_preserves_handle_scope_and_endpoint_policy() -> None:
 
 
 def test_lineage_dag_reports_missing_atomic_backend_capability() -> None:
-    """Backends without atomic cycle protection fail before writing an edge."""
+    """`add` raises `UnsupportedOperation` before it writes an edge if the backend has no atomic cycle protection."""
 
     memory = Memory(backend=CoreOnlyBackend())
     first = memory.put(type="artifact", value="first")
@@ -225,14 +225,14 @@ def test_lineage_dag_reports_missing_atomic_backend_capability() -> None:
     ["", "   ", LinkRelations.MOUNT, cast(str, 1)],
 )
 def test_lineage_dag_rejects_invalid_or_mount_relations(relation: str) -> None:
-    """Each lineage graph needs a non-empty, non-mount relation name."""
+    """`LineageDAG` rejects an empty, blank, mount, or non-string relation name."""
 
     with pytest.raises((TypeError, ValueError)):
         LineageDAG(Memory(), relation=relation)
 
 
 def test_lineage_update_rejects_an_edge_from_another_relation() -> None:
-    """Metadata updates cannot accidentally cross relation-scoped DAGs."""
+    """`update_edge` raises `ValueError` for an edge from another relation."""
 
     memory = Memory()
     a = memory.put(type="artifact", value="A")
@@ -245,7 +245,7 @@ def test_lineage_update_rejects_an_edge_from_another_relation() -> None:
 
 
 def test_lineage_update_rejects_a_missing_canonical_edge() -> None:
-    """A caller-provided edge object is not trusted unless storage contains its id."""
+    """`update_edge` does not trust an edge object from the caller and raises `MemoryNotFound` if storage does not contain its id."""
 
     memory = Memory()
     first = memory.put(type="artifact", value="first")
@@ -265,7 +265,7 @@ def test_lineage_update_rejects_a_missing_canonical_edge() -> None:
 
 
 def test_lineage_update_validates_the_canonical_stored_relation() -> None:
-    """Reconstructing a link cannot move its metadata update into a DAG."""
+    """`update_edge` checks the stored relation, so a copy with a changed relation cannot move into the DAG."""
 
     memory = Memory()
     first = memory.put(type="artifact", value="first")
@@ -286,7 +286,7 @@ def test_lineage_update_validates_the_canonical_stored_relation() -> None:
 
 
 def test_memory_handle_and_backend_implement_lineage_protocols() -> None:
-    """Public access objects and the reference backend expose DAG capabilities."""
+    """`Memory` and `MemoryHandle` satisfy `LineageAccess`, and the reference backend satisfies `AcyclicLinkStore`."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

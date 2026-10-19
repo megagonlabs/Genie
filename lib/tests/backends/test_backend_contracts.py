@@ -1,4 +1,4 @@
-"""Reusable contracts for backends supporting optional memory structures."""
+"""Reusable contract tests for backends that support optional memory structures."""
 
 from __future__ import annotations
 
@@ -36,12 +36,12 @@ from genie.structures import (
 class CoreOnlyBackend:
     """Core `MemoryBackend` that implements no optional capability.
 
-    It forwards the core methods to an `InMemoryBackend`, so tests can check
-    what happens when a backend lacks a capability such as `AcyclicLinkStore`.
+    It forwards the core methods to an `InMemoryBackend`, and tests use it to
+    check a backend that does not have a capability such as `AcyclicLinkStore`.
     """
 
     def __init__(self) -> None:
-        """Wrap a fresh in-memory backend."""
+        """Wrap a new `InMemoryBackend`."""
 
         inner = InMemoryBackend()
         self.put_block = inner.put_block
@@ -60,10 +60,10 @@ class CoreOnlyBackend:
 
 
 class StructureBackendContract:
-    """Factory hook shared by optional backend capability contracts."""
+    """Factory hook that the contracts for optional backend capabilities share."""
 
     def make_backend(self) -> MemoryBackend:
-        """Return a fresh backend under test."""
+        """Return a new instance of the backend under test."""
 
         raise NotImplementedError
 
@@ -72,7 +72,7 @@ class StructureBackendContract:
         backend: MemoryBackend,
         *block_ids: str,
     ) -> list[MemoryBlock]:
-        """Create deterministic blocks required by a capability test."""
+        """Create the blocks that a capability test needs, with fixed ids and values."""
 
         return [
             backend.put_block(MemoryBlock(id=block_id, type="test", value=block_id))
@@ -105,7 +105,7 @@ class StructureBackendContract:
 
 
 class BlockStoreContract(StructureBackendContract):
-    """Contract tests for conditional core block mutations."""
+    """Contract tests for conditional writes and deletes of core blocks."""
 
     def test_block_update_compare_and_swap_contract(self) -> None:
         """A stale version cannot replace a block changed by another writer."""
@@ -134,7 +134,7 @@ class BlockStoreContract(StructureBackendContract):
             )
 
     def test_block_reference_integrity_contract(self) -> None:
-        """Core writes reject duplicate identities and invalid parent references."""
+        """The backend rejects duplicate ids and invalid parent references on core writes."""
 
         backend = self.make_backend()
         existing = backend.put_block(
@@ -171,7 +171,7 @@ class BlockStoreContract(StructureBackendContract):
         backend.delete_block("mem_missing")
 
     def test_conditional_subtree_delete_contract(self) -> None:
-        """Deletion rejects an incomplete or stale subtree snapshot."""
+        """`delete_block` rejects an incomplete or stale subtree snapshot and deletes no block."""
 
         backend = self.make_backend()
         root, child = self.put_blocks(backend, "mem_root", "mem_child")
@@ -184,9 +184,9 @@ class BlockStoreContract(StructureBackendContract):
         assert backend.get_block(child.id) is not None
 
 
-# Two separate trees, one of them three levels deep with a fork, so traversal
-# has a shape to get wrong: a branch to move, siblings to keep apart, and a
-# second root that owns none of the first one's blocks.
+# Two separate trees. One tree is 3 levels deep and has a fork. The shape gives
+# an incorrect traversal 3 ways to fail. It has a branch to move, siblings to
+# keep apart, and a second root that owns no block of the first tree.
 _TRAVERSAL_TREE: Mapping[str, str | None] = {
     "mem_root": None,
     "mem_a": "mem_root",
@@ -200,7 +200,7 @@ _TRAVERSAL_TREE: Mapping[str, str | None] = {
 }
 
 _MISSING_ID = "mem_never_stored"
-"""An id no test writes, so every method has to report it as absent."""
+"""An id that no test writes, so every traversal method reports it as absent."""
 
 
 def _expected_children(tree: Mapping[str, str | None], parent_id: str) -> set[str]:
@@ -210,7 +210,7 @@ def _expected_children(tree: Mapping[str, str | None], parent_id: str) -> set[st
 
 
 def _expected_descendants(tree: Mapping[str, str | None], root_id: str) -> set[str]:
-    """Return every id below `root_id`, by walking children downward."""
+    """Return every id below `root_id` from a downward walk through the children."""
 
     found: set[str] = set()
     frontier = [root_id]
@@ -234,29 +234,29 @@ def _expected_ancestors(tree: Mapping[str, str | None], block_id: str) -> list[s
 
 
 class TraversalIndexContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing `TraversalIndex`.
+    """Reusable contract tests for backends that implement `TraversalIndex`.
 
-    Ownership is recorded by `MemoryBlock.parent_id` in the block store, and
-    `Memory` never reads that field: it asks these four methods instead. So an
-    adapter that fills both roles has to answer them consistently with the
-    parents it stored and consistently with each other.
-
-    - **Relationships, never a strategy.** The shipped adapters answer with a
-      recursive query, a graph path match, or a walk up the parent chain, and
-      `children` is a different query from `contains` in every one of them.
-      Nothing here prefers one.
+    - **Ownership source.** The block store records ownership in
+      `MemoryBlock.parent_id`. `Memory` never reads that field. It asks the
+      four `TraversalIndex` methods instead. These tests check that an adapter
+      that fills both roles gives answers that agree with the parents it
+      stored and with each other.
+    - **Relationships, never a strategy.** The shipped adapters use a
+      recursive query, a graph path match, or a walk up the parent chain. In
+      each adapter, `children` is a different query from `contains`. These
+      tests do not prefer one method.
     - **Order only where the protocol promises it.** `ancestors` documents
-      nearest-parent-first order, so that is asserted. `children` and
-      `descendants` are compared as sets, because their order is
-      backend-defined.
-    - **One adapter, not a composition.** A separately supplied
-      `RoutedBackend(traversal_index=...)` is allowed to assert ownership the
-      block store does not record. That freedom belongs to the composition, so
-      it never reaches these tests.
+      nearest-parent-first order, so the tests assert that order. The tests
+      compare `children` and `descendants` as sets, because the backend
+      defines their order.
+    - **One adapter, not a composition.** A separate
+      `RoutedBackend(traversal_index=...)` can assert ownership that the block
+      store does not record. That freedom belongs to the composition, so these
+      tests do not cover it.
     """
 
     def traversal_backend(self) -> MemoryBackend:
-        """Return a backend holding `_TRAVERSAL_TREE`, both roles checked."""
+        """Return a backend that holds `_TRAVERSAL_TREE`, after a check that it is a `BlockStore` and a `TraversalIndex`."""
 
         backend = self.make_backend()
         assert isinstance(backend, BlockStore)
@@ -265,7 +265,7 @@ class TraversalIndexContract(StructureBackendContract):
         return backend
 
     def test_traversal_children_contract(self) -> None:
-        """`children` returns exactly the blocks recording that block as parent."""
+        """`children` returns each block that records the given block as its parent exactly one time."""
 
         backend = self.traversal_backend()
 
@@ -298,8 +298,8 @@ class TraversalIndexContract(StructureBackendContract):
     def test_traversal_contains_contract(self) -> None:
         """`contains` agrees with `descendants` on every ordered pair.
 
-        This is the assertion that separates a wrong containment answer from a
-        merely slow one, and it covers the two-tree case in passing.
+        This assertion fails on a wrong containment answer but not on a slow
+        one, and it also covers the case with two trees.
         """
 
         backend = self.traversal_backend()
@@ -316,7 +316,7 @@ class TraversalIndexContract(StructureBackendContract):
                 ), f"contains({root_id!r}, {block_id!r})"
 
     def test_traversal_ancestors_contract(self) -> None:
-        """`ancestors` walks nearest parent first and the chain holds together."""
+        """`ancestors` returns the nearest parent first, and each block in the result records the next block as its parent."""
 
         backend = self.traversal_backend()
 
@@ -325,8 +325,8 @@ class TraversalIndexContract(StructureBackendContract):
             assert [block.id for block in returned] == _expected_ancestors(
                 _TRAVERSAL_TREE, block_id
             )
-            # Each returned block must record the next one as its own parent,
-            # so the list is a real chain and not a set in some order.
+            # Each returned block records the next block as its parent. This check
+            # proves that the list is a real chain, not only the correct set of blocks.
             for position, ancestor in enumerate(returned):
                 following = returned[position + 1].id if position + 1 < len(returned) else None
                 assert ancestor.parent_id == following
@@ -334,7 +334,7 @@ class TraversalIndexContract(StructureBackendContract):
         assert backend.ancestors(_MISSING_ID) == []
 
     def test_traversal_reparent_contract(self) -> None:
-        """Moving a block moves the branch it owns in every traversal view."""
+        """A move of a block to a new parent also moves the branch that it owns in every traversal view."""
 
         backend = self.traversal_backend()
         moving = backend.get_block("mem_a2")
@@ -361,7 +361,7 @@ class TraversalIndexContract(StructureBackendContract):
         )
 
     def test_traversal_delete_contract(self) -> None:
-        """Deleting a block removes its whole subtree from every view."""
+        """`delete_block` removes the whole subtree of the block from every traversal view."""
 
         backend = self.traversal_backend()
         removed = {"mem_a", "mem_a1", "mem_a2", "mem_a2x"}
@@ -386,10 +386,10 @@ class TraversalIndexContract(StructureBackendContract):
 
 
 class KeyedStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing `KeyedStore`."""
+    """Reusable contract tests for backends that implement `KeyedStore`."""
 
     def test_keyed_store_contract(self) -> None:
-        """Bindings are unique, ordered, conditional, and deletion-aware."""
+        """`KeyedStore` keeps bindings unique and ordered, applies conditional rebinds and unbinds, and removes the bindings of a deleted target or collection."""
 
         backend = self.make_backend()
         assert isinstance(backend, KeyedStore)
@@ -452,7 +452,7 @@ class KeyedStoreContract(StructureBackendContract):
         assert store.list_keys(collection.id) == []
 
     def test_keyed_store_bind_is_atomic(self) -> None:
-        """Only one concurrent writer can claim an unused address."""
+        """Of 12 concurrent writers, only one can bind an unused address."""
 
         backend = self.make_backend()
         assert isinstance(backend, KeyedStore)
@@ -480,7 +480,7 @@ class KeyedStoreContract(StructureBackendContract):
         assert store.get_key(collection.id, address) is not None
 
     def test_keyed_store_rejects_missing_references_and_invalid_pages(self) -> None:
-        """Keyed stores validate referential integrity and page arguments."""
+        """A `KeyedStore` rejects a `KeyBinding` that refers to a block that does not exist and rejects invalid page arguments."""
 
         backend = self.make_backend()
         assert isinstance(backend, KeyedStore)
@@ -504,7 +504,7 @@ class KeyedStoreContract(StructureBackendContract):
             store.list_keys(collection.id, limit=-1)
 
     def test_keyed_store_explicit_cleanup_capability(self) -> None:
-        """Adapters can explicitly remove bindings for a deleted target or owner."""
+        """An adapter can remove the bindings of one target or one owner collection explicitly, with `delete_key_bindings_for_block`."""
 
         backend = self.make_backend()
         assert isinstance(backend, KeyedStore)
@@ -528,10 +528,10 @@ class KeyedStoreContract(StructureBackendContract):
 
 
 class SequenceStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing `SequenceStore`."""
+    """Reusable contract tests for backends that implement `SequenceStore`."""
 
     def test_sequence_store_contract(self) -> None:
-        """Sequences are monotonic, range-readable, and deletion-aware."""
+        """`SequenceStore` gives each new entry a higher position, never reuses a position, reads ranges, and removes the entries of a deleted block or log."""
 
         backend = self.make_backend()
         assert isinstance(backend, SequenceStore)
@@ -566,7 +566,7 @@ class SequenceStoreContract(StructureBackendContract):
         assert store.list_log_entries(log.id) == []
 
     def test_sequence_store_append_is_atomic(self) -> None:
-        """Concurrent appends allocate unique positions in one log."""
+        """Concurrent appends to one log get unique positions."""
 
         backend = self.make_backend()
         assert isinstance(backend, SequenceStore)
@@ -584,7 +584,7 @@ class SequenceStoreContract(StructureBackendContract):
         assert sorted(entry.sequence for entry in entries) == list(range(100))
 
     def test_sequence_store_rejects_missing_references_and_invalid_ranges(self) -> None:
-        """Sequence stores reject dangling appends and malformed range arguments."""
+        """A `SequenceStore` rejects an append with a log or target that does not exist, and it rejects malformed range arguments."""
 
         backend = self.make_backend()
         assert isinstance(backend, SequenceStore)
@@ -609,7 +609,7 @@ class SequenceStoreContract(StructureBackendContract):
             store.list_log_entries(log.id, limit=-1)
 
     def test_sequence_store_explicit_cleanup_capability(self) -> None:
-        """Adapters can explicitly remove entries for a target or entire log."""
+        """An adapter can remove the entries of one target or of a whole log explicitly, with `delete_log_entries_for_block`."""
 
         backend = self.make_backend()
         assert isinstance(backend, SequenceStore)
@@ -632,10 +632,10 @@ class SequenceStoreContract(StructureBackendContract):
 
 
 class TemporalStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing `TemporalStore`."""
+    """Reusable contract tests for backends that implement `TemporalStore`."""
 
     def test_temporal_store_contract(self) -> None:
-        """Membership is unique, replaceable, ordered, and deletion-aware."""
+        """`TemporalStore` keeps memberships unique and ordered, replaces only an entry that exists, and removes the entries of a deleted block or collection."""
 
         backend = self.make_backend()
         assert isinstance(backend, TemporalStore)
@@ -696,7 +696,7 @@ class TemporalStoreContract(StructureBackendContract):
         assert store.list_temporal_entries(collection.id) == []
 
     def test_temporal_store_add_is_atomic(self) -> None:
-        """One collection and block pair cannot be inserted twice."""
+        """Of 12 concurrent writers, only one can add the same collection and block pair."""
 
         backend = self.make_backend()
         assert isinstance(backend, TemporalStore)
@@ -727,7 +727,7 @@ class TemporalStoreContract(StructureBackendContract):
         assert outcomes.count(True) == 1
 
     def test_temporal_store_rejects_missing_references_and_invalid_pages(self) -> None:
-        """Temporal stores validate references, removal state, and page limits."""
+        """A `TemporalStore` rejects references to blocks that do not exist, a replace or a remove of an absent entry, and invalid page limits."""
 
         backend = self.make_backend()
         assert isinstance(backend, TemporalStore)
@@ -772,7 +772,7 @@ class TemporalStoreContract(StructureBackendContract):
             store.list_temporal_entries(collection.id, limit=-1)
 
     def test_temporal_store_explicit_cleanup_capability(self) -> None:
-        """Adapters can explicitly remove memberships for a target or collection."""
+        """An adapter can remove the memberships of one target or of one collection explicitly, with `delete_temporal_entries_for_block`."""
 
         backend = self.make_backend()
         assert isinstance(backend, TemporalStore)
@@ -801,10 +801,10 @@ class TemporalStoreContract(StructureBackendContract):
 
 
 class TemporalIndexContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing `TemporalIndex`."""
+    """Reusable contract tests for backends that implement `TemporalIndex`."""
 
     def test_temporal_index_contract(self) -> None:
-        """Indexed filtering follows half-open time and stable paging rules."""
+        """`query_temporal_entries` uses half-open time ranges and a stable page order."""
 
         backend = self.make_backend()
         assert isinstance(backend, TemporalStore)
@@ -864,7 +864,7 @@ class TemporalIndexContract(StructureBackendContract):
         ] == [valid.id]
 
     def test_temporal_index_rejects_invalid_query_arguments(self) -> None:
-        """Indexed temporal queries reject malformed booleans, times, and limits."""
+        """`query_temporal_entries` rejects malformed booleans, times, intervals, and limits."""
 
         backend = self.make_backend()
         assert isinstance(backend, TemporalIndex)
@@ -899,7 +899,7 @@ class TemporalIndexContract(StructureBackendContract):
             index.query_temporal_entries("collection", limit=-1)
 
     def test_temporal_index_overlap_and_paging_contract(self) -> None:
-        """Overlap bounds and block-id cursors compose without boundary leaks."""
+        """Overlap bounds and block-id cursors work together, and no entry outside a bound appears in the result."""
 
         backend = self.make_backend()
         assert isinstance(backend, TemporalStore)
@@ -960,10 +960,10 @@ class TemporalIndexContract(StructureBackendContract):
 
 
 class LinkStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing `LinkStore`."""
+    """Reusable contract tests for backends that implement `LinkStore`."""
 
     def test_link_store_delete_block_cascade_contract(self) -> None:
-        """Deleting a subtree removes every link that touches a removed block."""
+        """`delete_block` on a subtree removes every link that touches a deleted block."""
 
         backend = self.make_backend()
         assert isinstance(backend, LinkStore)
@@ -992,7 +992,7 @@ class LinkStoreContract(StructureBackendContract):
         assert backend.list_links(outside.id, direction="both") == []
 
     def test_link_store_delete_block_cascade_covers_mounts(self) -> None:
-        """The reserved mount relation is cleaned up from either endpoint."""
+        """`delete_block` removes links with the reserved mount relation at either endpoint."""
 
         backend = self.make_backend()
         assert isinstance(backend, LinkStore)
@@ -1014,7 +1014,7 @@ class LinkStoreContract(StructureBackendContract):
         assert backend.list_links(other.id, direction="both") == []
 
     def test_link_store_explicit_cleanup_capability(self) -> None:
-        """Adapters can remove one block's links without deleting the block."""
+        """`delete_links_for_block` removes the links of one block and keeps the block."""
 
         backend = self.make_backend()
         assert isinstance(backend, LinkStore)
@@ -1040,10 +1040,10 @@ class LinkStoreContract(StructureBackendContract):
 
 
 class AcyclicLinkStoreContract(StructureBackendContract):
-    """Contract tests reusable by backends implementing `AcyclicLinkStore`."""
+    """Reusable contract tests for backends that implement `AcyclicLinkStore`."""
 
     def test_acyclic_link_store_contract(self) -> None:
-        """Protected relations reuse ordinary links and reject every cycle."""
+        """A protected relation reuses the ordinary links it already has, rejects every cycle, and rejects a later plain `add_link`."""
 
         backend = self.make_backend()
         assert isinstance(backend, AcyclicLinkStore)
@@ -1093,7 +1093,7 @@ class AcyclicLinkStoreContract(StructureBackendContract):
         assert outcomes.count(True) == 1
 
     def test_acyclic_link_store_rejects_missing_endpoints(self) -> None:
-        """Atomic DAG insertion preserves identity and endpoint integrity."""
+        """`add_acyclic_link` rejects an endpoint that does not exist and a duplicate link id."""
 
         backend = self.make_backend()
         assert isinstance(backend, AcyclicLinkStore)
@@ -1131,7 +1131,7 @@ class TestInMemoryStructureBackendContracts(
     LinkStoreContract,
     AcyclicLinkStoreContract,
 ):
-    """Run every optional structure contract against the reference backend."""
+    """Run every contract in this module against `InMemoryBackend`, the reference backend."""
 
     def make_backend(self) -> InMemoryBackend:
         """Return an isolated in-memory backend."""
@@ -1149,7 +1149,7 @@ class TestSQLiteStructureBackendContracts(
     LinkStoreContract,
     AcyclicLinkStoreContract,
 ):
-    """Run every optional structure contract against SQLite."""
+    """Run every contract in this module against `SQLiteBackend`."""
 
     def setup_method(self) -> None:
         """Track in-memory SQLite connections created by one contract test."""

@@ -1,4 +1,4 @@
-"""Tests for the in-memory backend reference implementation."""
+"""Tests for `InMemoryBackend`, the reference implementation for backends."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from genie.memory.errors import MemoryConflict
 
 
 def test_backends_can_be_shared_between_memory_instances() -> None:
-    """Multiple Memory handles can share one backend."""
+    """Two `Memory` handles can use the same backend, and one handle reads a block that the other wrote."""
 
     backend = InMemoryBackend()
     writer = Memory(backend=backend, principal="writer")
@@ -25,7 +25,7 @@ def test_backends_can_be_shared_between_memory_instances() -> None:
 
 
 def test_backend_parent_moves_update_children_indexes() -> None:
-    """Reparenting updates old and new child indexes."""
+    """A move to a new parent updates the child indexes of the old parent and the new parent."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -42,7 +42,7 @@ def test_backend_parent_moves_update_children_indexes() -> None:
 
 
 def test_backend_rejects_reparenting_cycles() -> None:
-    """Reparenting rejects self-parenting and descendant cycles."""
+    """The backend rejects a move that makes a block its own parent or puts it under its own descendant."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -61,7 +61,7 @@ def test_backend_rejects_reparenting_cycles() -> None:
 
 
 def test_backend_rejects_reparenting_to_missing_parent() -> None:
-    """Reparenting to a missing parent leaves existing parent placement unchanged."""
+    """The backend rejects a move to a parent that does not exist, and the block keeps its current parent."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -80,7 +80,7 @@ def test_backend_rejects_reparenting_to_missing_parent() -> None:
 
 
 def test_backend_rejects_a_stale_conditional_update() -> None:
-    """In-memory replacement follows the shared compare-and-swap contract."""
+    """`InMemoryBackend.update_block` follows the shared compare-and-swap contract and rejects a stale version."""
 
     backend = InMemoryBackend()
     original = backend.put_block(MemoryBlock(id="note", type="note", value={}))
@@ -101,7 +101,7 @@ def test_backend_rejects_a_stale_conditional_update() -> None:
 
 
 def test_backend_rejects_a_stale_conditional_subtree_delete() -> None:
-    """In-memory deletion requires the complete supplied subtree snapshot."""
+    """`InMemoryBackend.delete_block` rejects a subtree snapshot that does not include every block, and all blocks stay."""
 
     backend = InMemoryBackend()
     root = backend.put_block(MemoryBlock(id="root", type="root", value={}))
@@ -118,14 +118,14 @@ def test_backend_rejects_a_stale_conditional_subtree_delete() -> None:
 
 
 def test_backend_contains_requires_existing_root() -> None:
-    """Containment returns false when the potential root does not exist."""
+    """`contains` returns `False` if the root block does not exist."""
 
     backend = InMemoryBackend()
 
     assert backend.contains("missing", "missing") is False
 
 
-# `id: parent_id` for a tree with two roots, a fork, and three depths.
+# `id: parent_id` pairs for a tree with 2 roots, a fork, and 3 levels.
 _TREE = {
     "root": None,
     "a": "root",
@@ -140,14 +140,14 @@ _TREE = {
 
 
 def _build_tree(backend: InMemoryBackend) -> None:
-    """Write `_TREE` parents first, so a block never precedes its parent."""
+    """Write the blocks of `_TREE`, each parent before its children."""
 
     for block_id, parent_id in _TREE.items():
         backend.put_block(MemoryBlock(id=block_id, parent_id=parent_id, type="node", value={}))
 
 
 def _descendant_scan(backend: InMemoryBackend, root_id: str, block_id: str) -> bool:
-    """Answer containment by scanning the subtree, the slow but obvious way."""
+    """Answer containment with a full scan of the subtree, a slow but simple method."""
 
     if backend.get_block(root_id) is None:
         return False
@@ -157,7 +157,7 @@ def _descendant_scan(backend: InMemoryBackend, root_id: str, block_id: str) -> b
 
 
 def test_backend_contains_agrees_with_a_descendant_scan_on_every_pair() -> None:
-    """The upward walk answers exactly what a full subtree scan would answer."""
+    """On every pair of ids, the upward walk of `contains` gives the same answer as a full subtree scan."""
 
     backend = InMemoryBackend()
     _build_tree(backend)
@@ -171,7 +171,7 @@ def test_backend_contains_agrees_with_a_descendant_scan_on_every_pair() -> None:
 
 
 def test_backend_contains_answers_in_one_direction_only() -> None:
-    """Containment follows ownership downward, never back up the tree."""
+    """`contains` follows ownership down the tree and never up the tree."""
 
     backend = InMemoryBackend()
     _build_tree(backend)
@@ -198,7 +198,7 @@ def test_backend_contains_keeps_separate_trees_apart() -> None:
 
 
 def test_backend_contains_walks_a_deep_chain() -> None:
-    """Depth is the cost of the check, so a long chain must still be answered."""
+    """The cost of the check grows with depth, and the check also answers a chain of 200 blocks."""
 
     backend = InMemoryBackend()
     parent_id = None
@@ -216,7 +216,7 @@ def test_backend_contains_walks_a_deep_chain() -> None:
 
 
 def test_backend_contains_reports_a_missing_candidate_as_absent() -> None:
-    """An id that was never stored is not inside any subtree."""
+    """An id that the backend never stored is not inside any subtree."""
 
     backend = InMemoryBackend()
     _build_tree(backend)
@@ -226,7 +226,7 @@ def test_backend_contains_reports_a_missing_candidate_as_absent() -> None:
 
 
 def test_backend_contains_follows_a_reparented_block() -> None:
-    """Moving a block moves the whole branch it owns to the new subtree."""
+    """A move of a block to a new parent also moves the whole branch that the block owns."""
 
     backend = InMemoryBackend()
     _build_tree(backend)
@@ -243,7 +243,7 @@ def test_backend_contains_follows_a_reparented_block() -> None:
 
 
 def test_backend_rejects_moving_a_block_under_its_own_descendant() -> None:
-    """`contains` is the cycle guard, so the rejection must keep working."""
+    """`contains` is the cycle guard, and the backend still rejects a move of a block under its own descendant."""
 
     backend = InMemoryBackend()
     _build_tree(backend)
@@ -258,7 +258,7 @@ def test_backend_rejects_moving_a_block_under_its_own_descendant() -> None:
 
 
 def test_backend_rejects_making_a_block_its_own_parent() -> None:
-    """A self parent would be a one-block cycle."""
+    """The backend rejects a block as its own parent because that is a cycle of one block."""
 
     backend = InMemoryBackend()
     _build_tree(backend)
@@ -270,7 +270,7 @@ def test_backend_rejects_making_a_block_its_own_parent() -> None:
 
 
 def test_backend_links_return_defensive_metadata_copies() -> None:
-    """Backend link reads cannot mutate stored link metadata."""
+    """A change to the metadata of a link that `add_link` or `list_links` returns does not change the stored link."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -294,7 +294,7 @@ def test_backend_links_return_defensive_metadata_copies() -> None:
 
 
 def test_backend_updates_only_existing_link_metadata() -> None:
-    """Backend link updates preserve identity and reject implicit overwrites."""
+    """`update_link` changes only metadata, and the backend rejects a changed relation, an absent link, and a duplicate `add_link`."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -322,7 +322,7 @@ def test_backend_updates_only_existing_link_metadata() -> None:
 
 
 def test_backend_can_delete_links_for_a_block() -> None:
-    """Backends expose explicit cleanup for links connected to a block."""
+    """`delete_links_for_block` removes the links from a block and the links to that block."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -340,7 +340,7 @@ def test_backend_can_delete_links_for_a_block() -> None:
 
 
 def test_inmemory_backend_read_paths_return_defensive_copies() -> None:
-    """Backend reads, traversal, and search return defensive copies."""
+    """Reads, traversal methods, and search in `InMemoryBackend` return defensive copies."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -385,7 +385,7 @@ def test_inmemory_backend_read_paths_return_defensive_copies() -> None:
 
 
 def test_inmemory_link_scope_search_has_deterministic_tie_order() -> None:
-    """Linked candidates preserve first-seen link endpoint order."""
+    """A search with the `links` scope keeps the order in which link endpoints first appear, so ties are deterministic."""
 
     backend = InMemoryBackend()
     root = backend.put_block(MemoryBlock(id="root", type="node", value={}))

@@ -1,4 +1,4 @@
-"""Behavioral evidence for the Mem0-inspired Genie lamp."""
+"""Tests for the Mem0-inspired Genie lamp."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ LAYOVERS = "Alice avoids overnight layovers"
 
 @dataclass(frozen=True, slots=True)
 class Lamp:
-    """The wired pieces one test works against."""
+    """The connected parts that one test uses."""
 
     handle: MemoryHandle
     structures: Mem0Structures

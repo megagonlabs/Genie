@@ -115,10 +115,11 @@ def test_layered_import_styles_work_for_common_types() -> None:
 def test_root_package_reexports_every_subpackage_export() -> None:
     """`genie` exports every name its subpackages export.
 
-    Genie keeps one rule for its public surface: a name that is public at all
-    is importable from `genie` itself. The focused subpackages stay available
-    for readers who prefer them, but they never hold a name the root package
-    is missing, so the two import styles cannot drift apart.
+    - **One rule for the public surface.** A name that is public at all is
+      importable from `genie` itself.
+    - **Subpackages stay available.** Readers can still import from the focused
+      subpackages. A subpackage never holds a name that the root package does
+      not export, so a name resolves to the same object in both import styles.
     """
 
     subpackage_names = [
@@ -141,7 +142,7 @@ def test_root_package_reexports_every_subpackage_export() -> None:
 
 
 def test_lazy_import_modules_reject_unknown_attributes() -> None:
-    """Focused lazy-import packages fail with normal attribute errors."""
+    """Focused lazy-import packages raise a normal `AttributeError` for an unknown name."""
 
     from genie import memory, policy
 

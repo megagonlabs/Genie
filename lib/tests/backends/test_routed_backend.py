@@ -1,4 +1,4 @@
-"""Tests for routed backend composition."""
+"""Tests for the composition of backends in `RoutedBackend`."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ from tests.backends.test_backend_contracts import (
 
 
 def route_by_metadata(block: MemoryBlock) -> str | None:
-    """Choose a route from block metadata when provided."""
+    """Return the `route` name from the block metadata, or `None` if the metadata has no string `route`."""
 
     route = block.metadata.get("route")
     return route if isinstance(route, str) else None
@@ -56,7 +56,7 @@ def route_by_metadata(block: MemoryBlock) -> str | None:
 
 @dataclass(frozen=True)
 class Preference:
-    """Custom value used to prove routed backends work with codecs."""
+    """Custom value type that shows that `RoutedBackend` works with codecs."""
 
     topic: str
     value: str
@@ -101,7 +101,7 @@ class RecordingSearchIndex:
     """Shared search index that records queries and returns configured results."""
 
     def __init__(self) -> None:
-        """Create an empty recording index."""
+        """Create an empty `RecordingSearchIndex`."""
 
         self.queries: list[MemoryQuery] = []
         self.results: list[SearchResult] = []
@@ -117,7 +117,7 @@ class RecordingLinkStore:
     """Shared link store that records cleanup calls."""
 
     def __init__(self) -> None:
-        """Create an empty recording link store."""
+        """Create an empty `RecordingLinkStore`."""
 
         self.inner = InMemoryLinkStore()
         self.deleted_blocks: list[str] = []
@@ -144,7 +144,7 @@ class RecordingLinkStore:
         return self.inner.list_links(block_id, relation=relation, direction=direction)
 
     def delete_links_for_block(self, block_id: str) -> None:
-        """Record and clean links connected to a block."""
+        """Record the block id and delete the links connected to the block."""
 
         self.deleted_blocks.append(block_id)
         self.inner.delete_links_for_block(block_id)
@@ -153,12 +153,12 @@ class RecordingLinkStore:
 class AcyclicRecordingLinkStore(InMemoryLinkStore):
     """Shared link store that claims `AcyclicLinkStore` and records its calls.
 
-    It does not check for cycles. It only proves that the composite delegates
-    acyclic insertion to a shared store instead of to a route.
+    It does not check for cycles, and it only shows that the composite sends
+    acyclic inserts to a shared store and not to a route.
     """
 
     def __init__(self) -> None:
-        """Create an empty recording link store."""
+        """Create an empty `AcyclicRecordingLinkStore`."""
 
         super().__init__()
         self.acyclic_link_ids: list[str] = []
@@ -174,7 +174,7 @@ class RecordingTraversalIndex:
     """Shared traversal index with explicit cross-route relationships."""
 
     def __init__(self) -> None:
-        """Create an empty recording traversal index."""
+        """Create an empty `RecordingTraversalIndex`."""
 
         self.children_by_root: dict[str, list[MemoryBlock]] = {}
         self.ancestors_by_block: dict[str, list[MemoryBlock]] = {}
@@ -208,7 +208,7 @@ class RecordingTraversalIndex:
 
 
 def test_standalone_link_store_updates_only_metadata() -> None:
-    """The shared reference link store preserves link identity on updates."""
+    """`InMemoryLinkStore` keeps the link identity on updates and rejects a changed target."""
 
     store = InMemoryLinkStore()
     link = store.add_link(MemoryLink(source_id="source", target_id="target", relation="related"))
@@ -223,7 +223,7 @@ def test_standalone_link_store_updates_only_metadata() -> None:
 
 
 def test_standalone_link_store_validates_missing_updates_and_list_filters() -> None:
-    """Standalone link reads validate direction and honor relation and endpoint filters."""
+    """`InMemoryLinkStore.list_links` validates `direction` and applies the relation and endpoint filters, and `update_link` rejects an absent link."""
 
     store = InMemoryLinkStore()
     related = store.add_link(MemoryLink("source", "target", "related"))
@@ -238,7 +238,7 @@ def test_standalone_link_store_validates_missing_updates_and_list_filters() -> N
 
 
 def test_standalone_link_store_rejects_concurrent_duplicate_ids() -> None:
-    """The shared reference store atomically claims each link identity."""
+    """Of 48 concurrent adds of one link id, `InMemoryLinkStore` accepts exactly one."""
 
     store = InMemoryLinkStore()
     link = MemoryLink(
@@ -263,7 +263,7 @@ def test_standalone_link_store_rejects_concurrent_duplicate_ids() -> None:
 
 
 def test_routed_backend_routes_root_blocks_to_owning_stores() -> None:
-    """Independent root blocks can live in different backend stores."""
+    """`RoutedBackend` can store independent root blocks in different route backends."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -286,7 +286,7 @@ def test_routed_backend_routes_root_blocks_to_owning_stores() -> None:
 
 
 def test_routed_backend_atomically_assigns_one_owning_route() -> None:
-    """Concurrent creates cannot place one block id in multiple routes."""
+    """If two writers create the same block id at the same time, only one route gets the block."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -320,7 +320,7 @@ def test_routed_backend_atomically_assigns_one_owning_route() -> None:
 
 
 def test_routed_backend_children_inherit_parent_route() -> None:
-    """Child blocks inherit the parent route to preserve subtree operations."""
+    """A child block uses the route of its parent so that subtree operations work, and the backend rejects a child with a different route."""
 
     backend = RoutedBackend(
         {"a": InMemoryBackend(), "b": InMemoryBackend()},
@@ -342,7 +342,7 @@ def test_routed_backend_children_inherit_parent_route() -> None:
 
 
 def test_routed_backend_updates_blocks_without_changing_routes() -> None:
-    """Block updates stay in their owning route and cannot cross-route reparent."""
+    """A block update stays in the route that owns the block, and the backend rejects a move to a parent in another route."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -387,7 +387,7 @@ def test_routed_backend_updates_blocks_without_changing_routes() -> None:
 
 
 def test_routed_backend_merges_global_search_and_routes_scoped_search() -> None:
-    """Global search merges routes while subtree search stays on the root route."""
+    """A global search merges the results of all routes, and a subtree search uses only the route of the root."""
 
     backend = RoutedBackend(
         {"a": InMemoryBackend(), "b": InMemoryBackend()},
@@ -408,7 +408,7 @@ def test_routed_backend_merges_global_search_and_routes_scoped_search() -> None:
 
 
 def test_routed_backend_uses_shared_search_index() -> None:
-    """A configured shared search index owns routed search execution."""
+    """If the composite has a shared search index, it sends every search to that index."""
 
     search_index = RecordingSearchIndex()
     backend = RoutedBackend(
@@ -430,7 +430,7 @@ def test_routed_backend_uses_shared_search_index() -> None:
 
 
 def test_routed_backend_uses_shared_traversal_index() -> None:
-    """Shared traversal indexes can define parent/child ownership across routes."""
+    """A shared traversal index can define parent and child ownership across routes."""
 
     traversal_index = RecordingTraversalIndex()
     backend = RoutedBackend(
@@ -486,7 +486,7 @@ def test_routed_backend_supports_cross_route_links_with_shared_link_store() -> N
 
 
 def test_routed_backend_updates_route_local_links() -> None:
-    """Route-local links delegate metadata updates to their owning backend."""
+    """For a route-local link, `RoutedBackend` sends the metadata update to the backend that owns the link."""
 
     backend = RoutedBackend({"a": InMemoryBackend()}, default_route="a")
     memory = Memory(backend=backend)
@@ -504,7 +504,7 @@ def test_routed_backend_updates_route_local_links() -> None:
 
 
 def test_routed_backend_supports_cross_route_mounts_as_symbolic_links() -> None:
-    """Cross-route mounts do not turn the target into an owned descendant."""
+    """A cross-route mount does not make the target an owned descendant, and a delete of the source tree keeps the target tree."""
 
     backend = RoutedBackend(
         {"a": InMemoryBackend(), "b": InMemoryBackend()},
@@ -534,7 +534,7 @@ def test_routed_backend_supports_cross_route_mounts_as_symbolic_links() -> None:
 
 
 def test_routed_backend_can_register_route_for_discovered_pending_mount() -> None:
-    """A newly registered route can resolve a previously pending mount target."""
+    """`resolve_mount` returns `None` for a pending mount until `register_route` adds the route that holds the target."""
 
     link_store = InMemoryLinkStore()
     backend = RoutedBackend(
@@ -580,7 +580,7 @@ def test_routed_backend_can_register_route_for_discovered_pending_mount() -> Non
 
 
 def test_routed_backend_register_route_controls_default_for_new_roots() -> None:
-    """A runtime route can become the default for future root blocks."""
+    """`register_route` with `make_default=True` makes the new route the default for new root blocks."""
 
     backend = RoutedBackend({"us": InMemoryBackend()}, default_route="us")
     memory = Memory(backend=backend)
@@ -592,7 +592,7 @@ def test_routed_backend_register_route_controls_default_for_new_roots() -> None:
 
 
 def test_routed_backend_register_route_rejects_unsafe_replacement() -> None:
-    """Route registration rejects duplicates and replacing a populated route."""
+    """`register_route` rejects a duplicate name and the replacement of a route that holds blocks, but it can replace an empty route."""
 
     backend = RoutedBackend({"us": InMemoryBackend()}, default_route="us")
     memory = Memory(backend=backend)
@@ -656,7 +656,7 @@ def test_lineage_dag_checks_cycles_in_the_route_that_owns_the_links() -> None:
 
 
 def test_routed_acyclic_links_need_a_capable_route() -> None:
-    """A route without `AcyclicLinkStore` reports it and writes nothing."""
+    """If the route does not support `AcyclicLinkStore`, the composite raises `UnsupportedOperation` and writes no link."""
 
     memory = Memory(backend=RoutedBackend({"plain": CoreOnlyBackend()}))
     first = memory.put(type="artifact", value="first")
@@ -688,7 +688,7 @@ def test_routed_acyclic_links_use_a_capable_shared_link_store() -> None:
 
 
 def test_routed_acyclic_links_refuse_a_shared_store_without_the_capability() -> None:
-    """Links live in the shared store, so the routes cannot check cycles for it."""
+    """The links are in the shared store, so the routes cannot check cycles for it, and the composite raises `UnsupportedOperation`."""
 
     link_store = InMemoryLinkStore()
     memory = Memory(backend=RoutedBackend({"a": InMemoryBackend()}, link_store=link_store))
@@ -701,7 +701,7 @@ def test_routed_acyclic_links_refuse_a_shared_store_without_the_capability() -> 
 
 
 def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
-    """Route validation keeps each block owned by one backend route."""
+    """`RoutedBackend` rejects an empty route table, an unknown route name, and a block id that another route already owns."""
 
     with pytest.raises(ValueError, match="requires at least one route"):
         RoutedBackend({})
@@ -723,7 +723,7 @@ def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
 
 
 def test_routed_backend_missing_read_paths_are_empty_and_mutations_are_safe_noops() -> None:
-    """Unknown ids stay empty on reads and harmless cleanup operations."""
+    """For an unknown id, reads return empty results, and `delete_block` and `delete_links_for_block` do nothing."""
 
     backend = RoutedBackend({"a": InMemoryBackend()}, default_route="a")
 
@@ -741,7 +741,7 @@ def test_routed_backend_missing_read_paths_are_empty_and_mutations_are_safe_noop
 
 
 def test_routed_backend_detects_ambiguous_preexisting_ownership() -> None:
-    """A block discovered in multiple routes is rejected instead of chosen arbitrarily."""
+    """If a block id exists in more than one route, `route_for_block` raises `MemoryConflict` and does not choose a route at random."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -758,7 +758,7 @@ def test_routed_backend_detects_ambiguous_preexisting_ownership() -> None:
 
 
 def test_shared_link_search_applies_type_and_filter_constraints() -> None:
-    """Portable linked search applies every query constraint before ranking."""
+    """A portable search in the `links` scope applies the type filter and metadata filters before it ranks the results."""
 
     backend = RoutedBackend(
         {"a": InMemoryBackend(), "b": InMemoryBackend()},
@@ -816,7 +816,7 @@ def test_routed_backend_discovers_preexisting_route_blocks() -> None:
 
 
 def test_routed_backend_delete_cleans_catalog_and_shared_links() -> None:
-    """Recursive delete removes catalog state and shared links for descendants."""
+    """A recursive delete removes the catalog entries and the shared links of the root and its descendants."""
 
     link_store = RecordingLinkStore()
     backend = RoutedBackend(
@@ -881,7 +881,7 @@ def test_routed_backend_works_with_memory_layer_extensions() -> None:
 
 
 def test_structure_facades_use_the_route_that_owns_the_container() -> None:
-    """Facades work over a routed backend when the owning route is the store."""
+    """A structure facade works over `RoutedBackend` if the facade uses the route that owns the container as its store."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -896,8 +896,8 @@ def test_structure_facades_use_the_route_that_owns_the_container() -> None:
     config = memory.put(type="config", value="retry budget is three", metadata={"route": "a"})
     event = memory.put(type="event", value="retry budget changed", metadata={"route": "a"})
 
-    # The access object stays the composite-backed Memory; only the structure
-    # records live in the route that owns the container block.
+    # The access object is still the `Memory` over the composite backend. Only
+    # the structure records are in the route that owns the container block.
     catalog = KeyedCollection(memory, route_a, collection=catalog_root)
     events = EventLog(memory, route_a, log=log_root)
     address = MemoryAddress(("service",), "retry")
@@ -927,7 +927,7 @@ def test_structure_facade_membership_stays_inside_one_route() -> None:
     catalog_root = memory.put(type="collection", value="catalog", metadata={"route": "a"})
     far_block = memory.put(type="config", value="timeout budget is ten", metadata={"route": "b"})
 
-    # The composite is not a structure store, but it routes to the one that is.
+    # The composite is not a structure store, but it sends calls to the route that is one.
     catalog = KeyedCollection(memory, backend, collection=catalog_root)
 
     with pytest.raises(MemoryConflict):
@@ -935,7 +935,7 @@ def test_structure_facade_membership_stays_inside_one_route() -> None:
 
 
 def test_backend_for_block_resolves_the_owning_route() -> None:
-    """The routing primitive returns the adapter that owns a block."""
+    """`backend_for_block` returns the adapter that owns a block, or `None` for an unknown id."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -951,13 +951,13 @@ def test_backend_for_block_resolves_the_owning_route() -> None:
 
     assert backend.backend_for_block(here.id) is route_a
     assert backend.backend_for_block(there.id) is route_b
-    # A tree never spans routes, so a child resolves to its parent's adapter.
+    # A tree is always in one route, so a child resolves to the adapter of its parent.
     assert backend.backend_for_block(child.id) is route_b
     assert backend.backend_for_block("missing") is None
 
 
 def test_structure_facade_binds_through_backend_for_block() -> None:
-    """Applications reach a route's optional capabilities without the route table."""
+    """An application can use the optional capabilities of a route through `backend_for_block`, without the route table."""
 
     route_a = InMemoryBackend()
     backend = RoutedBackend(
@@ -971,8 +971,9 @@ def test_structure_facade_binds_through_backend_for_block() -> None:
 
     log_route = backend.backend_for_block(log_root.id)
     assert log_route is route_a
-    # `MemoryBackend` excludes the optional structure protocols, so a hand
-    # resolved route is checked for the capability before it is used as a store.
+    # `MemoryBackend` does not include the optional structure protocols. So the
+    # test checks that a route it resolves by hand has the capability before the
+    # test uses that route as a store.
     assert isinstance(log_route, SequenceStore)
     events = EventLog(memory, log_route, log=log_root)
     events.append(event)
@@ -992,7 +993,7 @@ def test_routed_backend_claims_only_the_link_capability() -> None:
 
 
 def test_a_tree_cannot_span_routes() -> None:
-    """Cross-route parenting is rejected by the composite, on create and on update."""
+    """The composite rejects a parent in a different route on create and on update."""
 
     backend = RoutedBackend(
         {"a": InMemoryBackend(), "b": InMemoryBackend()},
@@ -1008,13 +1009,13 @@ def test_a_tree_cannot_span_routes() -> None:
     with pytest.raises(MemoryConflict, match="cannot be reparented across routes"):
         backend.update_block(orphan.with_updates(parent_id=parent.id))
 
-    # The invariant is what makes route-local traversal exact.
+    # This invariant keeps route-local traversal exact.
     assert backend.children(parent.id) == []
     assert backend.contains(parent.id, orphan.id) is False
 
 
 def test_facade_accepts_the_composite_and_routes_to_the_owning_adapter() -> None:
-    """Passing the composite binds the facade to the route that holds the records."""
+    """A facade that gets the composite binds to the route that holds the records."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -1027,17 +1028,16 @@ def test_facade_accepts_the_composite_and_routes_to_the_owning_adapter() -> None
     log_root = memory.put(type="log", value="events", metadata={"route": "a"})
     event = memory.put(type="event", value="deploy started", metadata={"route": "a"})
 
-    # No hand resolution: the facade takes the composite directly.
+    # The test does not resolve the route by hand. The facade takes the composite directly.
     EventLog(memory, backend, log=log_root).append(event)
 
-    # The entry landed in route "a", which is what a facade bound straight to
-    # that adapter reads back.
+    # The entry is in route "a". A facade bound directly to that adapter reads it.
     assert [item.block.id for item in EventLog(memory, route_a, log=log_root).read()] == [event.id]
     assert EventLog(memory, route_b, log=log_root).read() == []
 
 
 def test_facade_reports_an_unknown_container_rather_than_a_missing_capability() -> None:
-    """A routed store with no owning route is a missing block, not a bad store."""
+    """If no route owns the container, the facade raises `MemoryNotFound`, not an error about an unsupported capability."""
 
     backend = RoutedBackend({"a": InMemoryBackend()})
     memory = Memory(backend=backend, principal="app:demo")
@@ -1049,7 +1049,7 @@ def test_facade_reports_an_unknown_container_rather_than_a_missing_capability() 
 
 
 def test_composite_still_advertises_no_structure_capability() -> None:
-    """Routing for a facade is not a claim to any storage capability."""
+    """The composite routes for facades but does not claim a storage capability such as `SequenceStore` or `KeyedStore`."""
 
     backend = RoutedBackend({"a": InMemoryBackend()})
 
@@ -1059,7 +1059,7 @@ def test_composite_still_advertises_no_structure_capability() -> None:
 
 
 def test_routes_mapping_is_read_only() -> None:
-    """Routes are replaced through `register_route`, never by direct assignment."""
+    """Only `register_route` replaces a route, and a direct assignment to `routes` raises `TypeError`."""
 
     backend = RoutedBackend({"a": InMemoryBackend()})
 
@@ -1067,23 +1067,23 @@ def test_routes_mapping_is_read_only() -> None:
     with pytest.raises(TypeError):
         backend.routes["a"] = InMemoryBackend()  # type: ignore[index]
 
-    # The view is live rather than a copy.
+    # `routes` is a live view, not a copy.
     backend.register_route("c", InMemoryBackend())
     assert sorted(backend.routes) == ["a", "c"]
 
 
 def test_route_replacement_probes_the_backend_when_the_catalog_is_cold(tmp_path: Any) -> None:
-    """A composite opened over existing data must not strand it.
+    """`register_route` does not replace a route that still holds blocks, even in a newly opened composite.
 
-    The catalog is filled lazily, so a freshly constructed composite has not
-    cataloged anything yet. Replacement has to ask the backend itself.
+    The catalog fills only on demand, so a new composite has no catalog
+    entries, and the replacement check asks the route backend directly.
     """
 
     database = tmp_path / "genie.db"
     first = RoutedBackend({"a": SQLiteBackend(database), "b": InMemoryBackend()}, default_route="a")
     stored = Memory(backend=first, principal="app:demo").put(type="note", value="persisted")
 
-    # Reopen the same store, as a restart would.
+    # Open the same store again, as after a restart.
     second = RoutedBackend({"a": SQLiteBackend(database), "b": InMemoryBackend()}, default_route="a")
 
     with pytest.raises(MemoryConflict, match="still holds blocks"):
@@ -1093,7 +1093,7 @@ def test_route_replacement_probes_the_backend_when_the_catalog_is_cold(tmp_path:
 
 
 def test_route_replacement_allows_a_genuinely_empty_route(tmp_path: Any) -> None:
-    """An empty backend stays replaceable, so the probe is not a blanket refusal."""
+    """`register_route` can replace a route with an empty backend, so the probe does not reject every replacement."""
 
     database = tmp_path / "empty.db"
     backend = RoutedBackend({"a": SQLiteBackend(database), "b": InMemoryBackend()}, default_route="b")
@@ -1108,6 +1108,6 @@ class TestRoutedStructureBackendContracts(LinkStoreContract, AcyclicLinkStoreCon
     """Run the link contracts against a composite with route-local links."""
 
     def make_backend(self) -> RoutedBackend:
-        """Return a two-route composite. New root blocks go to route `a`."""
+        """Return a composite with two routes, where new root blocks go to route `a`."""
 
         return RoutedBackend({"a": InMemoryBackend(), "b": InMemoryBackend()}, default_route="a")

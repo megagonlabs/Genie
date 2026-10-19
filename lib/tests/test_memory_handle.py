@@ -35,7 +35,7 @@ def test_subtree_scope_limits_search_scope() -> None:
 
 
 def test_scope_can_optionally_search_ancestors() -> None:
-    """Ancestor search is available only when explicitly enabled."""
+    """Only a handle with `allow_up=True` can search ancestors."""
 
     memory = Memory()
     root = memory.put(type="root", value="project launch context")
@@ -98,7 +98,7 @@ def test_scope_put_and_set_forward_codec_options() -> None:
 
 
 def test_handle_put_rejects_explicit_policy_by_default() -> None:
-    """Handles use the memory default policy unless policy override is enabled."""
+    """A handle uses the default policy of `Memory` and rejects an explicit `policy` unless `allow_policy_override` is true."""
 
     memory = Memory()
     root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
@@ -119,7 +119,7 @@ def test_handle_put_rejects_explicit_policy_by_default() -> None:
 
 
 def test_handle_put_forwards_block_policy_when_override_is_allowed() -> None:
-    """Trusted handles can attach the same policy object as `Memory.put`."""
+    """A handle with `allow_policy_override=True` can attach a policy object, as `Memory.put` can."""
 
     memory = Memory()
     root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
@@ -213,7 +213,7 @@ def test_child_handles_cannot_widen_parent_global_or_ancestor_access() -> None:
 
 
 def test_handle_creation_rejects_default_scope_that_requires_disabled_access() -> None:
-    """Handles reject default scopes that would fail every default search."""
+    """A new handle rejects a default scope that needs `allow_global` or `allow_up` if that flag is off."""
 
     memory = Memory()
     root = memory.put(type="root", value="root context")
@@ -233,7 +233,7 @@ def test_handle_creation_rejects_default_scope_that_requires_disabled_access() -
 
 
 def test_child_handle_creation_rejects_default_scope_without_matching_child_capability() -> None:
-    """Child handles must enable the capability required by their default scope."""
+    """A child handle rejects a default scope unless the child itself enables the capability that scope needs."""
 
     memory = Memory()
     root = memory.put(type="root", value="root context")
@@ -252,7 +252,7 @@ def test_child_handle_creation_rejects_default_scope_without_matching_child_capa
 
 
 def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
-    """Prebuilt queries cannot pass wider roots through a scope."""
+    """A prebuilt `MemoryQuery` cannot pass a wider root or scope through a handle."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -276,7 +276,7 @@ def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
 
 
 def test_child_handles_cannot_change_principal_identity() -> None:
-    """Child handles cannot replace the principal they were created with."""
+    """A child handle cannot replace the principal of its parent handle."""
 
     memory = Memory()
     root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
@@ -298,7 +298,7 @@ def test_get_unbounded_handle_requires_explicit_roots_for_traversal() -> None:
 
 
 def test_unbounded_handle_lists_links_for_explicit_blocks() -> None:
-    """An unbounded handle can inspect links without applying a synthetic root."""
+    """An unbounded handle lists the links of an explicit block and does not add a synthetic root."""
 
     memory = Memory()
     source = memory.put(type="node", value="source")
@@ -310,7 +310,7 @@ def test_unbounded_handle_lists_links_for_explicit_blocks() -> None:
 
 
 def test_unbounded_child_handle_can_remain_explicitly_unbounded() -> None:
-    """Trusted code can narrow capabilities without inventing a child root."""
+    """Trusted code can narrow capabilities and keep a child handle unbounded, with no invented root."""
 
     parent = Memory().get_unbounded_handle(allow_global=True)
 
@@ -321,7 +321,7 @@ def test_unbounded_child_handle_can_remain_explicitly_unbounded() -> None:
 
 
 def test_get_unbounded_handle_requires_explicit_root_or_global_permission_for_search() -> None:
-    """Unbounded handles cannot accidentally turn subtree search into global search."""
+    """An unbounded handle does not change a subtree search into a global search."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -345,7 +345,7 @@ def test_get_unbounded_handle_requires_explicit_root_or_global_permission_for_se
 
 
 def test_get_handle_requires_root_and_get_unbounded_handle_is_explicit() -> None:
-    """`Memory.get_handle` creates bounded handles; unbounded access uses `get_unbounded_handle`."""
+    """`Memory.get_handle` creates only bounded handles, and unbounded access uses `get_unbounded_handle`."""
 
     memory = Memory()
     missing_attribute = "scope"
@@ -365,7 +365,7 @@ def test_get_handle_requires_root_and_get_unbounded_handle_is_explicit() -> None
 
 
 def test_scope_root_must_exist() -> None:
-    """Bounded handles fail early when their root block is missing."""
+    """`get_handle` raises `MemoryNotFound` if the root block does not exist."""
 
     memory = Memory()
 
@@ -390,7 +390,7 @@ def test_get_handle_requires_root_read_access_for_requested_principal() -> None:
 
 
 def test_handle_set_and_update_need_read_on_the_block() -> None:
-    """A handle principal that can write but not read a block is refused instead of receiving the stored block."""
+    """A handle principal that can write but not read a block gets `AccessDenied` and does not get the stored block."""
 
     owner = Memory(principal="owner")
     inbox = owner.put(type="inbox", value="inbox", policy=MemoryPolicy.public())
@@ -412,7 +412,7 @@ def test_handle_set_and_update_need_read_on_the_block() -> None:
 
 
 def test_handle_require_access_checks_the_boundary_before_the_policy() -> None:
-    """A handle refuses blocks outside its root, then applies the block policy."""
+    """A handle rejects blocks outside its root first, then applies the block policy."""
 
     memory = Memory(principal="owner")
     readable = MemoryPolicy(read=AccessRule.allow())
@@ -433,7 +433,7 @@ def test_handle_require_access_checks_the_boundary_before_the_policy() -> None:
 
 
 def test_handle_delete_and_unbounded_ancestor_lookup_keep_explicit_boundaries() -> None:
-    """Scoped deletion works, while an unbounded handle cannot infer an ancestor root."""
+    """A scoped handle can delete a block in its subtree, but an unbounded handle cannot infer an ancestor root."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")
@@ -449,7 +449,7 @@ def test_handle_delete_and_unbounded_ancestor_lookup_keep_explicit_boundaries() 
 
 
 def test_handle_rejects_bad_block_references_before_boundary_checks() -> None:
-    """A bad id raises `TypeError` or `ValueError`, not a boundary refusal."""
+    """A bad id raises `TypeError` or `ValueError`, not `AccessDenied` from the boundary check."""
 
     memory = Memory()
     root = memory.put(type="root", value="root")

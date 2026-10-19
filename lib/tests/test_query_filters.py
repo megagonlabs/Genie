@@ -55,7 +55,7 @@ def test_search_filters_types_scopes_and_limits() -> None:
 
 
 def test_filter_operators_cover_common_comparisons() -> None:
-    """Human-friendly filter operators behave as expected."""
+    """The short filter operators, such as `>`, `<=`, `in`, and `!=`, select the correct blocks."""
 
     memory = Memory()
     memory.put(type="note", value="low", metadata={"priority": 1, "owner": "team"})
@@ -75,7 +75,7 @@ def test_filter_operators_cover_common_comparisons() -> None:
 
 
 def test_unknown_filter_operators_raise_before_any_backend_runs() -> None:
-    """A mistyped operator raises `ValueError` instead of returning an empty result."""
+    """A mistyped operator raises `ValueError` and does not return an empty result."""
 
     memory = Memory()
     memory.put(type="note", value="note", metadata={"priority": 3})
@@ -88,13 +88,13 @@ def test_unknown_filter_operators_raise_before_any_backend_runs() -> None:
     with pytest.raises(ValueError, match="'between'"):
         normalize_filters({"priority": {"$gte": 1, "between": (1, 3)}})
 
-    # The matcher keeps its own guard for adapters that skip normalization.
+    # The matcher has its own guard for adapters that do not normalize the filters.
     block = MemoryBlock(type="note", value="note", metadata={"priority": 3})
     assert matches_filters(block, {"priority": {"$unknown": 2}}) is False
 
 
 def test_canonical_filter_operators_still_work() -> None:
-    """Canonical adapter-facing filter operators remain supported."""
+    """`Memory.search` still accepts the canonical operators that adapters receive, such as `$gte` and `$lte`."""
 
     memory = Memory()
     block = memory.put(type="note", value="canonical", metadata={"priority": 2})
@@ -128,7 +128,7 @@ def test_canonical_filter_operator_truth_table(
     condition: dict[str, object],
     matches: bool,
 ) -> None:
-    """Every canonical comparison operator includes positive and negative cases."""
+    """The table has a positive case and a negative case for every canonical comparison operator."""
 
     memory = Memory()
     block = memory.put(
@@ -143,7 +143,7 @@ def test_canonical_filter_operator_truth_table(
 
 
 def test_filter_aliases_match_block_fields_and_do_not_mutate_inputs() -> None:
-    """Filter aliases work for block fields while normalization copies inputs."""
+    """Filter aliases match block fields, and `normalize_filters` copies its input and does not change it."""
 
     memory = Memory()
     wanted = memory.put(type="note", value="wanted", metadata={"priority": 2})
@@ -172,7 +172,7 @@ def test_backends_receive_normalized_filter_operators() -> None:
             self.seen_filters: dict[str, Any] | None = None
 
         def search(self, query: MemoryQuery) -> list[SearchResult]:
-            """Record filters before calling the in-memory backend."""
+            """Record the filters, then search through the in-memory backend."""
 
             self.seen_filters = query.filters
             return super().search(query)
@@ -237,14 +237,14 @@ def test_query_rejects_invalid_runtime_field_types(
     kwargs: dict[str, Any],
     error: type[Exception],
 ) -> None:
-    """Malformed query fields fail before they reach a backend adapter."""
+    """`MemoryQuery` raises an error for a malformed field before the query reaches a backend adapter."""
 
     with pytest.raises(error):
         MemoryQuery(**kwargs)
 
 
 def test_memory_search_preserves_query_validation_at_the_public_boundary() -> None:
-    """Friendly search arguments are validated instead of silently coerced."""
+    """`Memory.search` raises `TypeError` for a wrong `types` or `filters` argument and does not convert it silently."""
 
     memory = Memory()
 
@@ -255,7 +255,7 @@ def test_memory_search_preserves_query_validation_at_the_public_boundary() -> No
 
 
 def test_query_copies_nested_filter_operands_and_type_lists() -> None:
-    """Caller mutation cannot change a query after construction."""
+    """A change to the lists of the caller cannot change a query after construction."""
 
     owners = ["team"]
     types = ["note"]
@@ -270,7 +270,7 @@ def test_query_copies_nested_filter_operands_and_type_lists() -> None:
 
 
 def test_filter_fields_use_declared_block_fields_before_metadata_fallback() -> None:
-    """Methods do not shadow metadata keys that happen to share their names."""
+    """A `MemoryBlock` method name does not hide a metadata key with the same name."""
 
     memory = Memory()
     block = memory.put(
@@ -285,7 +285,7 @@ def test_filter_fields_use_declared_block_fields_before_metadata_fallback() -> N
 
 
 def test_portable_in_filters_require_a_collection_and_empty_operators_fail_closed() -> None:
-    """Portable matching never treats strings or empty operator maps as matches."""
+    """The portable matcher never treats a string `$in` operand or an empty operator map as a match."""
 
     memory = Memory()
     memory.put(type="note", value="value", metadata={"owner": "team"})
@@ -295,7 +295,7 @@ def test_portable_in_filters_require_a_collection_and_empty_operators_fail_close
 
 
 def test_portable_filter_matching_fails_closed_for_non_string_keys() -> None:
-    """Adapter-side matching rejects malformed field and operator keys."""
+    """`matches_filters` returns `False` for a field key or an operator key that is not a string."""
 
     block = MemoryBlock(type="note", value="value", metadata={"owner": "team"})
 
@@ -307,7 +307,7 @@ def test_portable_filter_matching_fails_closed_for_non_string_keys() -> None:
 
 
 def test_non_global_search_requires_an_explicit_root() -> None:
-    """A missing scoped-search root cannot silently widen into a global scan."""
+    """A scoped search without a root raises `ValueError` and does not become a global scan."""
 
     memory = Memory()
     memory.put(type="note", value="visible only to a deliberate query")
@@ -317,7 +317,7 @@ def test_non_global_search_requires_an_explicit_root() -> None:
 
 
 def test_search_results_validate_backend_facing_record_fields() -> None:
-    """Malformed result records fail before ranking or policy filtering."""
+    """`SearchResult` raises an error for a malformed field, so a bad record cannot reach the rank and policy steps."""
 
     block = MemoryBlock(type="note", value="value")
 
@@ -349,13 +349,14 @@ class _CountingBackend(InMemoryBackend):
 
 
 def test_search_reads_each_result_block_once() -> None:
-    """`Memory.search` checks a result's stored block once, not once per pass.
+    """`Memory.search` checks the stored block of a result once, not once per pass.
 
-    Visibility is filtered twice, before and after the `after_search` hooks,
-    because a hook may add results. Both passes share one verdict per block id,
-    so the second pass costs no extra reads. On a server-backed adapter that
-    halves the round trips a search spends, and the cost grew with the number
-    of results.
+    - **Two passes, one verdict.** `Memory.search` filters visibility twice,
+      before and after the `after_search` hooks, because a hook can add
+      results. Both passes share one verdict for each block id, so the second
+      pass costs no extra reads.
+    - **Cost.** On a server-backed adapter, this halves the round trips of a
+      search. That cost grows with the number of results.
     """
 
     backend = _CountingBackend()
@@ -371,17 +372,18 @@ def test_search_reads_each_result_block_once() -> None:
     returned = [result.block.id for result in results]
 
     assert sorted(returned) == sorted(note.id for note in notes)
-    # Exactly one read per returned block. Reads of the query root are the
-    # authorization path, not result filtering, so they are excluded.
+    # Exactly 1 read for each returned block. The reads of the query root are
+    # part of the authorization path, not of the result filter, so the count
+    # excludes them.
     result_reads = [block_id for block_id in backend.reads if block_id in set(returned)]
     assert sorted(result_reads) == sorted(returned)
 
 
 def test_search_visibility_is_decided_again_for_every_search() -> None:
-    """A shared verdict lives for one search only, never across two.
+    """A shared verdict applies to one search only, never to two searches.
 
-    Reusing it further would answer from a stale store, so a block deleted
-    between two searches has to disappear from the second one.
+    A reused verdict reads a stale store, so a block deleted between two
+    searches does not appear in the second result.
     """
 
     memory = Memory(principal="owner")

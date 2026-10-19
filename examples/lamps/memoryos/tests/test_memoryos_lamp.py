@@ -1,4 +1,4 @@
-"""Behavioral evidence for the MemoryOS-inspired Genie lamp."""
+"""Tests for the MemoryOS-inspired Genie lamp."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ MEALS = "meal requirements"
 
 @dataclass(frozen=True, slots=True)
 class Lamp:
-    """The wired pieces one test works against."""
+    """The connected parts that one test uses."""
 
     handle: MemoryHandle
     structures: MemoryOSStructures
@@ -67,7 +67,7 @@ def _lamp(
     shared: tuple[Memory, InMemoryBackend] | None = None,
     user_id: str = "alice",
 ) -> Lamp:
-    """Build an empty hierarchy, optionally beside another in one store."""
+    """Build an empty hierarchy, either in a new store or beside another hierarchy in a shared store."""
 
     store, backend = shared if shared is not None else _store()
     root = store.put(type=SYSTEM_TYPE, value={"user_id": user_id, "assistant_id": "travel-agent"})
@@ -102,14 +102,14 @@ def _lamp(
 
 
 def _store() -> tuple[Memory, InMemoryBackend]:
-    """Return one memory store and the backend its structures are built on."""
+    """Return one memory store and the backend that its structures use."""
 
     backend = InMemoryBackend()
     return Memory(backend=backend, principal="memoryos-test"), backend
 
 
 def _hours(offset: float) -> datetime:
-    """Return a moment a given number of hours into the test scenario."""
+    """Return the moment that is `offset` hours after the start of the test scenario."""
 
     return START + timedelta(hours=offset)
 
@@ -136,7 +136,7 @@ def _exchange(
 
 
 def _fill(lamp: Lamp, count: int, *, topic: str = SEATS, continues: bool = False, insight: Insight | None = None) -> list[Any]:
-    """Record `count` exchanges one hour apart and return the results."""
+    """Record `count` exchanges 1 hour apart and return the results."""
 
     return [
         lamp.system.add_memory(

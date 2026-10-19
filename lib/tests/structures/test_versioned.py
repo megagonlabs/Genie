@@ -25,7 +25,7 @@ from genie.structures import (
 
 
 def test_versioned_records_keep_keyed_identity_and_positive_revisions() -> None:
-    """A stable identity anchors positive ordered revision references."""
+    """Each revision refers to a stable keyed identity, and revision numbers start at 1 and increase in order."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -55,7 +55,7 @@ def test_versioned_records_keep_keyed_identity_and_positive_revisions() -> None:
 
 
 def test_each_identity_has_an_independent_revision_sequence() -> None:
-    """Logical revision numbering starts at one for every stable identity."""
+    """Each stable identity has its own revision numbers, which start at 1."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -75,7 +75,7 @@ def test_each_identity_has_an_independent_revision_sequence() -> None:
 
 
 def test_record_registration_is_create_only() -> None:
-    """The facade does not silently replace a stable keyed identity."""
+    """`register` raises `MemoryConflict` and does not replace a stable keyed identity."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -114,7 +114,7 @@ def test_revision_history_supports_ranges_reverse_order_and_limits() -> None:
 
 
 def test_concurrent_appends_allocate_unique_record_revisions() -> None:
-    """Concurrent writers receive one monotonic revision sequence per identity."""
+    """100 concurrent appends get the unique revisions 1 to 100 for one identity."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -135,7 +135,7 @@ def test_concurrent_appends_allocate_unique_record_revisions() -> None:
 
 
 def test_versioned_records_preserve_handle_scope_for_history() -> None:
-    """Scans omit hidden revisions while exact lookup and append propagate denial."""
+    """In a scoped collection, `history` omits an outside revision, and `revision` and `append` raise `AccessDenied` for it."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -163,7 +163,7 @@ def test_versioned_records_preserve_handle_scope_for_history() -> None:
 
 
 def test_revision_deletion_leaves_a_gap_and_does_not_reuse_numbers() -> None:
-    """Deleting a revision preserves later monotonic logical numbering."""
+    """A delete of a revision block leaves a gap, and later revisions do not reuse its number."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -188,7 +188,7 @@ def test_revision_deletion_leaves_a_gap_and_does_not_reuse_numbers() -> None:
 
 
 def test_identity_deletion_cleans_key_and_revision_log_state() -> None:
-    """Deleting the stable identity removes its address and complete log."""
+    """A delete of the stable identity removes its address and its complete log."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -210,7 +210,7 @@ def test_identity_deletion_cleans_key_and_revision_log_state() -> None:
 
 
 def test_missing_address_has_empty_read_behavior() -> None:
-    """Missing identities return empty reads while append reports the mistake."""
+    """For an address with no identity, reads return empty results and `append` raises `MemoryNotFound`."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -243,7 +243,7 @@ def test_missing_address_has_empty_read_behavior() -> None:
 def test_versioned_records_reject_invalid_revision_ranges(
     operation: Callable[[VersionedRecords, MemoryAddress], object],
 ) -> None:
-    """Revision ranges and limits use predictable validation errors."""
+    """Invalid revision numbers, ranges, limits, and flags raise `TypeError` or `ValueError`."""
 
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
@@ -256,7 +256,7 @@ def test_versioned_records_reject_invalid_revision_ranges(
 
 
 def test_versioned_records_requires_both_composed_store_capabilities() -> None:
-    """A store missing keyed or sequence operations fails clearly."""
+    """The constructor raises `UnsupportedOperation` for a store without keyed or sequence operations."""
 
     memory = Memory()
     root = memory.put(type="versioned_collection", value="records")
@@ -266,7 +266,7 @@ def test_versioned_records_requires_both_composed_store_capabilities() -> None:
 
 
 def test_memory_handle_and_backend_implement_versioned_protocols() -> None:
-    """Public access and the reference backend satisfy composition protocols."""
+    """`Memory` and `MemoryHandle` satisfy `VersionedAccess`, and the reference backend satisfies `VersionedStore`."""
 
     memory = Memory()
     root = memory.put(type="versioned_collection", value="records")
