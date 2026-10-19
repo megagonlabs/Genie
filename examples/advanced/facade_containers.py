@@ -1,18 +1,21 @@
 """Ask a facade which block it is bound to, and treat that block as memory.
 
-- Container-based facades hold a reference to one ordinary memory block: a tree
-  root, a collection, or a log.
-- Each exposes the id as a plain attribute and the block itself as a property
-  that re-reads storage, so the id stays cheap and stable while the property
-  always reflects the block's current value.
-- The container is ordinary memory, so it can be renamed, searched, and
-  policy-protected like anything else. Deleting it makes the facade report a
-  missing container rather than returning stale results.
-- Membership records name blocks by id and leave ownership alone. A block bound
-  into a facade stays where its parent put it, and container-scoped search
-  follows parents, not membership.
-- Link-based facades such as `PropertyGraph` and `LineageDAG` bind to a relation
-  instead, so they have no container block.
+- **One container block:** a container-based facade holds a reference to one
+  ordinary memory block. This block is a tree root, a collection, or a log.
+- **Id and block:** each facade gives the id as a plain attribute. It gives the
+  block as a property that reads storage again. So a read of the id does not
+  use storage and the id does not change. The property always shows the
+  current value of the block.
+- **Ordinary memory:** the application can rename the container, search for it,
+  and protect it with a policy, as with any other block. After a delete of the
+  container, the facade reports a missing container. It does not return old
+  results.
+- **Membership is not ownership:** membership records refer to blocks by id and
+  do not change ownership. A block that a facade binds keeps its parent. Search
+  scoped to a container follows parents, not membership.
+- **Link-based facades have no container block:** `LineageDAG` binds to one
+  relation. `PropertyGraph` binds to no relation, and its calls take an
+  optional `relation` filter.
 
 Run from the repository root:
 
@@ -46,7 +49,7 @@ ACTIVE = MemoryAddress(("serving",), "active_model")
 
 
 def main() -> None:
-    """Read every facade's container, then rename and delete one."""
+    """Read the container of each facade, then rename one and delete it."""
 
     print("== Facade containers ==")
     backend = InMemoryBackend()
@@ -64,7 +67,7 @@ def main() -> None:
     timeline = TemporalCollection(memory, backend, collection=timeline_root)
     versions = VersionedRecords(memory, backend, collection=versions_root)
 
-    # Every container-based facade reports the block it is bound to.
+    # Each container-based facade reports the block that it binds to.
     print(f"tree root: {tree.root.value}")
     print(f"catalog collection: {catalog.collection.value}")
     print(f"log: {events.log.value}")
@@ -77,12 +80,13 @@ def main() -> None:
     assert events.log == events_root
     assert timeline.collection_id == timeline_root.id
     assert timeline.collection == timeline_root
-    # Versioned records reuse a keyed collection, so they report the same one.
+    # `VersionedRecords` reuses a keyed collection, so it reports the same
+    # collection block.
     assert versions.collection_id == versions_root.id
     assert versions.collection == versions_root
 
-    # The container is ordinary memory. Renaming it is a normal write, and the
-    # property reflects it while the id stays the same.
+    # The container is ordinary memory, so a rename is a normal write. The
+    # property shows the new value, and the id does not change.
     renamed = memory.set(catalog_root, "ranker catalog")
 
     print(f"catalog collection after renaming: {catalog.collection.value}")
@@ -90,11 +94,11 @@ def main() -> None:
     assert catalog.collection_id == catalog_root.id
     assert catalog.collection.value == "ranker catalog"
     assert catalog.collection.version == renamed.version
-    # Containers are searchable like any other block.
+    # Search finds a container, as it finds any other block.
     assert [result.block.id for result in memory.search("ranker catalog")] == [catalog_root.id]
 
-    # A keyed read can return the block or the binding that reached it. The
-    # binding names the address, which the block itself does not carry.
+    # A keyed read returns the block (`get`) or the block with its binding
+    # (`get_item`). The binding records the address. The block does not.
     ranker = tree.create_child(type="model", value="candidate ranker")
     catalog.bind(ACTIVE, ranker)
     block = catalog.get(ACTIVE)
@@ -107,20 +111,20 @@ def main() -> None:
     assert item.block == ranker
     assert item.binding.address == ACTIVE
     assert item.binding.collection_id == catalog_root.id
-    # Binding recorded membership without changing ownership, so the ranker is
-    # still a child of the workspace. Search scopes follow parents, so a search
-    # rooted at the catalog does not reach it.
+    # The bind recorded membership and did not change ownership. So the ranker
+    # is still a child of the workspace. Search scopes follow parents, so a
+    # search from the catalog root does not find the ranker.
     assert memory.search("candidate ranker", root=catalog_root, scope="subtree") == []
     assert [
         result.block.id
         for result in memory.search("candidate ranker", root=workspace, scope="subtree")
     ] == [ranker.id]
-    # An unbound address is absent rather than an error, in both forms.
+    # For an unbound address, both forms return `None` and raise no error.
     assert catalog.get(MemoryAddress(("serving",), "missing")) is None
     assert catalog.get_item(MemoryAddress(("serving",), "missing")) is None
 
-    # Deleting the container makes the facade report a missing container rather
-    # than silently behaving like an empty one.
+    # After a delete of the container, the facade reports a missing container
+    # with `MemoryNotFound`. It does not act like an empty container.
     memory.delete(catalog_root)
 
     try:
@@ -136,9 +140,11 @@ def main() -> None:
     else:
         raise AssertionError("A deleted container must not serve reads.")
 
-    # The id is a plain attribute, so it still answers without storage.
+    # The id is a plain attribute, so a read of the id still works and does
+    # not use storage.
     assert catalog.collection_id == catalog_root.id
-    # The other facades are unaffected; each binds to its own block.
+    # The delete has no effect on the other facades. Each facade binds to its
+    # own block.
     assert events.log == events_root
     assert timeline.collection == timeline_root
     print("facades bound to other blocks are unaffected")

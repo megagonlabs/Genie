@@ -1,25 +1,26 @@
 """Semantic memory in its profile shape: one document, revised in place.
 
-LangMem offers two shapes for semantic memory:
+LangMem has 2 shapes for semantic memory:
 
-- A collection accumulates many small documents, and retrieval picks the
+- **Collection:** many small documents accumulate, and retrieval selects the
   relevant ones.
-- A profile is a single document per namespace, following a strict schema, that
-  is *updated* rather than added to. That is the right shape for "what does this
-  user prefer", where a second answer should replace the first rather than sit
-  beside it.
+- **Profile:** a single document for each namespace, with a strict schema. An
+  update changes the document and does not add a new one. This shape suits
+  "what does this user prefer". A second answer replaces the first answer, and
+  the 2 answers do not stay side by side.
 
-The two shapes want different Genie structures, which is the point of keeping
-this module separate from `store.py`:
+The 2 shapes need different Genie structures. That is why this module is
+separate from `store.py`:
 
-- A collection is `KeyedCollection`: many addresses, each holding one block.
-- A profile is `VersionedRecords`: one address holding one identity, with an
-  ordered revision behind it for every update. That gives the upstream behavior
-  - one current document, replaced on write - and adds what a single mutable
-  document cannot show, which is what it used to say.
-- Updates merge fields rather than replacing the whole document, and a revision
-  is written only when the merged value actually differs. So a conversation that
-  repeats what the profile already records leaves no version behind.
+- **Collection:** `KeyedCollection`. It has many addresses, and each address
+  holds one block.
+- **Profile:** `VersionedRecords`. One address holds one identity, and each
+  update adds an ordered revision behind it. This gives the upstream behavior:
+  one current document that each write replaces. It also adds what a single
+  mutable document cannot show: its earlier text.
+- **Merge:** an update merges fields and does not replace the whole document.
+  The store writes a revision only if the merged value is really different. So
+  a conversation that repeats the profile adds no version.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ from genie.structures import MemoryAddress, RevisionItem
 
 
 class ProfileStore:
-    """Single-document semantic memory, one identity per profile."""
+    """Single-document semantic memory, with one identity for each profile."""
 
     def __init__(
         self,
@@ -62,12 +63,11 @@ class ProfileStore:
         """Create a profile store over one bounded handle.
 
         Args:
-            memory: Bounded Genie handle owning the profile tier.
-            structures: Facade bundle built over the same handle.
-            schema: Optional schema every profile value must satisfy once it is
-                merged. LangMem requires a strict schema for the profile shape;
-                leaving it out here keeps the store usable for free-form
-                profiles.
+            memory: Bounded Genie handle that owns the profile tier.
+            structures: Facade bundle on the same handle.
+            schema: Optional schema for each profile value after the merge.
+                LangMem requires a strict schema for the profile shape. Here,
+                without a schema, the store also accepts free-form profiles.
         """
 
         self.memory = memory
@@ -82,21 +82,21 @@ class ProfileStore:
         default: Mapping[str, Any],
         at: datetime,
     ) -> Profile:
-        """Create a profile and write its opening version.
+        """Create a profile and write its first version.
 
-        LangMem's store manager takes a `default` so the first conversation
-        patches an existing document instead of inventing one. Registering the
-        default as revision one keeps that behavior and makes the starting point
-        readable afterwards.
+        The LangMem store manager takes a `default`. So the first conversation
+        patches a document that exists, and does not make a new one. This method
+        writes the default as revision 1. That keeps the upstream behavior, and
+        a reader can read the start value later.
 
         Args:
-            value: Resolved namespace the profile belongs to.
-            name: Profile name inside that namespace.
-            default: Opening value.
-            at: Timestamp recorded on the first revision.
+            value: Resolved namespace of the profile.
+            name: Profile name in that namespace.
+            default: First value.
+            at: Timestamp for the first revision.
 
         Returns:
-            The profile at revision one.
+            The profile at revision 1.
 
         Raises:
             TypeError: If the default is not a mapping or fails the schema.
@@ -127,17 +127,17 @@ class ProfileStore:
         *,
         at: datetime,
     ) -> Profile:
-        """Merge fields into a profile, writing a version only if it changed.
+        """Merge fields into a profile, and write a version only if the value changed.
 
         Args:
-            value: Resolved namespace holding the profile.
+            value: Resolved namespace that holds the profile.
             name: Profile name.
             changes: Fields to merge into the current value.
-            at: Timestamp recorded on the revision, when one is written.
+            at: Timestamp for the revision, if the store writes one.
 
         Returns:
-            The profile after the merge. Its `revision` is unchanged when the
-            merge was a no-op.
+            The profile after the merge. Its `revision` does not change if the
+            merge changed no field.
 
         Raises:
             KeyError: If the profile is not registered.
@@ -157,14 +157,14 @@ class ProfileStore:
         )
 
     def current(self, value: Sequence[str], name: str) -> Profile | None:
-        """Return the version of a profile that is on file now.
+        """Return the current version of a profile.
 
         Args:
             value: Resolved namespace.
             name: Profile name.
 
         Returns:
-            The profile, or `None` when it is not registered.
+            The profile, or `None` if it is not registered.
         """
 
         address = MemoryAddress(namespace(*value), required_text(name, field="name"))
@@ -175,7 +175,7 @@ class ProfileStore:
         return _profile(identity, revision)
 
     def require(self, value: Sequence[str], name: str) -> Profile:
-        """Return a profile and fail when it is not registered.
+        """Return a profile, and raise `KeyError` if it is not registered.
 
         Args:
             value: Resolved namespace.
@@ -194,14 +194,15 @@ class ProfileStore:
         return profile
 
     def history(self, value: Sequence[str], name: str) -> list[Profile]:
-        """Return every version a profile has had, oldest first.
+        """Return all versions of a profile, oldest first.
 
         Args:
             value: Resolved namespace.
             name: Profile name.
 
         Returns:
-            Versions in ascending revision order, empty when unregistered.
+            Versions in ascending revision order. The list is empty if the
+            profile is not registered.
         """
 
         address = MemoryAddress(namespace(*value), required_text(name, field="name"))
@@ -214,7 +215,7 @@ class ProfileStore:
         ]
 
     def profiles(self) -> list[Profile]:
-        """Return the current version of every registered profile.
+        """Return the current version of each registered profile.
 
         Returns:
             Profiles in ascending namespace and name order.
@@ -235,7 +236,7 @@ class ProfileStore:
         *,
         at: datetime,
     ) -> Profile:
-        """Append one profile revision and return the profile it produced."""
+        """Append one profile revision, and return the profile with that revision."""
 
         written_at = normalize_timestamp(at, field="at")
         revision_block = self.structures.tiers.create_child(
@@ -285,7 +286,7 @@ def _profile(identity: MemoryBlock, revision: RevisionItem) -> Profile:
 
 
 def _payload(block: MemoryBlock) -> dict[str, Any]:
-    """Return the dictionary value stored on a profile revision."""
+    """Return the dictionary value of a profile revision block."""
 
     if not isinstance(block.value, dict):
         raise TypeError(f"Block {block.id!r} does not hold a profile revision.")

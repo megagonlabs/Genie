@@ -1,14 +1,15 @@
-"""Genie structure facades wired to the Graphiti lamp's ownership tiers.
+"""Genie structure facades for the ownership tiers of the Graphiti lamp.
 
-Graphiti describes its graph as three subgraphs: episodic, semantic-entity, and
-community. Here those are ownership tiers below one root block, and each tier
-anchors the Genie facades the lamp needs. Keeping the wiring in its own module
-makes the composition itself readable: which facade each Graphiti idea maps to,
-and which backend capability it requires.
-
-Bi-temporality is the notable part. Fact valid time and fact transaction time
-are two separate `TemporalCollection` facades over the same fact blocks, so
-neither axis has to know the other exists.
+- **Upstream:** Graphiti divides its graph into 3 subgraphs: episodic,
+  semantic-entity, and community.
+- **Here:** these subgraphs are ownership tiers below one root block. Each tier
+  is the anchor of the Genie facades that the lamp needs.
+- **Why a separate module:** the module shows the composition in one place. It
+  shows the facade for each Graphiti idea, and the backend capability that each
+  facade needs.
+- **Bi-temporality:** fact valid time and fact transaction time are 2 separate
+  `TemporalCollection` facades over the same fact blocks. So each axis is
+  independent of the other axis.
 """
 
 from __future__ import annotations
@@ -36,12 +37,12 @@ class GraphitiStructureStore(
     TemporalStore,
     Protocol,
 ):
-    """Backend capabilities required by the Graphiti structure bundle."""
+    """Backend capabilities that the Graphiti structure bundle needs."""
 
 
 @dataclass(frozen=True, slots=True)
 class GraphitiStructures:
-    """The structural views this lamp composes over one graph root.
+    """The structural views that this lamp composes over one graph root.
 
     Attributes:
         tiers: Ownership view of the episodic, semantic, and community tiers.
@@ -50,9 +51,10 @@ class GraphitiStructures:
         episode_time: Event time of each episode.
         valid_time: Fact valid time, `[valid_at, invalid_at)`.
         transaction_time: Fact transaction time, `[ingested_at, expired_at)`.
-        entities: Entity identities keyed by type and name, each anchoring an
-            ordered log of summary revisions.
-        succession: Cycle-protected supersession history between facts.
+        entities: Entity identities keyed by type and name. Each identity is the
+            anchor of an ordered log of summary revisions.
+        succession: Supersession history between facts, with protection
+            against cycles.
         community_root: Block that owns community nodes.
     """
 
@@ -74,15 +76,17 @@ class GraphitiStructures:
     ) -> GraphitiStructures:
         """Build or reopen every structural anchor below one bounded root.
 
-        Existing anchors are found by scanning the tier they live in, so
-        reopening a graph returns the same structures instead of duplicating
-        them. A bounded handle refuses ids outside its root, so the scan is
-        used rather than a direct lookup of the derived anchor id.
+        - **Reuse:** the method scans the children of each tier to find the
+          existing anchors. So a second call returns the same structures and
+          does not make duplicates.
+        - **Why a scan:** a bounded handle refuses ids outside its root. So the
+          method scans the tier and does not read the derived anchor id
+          directly.
 
         Args:
             memory: Handle rooted at the block that owns the whole graph.
-            store: Backend providing acyclic-link, keyed, sequence, and
-                temporal capabilities.
+            store: Backend with the acyclic-link, keyed, sequence, and temporal
+                capabilities.
 
         Returns:
             The structure bundle for that graph.

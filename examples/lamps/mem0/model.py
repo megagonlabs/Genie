@@ -1,20 +1,20 @@
 """Value types, constants, and helpers for the Mem0 lamp.
 
-Mem0 stores one thing: a short natural-language memory, addressed by an id and
-scoped by the identifiers of the session it came from. Everything else in the
-system is a decision about that record - whether a new fact should be added
-beside it, folded into it, or allowed to remove it - and a row in the history
-table saying which of those happened.
+- **One record type:** Mem0 stores a short memory in natural language. An id
+  addresses the memory. The identifiers of its source session give its scope.
+- **Decisions about that record:** the rest of Mem0 decides if a new fact adds
+  a memory beside the record, merges into it, or removes it. A row in the
+  history table records which of these occurred.
 
-This module holds the four things the rest of the lamp shares:
+The 4 parts that the rest of the lamp shares:
 
-- the block types that keep memories, history events, and graph entities apart;
-- the session type that carries `user_id`, `agent_id`, and `run_id`;
-- the read-only records the stores hand back; and
-- the text helpers the deterministic pipeline scores with.
+- **Block types:** they keep memories, history events, and graph entities apart.
+- **`Session`:** the type that holds `user_id`, `agent_id`, and `run_id`.
+- **Records:** the read-only records that the stores return.
+- **Text helpers:** the deterministic pipeline uses them to calculate scores.
 
-Nothing here writes to Genie, so every other module can depend on it without a
-cycle.
+This module does not write to Genie. Thus all other modules can import it
+without an import cycle.
 """
 
 from __future__ import annotations
@@ -60,21 +60,21 @@ _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
 
 def new_memory_id() -> str:
-    """Create the id Mem0 hands back for a stored memory.
+    """Create the id that Mem0 returns for a stored memory.
 
     Returns:
-        A fresh UUID in string form, as upstream generates.
+        A new UUID as a string, as upstream makes it.
     """
 
     return str(uuid4())
 
 
 def content_hash(text: str) -> str:
-    """Return the digest Mem0 keeps beside a memory to detect a repeat.
+    """Return the digest that Mem0 keeps with a memory to find a repeat.
 
-    Upstream stores an MD5 of the memory text in the vector payload. Reusing
-    that here gives the pipeline an exact-repeat check that costs no reads
-    beyond the ones it already makes.
+    Upstream stores an MD5 digest of the memory text in the vector payload. The
+    lamp uses the same digest. Thus the pipeline gets an exact-repeat check
+    that adds no reads to the reads that it does already.
 
     Args:
         text: Memory text.
@@ -87,14 +87,14 @@ def content_hash(text: str) -> str:
 
 
 def normalize_timestamp(value: datetime, *, field: str) -> datetime:
-    """Return a timezone-aware timestamp normalized to UTC.
+    """Return a timezone-aware timestamp in UTC.
 
     Args:
-        value: Timestamp supplied by application code.
-        field: Field name used in error messages.
+        value: Timestamp from application code.
+        field: Field name for error messages.
 
     Returns:
-        The same instant expressed in UTC.
+        The same instant in UTC.
 
     Raises:
         TypeError: If `value` is not a `datetime`.
@@ -115,7 +115,7 @@ def format_timestamp(value: datetime) -> str:
         value: Timezone-aware timestamp.
 
     Returns:
-        An ISO 8601 string ending in `Z`.
+        An ISO 8601 string that ends in `Z`.
     """
 
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
@@ -126,7 +126,7 @@ def parse_timestamp(value: str, *, field: str = "timestamp") -> datetime:
 
     Args:
         value: ISO 8601 timestamp string.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
         The parsed instant in UTC.
@@ -143,17 +143,17 @@ def parse_timestamp(value: str, *, field: str = "timestamp") -> datetime:
 
 
 def required_text(value: object, *, field: str) -> str:
-    """Return stripped required text.
+    """Return required text without whitespace at the start and end.
 
     Args:
-        value: Candidate text.
-        field: Field name used in error messages.
+        value: Text to check.
+        field: Field name for error messages.
 
     Returns:
-        The text without surrounding whitespace.
+        The text without whitespace at the start and end.
 
     Raises:
-        ValueError: If the value is not a non-empty string.
+        ValueError: If the value is not a string, or is empty or only whitespace.
     """
 
     if not isinstance(value, str) or not value.strip():
@@ -162,17 +162,19 @@ def required_text(value: object, *, field: str) -> str:
 
 
 def optional_text(value: object, *, field: str) -> str | None:
-    """Return stripped optional text, or `None` when it was not supplied.
+    """Return optional text without whitespace at the start and end, or `None`.
 
     Args:
-        value: Candidate text or `None`.
-        field: Field name used in error messages.
+        value: Text to check, or `None`.
+        field: Field name for error messages.
 
     Returns:
-        The stripped text, or `None`.
+        The text without whitespace at the start and end, or `None` if the
+        value is `None`.
 
     Raises:
-        ValueError: If a value was supplied but is not a non-empty string.
+        ValueError: If the value is not `None` and not a string, or if it is
+            empty or only whitespace.
     """
 
     if value is None:
@@ -181,18 +183,18 @@ def optional_text(value: object, *, field: str) -> str | None:
 
 
 def unique_strings(values: object, *, field: str) -> tuple[str, ...]:
-    """Return unique non-empty strings in input order.
+    """Return the unique non-empty strings, in input order.
 
     Args:
-        values: Iterable of candidate strings.
-        field: Field name used in error messages.
+        values: Iterable of strings to check.
+        field: Field name for error messages.
 
     Returns:
-        Unique stripped strings.
+        Unique strings without whitespace at the start and end.
 
     Raises:
-        TypeError: If `values` is not a sequence of strings.
-        ValueError: If any entry is empty.
+        TypeError: If `values` is a string, a bytes value, or not iterable.
+        ValueError: If an entry is not a string, or is empty or only whitespace.
     """
 
     if isinstance(values, str | bytes) or not isinstance(values, Iterable):
@@ -206,18 +208,18 @@ def unique_strings(values: object, *, field: str) -> tuple[str, ...]:
 
 
 def json_mapping(value: object, *, field: str) -> dict[str, Any]:
-    """Return an isolated copy of an optional JSON-compatible mapping.
+    """Return a separate copy of an optional JSON-compatible mapping.
 
     Args:
-        value: Candidate mapping or `None`.
-        field: Field name used in error messages.
+        value: Mapping to check, or `None`.
+        field: Field name for error messages.
 
     Returns:
-        A deep copy of the mapping, empty when nothing was supplied.
+        A deep copy of the mapping, or an empty mapping if the value is `None`.
 
     Raises:
-        TypeError: If a value was supplied but is not a mapping with string
-            keys.
+        TypeError: If the value is not `None` and not a mapping, or if a key is
+            not a string.
     """
 
     if value is None:
@@ -230,16 +232,16 @@ def json_mapping(value: object, *, field: str) -> dict[str, Any]:
 
 
 def tokenize(value: str) -> tuple[str, ...]:
-    """Split text into lowercase alphanumeric tokens in first-seen order.
+    """Split text into lowercase alphanumeric tokens, in the order of first occurrence.
 
-    Search terms keep their order so that a query produces the same sequence of
-    Genie reads on every run.
+    The search terms keep their order. Thus a query causes the same sequence of
+    Genie reads in each run.
 
     Args:
-        value: Text to tokenize.
+        value: Text to split.
 
     Returns:
-        The distinct tokens found in the text.
+        The distinct tokens in the text.
     """
 
     seen: list[str] = []
@@ -250,20 +252,22 @@ def tokenize(value: str) -> tuple[str, ...]:
 
 
 def overlap(left: Sequence[str], right: Sequence[str]) -> float:
-    """Return how much two token sets share, between zero and one.
+    """Return how much 2 token sets share, from zero to one.
 
-    Mem0 compares an extracted fact against stored memories with embedding
-    similarity. Genie supplies no similarity measure and the lamp runs with no
-    model, so token overlap stands in for it: the shared share of the two token
-    sets, which is high for two wordings of the same fact and low for two
-    unrelated ones.
+    - **Upstream:** Mem0 compares an extracted fact with stored memories through
+      embedding similarity.
+    - **Here:** Genie supplies no similarity measure, and the lamp runs with no
+      model. Thus token overlap replaces embedding similarity.
+    - **Value:** the result is the shared part of the 2 token sets. It is high
+      for 2 wordings of the same fact, and low for 2 facts that are not related.
 
     Args:
         left: Tokens of the first text.
         right: Tokens of the second text.
 
     Returns:
-        Shared tokens divided by the size of the union, rounded to four places.
+        The number of shared tokens divided by the size of the union, rounded
+        to 4 decimal places. The value is zero if one of the sets is empty.
     """
 
     first, second = set(left), set(right)
@@ -275,41 +279,41 @@ def overlap(left: Sequence[str], right: Sequence[str]) -> float:
 def entity_key(name: str) -> str:
     """Return the stable lookup key for one graph entity name.
 
-    Mem0's graph phase resolves an extracted entity against the ones already
-    stored so that two spellings do not become two nodes. Case folding is the
-    whole of that resolution here.
+    The Mem0 graph phase resolves an extracted entity against the stored
+    entities, so 2 spellings do not become 2 nodes. Here, case folding is the
+    full resolution.
 
     Args:
         name: Entity name as extracted.
 
     Returns:
-        The folded key the entity is addressed by.
+        The case-folded key that addresses the entity.
     """
 
     return required_text(name, field="entity name").casefold()
 
 
 def relation_name(value: str) -> str:
-    """Return the Genie link relation used for one Mem0 relationship type.
+    """Return the Genie link relation for one Mem0 relationship type.
 
     Args:
-        value: Relationship type such as `prefers`.
+        value: Relationship type, for example `prefers`.
 
     Returns:
-        The relation prefixed into the lamp's own namespace.
+        The relation with the prefix of the lamp namespace.
     """
 
     return f"{RELATION_PREFIX}{required_text(value, field='relation')}"
 
 
 def relation_label(relation: str) -> str:
-    """Return the Mem0 relationship type behind a Genie link relation.
+    """Return the Mem0 relationship type of a Genie link relation.
 
     Args:
-        relation: Link relation stored on the edge.
+        relation: Link relation on the edge.
 
     Returns:
-        The relationship type without the lamp's prefix.
+        The relationship type without the lamp prefix.
     """
 
     return relation.removeprefix(RELATION_PREFIX)
@@ -317,23 +321,24 @@ def relation_label(relation: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Session:
-    """The identifiers Mem0 scopes a memory by.
+    """The identifiers that Mem0 uses to scope a memory.
 
-    - Upstream these are flat payload fields, and a search filters on whichever
-      of them the caller supplied.
-    - This lamp mirrors the supplied ones as an ownership path instead, in the
-      fixed order below.
-    - Why: "filter on the ids I gave you" and "look below the block those ids
-      name" select exactly the same memories. The second also answers what a
-      filter cannot, which is what happens to those memories when the user goes
-      away.
+    - **Upstream:** these are flat payload fields. A search filters on the
+      fields that the caller supplied.
+    - **Here:** the lamp copies the supplied identifiers into an ownership path,
+      in the fixed order below.
+    - **Why:** a filter on the supplied ids and a read below the block that those
+      ids name select the same memories. The ownership path also gives an answer
+      that a filter cannot give: what happens to those memories when the user
+      goes away.
 
     Attributes:
-        user_id: Person the memories belong to.
-        agent_id: Agent that formed them.
-        run_id: One conversation or task within the pair above.
-        actor_id: Who spoke the turn a memory came from. Upstream this narrows
-            a search rather than placing the memory, so it stays metadata here.
+        user_id: Person that the memories belong to.
+        agent_id: Agent that made the memories.
+        run_id: One conversation or task in the scope of the user and agent.
+        actor_id: Speaker of the turn that a memory came from. Upstream, this
+            field makes a search narrower and does not set the place of the
+            memory. Thus it stays metadata here.
     """
 
     user_id: str | None = None
@@ -345,8 +350,8 @@ class Session:
         """Validate the identifiers.
 
         Raises:
-            ValueError: If every scoping identifier is missing, or one was
-                supplied as empty text.
+            ValueError: If `user_id`, `agent_id`, and `run_id` are all `None`,
+                or if an identifier is empty text.
         """
 
         for name in ("user_id", "agent_id", "run_id", "actor_id"):
@@ -356,19 +361,19 @@ class Session:
 
     @property
     def path(self) -> tuple[str, ...]:
-        """Return the ownership path the supplied identifiers name."""
+        """Return the ownership path that the supplied identifiers name."""
 
         return tuple(f"{level}:{getattr(self, f'{level}_id')}" for level in SCOPE_LEVELS if getattr(self, f"{level}_id"))
 
     @property
     def label(self) -> str:
-        """Return the printable slash-separated form of the path."""
+        """Return the path as printable text, with a slash between each 2 segments."""
 
         return "/".join(self.path)
 
     @property
     def identifiers(self) -> dict[str, str | None]:
-        """Return the identifiers as the portable fields stored on a block."""
+        """Return the identifiers as the portable fields that a block stores."""
 
         return {
             "user_id": self.user_id,
@@ -378,10 +383,10 @@ class Session:
         }
 
     def with_actor(self, actor_id: str | None) -> Session:
-        """Return the same scope with a different speaker recorded.
+        """Return the same scope with a different speaker.
 
         Args:
-            actor_id: Who spoke, or `None` to record nobody.
+            actor_id: The speaker, or `None` for no speaker.
 
         Returns:
             A session with the same path and the supplied actor.
@@ -397,12 +402,12 @@ class Session:
 
 @dataclass(frozen=True, slots=True)
 class Message:
-    """One conversation turn handed to `add`.
+    """One conversation turn that the caller gives to `add`.
 
     Attributes:
-        role: Speaker role, such as `user` or `assistant`.
+        role: Speaker role, for example `user` or `assistant`.
         content: Message text.
-        name: Optional speaker name, which upstream carries as the actor.
+        name: Optional speaker name. Upstream uses it as the actor.
     """
 
     role: str
@@ -410,22 +415,22 @@ class Message:
     name: str | None = None
 
     def as_json(self) -> dict[str, str | None]:
-        """Return the message in the shape Mem0 accepts."""
+        """Return the message in the form that Mem0 accepts."""
 
         return {"role": self.role, "content": self.content, "name": self.name}
 
 
 @dataclass(frozen=True, slots=True)
 class Fact:
-    """One candidate memory the extraction phase produced.
+    """One candidate memory from the extraction phase.
 
     Attributes:
-        text: Memory as it would be stored.
-        retracts: Whether the fact says something on file is no longer true.
-            Upstream a model reads the candidate beside the stored memory and
-            judges that; here the extractor states it, because judging it is
-            the one step that genuinely needs a model.
-        actor_id: Who the fact came from, when a turn named a speaker.
+        text: Memory text, as the lamp would store it.
+        retracts: `True` if the fact says that a stored memory is no longer
+            true. Upstream, a model reads the candidate together with the
+            stored memory and makes this decision. Here, the extractor states
+            it, because this decision is the one step that really needs a model.
+        actor_id: Speaker that the fact came from, if a turn named a speaker.
         role: Role of that turn.
     """
 
@@ -451,15 +456,16 @@ class Fact:
 
 @dataclass(frozen=True, slots=True)
 class Triplet:
-    """One candidate relationship the graph phase produced.
+    """One candidate relationship from the graph phase.
 
-    Mem0's graph tools name these `source`, `relationship`, and `destination`.
+    The Mem0 graph tools call these fields `source`, `relationship`, and
+    `destination`.
 
     Attributes:
-        source: Entity the edge starts from.
+        source: Entity at the start of the edge.
         relation: Relationship type.
-        target: Entity the edge points to.
-        retracts: Whether the relationship no longer holds.
+        target: Entity at the end of the edge.
+        retracts: `True` if the relationship is no longer true.
     """
 
     source: str
@@ -484,18 +490,19 @@ class Triplet:
 
 @dataclass(frozen=True, slots=True)
 class StoredMemory:
-    """One memory as Mem0 returns it.
+    """One memory, in the form that Mem0 returns it.
 
     Attributes:
-        block: Genie block holding the record.
-        memory_id: Id callers address the memory by, stable across updates.
-        session: Scope the memory was formed in.
+        block: Genie block that holds the record.
+        memory_id: Id that callers use to address the memory. It stays the same
+            after updates.
+        session: Scope that the memory came from.
         text: Memory text.
         hash: Digest of that text.
         kind: `factual` or `procedural_memory`.
-        metadata: Application metadata supplied with the write.
-        created_at: When the memory was first stored.
-        updated_at: When it was last written.
+        metadata: Application metadata from the write.
+        created_at: Time of the first write of the memory.
+        updated_at: Time of the last write of the memory.
     """
 
     block: MemoryBlock
@@ -510,23 +517,23 @@ class StoredMemory:
 
     @property
     def version(self) -> int:
-        """Return how many times the underlying block has been written.
+        """Return how many times Genie wrote the block of this memory.
 
-        A Mem0 update rewrites the record in place and keeps its id. Genie
-        counts writes to one block, so the in-place patch is visible here
-        without the lamp maintaining a counter.
+        A Mem0 update writes the record again in place and keeps its id. Genie
+        counts the writes to one block. Thus this property shows the in-place
+        change, and the lamp keeps no counter of its own.
         """
 
         return self.block.version
 
     @property
     def terms(self) -> tuple[str, ...]:
-        """Return the memory's tokens, used for scoring and comparison."""
+        """Return the tokens of the memory, for scores and comparisons."""
 
         return tokenize(self.text)
 
     def as_json(self) -> dict[str, Any]:
-        """Return the record in the shape Mem0 hands back."""
+        """Return the record in the form that Mem0 returns."""
 
         return {
             "id": self.memory_id,
@@ -543,14 +550,15 @@ class StoredMemory:
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    """What the update phase decided to do with one candidate fact.
+    """The decision of the update phase for one candidate fact.
 
     Attributes:
-        fact: Candidate the decision is about.
+        fact: Candidate that the decision is about.
         event: `ADD`, `UPDATE`, `DELETE`, or `NONE`.
-        target_id: Memory the event applies to, absent for an `ADD`.
+        target_id: Memory that the event applies to. `None` for an `ADD`, and
+            for a `NONE` that has no target memory.
         score: Similarity between the fact and that memory.
-        reason: Plain-language explanation of the choice.
+        reason: Plain-language explanation of the decision.
     """
 
     fact: Fact
@@ -562,12 +570,12 @@ class Decision:
 
 @dataclass(frozen=True, slots=True)
 class MemoryChange:
-    """One decision after it was carried out.
+    """One decision after the client applied it.
 
     Attributes:
-        decision: `Decision` that produced the change.
+        decision: `Decision` that caused the change.
         memory: Memory after the write, or the deleted memory for a `DELETE`.
-            Absent for a `NONE`, which writes nothing.
+            `None` for a `NONE`, which writes nothing.
         previous_text: Memory text before an `UPDATE` or `DELETE`.
     """
 
@@ -577,12 +585,12 @@ class MemoryChange:
 
     @property
     def event(self) -> MemoryEvent:
-        """Return the event that was applied."""
+        """Return the applied event."""
 
         return self.decision.event
 
     def as_json(self) -> dict[str, Any]:
-        """Return the change in the shape Mem0's `add` reports."""
+        """Return the change in the form that the Mem0 `add` call reports."""
 
         return {
             "event": self.event,
@@ -596,20 +604,22 @@ class MemoryChange:
 
 @dataclass(frozen=True, slots=True)
 class HistoryEntry:
-    """One row of the change history Mem0 keeps for a memory.
+    """One row of the change history that Mem0 keeps for a memory.
 
     Attributes:
-        block: Genie block holding the recorded event.
-        memory_id: Memory the event belongs to.
+        block: Genie block that holds the recorded event.
+        memory_id: Memory that the event belongs to.
         event: `ADD`, `UPDATE`, or `DELETE`. A `NONE` writes no history.
-        old_memory: Text before the change, absent for an `ADD`.
-        new_memory: Text after it, absent for a `DELETE`.
-        actor_id: Who the change came from, when a turn named a speaker.
+        old_memory: Text before the change. `None` for an `ADD`.
+        new_memory: Text after the change. `None` for a `DELETE`.
+        actor_id: Speaker that the change came from, if a turn named a speaker.
         role: Role of that turn.
-        created_at: When the change was applied.
-        is_deleted: Whether this event removed the memory.
-        revision: Position in that memory's own history, when read from it.
-        sequence: Position in the store-wide journal, when read from that.
+        created_at: Time when the lamp applied the change.
+        is_deleted: `True` if this event removed the memory.
+        revision: Position in the history of that memory, if the read came from
+            that history.
+        sequence: Position in the store-wide journal, if the read came from the
+            journal.
     """
 
     block: MemoryBlock
@@ -625,7 +635,7 @@ class HistoryEntry:
     sequence: int | None = None
 
     def as_json(self) -> dict[str, Any]:
-        """Return the row in the shape Mem0's `history` hands back."""
+        """Return the row in the form that the Mem0 `history` call returns."""
 
         return {
             "memory_id": self.memory_id,
@@ -643,11 +653,11 @@ class HistoryEntry:
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
-    """One memory returned by the lamp's retrieval.
+    """One memory that the retrieval of the lamp returns.
 
     Attributes:
-        memory: Matching memory.
-        score: Share of query terms found in the memory.
+        memory: The memory that matches.
+        score: Fraction of the query terms that occur in the memory text.
         matched: Query terms that matched, in query order.
     """
 
@@ -656,21 +666,22 @@ class SearchHit:
     matched: tuple[str, ...]
 
     def as_json(self) -> dict[str, Any]:
-        """Return the hit in the shape Mem0's `search` hands back."""
+        """Return the hit in the form that the Mem0 `search` call returns."""
 
         return {**self.memory.as_json(), "score": self.score, "matched": list(self.matched)}
 
 
 @dataclass(frozen=True, slots=True)
 class GraphRelation:
-    """One relationship in the graph half of Mem0's memory.
+    """One relationship in the graph half of the Mem0 memory.
 
     Attributes:
-        source: Entity name the edge starts from.
+        source: Name of the entity at the start of the edge.
         relation: Relationship type.
-        target: Entity name the edge points to.
-        link_id: Id of the Genie link carrying it.
-        retracted_at: When the relationship was marked no longer true.
+        target: Name of the entity at the end of the edge.
+        link_id: Id of the Genie link that holds the relationship.
+        retracted_at: Time when the lamp marked the relationship as no longer
+            true.
     """
 
     source: str
@@ -681,12 +692,12 @@ class GraphRelation:
 
     @property
     def retracted(self) -> bool:
-        """Return whether the relationship has been retracted."""
+        """Return `True` if the relationship has a retraction time."""
 
         return self.retracted_at is not None
 
     def as_json(self) -> dict[str, Any]:
-        """Return the relationship in the shape Mem0's graph search reports."""
+        """Return the relationship in the form that the Mem0 graph search reports."""
 
         return {
             "source": self.source,
@@ -698,13 +709,13 @@ class GraphRelation:
 
 @dataclass(frozen=True, slots=True)
 class GraphChange:
-    """What the graph phase did with one candidate relationship.
+    """The result of the graph phase for one candidate relationship.
 
     Attributes:
-        triplet: Candidate the change is about.
+        triplet: Candidate that the change is about.
         event: `ADD`, `DELETE`, or `NONE`.
-        relation: Relationship after the change, when there is one.
-        reason: Plain-language explanation of the choice.
+        relation: Relationship after the change, if one exists.
+        reason: Plain-language explanation of the decision.
     """
 
     triplet: Triplet
@@ -726,15 +737,15 @@ class GraphChange:
 
 @dataclass(frozen=True, slots=True)
 class AddResult:
-    """Everything one `add` call produced.
+    """All results of one `add` call.
 
-    Mem0 returns the applied memory events and, when a graph store is
-    configured, the relationship changes beside them.
+    Mem0 returns the applied memory events. If the application configures a
+    graph store, Mem0 also returns the relationship changes.
 
     Attributes:
-        session: Scope the call was made in.
-        changes: What happened to every candidate fact, in candidate order.
-        relations: What happened to every candidate relationship.
+        session: Scope of the call.
+        changes: The result for each candidate fact, in candidate order.
+        relations: The result for each candidate relationship.
     """
 
     session: Session
@@ -742,21 +753,21 @@ class AddResult:
     relations: tuple[GraphChange, ...] = ()
 
     def applied(self, *events: str) -> tuple[MemoryChange, ...]:
-        """Return the memory changes matching the named events.
+        """Return the memory changes for the named events.
 
         Args:
-            events: Event names to keep. All events are kept when none is
-                given.
+            events: Event names to keep. If the caller gives no name, the
+                method keeps all events.
 
         Returns:
-            Matching changes in candidate order.
+            The changes that match, in candidate order.
         """
 
         kept = set(events) or set(MEMORY_EVENTS)
         return tuple(change for change in self.changes if change.event in kept)
 
     def as_json(self) -> dict[str, Any]:
-        """Return the result in the shape Mem0's `add` hands back."""
+        """Return the result in the form that the Mem0 `add` call returns."""
 
         return {
             "scope": self.session.label,
@@ -767,12 +778,12 @@ class AddResult:
 
 @dataclass(frozen=True, slots=True)
 class SearchResult:
-    """Both halves of one Mem0 search.
+    """The 2 halves of one Mem0 search.
 
     Attributes:
-        query: Text that was searched for.
-        hits: Matching memories in descending score order.
-        relations: Relationships attached to the entities the query named.
+        query: Search text.
+        hits: Memories that match, in descending score order.
+        relations: Relationships of the entities that the query names.
     """
 
     query: str
@@ -780,7 +791,7 @@ class SearchResult:
     relations: tuple[GraphRelation, ...] = ()
 
     def as_json(self) -> dict[str, Any]:
-        """Return the result in the shape Mem0's `search` hands back."""
+        """Return the result in the form that the Mem0 `search` call returns."""
 
         return {
             "query": self.query,
@@ -799,25 +810,25 @@ def memory_value(
     created_at: datetime,
     updated_at: datetime,
 ) -> dict[str, Any]:
-    """Return the payload one memory block stores.
+    """Return the payload that one memory block stores.
 
-    The field names follow the record Mem0's API hands back, so the stored
-    value and the tool result are the same shape.
+    The field names follow the record that the Mem0 API returns. Thus the
+    stored value and the tool result have the same form.
 
     Args:
-        session: Scope the memory was formed in.
-        memory_id: Id callers address the memory by.
+        session: Scope that the memory came from.
+        memory_id: Id that callers use to address the memory.
         text: Memory text.
         kind: `factual` or `procedural_memory`.
-        metadata: Application metadata supplied with the write.
-        created_at: When the memory was first stored.
-        updated_at: When it was last written.
+        metadata: Application metadata from the write.
+        created_at: Time of the first write of the memory.
+        updated_at: Time of the last write of the memory.
 
     Returns:
         The JSON-compatible payload.
 
     Raises:
-        ValueError: If the kind is not one Mem0 defines.
+        ValueError: If Mem0 does not define the kind.
     """
 
     if kind not in MEMORY_KINDS:
@@ -835,22 +846,22 @@ def memory_value(
 
 
 def memory_metadata(session: Session, memory_id: str, text: str, *, kind: str, metadata: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the portable index metadata stored beside a memory.
+    """Return the portable index metadata that the lamp stores with a memory.
 
-    - Mem0 keeps the session identifiers in the vector payload so a search can
-      filter on them.
-    - The same fields are duplicated into block metadata here, so Genie can
-      narrow a search without the lamp decoding every candidate first.
-    - Application metadata is copied in as well, because upstream a search
-      filter may name any payload field. The indexed fields win a name
-      collision.
+    - **Upstream:** Mem0 keeps the session identifiers in the vector payload, so
+      a search can filter on them.
+    - **Here:** the lamp copies the same fields into block metadata. Thus Genie
+      can make a search narrower before the lamp decodes each candidate.
+    - **Application metadata:** the lamp copies it in too, because upstream a
+      search filter can name any payload field. If a name occurs in both, the
+      indexed field wins.
 
     Args:
-        session: Scope the memory was formed in.
-        memory_id: Id callers address the memory by.
-        text: Memory text, whose digest is indexed for repeat detection.
+        session: Scope that the memory came from.
+        memory_id: Id that callers use to address the memory.
+        text: Memory text. The lamp indexes its digest to find repeats.
         kind: `factual` or `procedural_memory`.
-        metadata: Application metadata supplied with the write.
+        metadata: Application metadata from the write.
 
     Returns:
         The JSON-compatible metadata mapping.
@@ -870,7 +881,7 @@ def memory_from_block(block: MemoryBlock) -> StoredMemory:
     """Decode one stored memory.
 
     Args:
-        block: Block holding a memory payload.
+        block: Block that holds a memory payload.
 
     Returns:
         The decoded record.
@@ -902,12 +913,12 @@ def memory_from_block(block: MemoryBlock) -> StoredMemory:
 
 @dataclass(frozen=True, slots=True)
 class Exchange:
-    """One conversation handed to `add`, with what was extracted from it.
+    """One conversation that the caller gives to `add`, with the extraction results.
 
     Attributes:
         messages: Turns in the exchange.
-        facts: Candidate memories the extraction phase would have produced.
-        relations: Candidate relationships the graph phase would have produced.
+        facts: Candidate memories, as the extraction phase would make them.
+        relations: Candidate relationships, as the graph phase would make them.
     """
 
     messages: tuple[Message, ...] = ()
@@ -922,11 +933,11 @@ def messages_from_json(payload: object) -> tuple[Message, ...]:
         payload: Sequence of `{role, content, name}` mappings.
 
     Returns:
-        The turns in supplied order.
+        The turns, in the supplied order.
 
     Raises:
         TypeError: If the payload is not a sequence of mappings.
-        ValueError: If a turn is missing its role or content.
+        ValueError: If a turn has no role or no content.
     """
 
     return tuple(
@@ -946,7 +957,7 @@ def facts_from_json(payload: object) -> tuple[Fact, ...]:
         payload: Sequence of `{text, retracts, actor_id, role}` mappings.
 
     Returns:
-        The candidates in supplied order.
+        The candidates, in the supplied order.
 
     Raises:
         TypeError: If the payload is not a sequence of mappings.
@@ -969,14 +980,15 @@ def triplets_from_json(payload: object) -> tuple[Triplet, ...]:
 
     Args:
         payload: Sequence of `{source, relationship, destination, retracts}`
-            mappings, using the field names Mem0's graph tools use.
+            mappings, with the field names that the Mem0 graph tools use.
 
     Returns:
-        The candidates in supplied order.
+        The candidates, in the supplied order.
 
     Raises:
         TypeError: If the payload is not a sequence of mappings.
-        ValueError: If an endpoint or the relationship is missing.
+        ValueError: If a mapping has no source, no destination, or no
+            relationship.
     """
 
     return tuple(
@@ -994,11 +1006,11 @@ def _entries(payload: object, *, field: str) -> tuple[Mapping[str, Any], ...]:
     """Return a validated sequence of JSON-compatible mappings.
 
     Args:
-        payload: Candidate sequence.
-        field: Field name used in error messages.
+        payload: Sequence to check.
+        field: Field name for error messages.
 
     Returns:
-        The mappings in supplied order.
+        The mappings, in the supplied order.
 
     Raises:
         TypeError: If the payload is not a sequence of mappings.

@@ -1,9 +1,12 @@
-"""Write your own codec so an application type survives a storage round trip.
+"""Write your own codec so that an application type survives a storage round trip.
 
-A codec is the boundary between an application value and a storage-safe payload.
-Implement `can_encode`, `encode`, and `decode`, give the codec a `content_type`
-that identifies its payloads, and register it. Genie tries codecs in
-registration order, so `JsonCodec` goes last as the fallback for plain data.
+- **Role:** a codec changes an application value into a storage-safe payload, and
+  changes the payload back into the value.
+- **Steps:** implement `can_encode`, `encode`, and `decode`. Give the codec a
+  `content_type` that identifies its payloads. Then register the codec.
+- **Order:** Genie tries codecs in registration order and uses the first codec
+  whose `can_encode` returns `True`. Thus `JsonCodec` goes last, so that it
+  encodes only the plain data that no other codec accepts.
 
 Run from the repository root:
 
@@ -43,7 +46,7 @@ from genie.codecs.stdlib import DatetimeCodec, DecimalCodec, UUIDCodec
 
 @dataclass(frozen=True)
 class Preference:
-    """Custom value object stored through its own codec.
+    """Custom value object that `Memory` stores through its own codec.
 
     Attributes:
         topic: `Preference` topic.
@@ -56,11 +59,11 @@ class Preference:
 
 @dataclass(frozen=True)
 class Rating:
-    """Second custom value object, registered after the registry was built.
+    """Second custom value object. The example registers its codec after it creates the registry.
 
     Attributes:
-        subject: What was rated.
-        score: Score awarded.
+        subject: Thing that the rating is about.
+        score: Score that the rating gives.
     """
 
     subject: str
@@ -73,7 +76,7 @@ class PreferenceCodec(MemoryCodec):
     content_type = "application/vnd.genie.preference+json"
 
     def can_encode(self, value: Any) -> bool:
-        """Return whether this codec can encode the value.
+        """Return `True` if this codec can encode the value.
 
         Args:
             value: User-level value.
@@ -118,7 +121,7 @@ class RatingCodec(MemoryCodec):
     content_type = "application/vnd.genie.rating+json"
 
     def can_encode(self, value: Any) -> bool:
-        """Return whether this codec can encode the value.
+        """Return `True` if this codec can encode the value.
 
         Args:
             value: User-level value.
@@ -155,7 +158,7 @@ class RatingCodec(MemoryCodec):
 
 
 def main() -> None:
-    """Round-trip a custom type and inspect what storage actually holds."""
+    """Send custom and stdlib types through a storage round trip, and show the data that storage holds."""
 
     print("== Custom codecs ==")
     codecs = CodecRegistry(
@@ -191,8 +194,8 @@ def main() -> None:
     assert require_get(memory, budget).value == Decimal("19.99")
     assert require_get(memory, plain).value == {"body": "Plain JSON needs no custom codec"}
 
-    # Storage holds the encoded payload, and its content type records which
-    # codec produced it. Reading the backend directly skips decoding.
+    # Storage holds the encoded payload. Its content type records the codec that
+    # made the payload. A direct backend read does not decode the payload.
     raw_preference = require_raw(memory, preference.id)
     raw_budget = require_raw(memory, budget.id)
 
@@ -206,7 +209,8 @@ def main() -> None:
     # The decoded block keeps the same content type as the stored payload.
     assert decoded.content_type == PreferenceCodec.content_type
 
-    # A type no codec claims is refused rather than silently stringified.
+    # `Memory` raises `TypeError` for a type that no codec accepts. It does not
+    # silently change the value into a string.
     try:
         memory.put(type="rating", value=Rating("retrieval", 4))
     except TypeError as error:
@@ -214,7 +218,7 @@ def main() -> None:
     else:
         raise AssertionError("An unregistered value type must be refused.")
 
-    # Codecs can be registered after the registry is built.
+    # `CodecRegistry.register` also adds a codec after the registry exists.
     codecs.register(RatingCodec())
     rating = memory.put(type="rating", value=Rating("retrieval", 4))
 
@@ -223,19 +227,19 @@ def main() -> None:
     assert require_get(memory, rating).value == Rating("retrieval", 4)
     assert require_raw(memory, rating.id).content_type == RatingCodec.content_type
 
-    # A codec is keyed by content type, so registering the same content type
-    # again replaces the previous codec rather than adding a second one.
+    # The registry keys each codec by its content type. A new codec with the same
+    # content type replaces the old codec. The registry does not keep 2 codecs.
     codecs.register(RatingCodec())
     assert require_get(memory, rating).value == Rating("retrieval", 4)
     print("re-registering a content type replaced its codec")
 
 
 def require_get(memory: Memory, block_id: str | MemoryBlock) -> MemoryBlock:
-    """Return a decoded block that must exist.
+    """Return a decoded block, or fail with `AssertionError` if the block does not exist.
 
     Args:
         memory: Memory to read from.
-        block_id: Block or id to fetch.
+        block_id: Block or id to read.
 
     Returns:
         Decoded memory block.
@@ -247,11 +251,11 @@ def require_get(memory: Memory, block_id: str | MemoryBlock) -> MemoryBlock:
 
 
 def require_raw(memory: Memory, block_id: str) -> MemoryBlock:
-    """Return a stored block before codec decoding.
+    """Return a stored block before the codecs decode it, or fail with `AssertionError` if it does not exist.
 
     Args:
-        memory: Memory whose backend should be read.
-        block_id: Block id to fetch.
+        memory: Memory whose backend the function reads.
+        block_id: Block id to read.
 
     Returns:
         Stored backend block.

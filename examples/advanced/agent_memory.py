@@ -1,11 +1,11 @@
-"""Give an agent an application-friendly compound memory.
+"""Give an agent a compound memory that is simple for an application to use.
 
-`TaskMemory` hides structure roots and block creation while explicitly
-composing three generic Genie facades:
+`TaskMemory` hides the structure roots and the block creation from the caller.
+Its code composes 3 generic Genie facades explicitly:
 
-- a keyed collection of task preconditions
-- an ordered log of previous experiments
-- a property graph connecting knowledge
+- **`KeyedCollection`:** a keyed collection of task preconditions.
+- **`EventLog`:** an ordered log of previous experiments.
+- **`PropertyGraph`:** a property graph that connects knowledge.
 
 Run from the repository root:
 
@@ -49,7 +49,7 @@ DATA_READY = "data_ready"
 
 
 class Precondition(TypedDict):
-    """Stored value for one named task precondition."""
+    """The stored value of one named task precondition."""
 
     name: str
     satisfied: bool
@@ -78,7 +78,7 @@ class Preconditions:
         self._handle.update(current, value={"satisfied": satisfied})
 
     def get(self, name: str) -> Precondition | None:
-        """Return a stored value, or `None` when the name is unknown."""
+        """Return the stored value, or `None` if the name is unknown."""
 
         block = self._get_block(name)
         if block is None:
@@ -86,7 +86,7 @@ class Preconditions:
         return cast(Precondition, block.value)
 
     def _get_block(self, name: str) -> MemoryBlock | None:
-        """Return the block used internally by another memory view."""
+        """Return the precondition block. `Knowledge` uses it internally."""
 
         return self._collection.get(_precondition_address(name))
 
@@ -112,14 +112,14 @@ class ExperimentHistory:
 
 @dataclass(frozen=True)
 class Knowledge:
-    """Read and write graph relationships without interpreting them."""
+    """Read and write graph relationships. This view does not interpret them."""
 
     _handle: MemoryHandle
     _graph: PropertyGraph
     _preconditions: Preconditions
 
     def connect(self, subject: str, relation: str, target: str) -> None:
-        """Connect a named precondition to a stored knowledge value."""
+        """Store a knowledge value and connect a named precondition to it."""
 
         source = self._preconditions._get_block(subject)
         if source is None:
@@ -128,7 +128,10 @@ class Knowledge:
         self._graph.add_edge(source, target_block, relation)
 
     def neighbors(self, subject: str, *, relation: str) -> list[str]:
-        """Return all values related to a named precondition."""
+        """Return the values that a named precondition reaches by `relation`.
+
+        An unknown name gives an empty list.
+        """
 
         source = self._preconditions._get_block(subject)
         if source is None:
@@ -141,7 +144,7 @@ class Knowledge:
 
 @dataclass(frozen=True)
 class TaskMemory:
-    """Application memory composed from three value-oriented read/write views."""
+    """Application memory made from 3 value-oriented read and write views."""
 
     preconditions: Preconditions
     experiments: ExperimentHistory
@@ -186,7 +189,7 @@ class TaskMemory:
 
 @dataclass(frozen=True)
 class TaskAgent:
-    """Small application agent that reads its compound memory."""
+    """A small application agent that reads its compound memory."""
 
     name: str
     memory: TaskMemory
@@ -209,7 +212,7 @@ class TaskAgent:
 
 
 def main() -> None:
-    """Build a three-structure compound memory and give it to an agent."""
+    """Build a compound memory from 3 structures and give it to an agent."""
 
     print("== Compound memory for an agent ==")
     backend = InMemoryBackend()
@@ -244,7 +247,7 @@ def main() -> None:
 
 
 def _precondition_address(name: str) -> MemoryAddress:
-    """Return the private keyed address for a task precondition name."""
+    """Return the private keyed address of a task precondition name."""
 
     return MemoryAddress(("task",), name)
 

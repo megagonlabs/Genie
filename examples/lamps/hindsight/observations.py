@@ -1,25 +1,27 @@
-"""Consolidation: turning retained facts into beliefs that survive new evidence.
+"""Consolidation of retained facts into beliefs that survive new evidence.
 
-Observations are the layer that makes Hindsight more than a store of sentences.
-Related facts are folded into one deduplicated belief that carries a proof
-count, gets stronger when more evidence arrives, gets extended when the evidence
-adds nuance, and records the whole journey rather than being overwritten when
-the evidence reverses.
+Observations make Hindsight more than a store of sentences. Consolidation merges
+related facts into one deduplicated belief with a proof count:
 
-Three Genie structures carry that behavior:
+- **Strengthen:** more evidence makes the belief stronger.
+- **Extend:** evidence with new detail adds to the wording of the belief.
+- **Reconcile:** when the evidence reverses, the belief records the full
+  history and the lamp does not overwrite it.
 
-- `VersionedRecords` gives each belief a stable identity and an ordered history,
-  so "what did we used to think?" is a read rather than an audit table the lamp
-  has to keep.
-- `LineageDAG` holds the evidence edges, so the proof count is counted off the
-  graph instead of stored and kept in sync.
-- The retention `EventLog` supplies the cursor. Consolidation processes the
-  facts appended since it last ran, which is also how an observation knows it
-  has gone stale.
+The behavior uses 3 Genie structures:
 
-What the lamp supplies is the judgment Hindsight asks a language model for. Each
-extracted fact names the belief it speaks to and whether it supports or
-contradicts it, so grouping and reconciliation stay deterministic.
+- **`VersionedRecords`:** gives each belief a stable identity and an ordered
+  history. So "what did we think before?" is a read, not an audit table that the
+  lamp keeps.
+- **`LineageDAG`:** holds the evidence edges. So the lamp gets the proof count
+  from the graph. It does not store the count and keep it in sync.
+- **Retention `EventLog`:** its sequence numbers are the cursor positions.
+  Consolidation reads the facts appended since its last run. The same cursor
+  also tells an observation that it is stale.
+
+The lamp supplies the decision that Hindsight asks a language model for. Each
+extracted fact names its belief and says if it supports or contradicts that
+belief. So the groups of facts and the reconciliation stay deterministic.
 """
 
 from __future__ import annotations
@@ -51,34 +53,35 @@ CURSOR_FIELD = "consolidated_through"
 
 
 class ConsolidationEngine:
-    """Folds retained facts into versioned, evidence-backed observations."""
+    """Merges retained facts into versioned observations with evidence."""
 
     def __init__(self, bank: HindsightMemoryBank) -> None:
         """Create a consolidation engine over one memory bank.
 
         Args:
-            bank: Bank whose retained facts are consolidated.
+            bank: Bank with the retained facts to consolidate.
         """
 
         self.bank = bank
 
     def consolidate(self, *, at: datetime) -> list[Observation]:
-        """Fold every fact retained since the last run into observations.
+        """Merge every fact retained since the last run into observations.
 
-        Upstream this runs in the background after each `retain`. Here it is an
-        explicit call so the example stays deterministic, but the unit of work
-        is the same: the facts appended to the retention log after the stored
-        cursor.
-
-        The cursor moves before the beliefs are written, so an observation
-        refreshed by this run does not see its own evidence as unconsolidated
-        and report itself stale.
+        - **Upstream:** this work runs in the background after each `retain`.
+        - **Here:** it is an explicit call, so the example stays deterministic.
+          The unit of work is the same: the facts in the retention log at or
+          after the stored cursor.
+        - **Skipped facts:** invalidated facts and facts without a claim change
+          no observation, but the cursor moves past them.
+        - **Cursor first:** the method moves the cursor before it writes the
+          beliefs. So an observation that this run refreshes does not see its
+          own evidence as unconsolidated, and does not report itself as stale.
 
         Args:
-            at: Timestamp recorded on the revisions this run writes.
+            at: Timestamp that the method records on the revisions of this run.
 
         Returns:
-            The observations created or refreshed, in claim order.
+            The observations that this run created or refreshed, in claim order.
         """
 
         consolidated_at = normalize_timestamp(at, field="at")
@@ -97,7 +100,7 @@ class ConsolidationEngine:
         ]
 
     def cursor(self) -> int:
-        """Return the retention sequence consolidation will resume from.
+        """Return the retention sequence where the next consolidation starts.
 
         Returns:
             The next unconsolidated log sequence.
@@ -110,7 +113,7 @@ class ConsolidationEngine:
         return stored if isinstance(stored, int) else 0
 
     def pending(self) -> list[MemoryFact]:
-        """Return valid facts that carry a claim and are not consolidated yet.
+        """Return the valid facts that have a claim and are not consolidated yet.
 
         Returns:
             Facts in retention order.
@@ -129,7 +132,7 @@ class ConsolidationEngine:
             claim: Belief key.
 
         Returns:
-            The current observation, or `None` when the belief is unknown.
+            The current observation, or `None` if the belief is unknown.
         """
 
         address = _claim_address(claim)
@@ -160,7 +163,7 @@ class ConsolidationEngine:
         return sorted(results, key=lambda observation: observation.claim)
 
     def history(self, claim: str) -> list[Observation]:
-        """Return every wording this belief has had, oldest first.
+        """Return every wording of this belief, oldest first.
 
         Args:
             claim: Belief key.
@@ -186,7 +189,11 @@ class ConsolidationEngine:
         *,
         consolidated_at: datetime,
     ) -> Observation:
-        """Create or refine one belief from the facts that speak to it."""
+        """Create or refine one belief from the facts about it.
+
+        If the text and the tags do not change, the method adds only the
+        evidence edges and writes no revision.
+        """
 
         address = _claim_address(claim)
         identity = self.bank.structures.observations.identity(address)
@@ -232,7 +239,7 @@ class ConsolidationEngine:
         *,
         carried: Sequence[MemoryBlock] = (),
     ) -> None:
-        """Link supporting facts to a revision as its evidence."""
+        """Link the facts that support the belief, and the evidence carried from the previous revision, to a revision."""
 
         attached = {block.id for block in self.bank.provenance(revision)}
         for block in (*carried, *(fact.block for fact in facts)):
@@ -271,12 +278,12 @@ class ConsolidationEngine:
         )
 
     def _is_stale(self, claim: str) -> bool:
-        """Return whether unconsolidated facts still speak to this belief."""
+        """Return `True` if valid facts that are not consolidated yet still name this belief."""
 
         return any(fact.claim is not None and fact.claim.key == claim for fact in self.pending())
 
     def _set_cursor(self, sequence: int) -> None:
-        """Record how far consolidation has read the retention log."""
+        """Record the retention sequence where the next consolidation starts."""
 
         self.bank.memory.update(
             self.bank.structures.observation_root,
@@ -285,11 +292,16 @@ class ConsolidationEngine:
 
 
 def _reconcile(previous: str, facts: Sequence[MemoryFact]) -> tuple[str, Stance]:
-    """Fold new evidence into a belief and report how it changed it.
+    """Merge new evidence into a belief, and return the new text and stance.
 
-    Repeating a belief strengthens it without rewording it, a supporting fact
-    with something new to say extends it, and a contradicting fact leads with
-    the new belief while keeping the old one visible.
+    - **New belief:** if the belief has no wording yet, the first fact sets it.
+    - **Strengthen:** a fact whose belief text is already in the wording does
+      not change the wording.
+    - **Extend:** a fact that supports the belief and has new content adds
+      `Also: <belief>` to the wording.
+    - **Reconcile:** a fact that contradicts the belief puts the new belief
+      first, then `Previously:` and the old wording. So the old wording stays
+      visible, and the stance becomes `contradicts`.
     """
 
     text = previous
@@ -311,7 +323,7 @@ def _reconcile(previous: str, facts: Sequence[MemoryFact]) -> tuple[str, Stance]
 
 
 def _merged_tags(current: RevisionItem | None, facts: Sequence[MemoryFact]) -> tuple[str, ...]:
-    """Return the union of a revision's tags and its new evidence's tags."""
+    """Return the tags of a revision plus the tags of its new evidence, without duplicates."""
 
     tags = list(_revision_tags(current)) if current is not None else []
     for fact in facts:

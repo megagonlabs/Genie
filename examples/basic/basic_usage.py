@@ -1,14 +1,15 @@
 """End-to-end Genie walkthrough.
 
-This example combines the main concepts shown in the smaller examples:
+The example combines the main concepts of the smaller examples:
 
-- a full `Memory` object kept in trusted application code
-- bounded memory handles passed to agents
-- parent/child ownership for project/task/note structure
-- text search, metadata filters, and linked-memory search
-- typed links between memory blocks
-- policies for principal-specific access control
-- hooks, dataclass codecs, and stdlib codecs as ways to customize Genie
+- **Full `Memory`:** the full `Memory` object stays in trusted application code.
+- **Handles:** the application gives bounded memory handles to agents.
+- **Ownership:** parent/child ownership gives a project/task/note structure.
+- **Search:** text search, metadata filters, and linked-memory search.
+- **Links:** typed links connect memory blocks.
+- **Policies:** policies control access for each principal.
+- **Customization:** hooks, dataclass codecs, and stdlib codecs change how Genie
+  works.
 
 Run from the repository root:
 
@@ -57,11 +58,11 @@ from genie.codecs.stdlib import (
 
 @dataclass(frozen=True)
 class StylePreference:
-    """Custom preference value used by the integrated walkthrough.
+    """Custom preference value that the integrated walkthrough stores.
 
     Attributes:
-        tone: Desired writing tone.
-        length: Desired response length.
+        tone: Tone that the user wants for written text.
+        length: Response length that the user wants.
     """
 
     tone: str
@@ -92,8 +93,8 @@ class Agent:
     """Small example agent that depends only on `MemoryHandle`.
 
     Attributes:
-        name: Agent name used in printed output.
-        memory: Bounded memory handle assigned by the application.
+        name: Agent name that the printed output shows.
+        memory: Bounded memory handle that the application gives to the agent.
     """
 
     name: str
@@ -107,16 +108,16 @@ class Agent:
         policy: MemoryPolicy | None = None,
         **metadata: object,
     ) -> MemoryBlock:
-        """Write a block through this agent's memory handle.
+        """Write a block through the memory handle of this agent, and print its type and value.
 
         Args:
             type: Block type.
             value: Block value.
             policy: Optional access policy for the new block.
-            **metadata: Metadata fields to attach.
+            **metadata: Metadata fields to add to the block.
 
         Returns:
-            Created memory block.
+            New memory block.
         """
 
         block = self.memory.put(type=type, value=value, metadata=metadata, policy=policy)
@@ -124,14 +125,14 @@ class Agent:
         return block
 
     def recall(self, text: str, **search_options: Any) -> list[MemoryBlock]:
-        """Search through this agent's memory handle.
+        """Search through the memory handle of this agent, and print the results.
 
         Args:
             text: Text query.
-            **search_options: Additional options passed to `MemoryHandle.search`.
+            **search_options: Other options for `MemoryHandle.search`.
 
         Returns:
-            Matching memory blocks.
+            Memory blocks that match the query.
         """
 
         results = self.memory.search(text, **search_options)
@@ -326,7 +327,7 @@ def section(title: str) -> None:
 
 
 def print_results(results: list[SearchResult]) -> None:
-    """Print search results in a compact form.
+    """Print search results in a short form.
 
     Args:
         results: Search results to print.

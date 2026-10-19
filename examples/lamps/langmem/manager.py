@@ -1,31 +1,34 @@
-"""The memory manager: a conversation in, a set of permitted changes out.
+"""The memory manager: it reads a conversation and applies the permitted changes.
 
-This is the piece that makes LangMem a memory system rather than a store.
+This part makes LangMem a memory system, not only a store.
 
-- A manager reads an exchange, looks at what is already on file, and returns the
-  changes it wants: insert this, patch that in place, remove the one that is now
-  wrong.
-- Whether each kind of change is allowed is configuration. LangMem gates them
-  with `enable_inserts`, `enable_updates`, and `enable_deletes`, and defaults
-  deletes to off, so a manager can be given a store it may add to but never
-  erase from.
+- **Proposal:** a manager reads an exchange and examines the stored memories.
+  Then it returns the changes that it wants: insert this memory, patch that
+  memory in place, remove the memory that is now wrong.
+- **Permissions:** configuration sets which kinds of change are allowed.
+  LangMem controls them with `enable_inserts`, `enable_updates`, and
+  `enable_deletes`. Deletes are off by default. So a configuration can give a
+  manager a store that it can add to but never erase from.
 
-The lamp keeps that separation and the reconciliation that goes with it, and
-substitutes only the judgment. Upstream a language model reads the messages and
-decides the changes. Here each conversation arrives with its changes already
-proposed, which is the same substitution the Graphiti lamp makes when it accepts
-structured triplets instead of natural-language extraction.
+The lamp keeps this separation and the reconciliation that goes with it. It
+replaces only the judgment:
 
-What still happens here is the part that has to touch storage:
+- **Upstream:** a language model reads the messages and decides the changes.
+- **Here:** each conversation comes with its changes already proposed. The
+  Graphiti lamp makes the same replacement: it accepts structured triplets
+  instead of natural-language extraction.
 
-- reading the address to see whether a proposed insert is really an update;
-- refusing what the permissions do not allow;
-- applying the rest; and
-- recording which conversation each write came from.
+This module still does the steps that touch storage:
 
-That last step is a `LineageDAG` edge rather than a stored field, so asking
-"what taught the agent this?" is a graph read, and a memory patched by three
-conversations has three predecessors without the lamp maintaining a list.
+- **Reconcile:** it reads the address to find if a proposed insert is really an
+  update.
+- **Refuse:** it refuses the changes that the permissions do not allow.
+- **Apply:** it applies the other changes.
+- **Provenance:** it records the conversation that each write came from.
+
+Provenance is a `LineageDAG` edge, not a stored field. So the question "what
+taught the agent this?" is a graph read. A memory that 3 conversations patched
+has 3 predecessors, and the lamp keeps no list.
 """
 
 from __future__ import annotations
@@ -52,7 +55,7 @@ from genie import MemoryBlock
 
 
 class MemoryManager:
-    """Applies the changes a conversation proposes, within its permissions."""
+    """Applies the changes that a conversation proposes, within its permissions."""
 
     def __init__(
         self,
@@ -67,14 +70,16 @@ class MemoryManager:
         """Create a manager over one store and its profiles.
 
         Args:
-            store: Collection-shaped memory the manager writes to.
-            profiles: Profile-shaped memory the manager revises.
-            profile_name: Profile a conversation's profile fields are merged
-                into.
-            enable_inserts: Whether new memories may be added.
-            enable_updates: Whether existing memories may be patched in place.
-            enable_deletes: Whether memories may be removed. Off by default,
-                as upstream, so forgetting is an explicit decision.
+            store: Collection-shaped memory that the manager writes to.
+            profiles: Profile-shaped memory that the manager revises.
+            profile_name: Name of the profile that receives the profile fields
+                of a conversation.
+            enable_inserts: If `True`, the manager can add new memories.
+            enable_updates: If `True`, the manager can patch stored memories in
+                place. A profile revision also needs this permission.
+            enable_deletes: If `True`, the manager can remove memories. It is
+                off by default, as upstream, so the decision to forget is
+                always explicit.
         """
 
         self.store = store
@@ -86,7 +91,7 @@ class MemoryManager:
 
     @property
     def permissions(self) -> dict[str, bool]:
-        """Return which kinds of change this manager may make."""
+        """Return the kinds of change that this manager can make."""
 
         return {
             "insert": self.enable_inserts,
@@ -102,19 +107,23 @@ class MemoryManager:
         source: MemoryBlock | None = None,
         at: datetime,
     ) -> ManagerRun:
-        """Apply one conversation's proposed changes and report each outcome.
+        """Apply the proposed changes of one conversation, and report each outcome.
 
         Args:
-            conversation: `Exchange` and the changes proposed from it.
-            base: Resolved namespace the conversation's collections sit under.
-            source: Block recording the conversation, so each write can be
-                traced back to it. Hot-path writes have no such block.
-            at: Timestamp used for profile revisions.
+            conversation: The exchange and its proposed changes.
+            base: Resolved namespace that contains the collections of the
+                conversation.
+            source: Block that records the conversation. The manager links
+                each write to it, so a reader can trace the write back. `None`
+                if no recorded conversation exists, for example for a direct
+                call. Then the manager adds no lineage edge.
+            at: Timestamp for the run and for profile revisions.
 
         Returns:
-            What happened to every proposed change, in proposal order, plus the
-            profile if the conversation revised one and why the revision was
-            refused if it was.
+            The outcome of each proposed change, in proposal order. If the
+            conversation revised the profile, the result also has the profile.
+            If the manager refused the revision, the result also has the
+            reason.
 
         Raises:
             KeyError: If the conversation revises a profile that is not
@@ -141,7 +150,7 @@ class MemoryManager:
         base: Namespace,
         source: MemoryBlock | None,
     ) -> PatchOutcome:
-        """Reconcile one proposed change against the address it targets."""
+        """Reconcile one proposed change with its target address, and apply it if the permissions allow it."""
 
         target = namespace(*base, patch.collection)
         existing = self.store.get(target, patch.key)
@@ -168,13 +177,14 @@ class MemoryManager:
         return PatchOutcome(patch, action, True, reason, item)
 
     def _reconcile(self, action: PatchAction, *, occupied: bool) -> PatchAction:
-        """Return the change the address actually calls for.
+        """Return the change that the address really needs.
 
-        An extractor proposing an insert has not necessarily looked at what is
-        already stored. Upstream the manager reconciles the two by searching
-        first; the equivalent read here is the address itself, so a proposal
-        that collides with a stored memory becomes a patch of it, and a proposal
-        to patch a memory that is gone becomes an insert.
+        - **Problem:** an extractor that proposes an insert possibly did not
+          examine the stored memories.
+        - **Upstream:** the manager does a search first to reconcile the two.
+        - **Here:** the equivalent read is the address itself. A proposed insert
+          that collides with a stored memory becomes a patch of that memory. A
+          proposed patch of a memory that is gone becomes an insert.
         """
 
         if action == "insert" and occupied:
@@ -191,13 +201,15 @@ class MemoryManager:
         source: MemoryBlock | None,
         at: datetime,
     ) -> tuple[Profile | None, str | None]:
-        """Merge a conversation's profile fields, recording what changed it.
+        """Merge the profile fields of a conversation, and record the source of the change.
 
-        The permissions cover this write too. A profile is always patched in
-        place, because `register` is what creates one, so `update` is the
-        permission a revision asks for. A refusal is returned rather than
-        raised, the same way a refused patch is, and leaves the profile at the
-        version it already had.
+        - **Permission:** the permissions also apply to this write. Only
+          `register` creates a profile. A revision always patches the profile
+          in place, so it needs the `update` permission.
+        - **Refusal:** the method returns a refusal and does not raise it, as
+          for a refused patch. The profile stays at its current version.
+        - **Lineage:** if a source block exists and the merge wrote a new
+          revision, the method links the source to that revision.
         """
 
         if not conversation.profile:
@@ -211,13 +223,13 @@ class MemoryManager:
         return after, None
 
     def _record_source(self, source: MemoryBlock | None, item: MemoryItem) -> None:
-        """Record which conversation a stored memory came from."""
+        """Record the conversation that a stored memory came from."""
 
         if source is not None:
             self._link(source, item.block, role="extracted")
 
     def _link(self, source: MemoryBlock, target: MemoryBlock, *, role: str) -> None:
-        """Add one derivation edge unless the pair is already connected."""
+        """Add one derivation edge, if the pair has no edge yet."""
 
         existing = self.store.structures.lineage.successors(source)
         if any(neighbor.block.id == target.id for neighbor in existing):

@@ -1,15 +1,20 @@
 """Value types, constants, and helpers for the LangMem lamp.
 
-LangMem stores everything at an address: a hierarchical namespace plus a key
-inside it. The namespace is a template such as `("memories", "{user_id}")`
-that is filled in at request time, so one configured tool set serves every
-user without the tool arguments ever naming one.
+LangMem stores each memory at an address: a hierarchical namespace plus a key in
+that namespace. The namespace is a template, for example `("memories", "{user_id}")`.
+LangMem fills in the template at request time. So one configured tool set serves
+all users, and no tool argument names a user.
 
-This module holds the four things the rest of the lamp shares: the block types
-that keep the four memory kinds apart, the address helpers that resolve and
-compare namespaces, the read-only records the stores hand back, and the
-timestamp and token helpers. Nothing here writes to Genie, so every other
-module can depend on it without a cycle.
+The rest of the lamp shares these 4 parts:
+
+- **Block types:** they keep the 4 memory kinds apart.
+- **Address helpers:** they resolve and compare namespaces.
+- **Records:** the stores return these read-only records.
+- **Timestamp and token helpers:** they normalize times and split text into
+  search terms.
+
+This module does not write to Genie. So each other module can depend on it
+without an import cycle.
 """
 
 from __future__ import annotations
@@ -57,11 +62,11 @@ def normalize_timestamp(value: datetime, *, field: str) -> datetime:
     """Return a timezone-aware timestamp normalized to UTC.
 
     Args:
-        value: Timestamp supplied by application code.
-        field: Field name used in error messages.
+        value: Timestamp from application code.
+        field: Field name for error messages.
 
     Returns:
-        The same instant expressed in UTC.
+        The same instant in UTC.
 
     Raises:
         TypeError: If `value` is not a `datetime`.
@@ -82,7 +87,7 @@ def format_timestamp(value: datetime) -> str:
         value: Timezone-aware timestamp.
 
     Returns:
-        An ISO 8601 string ending in `Z`.
+        An ISO 8601 string that ends in `Z`.
     """
 
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
@@ -93,7 +98,7 @@ def parse_timestamp(value: str, *, field: str = "timestamp") -> datetime:
 
     Args:
         value: ISO 8601 timestamp string.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
         The parsed instant in UTC.
@@ -110,14 +115,14 @@ def parse_timestamp(value: str, *, field: str = "timestamp") -> datetime:
 
 
 def required_text(value: object, *, field: str) -> str:
-    """Return stripped required text.
+    """Return required text without whitespace at the start and end.
 
     Args:
         value: Candidate text.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
-        The text without surrounding whitespace.
+        The text without whitespace at the start and end.
 
     Raises:
         ValueError: If the value is not a non-empty string.
@@ -133,14 +138,14 @@ def unique_strings(values: object, *, field: str) -> tuple[str, ...]:
 
     Args:
         values: Iterable of candidate strings.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
-        Unique stripped strings.
+        Unique strings without whitespace at the start and end.
 
     Raises:
-        TypeError: If `values` is not a sequence of strings.
-        ValueError: If any entry is empty.
+        TypeError: If `values` is a string, bytes, or not iterable.
+        ValueError: If an entry is empty or is not a string.
     """
 
     if isinstance(values, str | bytes) or not isinstance(values, Iterable):
@@ -154,16 +159,16 @@ def unique_strings(values: object, *, field: str) -> tuple[str, ...]:
 
 
 def tokenize(value: str) -> tuple[str, ...]:
-    """Split text into lowercase alphanumeric tokens in first-seen order.
+    """Split text into lowercase alphanumeric tokens, in the order they first occur.
 
-    Search terms keep their order so that a query produces the same sequence of
-    Genie reads on every run.
+    The search terms keep their order. So a query makes the same sequence of
+    Genie reads on each run.
 
     Args:
-        value: Text to tokenize.
+        value: Text to split.
 
     Returns:
-        The distinct tokens found in the text.
+        The distinct tokens in the text.
     """
 
     seen: list[str] = []
@@ -177,14 +182,15 @@ def namespace(*segments: str) -> Namespace:
     """Return a validated namespace from its segments.
 
     Args:
-        segments: One or more namespace segments, template or literal.
+        segments: One or more namespace segments. A segment can be a template
+            placeholder or a literal.
 
     Returns:
         The namespace as a tuple.
 
     Raises:
-        ValueError: If no segment is given or a segment is empty or contains a
-            path separator.
+        ValueError: If there is no segment, or a segment is empty or contains
+            a path separator (`/`).
     """
 
     if not segments:
@@ -193,22 +199,23 @@ def namespace(*segments: str) -> Namespace:
 
 
 def resolve_namespace(template: Sequence[str], values: Mapping[str, str]) -> Namespace:
-    """Fill a namespace template's placeholders from request-scoped values.
+    """Fill the placeholders of a namespace template from request-scoped values.
 
-    LangMem writes a namespace once, as `("memories", "{user_id}")`, and fills
-    the placeholder from configuration on each call. Keeping the substitution
-    here means the tool arguments never carry the user id, so a tool set bound
-    to one user cannot read another user's namespace.
+    - **Upstream:** LangMem writes a namespace once, as `("memories", "{user_id}")`.
+      It fills the placeholder from configuration on each call.
+    - **Here:** this function does the substitution, so no tool argument
+      contains the user id. A tool set bound to one user cannot read the
+      namespace of another user.
 
     Args:
-        template: Namespace whose segments may be `{placeholder}` names.
-        values: Placeholder names mapped to their runtime values.
+        template: Namespace. A segment can be a `{placeholder}` name.
+        values: Placeholder names and their runtime values.
 
     Returns:
-        The namespace with every placeholder replaced.
+        The namespace with each placeholder replaced by its value.
 
     Raises:
-        KeyError: If a placeholder has no supplied value.
+        KeyError: If `values` has no value for a placeholder.
         ValueError: If a segment is empty or contains a path separator.
     """
 
@@ -233,34 +240,36 @@ def namespace_path(value: Sequence[str]) -> str:
         value: Namespace segments.
 
     Returns:
-        The segments joined with `/`.
+        The segments, joined with `/`.
     """
 
     return "/".join(value)
 
 
 def is_below(value: Namespace, prefix: Namespace) -> bool:
-    """Return whether one namespace sits at or below a prefix.
+    """Return `True` if a namespace is at or below a prefix.
 
     Args:
-        value: Namespace being tested.
+        value: Namespace to test.
         prefix: Candidate prefix.
 
     Returns:
-        `True` when `prefix` is a prefix of `value`.
+        `True` if `prefix` is a prefix of `value`.
     """
 
     return value[: len(prefix)] == prefix
 
 
 class ValueSchema:
-    """Runtime schema supplied for the values stored under one namespace.
+    """Runtime schema for the values stored under one namespace.
 
-    LangMem takes Pydantic models in `schemas=[...]` and uses them both to
-    shape extraction and to name the memory kind. Genie stores whatever its
-    codec accepts and has no opinion on value shape, so the schema lives here
-    in application code. This dependency-free stand-in checks required fields
-    and their types; a real application would pass its own Pydantic models.
+    - **Upstream:** LangMem takes Pydantic models in `schemas=[...]`. It uses
+      them to shape extraction and to name the memory kind.
+    - **Genie:** Genie stores each value that its codec accepts. It does not
+      check the shape of a value, so the schema is in application code.
+    - **This class:** a stand-in with no dependencies. It checks the required
+      fields and their types, and it rejects extra fields. A real application
+      gives its own Pydantic models.
     """
 
     __slots__ = ("_fields", "name")
@@ -269,13 +278,15 @@ class ValueSchema:
         """Create an exact dictionary schema.
 
         Args:
-            name: Schema name recorded in block metadata and filterable in
-                search, the way a LangMem schema names a memory kind.
+            name: Schema name. The store records it in block metadata, and a
+                search can filter on it. It names a memory kind, as a LangMem
+                schema does.
             fields: Required field names and their expected Python types.
 
         Raises:
-            TypeError: If a field does not declare a Python type.
-            ValueError: If the name is empty or no field is declared.
+            TypeError: If the type of a field is not a Python type.
+            ValueError: If the name or a field name is empty, or `fields` is
+                empty.
         """
 
         self.name = required_text(name, field="schema name")
@@ -291,12 +302,12 @@ class ValueSchema:
 
     @property
     def fields(self) -> dict[str, type]:
-        """Return an isolated copy of the schema's field mapping."""
+        """Return an independent copy of the field mapping of the schema."""
 
         return dict(self._fields)
 
     def validate(self, value: object) -> dict[str, Any]:
-        """Validate one value and return an isolated copy of it.
+        """Validate one value and return an independent copy of it.
 
         Args:
             value: Candidate value for this namespace.
@@ -307,8 +318,8 @@ class ValueSchema:
         Raises:
             TypeError: If the value is not a dictionary or a field has the
                 wrong type.
-            ValueError: If a required field is missing or an extra field is
-                supplied.
+            ValueError: If the value does not have a required field, or has
+                an extra field.
         """
 
         if not isinstance(value, dict):
@@ -327,10 +338,10 @@ class ValueSchema:
 
 @dataclass(frozen=True, slots=True)
 class Message:
-    """One conversation turn the manager reads.
+    """One conversation turn that the manager reads.
 
     Attributes:
-        role: Speaker role, such as `user` or `assistant`.
+        role: Speaker role, for example `user` or `assistant`.
         content: Message text.
     """
 
@@ -338,7 +349,7 @@ class Message:
     content: str
 
     def as_json(self) -> dict[str, str]:
-        """Return the message in the shape LangMem submits."""
+        """Return the message in the shape that LangMem submits."""
 
         return {"role": self.role, "content": self.content}
 
@@ -348,11 +359,12 @@ class MemoryItem:
     """A resolved `(namespace, key, value)` item.
 
     Attributes:
-        block: Genie block holding the item.
-        namespace: Resolved namespace the item is addressed in.
-        key: Key inside that namespace.
+        block: Genie block that holds the item.
+        namespace: Resolved namespace of the item address.
+        key: Key in that namespace.
         value: Stored application value.
-        schema_name: Registered schema for the namespace, when there is one.
+        schema_name: Name of the registered schema for the namespace, or
+            `None` if the namespace has no schema.
     """
 
     block: MemoryBlock
@@ -363,17 +375,17 @@ class MemoryItem:
 
     @property
     def id(self) -> str:
-        """Return the stored item id, which is the Genie block id."""
+        """Return the item id. It is the Genie block id."""
 
         return self.block.id
 
     @property
     def version(self) -> int:
-        """Return how many times the item has been written.
+        """Return the number of writes to the item.
 
-        LangMem keeps a change history for an updated memory. Genie counts
-        writes to one block, so an in-place patch is visible here rather than
-        in an audit record the lamp maintains.
+        LangMem keeps a change history for an updated memory. Genie counts the
+        writes to one block. So an in-place patch shows here, and the lamp does
+        not keep an audit record for it.
         """
 
         return self.block.version
@@ -385,18 +397,19 @@ class MemoryItem:
         return f"{namespace_path(self.namespace)}/{self.key}"
 
     def canonical_value(self) -> dict[str, Any]:
-        """Return the exact namespace/key/value wrapper stored in Genie."""
+        """Return a copy of the exact namespace/key/value wrapper that Genie stores."""
 
         return deepcopy(cast(dict[str, Any], self.block.value))
 
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
-    """One item returned by the lamp's lexical retrieval.
+    """One item that the lexical search of the lamp returns.
 
     Attributes:
-        item: Matching item.
-        score: Share of query terms Genie matched in the item.
+        item: Item that matched.
+        score: Share of query terms that occur in the item value. The lamp
+            calculates it, not Genie.
         matched: Query terms that matched, in query order.
     """
 
@@ -407,18 +420,19 @@ class SearchHit:
 
 @dataclass(frozen=True, slots=True)
 class Patch:
-    """One change a memory manager proposes to the store.
+    """One change that a memory manager proposes to the store.
 
-    LangMem's manager returns the changes it wants rather than writing them, so
-    inserts, updates, and deletes can be permitted separately. This is that
-    proposal.
+    The LangMem manager returns the changes that it wants, and does not write
+    them. So a configuration can permit inserts, updates, and deletes
+    separately. This class is one such proposal.
 
     Attributes:
         action: `insert`, `update`, or `delete`.
-        collection: Namespace segment below the bound namespace, such as
+        collection: Namespace segment below the bound namespace, for example
             `semantic` or `episodes`.
-        key: Key inside that namespace.
-        value: New value. Required except for a delete.
+        key: Key in that namespace.
+        value: New value. An insert and an update require a value. A delete
+            has no value.
     """
 
     action: PatchAction
@@ -431,7 +445,8 @@ class Patch:
 
         Raises:
             ValueError: If the action is unknown, the collection or key is
-                empty, or a value is missing or supplied where it must not be.
+                empty, an insert or update has no value, or a delete has a
+                value.
         """
 
         if self.action not in PATCH_ACTIONS:
@@ -449,12 +464,17 @@ class PatchOutcome:
     """What the store did with one proposed change.
 
     Attributes:
-        patch: Change the manager proposed.
-        action: Change that was actually made, which differs from the proposal
-            when an insert lands on an address that already holds an item.
-        applied: Whether the store was written.
-        reason: Plain-language explanation, including why a change was refused.
-        item: Item after the change, or the deleted item, when there is one.
+        patch: Change that the manager proposed.
+        action: Change that the address calls for after reconciliation. It is
+            different from the proposal if an insert targets an address that
+            holds an item (`update`), or an update targets an empty address
+            (`insert`). A refused outcome also records this action.
+        applied: `True` if the store wrote the change.
+        reason: Plain-language explanation. For a refused change, it tells
+            why.
+        item: Item after the change, or the deleted item. If the permissions
+            refuse the change, it is the item at the address. `None` if
+            there is no item.
     """
 
     patch: Patch
@@ -466,13 +486,14 @@ class PatchOutcome:
 
 @dataclass(frozen=True, slots=True)
 class Conversation:
-    """A conversation submitted for memory formation.
+    """A conversation that a caller submits for memory formation.
 
     Attributes:
-        thread: `Conversation` thread. Submissions debounce per thread.
+        thread: Name of the conversation thread. The queue debounces the
+            submissions of each thread in one namespace.
         messages: Turns in the exchange.
-        patches: Changes an extractor proposed from those turns.
-        profile: Profile fields the exchange revises.
+        patches: Changes that an extractor proposed from those turns.
+        profile: Profile fields that the exchange revises.
     """
 
     thread: str
@@ -486,16 +507,16 @@ class Submission:
     """One deferred memory-formation task on the reflection queue.
 
     Attributes:
-        block: Genie block recording the submission.
+        block: Genie block that records the submission.
         sequence: Position in the append-only queue log.
-        thread: `Conversation` thread this submission belongs to.
+        thread: Name of the `Conversation` thread of this submission.
         state: `pending`, `superseded`, or `processed`.
-        submitted_at: When the conversation was handed to the queue.
-        due_at: When the manager may run it.
-        messages: Accumulated turns, including any carried from a superseded
-            submission for the same thread.
+        submitted_at: Time when the caller gave the conversation to the queue.
+        due_at: Earliest time when the manager can run the submission.
+        messages: Accumulated turns. They include the turns from a superseded
+            submission on the same thread.
         patches: Accumulated proposed changes.
-        profile: Accumulated profile revisions.
+        profile: Accumulated profile fields.
         superseded_by: Id of the submission that replaced this one.
     """
 
@@ -513,17 +534,18 @@ class Submission:
 
 @dataclass(frozen=True, slots=True)
 class ManagerRun:
-    """The result of running the memory manager over one conversation.
+    """The result of one memory manager run over one conversation.
 
     Attributes:
-        thread: `Conversation` thread that was processed.
-        source_id: Block the conversation was recorded in, when the run came
-            from the queue rather than from a hot-path tool call.
-        ran_at: When the manager ran.
-        outcomes: What happened to every proposed change, in proposal order.
-        profile: Profile after the run, when the conversation revised one. It
-            is the profile as it still stands when the revision was refused.
-        profile_reason: Why the profile revision was refused, when it was.
+        thread: Name of the `Conversation` thread that the manager processed.
+        source_id: Id of the block that records the conversation, if the run
+            came from the queue. `None` if the caller gave no source block.
+        ran_at: Time of the manager run.
+        outcomes: The outcome of each proposed change, in proposal order.
+        profile: Profile after the run, if the conversation revised one. If
+            the manager refused the revision, it is the unchanged profile.
+        profile_reason: The reason why the manager refused the profile
+            revision, or `None`.
     """
 
     thread: str
@@ -535,29 +557,33 @@ class ManagerRun:
 
     @property
     def applied(self) -> tuple[PatchOutcome, ...]:
-        """Return the changes that were written."""
+        """Return the changes that the store wrote."""
 
         return tuple(outcome for outcome in self.outcomes if outcome.applied)
 
     @property
     def refused(self) -> tuple[PatchOutcome, ...]:
-        """Return the changes the manager was not permitted to make."""
+        """Return the changes that the store did not write.
+
+        A refused change has no permission, or it is a delete at an empty
+        address.
+        """
 
         return tuple(outcome for outcome in self.outcomes if not outcome.applied)
 
 
 @dataclass(frozen=True, slots=True)
 class Profile:
-    """The single continuously-updated document for one namespace.
+    """The single document for one namespace that each update revises.
 
     Attributes:
-        identity: Stable block the revisions hang from.
-        block: Revision holding the current value.
-        namespace: Namespace the profile belongs to.
-        name: Profile name inside that namespace.
+        identity: Stable block that owns the revisions.
+        block: Revision that holds the current value.
+        namespace: Namespace of the profile.
+        name: Profile name in that namespace.
         value: Current merged value.
-        revision: Revision number, counting from one.
-        updated_at: When this revision was written.
+        revision: Revision number. The first revision is 1.
+        updated_at: Time when the store wrote this revision.
     """
 
     identity: MemoryBlock
@@ -571,12 +597,12 @@ class Profile:
 
 @dataclass(frozen=True, slots=True)
 class PromptRule:
-    """One standing instruction in a prompt's rule set.
+    """One permanent instruction in the rule set of a prompt.
 
     Attributes:
         key: Stable rule name. A later rule with the same key replaces this
-            one instead of being appended beside it.
-        text: Instruction as it appears in the composed prompt.
+            rule. The optimizer does not add the later rule next to it.
+        text: Instruction text as it shows in the composed prompt.
     """
 
     key: str
@@ -595,13 +621,13 @@ class PromptRule:
 
 @dataclass(frozen=True, slots=True)
 class AnnotatedTrajectory:
-    """A past exchange plus the feedback the optimizer learns from.
+    """A past exchange and the feedback that the optimizer learns from.
 
     Attributes:
-        name: Stable trajectory name, used to report provenance.
+        name: Stable trajectory name. Provenance reports use it.
         messages: Turns in the exchange.
-        feedback: What the reviewer said about it.
-        rules: Rules the feedback asks the prompt to carry.
+        feedback: What the reviewer said about the exchange.
+        rules: Rules that the feedback asks the prompt to include.
     """
 
     name: str
@@ -612,19 +638,21 @@ class AnnotatedTrajectory:
 
 @dataclass(frozen=True, slots=True)
 class PromptVersion:
-    """One version of an agent's procedural memory.
+    """One version of the procedural memory of an agent.
 
     Attributes:
-        identity: Stable block naming the prompt.
-        block: Revision holding this version, absent before the first one.
+        identity: Stable block that names the prompt.
+        block: Revision that holds this version. `None` before the first
+            revision.
         name: Prompt name.
-        base: Prompt text before any learned rule is appended.
-        text: Composed prompt the agent would run with.
-        rules: Rules carried by this version, in acquisition order.
-        revision: Revision number, or zero before the first optimization.
-        when_to_update: Condition recorded for the optimizer that reads it.
-        sources: Names of the annotated exchanges this version was written
-            from, read off the lineage edges into its revision.
+        base: Prompt text without the learned rules.
+        text: Composed prompt that the agent uses.
+        rules: Rules in this version, in acquisition order.
+        revision: Revision number. It is 0 before the first optimization.
+        when_to_update: Condition that the store records for an optimizer to
+            read.
+        sources: Names of the annotated exchanges that produced this version.
+            The optimizer reads them from the lineage edges into the revision.
     """
 
     identity: MemoryBlock
@@ -639,14 +667,15 @@ class PromptVersion:
 
 
 def compose_prompt(base: str, rules: Sequence[PromptRule]) -> str:
-    """Return the prompt text an agent runs with.
+    """Return the prompt text that an agent uses.
 
     Args:
-        base: Prompt as first registered.
+        base: Prompt text at registration.
         rules: Rules learned from feedback, in acquisition order.
 
     Returns:
-        The base prompt followed by its numbered rules.
+        The base prompt, then its numbered rules. Without rules, only the base
+        prompt.
     """
 
     if not rules:
@@ -660,7 +689,7 @@ def item_from_block(block: MemoryBlock) -> MemoryItem:
     """Decode one stored item wrapper.
 
     Args:
-        block: Block holding a `namespace`/`key`/`value` wrapper.
+        block: Block that holds a `namespace`/`key`/`value` wrapper.
 
     Returns:
         The resolved item.
@@ -688,17 +717,19 @@ def item_from_block(block: MemoryBlock) -> MemoryItem:
 
 
 def item_metadata(value: Namespace, key: str, *, schema_name: str | None) -> dict[str, Any]:
-    """Return the portable index metadata stored beside an item.
+    """Return the portable index metadata that the store keeps next to an item.
 
-    The address is duplicated into metadata so Genie can filter and scope a
-    search without the lamp decoding every candidate value first. `schema` is
-    what LangMem's search `filter` narrows on when several schemas share a
-    namespace.
+    - **Address copy:** the metadata repeats the address. So Genie can filter
+      and scope a search, and the lamp does not decode each candidate value
+      first.
+    - **`schema`:** the LangMem search `filter` uses this field when several
+      schemas share a namespace.
 
     Args:
         value: Resolved namespace.
-        key: Key inside that namespace.
-        schema_name: Registered schema name, when the namespace has one.
+        key: Key in that namespace.
+        schema_name: Registered schema name, or `None` if the namespace has no
+            schema.
 
     Returns:
         Metadata for the item block.
@@ -745,7 +776,7 @@ def patch_as_json(patch: Patch) -> dict[str, Any]:
         patch: Change to serialize.
 
     Returns:
-        A mapping a tool call can carry.
+        A mapping for a tool call.
     """
 
     payload: dict[str, Any] = {
@@ -765,7 +796,7 @@ def messages_from_json(payload: object) -> tuple[Message, ...]:
         payload: Sequence of `{"role": ..., "content": ...}` mappings.
 
     Returns:
-        The turns in supplied order.
+        The turns, in the given order.
 
     Raises:
         TypeError: If the payload is not a sequence of mappings.
@@ -788,11 +819,11 @@ def messages_from_json(payload: object) -> tuple[Message, ...]:
 
 
 def json_mapping(value: object, *, field: str) -> dict[str, Any]:
-    """Return an isolated copy of a JSON-compatible mapping.
+    """Return an independent copy of a JSON-compatible mapping.
 
     Args:
-        value: Candidate mapping, or `None` for an empty one.
-        field: Field name used in error messages.
+        value: Candidate mapping, or `None` for an empty mapping.
+        field: Field name for error messages.
 
     Returns:
         A deep copy with string keys.
@@ -812,13 +843,13 @@ def json_mapping(value: object, *, field: str) -> dict[str, Any]:
 
 
 def searchable_text(value: Any) -> str:
-    """Return the text a lexical search reads out of a stored value.
+    """Return the text that a lexical search reads from a stored value.
 
     Args:
         value: Stored application value of any supported shape.
 
     Returns:
-        Flattened text for tokenizing.
+        Flat text for `tokenize`.
     """
 
     if isinstance(value, str):

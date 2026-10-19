@@ -31,18 +31,18 @@ from genie import (
 
 
 def export_value(memory: Memory, block: MemoryBlock) -> str:
-    """Export a block after checking an application-defined operation.
+    """Export a block value after a check of the application-defined `"export"` operation.
 
     Args:
-        memory: Memory handle carrying the acting principal.
+        memory: `Memory` instance with the acting principal.
         block: Block to export.
 
     Returns:
-        String representation of the block value.
+        The block value as a string.
 
     Raises:
-        AccessDenied: If the principal cannot perform the custom `"export"`
-            operation or cannot read the block.
+        AccessDenied: If the principal cannot do the custom `"export"`
+            operation, or cannot read the block.
     """
 
     memory.policy_engine.require("export", block, memory.principal)
@@ -52,13 +52,13 @@ def export_value(memory: Memory, block: MemoryBlock) -> str:
 
 
 def main() -> None:
-    """Run a principal and role based policy walkthrough."""
+    """Run a short walkthrough of policies that use principals and roles."""
 
     print("== Access policies ==")
     policy_engine = PolicyEngine(
         operations={
-            # Custom operations are opt-in. This default says that blocks
-            # without an explicit export rule can be exported by compliance.
+            # Custom operations are opt-in. With this default, the `compliance`
+            # role can export a block that has no explicit export rule.
             "export": AccessRule.only(roles={"compliance"}),
         }
     )
@@ -71,8 +71,9 @@ def main() -> None:
     researcher_shared = AccessRule.only(roles={"researcher"}, owner=True)
     compliance_shared = AccessRule.only(roles={"compliance"}, owner=True)
     public = owner.put(type="note", value="Public context", policy=MemoryPolicy.public())
-    # No policy argument, so this block gets the `MemoryPolicy.owner_private()`
-    # default: only `agent:owner` passes any built-in operation on it.
+    # This call has no policy argument, so the block gets the
+    # `MemoryPolicy.owner_private()` default. Only `agent:owner` passes the
+    # built-in operations on it.
     private = owner.put(type="note", value="Owner-only reasoning")
     role_gated = owner.put(
         type="note",

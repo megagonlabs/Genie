@@ -1,13 +1,14 @@
 """Value types, constants, and time helpers for the Hindsight lamp.
 
-Hindsight keeps four kinds of knowledge apart: source documents, the facts
-extracted from them, the observations consolidated out of those facts, and the
-mental models written from observations. This module names the block types and
-relations that separation needs, the timestamp helpers every layer shares, and
-the read-only records the bank hands back.
-
-Nothing here calls Genie beyond reading blocks that were already stored, so
-every other module in the lamp can depend on it without a cycle.
+- **4 layers:** Hindsight keeps 4 kinds of knowledge apart. These are source
+  documents, the facts extracted from them, the observations consolidated from
+  those facts, and the mental models written from observations.
+- **Contents:** the block types and relations for that separation, the
+  timestamp helpers that every layer shares, and the read-only records that the
+  bank returns.
+- **No import cycle:** this module only reads blocks that are already stored.
+  It does not call Genie for other work. So every other module in the lamp can
+  import it without an import cycle.
 """
 
 from __future__ import annotations
@@ -61,11 +62,11 @@ _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 def normalize_timestamp(value: datetime, *, field: str) -> datetime:
-    """Return a timezone-aware timestamp normalized to UTC.
+    """Return a timezone-aware timestamp in UTC.
 
     Args:
-        value: Timestamp supplied by application code.
-        field: Field name used in error messages.
+        value: Timestamp from application code.
+        field: Field name for error messages.
 
     Returns:
         The same instant expressed in UTC.
@@ -89,7 +90,7 @@ def format_timestamp(value: datetime) -> str:
         value: Timezone-aware timestamp.
 
     Returns:
-        An ISO 8601 string ending in `Z`.
+        An ISO 8601 string that ends in `Z`.
     """
 
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
@@ -100,7 +101,7 @@ def parse_timestamp(value: str, *, field: str = "timestamp") -> datetime:
 
     Args:
         value: ISO 8601 timestamp string.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
         The parsed instant in UTC.
@@ -117,17 +118,17 @@ def parse_timestamp(value: str, *, field: str = "timestamp") -> datetime:
 
 
 def required_text(value: str, *, field: str) -> str:
-    """Return stripped required text.
+    """Return required text without the whitespace around it.
 
     Args:
         value: Candidate text.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
-        The text without surrounding whitespace.
+        The text without the whitespace around it.
 
     Raises:
-        ValueError: If the text is empty.
+        ValueError: If the value is not a string, or the text is empty.
     """
 
     if not isinstance(value, str) or not value.strip():
@@ -140,14 +141,14 @@ def unique_strings(values: object, *, field: str) -> tuple[str, ...]:
 
     Args:
         values: Iterable of candidate strings.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
-        Unique stripped strings.
+        Unique strings without the whitespace around them.
 
     Raises:
-        TypeError: If `values` is not a sequence of strings.
-        ValueError: If any entry is empty.
+        TypeError: If `values` is a string, is bytes, or is not iterable.
+        ValueError: If an entry is not a string, or an entry is empty.
     """
 
     if isinstance(values, (str, bytes)) or not isinstance(values, Iterable):
@@ -163,8 +164,8 @@ def unique_strings(values: object, *, field: str) -> tuple[str, ...]:
 def normalize_name(value: str) -> str:
     """Return the lookup key for an entity name or alias.
 
-    Names are compared case-insensitively with collapsed whitespace and no
-    trailing periods, so `Alice C.` and `alice c` share one key.
+    The key ignores case, collapses whitespace, and removes the periods at the
+    end of each word. So `Alice C.` and `alice c` have the same key.
 
     Args:
         value: Entity name or alias as written.
@@ -193,12 +194,12 @@ def tokenize(value: str) -> frozenset[str]:
 def estimate_tokens(value: str) -> int:
     """Estimate the token cost of text for the recall budget.
 
-    Hindsight trims recall results to a `max_tokens` budget measured with a
-    real tokenizer. Counting whitespace-separated words keeps the same
-    behavior visible without adding a dependency.
+    Upstream Hindsight trims recall results to a `max_tokens` budget that a
+    real tokenizer measures. The lamp counts the words between whitespace
+    instead. This shows the same behavior and adds no dependency.
 
     Args:
-        value: Text whose cost is estimated.
+        value: Text to estimate the cost of.
 
     Returns:
         The estimated token count.
@@ -209,16 +210,17 @@ def estimate_tokens(value: str) -> int:
 
 @dataclass(frozen=True, slots=True)
 class Claim:
-    """The standing belief one extracted fact is evidence for.
+    """The standing belief that one extracted fact is evidence for.
 
-    Upstream Hindsight decides which facts belong to which belief with a
-    language model. The lamp asks the extractor for that decision instead, so
+    Upstream Hindsight uses a language model to decide which facts belong to
+    which belief. The lamp asks the extractor for that decision instead, so
     consolidation stays deterministic.
 
     Attributes:
-        key: Stable identifier for the belief this fact speaks to.
-        belief: Sentence the fact supports or contradicts.
-        stance: Whether the fact backs the belief or overturns it.
+        key: Stable identifier of the belief that this fact is about.
+        belief: Sentence that the fact supports or contradicts.
+        stance: `supports` if the fact supports the belief, or `contradicts`
+            if the fact reverses the belief.
     """
 
     key: str
@@ -241,18 +243,18 @@ class Claim:
 
 @dataclass(frozen=True, slots=True)
 class FactDraft:
-    """One extracted fact waiting to be retained.
+    """One extracted fact before the bank retains it.
 
     Attributes:
-        text: Narrative sentence stored as the memory.
+        text: Narrative sentence that the bank stores as the memory.
         fact_type: `world` for facts about others, `experience` for the
-            bank's own first-person history.
-        context: Short description of the situation the fact came from.
-        entities: Entity names the fact mentions, as written.
-        occurred_at: Optional start of the period the fact describes.
+            first-person history of the bank.
+        context: Short description of the situation that the fact came from.
+        entities: Entity names that the fact mentions, as written.
+        occurred_at: Optional start of the period that the fact describes.
         occurred_until: Optional exclusive end of that period.
-        tags: Visibility tags used for scoping and recall filters.
-        claim: Optional belief this fact is evidence for.
+        tags: Visibility tags for scopes and recall filters.
+        claim: Optional belief that this fact is evidence for.
     """
 
     text: str
@@ -273,7 +275,7 @@ class Document:
         block: Stored document block.
         source: Where the payload came from.
         content: Raw payload text.
-        context: Caller-supplied framing for the payload.
+        context: Text from the caller that describes the payload.
         retained_at: When the bank learned this payload.
     """
 
@@ -285,7 +287,7 @@ class Document:
 
     @property
     def id(self) -> str:
-        """Return the underlying Genie block id."""
+        """Return the id of the Genie block."""
 
         return self.block.id
 
@@ -298,15 +300,16 @@ class MemoryFact:
         block: Stored fact block.
         text: Narrative sentence.
         fact_type: `world` or `experience`.
-        state: `valid` or soft-retired `invalidated`.
-        context: Situation the fact came from.
+        state: `valid`, or `invalidated` for a fact that the bank retired but
+            did not delete.
+        context: Situation that the fact came from.
         entities: Resolved canonical entity names.
-        occurred: Optional period the fact describes, or `None` for an
+        occurred: Optional period that the fact describes, or `None` for an
             ongoing fact such as a preference.
         learned_at: When the bank learned the fact.
         tags: Visibility tags.
-        claim: Belief this fact is evidence for, when it has one.
-        document_id: Source document block id.
+        claim: Belief that this fact is evidence for, if it has one.
+        document_id: Block id of the source document.
     """
 
     block: MemoryBlock
@@ -323,7 +326,7 @@ class MemoryFact:
 
     @property
     def id(self) -> str:
-        """Return the underlying Genie block id."""
+        """Return the id of the Genie block."""
 
         return self.block.id
 
@@ -336,7 +339,8 @@ class Entity:
         block: Stored entity block.
         name: Canonical display name.
         kind: Application-defined entity kind.
-        aliases: Every surface form bound to this entity so far.
+        aliases: Every surface form (written form of a name) that the bank
+            bound to this entity so far.
     """
 
     block: MemoryBlock
@@ -346,27 +350,30 @@ class Entity:
 
     @property
     def id(self) -> str:
-        """Return the underlying Genie block id."""
+        """Return the id of the Genie block."""
 
         return self.block.id
 
 
 @dataclass(frozen=True, slots=True)
 class Observation:
-    """A consolidated belief and the evidence standing behind it.
+    """A consolidated belief and the evidence that supports it.
 
     Attributes:
-        identity: Stable block every revision of this belief hangs from.
-        block: Block holding the current revision's text.
-        claim: Belief key shared by every revision.
+        identity: Stable block that owns every revision of this belief.
+        block: Block that holds the text of the current revision.
+        claim: Belief key that every revision shares.
         text: Current wording of the belief.
         revision: Positive revision number of `block`.
-        stance: Whether this revision recorded support or a reversal.
-        tags: Visibility tags inherited from the supporting facts.
-        consolidated_at: When this revision was written.
-        proof_count: Number of facts linked to this revision as evidence.
-        sources: Ids of those supporting facts.
-        stale: Whether facts touching this belief are still unconsolidated.
+        stance: `supports` if this revision recorded support, or
+            `contradicts` if it recorded a reversal.
+        tags: Visibility tags merged from the facts that support the belief.
+        consolidated_at: When consolidation wrote this revision.
+        proof_count: Number of facts that are linked to this revision as
+            evidence.
+        sources: Ids of those facts.
+        stale: `True` if valid facts about this belief are not consolidated
+            yet.
     """
 
     identity: MemoryBlock
@@ -390,20 +397,21 @@ class Observation:
 
 @dataclass(frozen=True, slots=True)
 class MentalModel:
-    """A standing question and the answer currently on file for it.
+    """A standing question and its current stored answer.
 
     Attributes:
-        identity: Stable block every revision of this answer hangs from.
-        block: Block holding the current revision's content, or `None` before
-            the first refresh.
+        identity: Stable block that owns every revision of this answer.
+        block: Block that holds the content of the current revision, or
+            `None` before the first refresh.
         name: Stable model name.
-        question: Standing question the model answers.
-        content: Current answer text, empty before the first refresh.
-        revision: Positive revision number, or zero before the first refresh.
-        tags: Scope tags restricting which memories feed the model.
-        refreshed_at: When this revision was written, if there is one.
-        sources: Ids of the observations and facts this revision was built
-            from.
+        question: Standing question that the model answers.
+        content: Current answer text. It is empty before the first refresh.
+        revision: Positive revision number, or `0` before the first refresh.
+        tags: Scope tags that select the observations that the model reads.
+        refreshed_at: When the store wrote this revision, or `None` if there
+            is no revision.
+        sources: Ids of the observation revisions that this revision was
+            built from.
     """
 
     identity: MemoryBlock
@@ -418,7 +426,7 @@ class MentalModel:
 
     @property
     def id(self) -> str:
-        """Return the block id of the current revision, or the identity."""
+        """Return the block id of the current revision, or of the identity before the first refresh."""
 
         return self.block.id if self.block is not None else self.identity.id
 
@@ -428,12 +436,12 @@ class RecallHit:
     """One ranked recall result.
 
     Attributes:
-        block: Fact or observation revision block that matched.
-        text: Text the retrievers scored.
+        block: Fact block or observation revision block that matched.
+        text: Text that the retrievers scored.
         kind: `world`, `experience`, or `observation`.
-        score: Fused reciprocal-rank score, higher first.
+        score: Fused reciprocal rank score. A higher score ranks first.
         retrievers: Names of the retrievers that found this candidate.
-        tokens: Estimated token cost charged to the recall budget.
+        tokens: Estimated token cost that counts against the recall budget.
     """
 
     block: MemoryBlock
@@ -445,22 +453,22 @@ class RecallHit:
 
     @property
     def id(self) -> str:
-        """Return the underlying Genie block id."""
+        """Return the id of the Genie block."""
 
         return self.block.id
 
 
 @dataclass(frozen=True, slots=True)
 class Evidence:
-    """One item the reflection leaned on, with where it came from.
+    """One item that the reflection used, and the sources of that item.
 
     Attributes:
         kind: `mental_model`, `observation`, `world`, or `experience`.
-        block_id: Block the evidence was read from.
-        text: Text the answer drew on, or the name and revision of the
-            standing answer it came from.
-        sources: Ids of the blocks this item was derived from, walked back
-            through the lineage relation.
+        block_id: Block that the reflection read the evidence from.
+        text: Text that the answer used, or the name and revision of the
+            standing answer that the item came from.
+        sources: Ids of the blocks that this item was derived from. The
+            reflection reads them through the lineage relation.
     """
 
     kind: str
@@ -471,13 +479,13 @@ class Evidence:
 
 @dataclass(frozen=True, slots=True)
 class Reflection:
-    """The answer a reflection produced and how it got there.
+    """The answer of one reflection, and the evidence and tiers behind it.
 
     Attributes:
-        question: Question that was reflected on.
+        question: Question that the reflection answered.
         text: Composed answer.
-        based_on: Evidence used, highest tier first.
-        trace: Retrieval tiers consulted, in order.
+        based_on: Evidence that the reflection used, highest tier first.
+        trace: Retrieval tiers that the reflection consulted, in order.
     """
 
     question: str
@@ -492,10 +500,12 @@ class RetainResult:
 
     Attributes:
         document: The stored source payload.
-        facts: One fact per draft, in draft order. A draft whose text was
-            already on file resolves to the existing fact.
-        duplicates: The subset of `facts` that this payload re-attested; each
-            gained the new document as extra provenance instead of a copy.
+        facts: One fact for each draft, in draft order. If a valid fact with
+            the same normalized text was on file before the call, the draft
+            resolves to that stored fact.
+        duplicates: The subset of `facts` that this payload re-attested
+            (stated again). Each of these facts got the new document as extra
+            provenance, not a copy.
     """
 
     document: Document
@@ -507,7 +517,7 @@ def document_from_block(block: MemoryBlock) -> Document:
     """Decode a stored document block.
 
     Args:
-        block: Block previously written by the bank.
+        block: Block that the bank wrote earlier.
 
     Returns:
         The decoded document.
@@ -530,7 +540,7 @@ def fact_from_block(block: MemoryBlock) -> MemoryFact:
     """Decode a stored fact block.
 
     Args:
-        block: Block previously written by the bank.
+        block: Block that the bank wrote earlier.
 
     Returns:
         The decoded fact.
@@ -582,7 +592,7 @@ def entity_from_block(block: MemoryBlock) -> Entity:
     """Decode a stored entity block.
 
     Args:
-        block: Block previously written by the bank.
+        block: Block that the bank wrote earlier.
 
     Returns:
         The decoded entity.
@@ -625,7 +635,7 @@ def _stance(value: str) -> Stance:
 
 
 def _require_payload(block: MemoryBlock, expected: str) -> dict[str, Any]:
-    """Return a block's dictionary value after checking its type."""
+    """Check the type of a block, then return its dictionary value."""
 
     if block.type != expected:
         raise TypeError(f"Expected block type {expected!r}, got {block.type!r}.")

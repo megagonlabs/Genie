@@ -1,30 +1,30 @@
-"""Genie facades wired to the Mem0 lamp's three ownership tiers.
+"""Genie facades for the 3 ownership tiers of the Mem0 lamp.
 
-Mem0 runs on stores that know nothing about each other:
+Mem0 uses 3 stores that are independent of each other:
 
-- A vector store holds one payload per memory, scoped by whichever of
-  `user_id`, `agent_id`, and `run_id` the caller supplied.
-- A relational history table holds one row per change to any of them.
-- An optional graph store holds entities and the relationships between them.
+- **Vector store:** holds one payload for each memory. The payload scope is the
+  subset of `user_id`, `agent_id`, and `run_id` that the caller supplied.
+- **Relational history table:** holds one row for each change to a memory.
+- **Graph store (optional):** holds entities and the relationships between them.
 
-That split is what the three tiers below preserve, and it is why the same memory
-is reachable two ways:
+The 3 tiers below keep that split. Thus 2 paths reach the same memory:
 
-- Its id is a `KeyedCollection` address, because `get`, `update`, and `delete`
-  take an id and no scope.
-- Its session is an ownership path, because a search does take a scope. "Filter
-  on the ids I supplied" selects exactly the blocks a subtree scope does, with
-  the difference that ownership also answers what happens to those memories when
-  the user is retired.
+- **Id:** the id is a `KeyedCollection` address, because `get`, `update`, and
+  `delete` take an id and no scope.
+- **Session:** the session is an ownership path, because a search takes a scope.
+  A filter on the supplied ids selects the same blocks as a subtree scope.
+  Ownership also tells what happens to those memories when the application
+  retires the user.
 
-The history tier carries two facades over the same event blocks:
+The history tier has 2 facades over the same event blocks:
 
-- `EventLog`, anchored on the tier itself, is the journal in arrival order,
-  which is the history table read whole.
-- `VersionedRecords`, anchored on one identity per memory, is that memory's own
-  history, which is what `Memory.history(memory_id)` returns.
-- Both keep working after the memory is deleted, because the events are owned by
-  this tier rather than by the memory they describe.
+- **`EventLog`:** its anchor is the tier itself. It is the journal in arrival
+  order, that is, the full history table.
+- **`VersionedRecords`:** its anchor is one identity for each memory. It is the
+  history of that memory, which `Memory.history(memory_id)` returns.
+- **Both survive a delete:** both facades continue to work after the lamp
+  deletes the memory. This tier owns the events, not the memory that they
+  describe.
 """
 
 from __future__ import annotations
@@ -45,24 +45,27 @@ from genie.structures import (
 
 
 class Mem0StructureStore(KeyedStore, SequenceStore, Protocol):
-    """Backend capabilities required by the Mem0 structure bundle."""
+    """Backend capabilities that the Mem0 structure bundle requires."""
 
 
 @dataclass(frozen=True, slots=True)
 class Mem0Structures:
-    """The structural views this lamp composes over one memory store.
+    """The structure views that this lamp composes over one memory store.
 
     Attributes:
-        tiers: Ownership view of the three tiers below the store root.
-        records: Memory ids mapped to the blocks holding them.
-        history: One identity per memory, one revision per recorded change.
-        journal: Every recorded change in the order it was applied.
-        entities: Graph entity names mapped to their nodes, per session path.
+        tiers: Ownership view of the 3 tiers below the store root.
+        records: Map from memory ids to the blocks that hold the memories.
+        history: One identity for each memory, and one revision for each
+            recorded change.
+        journal: All recorded changes, in the order that the lamp applied them.
+        entities: Map from graph entity names to their nodes. There is one
+            namespace for each outermost session identifier.
         graph: Typed relationships between those nodes.
-        memory_root: Block that owns the mirrored session paths and the
-            memories addressed inside them.
-        history_root: Block that owns history identities and their events.
-        entity_root: Block that owns graph entities.
+        memory_root: Block that owns the session paths and the memories that
+            have addresses in them. The session paths copy the session
+            identifiers.
+        history_root: Block that owns the history identities and their events.
+        entity_root: Block that owns the graph entities.
     """
 
     tiers: OwnershipTree
@@ -77,15 +80,15 @@ class Mem0Structures:
 
     @classmethod
     def create(cls, memory: MemoryHandle, store: Mem0StructureStore) -> Mem0Structures:
-        """Build or reopen every structural anchor below one bounded root.
+        """Build or reopen all structure anchors below one bounded root.
 
-        Existing anchors are found by scanning the root's children, so
-        reopening a store returns the same structures instead of duplicating
-        them.
+        The method finds the anchors that exist already in the children of the
+        root. Thus a reopened store returns the same structures and does not
+        make duplicates.
 
         Args:
-            memory: Handle rooted at the block that owns the whole store.
-            store: Backend providing keyed and sequence capabilities.
+            memory: Handle with its root at the block that owns the whole store.
+            store: Backend with the keyed and sequence capabilities.
 
         Returns:
             The structure bundle for that store.
@@ -112,10 +115,10 @@ class Mem0Structures:
 
 
 def _anchor(tiers: OwnershipTree, name: str) -> MemoryBlock:
-    """Return the tier anchor with this name, creating it when absent.
+    """Return the tier anchor with this name, and create it if it does not exist.
 
-    Anchors are matched on metadata rather than on value so that a tier which
-    keeps state in its own value can still be found again.
+    The function matches anchors on metadata, not on value. Thus it can find a
+    tier again, also if that tier keeps state in its own value.
     """
 
     existing = next(

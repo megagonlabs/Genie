@@ -1,29 +1,31 @@
-"""Mem0's graph memory: the entities in a conversation and how they relate.
+"""The graph memory of Mem0: the entities in a conversation and their relationships.
 
-With a graph store configured, Mem0 runs a second extraction over the same
-messages:
+If the application configures a graph store, Mem0 runs a second extraction over
+the same messages:
 
-- It pulls out entities and resolves each one against the nodes already stored
-  for that user, so two spellings do not become two nodes.
-- It writes typed relationships between them.
-- A search then returns both halves: the memories that match the query text, and
-  the relationships attached to the entities the query names.
-- The graph phase can also retract a relationship that a later turn contradicts.
+- **Entities:** it extracts entities and resolves each one against the stored
+  nodes of that user. Thus 2 spellings do not become 2 nodes.
+- **Relationships:** it writes typed relationships between the entities.
+- **Search:** a search then returns 2 halves: the memories that match the query
+  text, and the relationships of the entities that the query names.
+- **Retraction:** the graph phase can also retract a relationship that a later
+  turn contradicts.
 
 The Genie side:
 
-- `PropertyGraph` carries the relationships.
-- A second `KeyedCollection` carries entity resolution. An entity is addressed
-  by its folded name inside the session's outermost identifier, which is the
-  level upstream scopes graph nodes at. So resolving an extracted name is one
-  keyed lookup rather than a scan, and listing a user's entities is one
-  namespaced read.
-- That namespace is also a block, and it owns the nodes addressed inside it. So
-  clearing a user's graph is one `delete_subtree`, the same operation that
-  retires their memories.
-- Genie has no operation that removes a single link, so a retracted relationship
-  is marked rather than deleted. That fits the rest of the lamp, where a change
-  is something you can still read afterwards.
+- **`PropertyGraph`:** holds the relationships.
+- **A second `KeyedCollection`:** does entity resolution. The address of an
+  entity is its case-folded name in the outermost identifier of the session.
+  Upstream scopes graph nodes at this level. Thus the resolution of an extracted
+  name is one keyed lookup, not a scan. A list of the entities of a user is one
+  read of one namespace.
+- **The namespace is a block:** the namespace block owns the nodes in it. Thus
+  one `delete_subtree` clears the graph of a user. The same operation retires
+  the memories of that user.
+- **Retraction marks the edge:** Genie has no operation that removes a single
+  link. Thus the lamp marks a retracted relationship and does not delete it.
+  This agrees with the rest of the lamp, where a caller can still read a change
+  after it occurs.
 """
 
 from __future__ import annotations
@@ -55,30 +57,32 @@ from genie.structures import MemoryAddress
 
 
 class GraphMemory:
-    """Entities and typed relationships, scoped like the memories beside them."""
+    """Entities and typed relationships, with the same scopes as the memories."""
 
     def __init__(self, memory: MemoryHandle, *, structures: Mem0Structures) -> None:
         """Create graph memory over one bounded handle.
 
         Args:
-            memory: Bounded Genie handle owning the entity tier.
-            structures: Facade bundle built over the same handle.
+            memory: Bounded Genie handle that owns the entity tier.
+            structures: Facade bundle over the same handle.
         """
 
         self.memory = memory
         self.structures = structures
 
     def apply(self, session: Session, triplet: Triplet, *, at: datetime) -> GraphChange:
-        """Add or retract one relationship, and report which happened.
+        """Add or retract one relationship, and report the result.
 
         Args:
-            session: Scope whose entity namespace the relationship belongs to.
+            session: Scope of the entity namespace that contains the
+                relationship.
             triplet: Candidate relationship from the graph extraction phase.
-            at: Time recorded on the edge.
+            at: Time that the method records on the edge.
 
         Returns:
-            The change that was made. A relationship already on file is left
-            alone, and a retraction with nothing to retract writes nothing.
+            The change. If the graph has the relationship already, the method
+            writes nothing and returns `NONE`. A retraction with no relationship
+            to retract also writes nothing and returns `NONE`.
         """
 
         applied_at = normalize_timestamp(at, field="at")
@@ -110,37 +114,37 @@ class GraphMemory:
         return GraphChange(triplet=triplet, event="ADD", relation=self._relation(session, edge), reason="a new relationship was extracted")
 
     def relations(self, session: Session, *, limit: int = READ_LIMIT, include_retracted: bool = False) -> list[GraphRelation]:
-        """Return every relationship stored in one scope's entity namespace.
+        """Return all relationships in the entity namespace of one scope.
 
         Args:
             session: Scope to read.
-            limit: Maximum entities to walk.
-            include_retracted: Whether relationships marked as no longer true
-                are returned as well.
+            limit: Maximum number of entities to read.
+            include_retracted: If `True`, the result also includes the
+                relationships that are marked as no longer true.
 
         Returns:
-            Relationships in ascending source, relation, and target order. Each
-            edge appears once, walked from the entity it starts at.
+            Relationships in ascending order of source, relation, and target.
+            Each edge occurs once, from the entity at its start.
         """
 
         return self._relations_of(self.entities(session, limit=limit), session, include_retracted=include_retracted)
 
     def relations_for(self, session: Session, query: str, *, limit: int = READ_LIMIT) -> list[GraphRelation]:
-        """Return the relationships attached to the entities a query names.
+        """Return the relationships that start or end at the entities that a query names.
 
-        Upstream a model reads the query and names the entities in it. Here an
-        entity is named when every token of its name appears in the query, which
-        needs no model and is enough to show the two halves of a Mem0 search
-        arriving together.
+        - **Upstream:** a model reads the query and names the entities in it.
+        - **Here:** a query names an entity if each token of the entity name
+          occurs in the query. This needs no model, and it is sufficient to
+          show the 2 halves of a Mem0 search together.
 
         Args:
             session: Scope to read.
             query: Search text.
-            limit: Maximum entities to walk.
+            limit: Maximum number of entities to read.
 
         Returns:
-            Relationships in ascending source, relation, and target order,
-            excluding retracted ones.
+            Relationships in ascending order of source, relation, and target.
+            Retracted relationships are not in the result.
         """
 
         terms = set(tokenize(required_text(query, field="query")))
@@ -157,11 +161,11 @@ class GraphMemory:
         return _ordered(found)
 
     def entities(self, session: Session, *, limit: int = READ_LIMIT) -> list[MemoryBlock]:
-        """Return the entity nodes stored in one scope, in address order.
+        """Return the entity nodes in one scope, in address order.
 
         Args:
-            session: Scope whose entity namespace should be listed.
-            limit: Maximum entities to return.
+            session: Scope of the entity namespace to list.
+            limit: Maximum number of entities to return.
 
         Returns:
             Entity blocks in ascending key order.
@@ -171,11 +175,11 @@ class GraphMemory:
         return [item.block for item in items]
 
     def entity_names(self, session: Session, *, limit: int = READ_LIMIT) -> list[str]:
-        """Return the display names of the entities stored in one scope.
+        """Return the display names of the entities in one scope.
 
         Args:
-            session: Scope whose entity namespace should be listed.
-            limit: Maximum entities to return.
+            session: Scope of the entity namespace to list.
+            limit: Maximum number of entities to return.
 
         Returns:
             Entity names in ascending key order.
@@ -187,22 +191,22 @@ class GraphMemory:
         """Resolve one extracted entity name against the stored nodes.
 
         Args:
-            session: Scope whose entity namespace to look in.
+            session: Scope of the entity namespace to search.
             name: Entity name as extracted.
 
         Returns:
-            The entity node, or `None` when the scope has no node for it.
+            The entity node, or `None` if the scope has no node for it.
         """
 
         return self.structures.entities.get(MemoryAddress(self.namespace(session), entity_key(name)))
 
     def ensure_entity(self, session: Session, name: str) -> MemoryBlock:
-        """Return one entity node, creating it when the scope has none.
+        """Return one entity node, and create it if the scope has no node for it.
 
         Args:
-            session: Scope whose entity namespace to place the node in.
-            name: Entity name as extracted. The first spelling seen is the one
-                reported afterwards.
+            session: Scope of the entity namespace for the node.
+            name: Entity name as extracted. The method keeps the first spelling
+                and reports that spelling later.
 
         Returns:
             The entity node.
@@ -228,23 +232,26 @@ class GraphMemory:
         return block
 
     def drop(self, session: Session) -> list[GraphRelation]:
-        """Delete one scope's entity namespace and every edge attached to it.
+        """Delete the entity namespace of one scope and all edges of its entities.
 
-        Mem0 clears graph memory alongside the vector store when a scope is
-        retired. Each namespace owns its own nodes here, so retiring it is one
-        `delete_subtree` rather than a walk that deletes each node in turn. That
-        is the same argument the memory tier makes: a listing that deletes what
-        it read can only retire as much as one read returns, while a subtree is
-        the whole namespace by definition. The edges and the keyed bindings go
-        with the blocks, because Genie drops both when a block is deleted.
+        - **Upstream:** Mem0 clears the graph memory together with the vector
+          store when it retires a scope.
+        - **Here:** each namespace owns its nodes. Thus one `delete_subtree`
+          retires the namespace, and no walk deletes each node in turn.
+        - **Why a subtree:** the memory tier uses the same reason. A list that
+          deletes what it read can retire only as much as one read returns. A
+          subtree is always the full namespace.
+        - **Edges and bindings:** Genie removes the links and the keyed
+          bindings of a block when it deletes the block. Thus the edges and the
+          keyed bindings go away with the blocks.
 
         Args:
-            session: Scope being retired. Nothing is deleted unless it names the
-                whole entity namespace, so retiring one run leaves the user's
-                entities alone.
+            session: Scope to retire. The method deletes nothing if the session
+                path has more segments than the entity namespace. Thus a retire
+                of one run does not change the entities of the user.
 
         Returns:
-            The relationships that were removed, retracted ones included.
+            The removed relationships, retracted relationships included.
         """
 
         if session.path != self.namespace(session):
@@ -258,23 +265,23 @@ class GraphMemory:
         return removed
 
     def namespace(self, session: Session) -> tuple[str, ...]:
-        """Return the entity namespace one session resolves names in.
+        """Return the entity namespace in which one session resolves names.
 
-        Mem0 scopes graph nodes by `user_id`, so the outermost identifier a
-        session names is the level entities are shared at. Two runs of the same
-        user therefore see one node per entity rather than one each.
+        Mem0 scopes graph nodes by `user_id`. Thus the outermost identifier of
+        a session is the level where the session shares entities. 2 runs of the
+        same user see one node for each entity, not one node for each run.
 
         Args:
-            session: Scope being read or written.
+            session: Scope to read or write.
 
         Returns:
-            The single-segment namespace entities are addressed inside.
+            The namespace of one segment that contains the entity addresses.
         """
 
         return session.path[:1]
 
     def _scope_node(self, session: Session) -> MemoryBlock | None:
-        """Return the block owning one entity namespace, when it exists."""
+        """Return the block that owns one entity namespace, if it exists."""
 
         segment = self.namespace(session)[0]
         return next(
@@ -287,7 +294,7 @@ class GraphMemory:
         )
 
     def _ensure_scope(self, session: Session) -> MemoryBlock:
-        """Return the block owning one entity namespace, creating it when absent."""
+        """Return the block that owns one entity namespace, and create it if it does not exist."""
 
         existing = self._scope_node(session)
         if existing is not None:
@@ -301,7 +308,7 @@ class GraphMemory:
         )
 
     def _relations_of(self, blocks: list[MemoryBlock], session: Session, *, include_retracted: bool) -> list[GraphRelation]:
-        """Return the relationships that start at one set of entity nodes."""
+        """Return the relationships that start at a set of entity nodes."""
 
         found: list[GraphRelation] = []
         for block in blocks:
@@ -315,7 +322,7 @@ class GraphMemory:
         return _ordered(found)
 
     def _edge(self, session: Session, triplet: Triplet, relation: str) -> MemoryLink | None:
-        """Return the live edge matching one candidate, when there is one."""
+        """Return the edge that matches one candidate and is not retracted, if one exists."""
 
         source = self.entity(session, triplet.source)
         target = self.entity(session, triplet.target)
@@ -327,7 +334,7 @@ class GraphMemory:
         return None
 
     def _relation(self, session: Session, edge: MemoryLink) -> GraphRelation:
-        """Decode one edge into the relationship it represents."""
+        """Decode one edge into its relationship."""
 
         retracted = edge.metadata.get("retracted_at")
         return GraphRelation(
@@ -339,7 +346,7 @@ class GraphMemory:
         )
 
     def _node(self, session: Session, block_id: str) -> MemoryBlock:
-        """Return one endpoint node, failing when it has gone."""
+        """Return one endpoint node, and raise `KeyError` if it is not an entity in the store."""
 
         block = self.memory.get(block_id)
         if block is None or block.type != ENTITY_TYPE:
@@ -348,7 +355,7 @@ class GraphMemory:
 
 
 def _name(block: MemoryBlock) -> str:
-    """Return the display name stored on one entity node.
+    """Return the display name on one entity node.
 
     Args:
         block: Entity node.
@@ -366,14 +373,14 @@ def _name(block: MemoryBlock) -> str:
 
 
 def _ordered(relations: list[GraphRelation]) -> list[GraphRelation]:
-    """Return relationships in a stable, run-independent order.
+    """Return the relationships in a stable order that is the same in each run.
 
     Args:
         relations: Relationships to sort.
 
     Returns:
-        The same relationships ordered by source, relation, and target, because
-        link ids are fresh on every run.
+        The same relationships, ordered by source, relation, and target. The
+        order does not use link ids, because link ids are new in each run.
     """
 
     return sorted(relations, key=lambda relation: (relation.source, relation.relation, relation.target))

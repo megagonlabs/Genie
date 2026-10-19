@@ -1,27 +1,29 @@
-"""The store Mem0's memories live in, addressed by id and scoped by session.
+"""The store of Mem0 memories, with an id address and a session scope for each memory.
 
-Upstream this is a vector collection:
+Upstream, this store is a vector collection:
 
-- Each memory is one payload holding the text, its digest, and the session
-  identifiers.
-- `get`, `update`, and `delete` take a memory id.
-- `get_all` and `search` take the identifiers and turn them into a filter.
+- **Payload:** each memory is one payload that holds the text, its digest, and
+  the session identifiers.
+- **Id calls:** `get`, `update`, and `delete` take a memory id.
+- **Scope calls:** `get_all` and `search` take the identifiers and make a filter
+  from them.
 
-This module is that surface, with the two lookups split across the two Genie
-structures that fit them: the id is a `KeyedCollection` address, and the session
-is a path in the ownership tree.
+This module has the same calls. It puts the 2 lookups on the 2 Genie structures
+that suit them:
 
-- The split matters most for the operations a filter cannot express. Each path
-  segment owns the memories addressed below it, so `drop` retires a user, an
-  agent, or a single run with one call, and a narrower session is simply a
-  deeper search root.
-- Retrieval is deliberately two different things here, as it is upstream. A
-  search takes a query and returns what matches its terms. The neighbor lookup
-  the update phase makes takes a whole candidate fact and returns the stored
-  memories closest to it.
-- Genie selects candidates in both cases - the scope, the block type, and any
-  metadata filter are the query - and the lamp scores them, because Genie
-  supplies no ranking.
+- **Id:** the id is a `KeyedCollection` address.
+- **Session:** the session is a path in the ownership tree.
+- **Why the split matters:** it gives the operations that a filter cannot
+  express. Each path segment owns the memories that have addresses below it.
+  Thus `drop` retires a user, an agent, or a single run with one call. A
+  narrower session is only a deeper search root.
+- **2 kinds of retrieval:** as upstream, retrieval has 2 different forms here,
+  on purpose. A search takes a query and returns the memories that match its
+  terms. The neighbor lookup of the update phase takes a full candidate fact
+  and returns the stored memories that are nearest to it.
+- **Who does what:** in both forms, Genie selects the candidates. The scope, the
+  block type, and any metadata filter are the query. The lamp calculates the
+  scores, because Genie supplies no ranking.
 """
 
 from __future__ import annotations
@@ -57,19 +59,20 @@ from genie.structures import MemoryAddress
 
 
 class MemoryStore:
-    """Scoped memory records addressed by a stable Mem0 memory id.
+    """Scoped memory records, each with a stable Mem0 memory id as its address.
 
-    The store owns placement, addressing, and retrieval. It never decides
-    whether a new fact should add, replace, or remove a record; the pipeline
-    does that.
+    The store controls placement, addresses, and retrieval. It never decides if
+    a new fact adds, replaces, or removes a record. The pipeline makes that
+    decision.
     """
 
     def __init__(self, memory: MemoryHandle, *, structures: Mem0Structures) -> None:
         """Create a store over one bounded handle.
 
         Args:
-            memory: Bounded Genie handle owning every session path and memory.
-            structures: Facade bundle built over the same handle.
+            memory: Bounded Genie handle that owns all session paths and
+                memories.
+            structures: Facade bundle over the same handle.
         """
 
         self.memory = memory
@@ -84,15 +87,16 @@ class MemoryStore:
         metadata: Mapping[str, Any] | None = None,
         at: datetime,
     ) -> StoredMemory:
-        """Store a new memory in one session's scope.
+        """Store a new memory in the scope of one session.
 
         Args:
-            session: Scope the memory belongs to. Its path is created when this
-                is the first memory stored under it.
+            session: Scope of the memory. If this is the first memory in the
+                scope, the method creates the scope path.
             text: Memory text.
             kind: `factual` or `procedural_memory`.
             metadata: Application metadata to keep and index with the record.
-            at: Time recorded as both creation and update time.
+            at: Time that the method records as the creation time and the
+                update time.
 
         Returns:
             The stored memory.
@@ -134,18 +138,20 @@ class MemoryStore:
         metadata: Mapping[str, Any] | None = None,
         at: datetime,
     ) -> StoredMemory:
-        """Rewrite one memory in place, keeping its id and creation time.
+        """Rewrite one memory in place, and keep its id and creation time.
 
-        Mem0's update phase patches the stored record rather than adding beside
-        it, so callers holding the id keep a valid reference. A Genie update
-        keeps the block id and raises `StoredMemory.version`, which makes the
-        patch visible without the lamp counting writes itself.
+        - **Upstream:** the Mem0 update phase changes the stored record. It
+          does not add a new record beside it. Thus callers that hold the id
+          keep a valid reference.
+        - **Here:** a Genie update keeps the block id and increases
+          `StoredMemory.version`. Thus the change is visible, and the lamp does
+          not count the writes itself.
 
         Args:
             memory_id: Id of the memory to rewrite.
-            text: Replacement text.
+            text: New text.
             metadata: Application metadata to merge into the record.
-            at: Time recorded as the new update time.
+            at: Time that the method records as the new update time.
 
         Returns:
             The memory after the write, with the same id as before.
@@ -180,15 +186,16 @@ class MemoryStore:
     def remove(self, memory_id: str) -> StoredMemory:
         """Delete one memory and return its last stored state.
 
-        The keyed binding goes with the block it pointed at, so the id is freed
-        rather than left dangling. The memory's recorded history is untouched,
-        because those events are owned by the history tier.
+        - **Binding:** Genie removes the keyed binding together with its block.
+          Thus the id becomes free and does not refer to a deleted block.
+        - **History:** the recorded history of the memory does not change,
+          because the history tier owns those events.
 
         Args:
             memory_id: Id of the memory to delete.
 
         Returns:
-            The memory as it was before deletion.
+            The memory as it was before the delete.
 
         Raises:
             KeyError: If no memory has that id.
@@ -199,13 +206,13 @@ class MemoryStore:
         return existing
 
     def get(self, memory_id: str) -> StoredMemory | None:
-        """Look one memory up by its id, without naming a scope.
+        """Find one memory by its id, with no scope.
 
         Args:
-            memory_id: Id to look up.
+            memory_id: Id to find.
 
         Returns:
-            The memory, or `None` when the id is unknown.
+            The memory, or `None` if the id is unknown.
         """
 
         address = MemoryAddress(MEMORY_NAMESPACE, required_text(memory_id, field="memory_id"))
@@ -213,10 +220,10 @@ class MemoryStore:
         return None if block is None else memory_from_block(block)
 
     def require(self, memory_id: str) -> StoredMemory:
-        """Look one memory up and fail when the id is unknown.
+        """Find one memory, and raise `KeyError` if the id is unknown.
 
         Args:
-            memory_id: Id to look up.
+            memory_id: Id to find.
 
         Returns:
             The stored memory.
@@ -237,19 +244,19 @@ class MemoryStore:
         filters: Mapping[str, Any] | None = None,
         limit: int = READ_LIMIT,
     ) -> list[StoredMemory]:
-        """Return every memory in one session's scope.
+        """Return all memories in the scope of one session.
 
-        A session names a path, so a scope is a search root: asking for
-        `user:alice` returns the memories of every agent and run below her,
-        which is what filtering on `user_id` alone does upstream.
+        A session names a path, so a scope is a search root. A read for
+        `user:alice` returns the memories of all agents and runs below her.
+        Upstream, a filter on only `user_id` gives the same result.
 
         Args:
             session: Scope to read.
-            filters: Metadata filter passed through to Genie.
-            limit: Maximum memories to return.
+            filters: Metadata filter for the Genie search.
+            limit: Maximum number of memories to return.
 
         Returns:
-            Memories in ascending creation-time and text order.
+            Memories in ascending order of creation time, and then of text.
         """
 
         return self._sorted(self._candidates(session, filters=filters, limit=limit).values())
@@ -263,31 +270,34 @@ class MemoryStore:
         limit: int = 10,
         threshold: float = 0.0,
     ) -> list[SearchHit]:
-        """Return the memories in scope that match a query's terms.
+        """Return the memories in scope that match the terms of a query.
 
-        - Genie selects the candidates. The session path becomes a subtree
-          scope, the block type and any metadata filter go into the query, and
-          one search runs per query term.
-        - Scoring is the lamp's, because Genie's portable text match is a
-          substring test rather than a similarity measure. A candidate counts a
-          term only when it appears in the memory's own text, and the score is
-          the share of terms that do.
+        - **Genie selects the candidates:** the session path becomes a subtree
+          scope. The block type and any metadata filter go into the query. One
+          search runs for each query term.
+        - **The lamp calculates the scores:** the portable text match of Genie
+          is a substring test, not a similarity measure. A candidate counts a
+          term only if the term occurs in the text of the memory. The score is
+          the fraction of the terms that occur.
 
         Args:
             session: Scope to search below.
-            query: Free text whose terms are matched against memory text.
-            filters: Metadata filter passed through to Genie, such as
+            query: Free text. The method matches its terms against the memory
+                text.
+            filters: Metadata filter for the Genie search, for example
                 `{"memory_type": "procedural_memory"}`.
-            limit: Maximum hits to return.
-            threshold: Minimum score a hit must reach, as upstream.
+            limit: Maximum number of hits to return.
+            threshold: Minimum score of a hit, as upstream.
 
         Returns:
-            Hits in descending score order, ties broken on creation time and
-            then text so repeated runs agree.
+            Hits in descending score order. For equal scores, the order uses
+            creation time and then text, so 2 runs give the same order.
 
         Raises:
+            TypeError: If the limit is not an integer, or the threshold is not
+                a number.
             ValueError: If the query is empty, the limit is not positive, or
-                the threshold is outside zero to one.
+                the threshold is not from zero to one.
         """
 
         terms = tokenize(required_text(query, field="query"))
@@ -318,22 +328,23 @@ class MemoryStore:
         return hits[:page]
 
     def neighbors(self, session: Session, text: str, *, limit: int = 5) -> list[tuple[StoredMemory, float]]:
-        """Return the stored memories closest to one candidate fact.
+        """Return the stored memories that are nearest to one candidate fact.
 
-        This is the read Mem0 makes between its two phases: before deciding
-        what to do with an extracted fact, it fetches the most similar memories
-        already in scope so the decision is made against what is on file. The
-        comparison is over whole records rather than query terms, which is why
-        it is a separate operation from `search`.
+        - **Upstream:** Mem0 does this read between its 2 phases. Before it
+          decides about an extracted fact, it gets the most similar memories in
+          scope. Thus the decision compares the fact with the stored memories.
+        - **Not `search`:** the comparison uses full records, not query terms.
+          Thus it is a separate operation.
 
         Args:
-            session: Scope to compare within.
+            session: Scope for the comparison.
             text: Candidate fact.
-            limit: Maximum neighbors to return.
+            limit: Maximum number of neighbors to return.
 
         Returns:
-            Memories paired with their similarity, most similar first, ties
-            broken on creation time and then text.
+            Memories with their similarity, the most similar first. For equal
+            similarity, the order uses creation time and then text. Memories
+            with zero similarity are not in the result.
 
         Raises:
             ValueError: If the text is empty or the limit is not positive.
@@ -347,18 +358,20 @@ class MemoryStore:
         return ranked[:page]
 
     def drop(self, session: Session) -> list[StoredMemory]:
-        """Delete one session's scope and every memory below it.
+        """Delete the scope of one session and all memories below it.
 
-        A payload filter has no answer for "this user is gone"; every matching
-        record has to be found and deleted one at a time. Because each path
-        segment owns what is stored below it, ownership answers it in one call,
-        and the keyed bindings go with the blocks they pointed at.
+        - **Without ownership:** a payload filter has no answer for "this user
+          is gone". The caller finds each record that matches and deletes it,
+          one record at a time.
+        - **With ownership:** each path segment owns the blocks below it. Thus
+          one call deletes the full scope, and Genie removes the keyed bindings
+          together with their blocks.
 
         Args:
-            session: Scope to retire, at whatever level its identifiers name.
+            session: Scope to retire, at the level that its identifiers name.
 
         Returns:
-            The memories that were removed, in ascending creation-time order.
+            The removed memories, in ascending order of creation time.
         """
 
         node = self.scope_node(session)
@@ -369,14 +382,15 @@ class MemoryStore:
         return removed
 
     def scope_node(self, session: Session) -> MemoryBlock | None:
-        """Return the block owning one session's scope, when it exists.
+        """Return the block that owns the scope of one session, if it exists.
 
         Args:
-            session: Scope to look up.
+            session: Scope to find.
 
         Returns:
-            The deepest path block, or `None` when nothing has been stored
-            under that session yet.
+            The deepest path block, or `None` if that path does not exist. The
+            store creates the path when it stores the first memory of the
+            session.
         """
 
         node = self.structures.memory_root
@@ -388,13 +402,14 @@ class MemoryStore:
         return node
 
     def ensure_scope(self, session: Session) -> MemoryBlock:
-        """Return the block owning one session's scope, creating the path.
+        """Return the block that owns the scope of one session, and create the path if necessary.
 
         Args:
-            session: Scope to place a memory in.
+            session: Scope for a new memory.
 
         Returns:
-            The deepest path block, after creating any missing segment.
+            The deepest path block. The method first creates each path segment
+            that does not exist.
         """
 
         node = self.structures.memory_root
@@ -418,7 +433,7 @@ class MemoryStore:
         filters: Mapping[str, Any] | None,
         limit: int,
     ) -> dict[str, MemoryBlock]:
-        """Return the memory blocks Genie selects for one scope."""
+        """Return the memory blocks that Genie selects for one scope."""
 
         node = self.scope_node(session)
         if node is None:
@@ -435,7 +450,7 @@ class MemoryStore:
         }
 
     def _segment(self, parent: MemoryBlock, segment: str) -> MemoryBlock | None:
-        """Return the path child with this segment, when it exists."""
+        """Return the path child with this segment, if it exists."""
 
         return next(
             (
@@ -447,7 +462,7 @@ class MemoryStore:
         )
 
     def _sorted(self, blocks: Iterable[MemoryBlock]) -> list[StoredMemory]:
-        """Decode blocks into memories in a stable, run-independent order."""
+        """Decode blocks into memories, in a stable order that is the same in each run."""
 
         memories = [memory_from_block(block) for block in blocks]
         return sorted(memories, key=lambda memory: (memory.created_at, memory.text))
@@ -457,14 +472,14 @@ def _positive(value: object, *, field: str) -> int:
     """Return a positive integer bound.
 
     Args:
-        value: Candidate bound.
-        field: Field name used in error messages.
+        value: Bound to check.
+        field: Field name for error messages.
 
     Returns:
         The validated integer.
 
     Raises:
-        TypeError: If the value is not an integer.
+        TypeError: If the value is a boolean or not an integer.
         ValueError: If the value is not positive.
     """
 
@@ -476,18 +491,18 @@ def _positive(value: object, *, field: str) -> int:
 
 
 def _fraction(value: object, *, field: str) -> float:
-    """Return a score bound between zero and one.
+    """Return a score bound from zero to one.
 
     Args:
-        value: Candidate bound.
-        field: Field name used in error messages.
+        value: Bound to check.
+        field: Field name for error messages.
 
     Returns:
         The validated float.
 
     Raises:
-        TypeError: If the value is not a number.
-        ValueError: If the value is outside zero to one.
+        TypeError: If the value is a boolean or not a number.
+        ValueError: If the value is not from zero to one.
     """
 
     if isinstance(value, bool) or not isinstance(value, int | float):

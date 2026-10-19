@@ -1,32 +1,39 @@
-"""MemoryOS's paged tier: topic segments, their pages, and their heat.
+"""The paged tier of MemoryOS: topic segments, their pages, and their heat.
 
-Mid-term memory is where MemoryOS stops being a transcript and starts being a
-memory system. A page arriving from short-term memory is not filed by time; it
-is filed with the other pages about the same thing, in a *session* that
-MemoryOS also calls a segment. A segment carries a score:
+In mid-term memory, MemoryOS changes from a transcript into a memory system.
+The lamp does not file a page from short-term memory by time. It files the page
+with the other pages about the same subject, in a *session*. MemoryOS also
+calls a session a segment. Each segment has a score:
 
     H_segment = alpha * N_visit + beta * L_interaction + gamma * R_recency
 
-and that score is the whole promotion policy. Retrieval raises `N_visit`,
-paging in more dialogue raises `L_interaction`, and time lowers `R_recency`. A
-segment that keeps coming up gets hot enough to be read into long-term memory;
-one that never comes up cools, and is eventually the one evicted when the tier
-runs out of room.
+This score is the full promotion policy:
 
-Two of those three terms are read out of the store here rather than kept in step
-with it by hand:
+- **`N_visit`:** retrieval increases it.
+- **`L_interaction`:** more paged-in dialogue increases it.
+- **`R_recency`:** time decreases it.
+- **Hot segment:** a segment that comes up again and again becomes hot enough
+  for an analysis into long-term memory.
+- **Cold segment:** a segment that never comes up becomes cold. Its access count
+  stays low, so eviction removes it at some time when the tier has no more
+  room.
 
-- `L_interaction` is the number of pages the segment owns that no analysis has
-  read yet. That is exactly what upstream's counter holds, since it resets to
-  zero at the same moment it marks every page analyzed.
-- `R_recency` decays the last-visit time held in a `TemporalCollection`.
-- So heat cannot drift away from the pages it is supposed to describe. There is
-  no cached number to go stale, only a formula over what is stored.
+The lamp reads 2 of the 3 terms from the store. It does not keep them in step
+with the store by hand:
 
-The pages are the segment's children, which is the other thing ownership buys.
-Evicting a segment is one `delete_subtree`, and its pages and their
-dialogue-chain edges go with it. Upstream has to walk the pages it is about to
-drop and clear the `pre_page`/`next_page` fields that point at them.
+- **`L_interaction`:** the number of pages of the segment that no analysis has
+  read. The upstream counter holds the same number, because upstream sets it to
+  zero at the same time that it marks each page as analyzed.
+- **`R_recency`:** decays the last-visit time in a `TemporalCollection`.
+- **No drift:** heat always agrees with the pages that it describes. No cached
+  number can become stale. Heat is only a formula over the stored data.
+
+The pages are the children of the segment. Ownership gives this result:
+
+- **Eviction is one call:** one `delete_subtree` removes the segment, its pages,
+  and their dialogue-chain edges.
+- **Upstream:** it walks the pages that it will drop, and it clears the
+  `pre_page`/`next_page` fields that refer to them.
 """
 
 from __future__ import annotations
@@ -73,12 +80,14 @@ class SegmentWrite:
     """What one batch of paged-out exchanges did to mid-term memory.
 
     Attributes:
-        segment: The segment the pages ended up in.
-        pages: The pages that were written, in batch order.
-        opened: Whether a new segment was opened for them.
-        score: How well the batch matched the segment it joined, or zero when
-            nothing was close enough and a segment was opened instead.
-        evictions: Anything the capacity rule dropped to make room.
+        segment: The segment that received the pages.
+        pages: The pages that the batch wrote, in batch order.
+        opened: `True` if the lamp opened a new segment for them.
+        score: How well the batch matched the segment that it joined. When the
+            lamp opened a new segment, this is the best score of the segments
+            that were open, which was below the threshold. It is zero when no
+            segment was open.
+        evictions: Segments that the capacity rule removed to make room.
     """
 
     segment: Segment
@@ -89,7 +98,7 @@ class SegmentWrite:
 
 
 class MidTermMemory:
-    """Topic segments, the pages they own, and the heat that ranks them."""
+    """Topic segments, the pages that they own, and the heat that ranks them."""
 
     def __init__(
         self,
@@ -101,23 +110,25 @@ class MidTermMemory:
         keyword_alpha: float = 1.0,
         tau_hours: float = RECENCY_TAU_HOURS,
     ) -> None:
-        """Bind the paged tier to one user's mid-term store.
+        """Bind the paged tier to the mid-term store of one user.
 
         Args:
-            memory: Handle bounded to one user's memory.
+            memory: Handle bounded to the memory of one user.
             structures: Structure bundle for that memory.
-            capacity: How many segments the tier holds, `mid_term_capacity`
-                upstream.
-            similarity_threshold: How well a batch must match a segment to join
-                it instead of opening one, `mid_term_similarity_threshold`
-                upstream.
-            keyword_alpha: Weight on the keyword term of a match, upstream's
-                `keyword_similarity_alpha`.
-            tau_hours: Recency half-life used by the heat formula.
+            capacity: Maximum number of segments in the tier,
+                `mid_term_capacity` upstream.
+            similarity_threshold: Minimum match score for a batch to join a
+                segment. Below it, the batch opens a new segment.
+                `mid_term_similarity_threshold` upstream.
+            keyword_alpha: Weight on the keyword term of a match,
+                `keyword_similarity_alpha` upstream.
+            tau_hours: Recency time constant of the heat formula: the number of
+                hours in which the recency factor decreases by a factor of e.
+                Zero selects `RECENCY_TAU_HOURS`.
 
         Raises:
-            TypeError: If a bound has the wrong runtime type.
-            ValueError: If a bound is out of range.
+            TypeError: If a limit has the wrong runtime type.
+            ValueError: If a limit is out of range.
         """
 
         self.memory = memory
@@ -135,24 +146,27 @@ class MidTermMemory:
         summary_keywords: Sequence[str] = (),
         now: datetime,
     ) -> SegmentWrite:
-        """File a batch of paged-out exchanges under the segment that fits.
+        """File a batch of paged-out exchanges under the segment that matches it best.
 
-        This is upstream's `insert_pages_into_session`. The batch arrives with
-        the themed summary a model wrote for it, that summary is compared with
-        every segment already open, and the best match above the threshold takes
-        the pages. When nothing is close enough a segment is opened, which is
-        `add_session`.
+        This is upstream `insert_pages_into_session`:
+
+        - **Compare:** the batch comes with the themed summary that a model wrote
+          for it. The method compares that summary with each open segment.
+        - **Join:** the best match at or above the threshold receives the pages.
+        - **Open:** if no segment is close enough, the method opens a segment.
+          This is upstream `add_session`. Only a new segment can cause an
+          eviction under the capacity rule.
 
         Args:
-            exchanges: Exchanges that fell out of short-term memory.
-            summary: Themed summary the batch was grouped under.
-            summary_keywords: Keywords that came with the summary. Content words
-                from the summary are used when none are supplied.
-            now: Time the write is being made at.
+            exchanges: Exchanges that left short-term memory.
+            summary: Themed summary of the batch.
+            summary_keywords: Keywords that came with the summary. If there are
+                none, the method uses the content words of the summary.
+            now: Time of the write.
 
         Returns:
-            The segment, the pages written into it, and anything the capacity
-            rule evicted to make room.
+            The segment, the pages written into it, and the segments that the
+            capacity rule evicted to make room.
 
         Raises:
             ValueError: If the batch is empty or the summary is blank.
@@ -185,19 +199,21 @@ class MidTermMemory:
         )
 
     def visit(self, segment: Segment, *, now: datetime) -> Segment:
-        """Record that retrieval reached this segment, and reheat it.
+        """Record that retrieval reached this segment, and make it hotter.
 
-        A read is a write in MemoryOS: reaching a segment raises `N_visit`,
-        raises the counter eviction reads, and moves the last-visit time that
-        the recency term decays from. Retrieval is therefore what decides what
-        eventually reaches long-term memory.
+        - **A read is a write in MemoryOS:** when retrieval reaches a segment,
+          this method adds one to `N_visit` and to the eviction counter
+          `access_count_lfu`.
+        - **Recency:** it also moves the last-visit time. The recency term
+          decays from this time.
+        - **Result:** retrieval decides what goes to long-term memory later.
 
         Args:
             segment: Segment that matched a query.
             now: Time of the retrieval.
 
         Returns:
-            The segment as it now stands, with its new heat.
+            The segment as it is now, with its new heat.
         """
 
         moment = normalize_timestamp(now, field="now")
@@ -209,13 +225,13 @@ class MidTermMemory:
         return self._read_segment(self._require_block(segment.id), now=moment)
 
     def mark_analyzed(self, pages: Sequence[Page]) -> tuple[Page, ...]:
-        """Mark pages as read by an analysis, which drops them out of length.
+        """Mark pages as read by an analysis, so they do not count toward length.
 
         Args:
-            pages: Pages the analysis read.
+            pages: Pages that the analysis read.
 
         Returns:
-            The pages as they now stand.
+            The pages as they are now.
         """
 
         marked: list[Page] = []
@@ -225,16 +241,17 @@ class MidTermMemory:
         return tuple(marked)
 
     def cool(self, segment: Segment, *, now: datetime) -> Segment:
-        """Reset a segment's visit term after its pages have been promoted.
+        """Reset the visit term of a segment after a promotion of its pages.
 
-        Upstream sets `N_visit` and `L_interaction` to zero, refreshes the
-        last-visit time, and recomputes heat. Only the visit count is written
-        here; length falls on its own, because the pages the analysis just
-        marked no longer count toward it.
+        - **Upstream:** it sets `N_visit` and `L_interaction` to zero, moves the
+          last-visit time to now, and calculates heat again.
+        - **Here:** the method writes only the visit count, and it moves the
+          last-visit time. Length decreases with no write, because the pages
+          that the analysis marked do not count toward it.
 
         Args:
-            segment: Segment that was analyzed.
-            now: Time the analysis finished.
+            segment: Segment that the analysis read.
+            now: Time when the analysis finished.
 
         Returns:
             The cooled segment.
@@ -246,10 +263,10 @@ class MidTermMemory:
         return self._read_segment(self._require_block(segment.id), now=moment)
 
     def segments(self, *, now: datetime) -> list[Segment]:
-        """Return every open segment, oldest first.
+        """Return each open segment, oldest first.
 
         Args:
-            now: Time heat is being taken at.
+            now: Time for the heat calculation.
 
         Returns:
             The segments in creation order.
@@ -259,7 +276,7 @@ class MidTermMemory:
         return [self._read_segment(block, now=moment) for block in self._segment_blocks()]
 
     def count(self) -> int:
-        """Return how many segments are open.
+        """Return the number of open segments.
 
         Returns:
             The number of segments in the tier.
@@ -268,7 +285,7 @@ class MidTermMemory:
         return len(self._segment_blocks())
 
     def page_count(self) -> int:
-        """Return how many pages the tier holds across every segment.
+        """Return the number of pages in all segments of the tier.
 
         Returns:
             The number of pages, analyzed or not.
@@ -281,7 +298,7 @@ class MidTermMemory:
 
         Args:
             segment_id: MemoryOS session id.
-            now: Time heat is being taken at.
+            now: Time for the heat calculation.
 
         Returns:
             The segment, or `None` when no session has that id.
@@ -295,9 +312,10 @@ class MidTermMemory:
     def page(self, page_id: str) -> Page | None:
         """Return one page by its page id.
 
-        Upstream this walks every session's page list until it finds a match.
-        A page id is an address here, so the answer is one read that does not
-        get slower as the tier fills.
+        - **Upstream:** it walks the page list of each session until it finds a
+          match.
+        - **Here:** a page id is an address. So the method does one read, and
+          the read does not become slower when the tier fills.
 
         Args:
             page_id: MemoryOS page id.
@@ -310,14 +328,15 @@ class MidTermMemory:
         return None if block is None else _read_page(block)
 
     def hottest(self, *, now: datetime) -> Segment | None:
-        """Return the segment the promotion check would look at first.
+        """Return the segment that the promotion check examines.
 
         Args:
-            now: Time heat is being taken at.
+            now: Time for the heat calculation.
 
         Returns:
-            The hottest segment, or `None` when the tier is empty. Ties break
-            on creation time and then session id so runs agree.
+            The hottest segment, or `None` when the tier is empty. If 2
+            segments have the same heat, the older segment wins, and then the
+            session id decides. So all runs give the same result.
         """
 
         found = self.segments(now=now)
@@ -334,29 +353,36 @@ class MidTermMemory:
         page_threshold: float = 0.1,
         top_k_segments: int = 5,
     ) -> list[PageHit]:
-        """Return the pages that match a query, visiting the segments on the way.
+        """Return the pages that match a query, and visit the segments that match.
 
-        - Candidate selection is Genie's. The mid-term tier becomes a subtree
-          scope, the block type narrows it to segments, and one search runs per
-          query term.
-        - Scoring is the lamp's, because Genie has no similarity measure. A
-          segment scores the share of query terms that appear in its summary,
-          plus MemoryOS's keyword Jaccard term. A page inside a qualifying
-          segment scores the share of query terms in its own dialogue.
+        - **Candidates come from Genie:** the mid-term tier is a subtree scope,
+          the block type limits the search to segments, and the method runs one
+          search for each query term.
+        - **Scores come from the lamp,** because Genie has no similarity
+          measure. A segment score is the fraction of query terms in its
+          summary, plus the MemoryOS keyword Jaccard term multiplied by
+          `keyword_alpha`.
+        - **Page score:** the fraction of query terms in the user input, the
+          assistant reply, and the topic of a page. The method scores only the
+          pages of the segments that it visits. A page with a score of zero is
+          never kept.
+        - **Visits:** the method visits only the `top_k_segments` best segments
+          at or above `segment_threshold`.
 
         Args:
-            query: Free text to retrieve for.
-            now: Time of the retrieval, recorded as a visit.
-            segment_threshold: Minimum segment score to look inside.
-            page_threshold: Minimum page score to keep.
-            top_k_segments: How many matching segments to look inside.
+            query: Free text to retrieve pages for.
+            now: Time of the retrieval. The method records it as a visit.
+            segment_threshold: Minimum segment score for a search of its pages.
+            page_threshold: Minimum page score to keep a page.
+            top_k_segments: Maximum number of matched segments to search for
+                pages.
 
         Returns:
-            Page hits in descending score order, ties broken on page time and
-            then page id.
+            Page hits, highest score first. Ties break on the segment score
+            (higher first), then on the page time, and then on the page id.
 
         Raises:
-            ValueError: If the query is blank or a bound is out of range.
+            ValueError: If the query is blank or a limit is out of range.
         """
 
         text = required_text(query, field="query")
@@ -394,22 +420,27 @@ class MidTermMemory:
         return hits
 
     def evict_coldest(self, *, exclude: str | None = None) -> Eviction | None:
-        """Drop the least frequently used segment, with everything it owns.
+        """Remove the least frequently used segment, with all that it owns.
 
-        - This is upstream's LFU rule. The segment with the lowest access count
-          goes, and the count is the one that promotion never resets.
-        - The delete is a single subtree call, so the pages and their
-          dialogue-chain edges go with the segment.
-        - The id space has to be cleaned up by hand, because a binding names a
-          block rather than copying it, and a name left pointing at a deleted
-          block is worse than a name that is free.
+        - **Upstream LFU rule:** the segment with the lowest access count
+          leaves. Promotion never resets this count. Ties break on the creation
+          time (older first), and then on the session id.
+        - **One subtree delete:** the pages and their dialogue-chain edges leave
+          with the segment.
+        - **Manual cleanup of the id space:** a binding refers to a block and
+          does not copy it. A binding to a deleted block makes
+          `KeyedCollection.get` raise `MemoryNotFound`, but a free name does
+          not. So the method unbinds the page ids and the session id before
+          the delete. It also removes the segment from the
+          `TemporalCollection`.
 
         Args:
-            exclude: Block id that must survive, normally the segment a batch
-                was just written into.
+            exclude: Block id of a segment that this call does not evict,
+                usually the segment that a batch just went into.
 
         Returns:
-            What was evicted, or `None` when nothing was eligible.
+            What the method evicted, or `None` when no segment could be
+            evicted.
         """
 
         blocks = [block for block in self._segment_blocks() if block.id != exclude]
@@ -436,20 +467,22 @@ class MidTermMemory:
     def chain_from(self, page_id: str, *, depth: int = 5) -> list[Page]:
         """Walk the dialogue chain forward from one page.
 
-        The chain is the one relationship in MemoryOS that follows the
-        conversation rather than the storage, so it is the one that crosses
-        segments: two consecutive exchanges can be filed under different topics
-        and still be linked.
+        The chain is the only relationship in MemoryOS that follows the
+        conversation and not the storage. So it can cross segments: the lamp can
+        file 2 consecutive exchanges under different topics, and the chain still
+        links them.
 
         Args:
             page_id: Page to start from.
-            depth: Maximum edges to follow.
+            depth: Maximum number of edges to follow.
 
         Returns:
-            The pages reached, nearest first, without the starting page.
+            The pages that the walk reached, nearest first, without the start
+            page. The list is empty when no page has this id.
 
         Raises:
-            ValueError: If the page id is blank or the depth is not positive.
+            ValueError: If the page id is blank, or if the page exists and the
+                depth is not positive.
         """
 
         start = self.page(page_id)
@@ -469,26 +502,28 @@ class MidTermMemory:
         return found
 
     def link_pages(self, previous: Page, current: Page) -> None:
-        """Record that one page continues the conversation of another.
+        """Record that one page continues the conversation of another page.
 
-        Upstream keeps this as a `pre_page` and a `next_page` id on the two
-        page dicts, writes both ends itself, and clears them when a page is
-        dropped. One lineage edge replaces all of that:
+        Upstream keeps a `pre_page` id and a `next_page` id on the 2 page dicts.
+        It writes both ends, and it clears them when it drops a page. One
+        lineage edge replaces all of that:
 
-        - it is a single write;
-        - it is readable from either end;
-        - it refuses an edge that would close a loop; and
-        - it disappears when either page does.
+        - **One write:** the lamp adds the edge with a single call.
+        - **Both ends:** a reader can read the edge from either page.
+        - **No loops:** the `LineageDAG` refuses an edge that would close a
+          loop.
+        - **Automatic removal:** Genie removes the edge when the lamp deletes
+          either page.
 
         Args:
-            previous: Page that came earlier.
-            current: Page that continues it.
+            previous: The earlier page.
+            current: The page that continues it.
         """
 
         self.structures.chain.add(previous.block, current.block, metadata={"reason": "dialogue continuity"})
 
     def _best_match(self, summary: str, summary_keywords: frozenset[str], *, now: datetime) -> tuple[Segment | None, float]:
-        """Return the open segment a batch should join, and how well it fits."""
+        """Return the open segment that a batch joins, or `None`, and the best match score."""
 
         terms = tokenize(summary)
         scored = [
@@ -504,12 +539,12 @@ class MidTermMemory:
         return best, best_score
 
     def _match(self, summary: str, segment_keywords: frozenset[str], *, terms: frozenset[str], query_keywords: frozenset[str]) -> float:
-        """Score one segment the way upstream combines its two similarities."""
+        """Score one segment as upstream combines its 2 similarity measures."""
 
         return overlap(terms, tokenize(summary)) + self.keyword_alpha * jaccard(query_keywords, segment_keywords)
 
     def _open_segment(self, summary: str, summary_keywords: Sequence[str], *, now: datetime) -> MemoryBlock:
-        """Create a segment block, bind its session id, and start its clock."""
+        """Create a segment block, bind its session id, and record its first visit time."""
 
         segment_id = new_id("session")
         block = self.structures.segments.create_child(
@@ -549,12 +584,12 @@ class MidTermMemory:
         return _read_page(block)
 
     def _touch(self, segment: MemoryBlock, *, now: datetime) -> None:
-        """Move a segment's last-visit time, which is what recency decays."""
+        """Move the last-visit time of a segment. The recency term decays from this time."""
 
         self.structures.visits.replace(segment, occurred_at=now)
 
     def _enforce_capacity(self, *, keep: str) -> tuple[Eviction, ...]:
-        """Evict least-used segments until the tier is back inside capacity."""
+        """Evict the least used segments until the tier is inside its capacity again."""
 
         evicted: list[Eviction] = []
         while self.count() > self.capacity:
@@ -565,7 +600,7 @@ class MidTermMemory:
         return tuple(evicted)
 
     def _candidates(self, terms: frozenset[str]) -> list[MemoryBlock]:
-        """Return the segments Genie's search offers for a set of query terms."""
+        """Return the segments that the Genie search finds for a set of query terms."""
 
         found: dict[str, MemoryBlock] = {}
         for term in sorted(terms):
@@ -587,14 +622,14 @@ class MidTermMemory:
         return blocks
 
     def _page_blocks(self, segment: MemoryBlock) -> list[MemoryBlock]:
-        """Return one segment's page blocks in dialogue order."""
+        """Return the page blocks of one segment in dialogue order."""
 
         blocks = [block for block in self.structures.segments.children(segment) if block.type == PAGE_TYPE]
         blocks.sort(key=lambda block: (str(block.value.get("timestamp", "")), str(block.value.get("page_id", ""))))
         return blocks
 
     def _read_segment(self, block: MemoryBlock, *, now: datetime) -> Segment:
-        """Assemble one segment record, computing the two derived heat terms."""
+        """Build one segment record, and calculate the 2 derived heat terms."""
 
         item = self.structures.visits.get(block)
         created = parse_timestamp(block.value["timestamp"], field="timestamp")
@@ -613,7 +648,7 @@ class MidTermMemory:
         )
 
     def _require_block(self, block_id: str) -> MemoryBlock:
-        """Return a block that must still exist, or fail loudly."""
+        """Return the block, or raise `LookupError` if the block no longer exists."""
 
         block = self.memory.get(block_id)
         if block is None:
@@ -622,7 +657,7 @@ class MidTermMemory:
 
 
 def _read_page(block: MemoryBlock) -> Page:
-    """Assemble one page record from its block."""
+    """Build one page record from its block."""
 
     return Page(
         block=block,

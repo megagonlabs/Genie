@@ -1,75 +1,75 @@
 # LangMem-inspired agent memory
 
-LangMem is LangChain's SDK for long-term agent memory.
+LangMem is the LangChain SDK for long-term agent memory.
 
-- **An agent's memory has four kinds, not one:** facts it has learned, experiences it can copy, a profile of the person it works for, and its own operating instructions.
-- **Everything is addressed by a namespace and a key.**
-- **Memories form in one of two places:** on the hot path, meaning during the conversation itself, or in a debounced background pass.
-- **A *manager* decides** whether new information should be inserted next to what is on file, patched into it, or allowed to delete it. The application does not decide that.
-- **The fourth kind is the unusual one.** Procedural memory is the agent's prompt, revised from feedback on past runs, so improving the agent is a memory write.
+- **An agent has 4 kinds of memory, not one:** facts that it learned, experiences that it can copy, a profile of the person that it works for, and its own instructions.
+- **Each memory has an address:** a namespace and a key.
+- **Memories form in one of 2 places:** on the hot path, that is, during the conversation, or in a debounced background pass. A debounced pass waits until no new turn arrives on the thread for a set time.
+- **A *manager* decides** if new information goes into the store next to the stored memories, patches a stored memory, or deletes a stored memory. The application does not make this decision.
+- **The fourth kind is unusual.** Procedural memory is the prompt of the agent. LangMem revises it from feedback on past runs. So an improvement to the agent is a memory write.
 
-This lamp rebuilds that architecture on Genie building blocks. It is an
-architectural example, not a drop-in implementation.
+This lamp builds that architecture with Genie blocks, links, and structure
+facades. It is an architectural example, not a replacement for LangMem.
 
 ## Run
 
-From the repository root, with no API key and no external service:
+Run these commands from the repository root. They need no API key and no external service:
 
 ```bash
 python -m examples.lamps.langmem.demo
 python -m pytest examples/lamps/langmem/tests -q
 ```
 
-- **`demo.py` is the entry point.** Run the module path from the repository root so that both `examples` and `genie` can be found.
-- **What it does:** runs a code-review assistant through both write paths, revises its prompt from three pieces of feedback, and prints the answer.
-- **Deterministic.** Every timestamp comes from the scenario and not from a clock, so each run prints the same output.
+- **Entry point:** `demo.py`. Run the module path from the repository root, so that Python can find both `examples` and `genie`.
+- **What it does:** it runs a code-review assistant through both write paths, revises its prompt from 3 pieces of feedback, and prints the answer.
+- **Deterministic:** each timestamp comes from the scenario, not from a clock. So each run prints the same output.
 
 ## Modules
 
-The lamp is split by topic instead of kept in one file. Each module depends on
-the ones above it:
+The lamp has one module for each topic. Each module imports only the modules
+above it in this table:
 
 | Module | Contents |
 | --- | --- |
-| `model.py` | Block types, namespace addressing and templating, records, schemas |
-| `structures.py` | Genie facades wired to the store's five ownership tiers |
-| `store.py` | Namespaced items: insert, patch, delete, scoped and filtered search |
-| `profiles.py` | The profile shape: one document per namespace, revised in place |
-| `manager.py` | Reconciling proposed changes and applying the permitted ones |
-| `reflection.py` | The deferred queue, its due times, and the per-thread debounce |
-| `prompts.py` | Procedural memory: prompts, feedback, and the versions between |
+| `model.py` | Block types, namespace addresses and templates, records, schemas |
+| `structures.py` | Genie facades connected to the 5 ownership tiers of the store |
+| `store.py` | Namespaced items: insert, patch, delete, and scoped and filtered search |
+| `profiles.py` | The profile shape: one document for each namespace, revised in place |
+| `manager.py` | Reconciles proposed changes and applies the permitted changes |
+| `reflection.py` | The deferred queue, its due times, and the debounce for each thread |
+| `prompts.py` | Procedural memory: prompts, feedback, and the versions between them |
 | `agent.py` | JSON-compatible tools and the deterministic example agent |
-| `demo.py` | One user, three conversations, two write paths, one answer |
+| `demo.py` | One user, 3 conversations, 2 write paths, one answer |
 
 ## Mapping
 
 | LangMem concept | Genie representation |
 | --- | --- |
 | `BaseStore` item at a namespace and key | `KeyedCollection` binding on a `MemoryAddress` |
-| Namespace template `("memories", "{user_id}")` | Resolved once when a tool set is bound |
-| Namespace hierarchy | `OwnershipTree` path, one block per segment |
-| Namespace-prefix search | `Scope.SUBTREE` rooted at that namespace block |
+| Namespace template `("memories", "{user_id}")` | Resolved once, when the lamp binds a tool set |
+| Namespace hierarchy | `OwnershipTree` path, one block for each segment |
+| Namespace-prefix search | `Scope.SUBTREE` with that namespace block as the root |
 | Search `filter` | `MemoryHandle.search` metadata filters |
 | Semantic memory, collection shape | Many keyed `langmem.item` blocks |
-| Semantic memory, profile shape | `VersionedRecords` identity, one revision per update |
-| Manager `default` for a profile | The profile's first revision |
+| Semantic memory, profile shape | `VersionedRecords` identity, one revision for each update |
+| Manager `default` for a profile | The first revision of the profile |
 | Episodic memory | Items under an `episodes` namespace with the episode schema |
-| Procedural memory (the prompt) | `VersionedRecords` identity, one revision per optimization |
-| Annotated trajectory | `langmem.trajectory` block owned by the trajectories tier |
+| Procedural memory (the prompt) | `VersionedRecords` identity, one revision for each optimization |
+| Annotated trajectory | `langmem.trajectory` block that the trajectories tier owns |
 | Which feedback produced a prompt version | `LineageDAG` edges into that revision |
 | Which conversation wrote a memory | `LineageDAG` edges into that block |
-| `schemas=[...]` Pydantic models | `ValueSchema` per namespace, named in block metadata |
-| Patch that updates in place | `MemoryHandle.update`; the id stays, `version` rises |
-| `enable_inserts` / `enable_updates` / `enable_deletes` | Manager permissions checked per change |
-| `actions_permitted` on the hot-path tool | Tool-level gate, separate from the manager's |
+| `schemas=[...]` Pydantic models | One `ValueSchema` for each namespace, named in block metadata |
+| Patch that updates in place | `MemoryHandle.update`. The id stays, and `version` increases |
+| `enable_inserts` / `enable_updates` / `enable_deletes` | Manager permissions, checked for each change |
+| `actions_permitted` on the hot-path tool | Tool-level gate, separate from the manager gate |
 | `ReflectionExecutor.submit` | `EventLog` append plus a `TemporalCollection` due time |
 | `after_seconds` debounce window | Half-open time query against that due time |
-| Cancelling a pending reflection | Dropping the temporal entry; the log entry stays |
-| Retiring a user | `OwnershipTree.delete_subtree` on their namespace |
+| Cancel a pending reflection | Remove the temporal entry. The log entry stays |
+| Retire a user | `OwnershipTree.delete_subtree` on the namespace of the user |
 | Agent access | Named JSON-compatible tools |
 
-Five tiers sit below one store root. So deleting the store deletes everything in
-it, and deleting a namespace deletes everything that belongs to that user:
+One store root owns 5 tiers. So a delete of the store deletes everything in it.
+A delete of a namespace deletes everything that belongs to that user:
 
 ```text
 langmem.store                     one namespaced memory store
@@ -80,108 +80,108 @@ langmem.store                     one namespaced memory store
   queue                           deferred submissions: arrival order and due time
 ```
 
-- **A tier anchor is where a structure keeps its bindings, not where the blocks live.** Ownership and structure membership are separate in Genie, so a block can be owned by one tier and registered with a structure anchored on another.
-- **Per-user state is owned by the user's namespace block.** Items, the profile identity and its revisions, and every queued submission hang off `memories/{user_id}`, while still being bound into `KeyedCollection`, `VersionedRecords`, `EventLog` and `TemporalCollection` on their own tiers.
-- **Prompts and trajectories are the exception, on purpose.** They belong to the agent rather than to one user, so they are owned by their tiers and outlive any namespace.
+- **A structure keeps its bindings at a tier anchor. The tier anchor does not own the blocks.** In Genie, ownership and structure membership are separate. So one tier can own a block, and a structure with its anchor on a different tier can register the same block.
+- **The namespace block of a user owns the state of that user.** `memories/{user_id}` owns the items, the profile identity and its revisions, and each queued submission. These blocks are also bound into `KeyedCollection`, `VersionedRecords`, `EventLog`, and `TemporalCollection` on their own tiers.
+- **Prompts and trajectories are the exception, on purpose.** They belong to the agent, not to one user. So their tiers own them, and they stay after the lamp deletes a namespace.
 
 ## A namespace with a lifecycle
 
-- **Upstream, a namespace is just a name.** Nothing owns it, so nothing follows from it: prefix search is a scan that the store filters, and "this user is gone" means finding and deleting every key one at a time.
-- **Making each segment a block that owns what is addressed below it changes both of those.**
+- **Upstream, a namespace is only a name.** Nothing owns it, so it has no effect on other operations. A prefix search is a scan, and the store filters the results. For "this user is gone", the application finds and deletes each key, one at a time.
+- **Here, each segment is a block that owns the blocks at the addresses below it.** This changes both operations.
 
 | Operation | Without ownership | Here |
 | --- | --- | --- |
-| Search below `memories/dana` | Filter candidates by prefix | `Scope.SUBTREE` rooted at that block |
-| Delete everything for `dana` | List and delete each key | One `delete_subtree` |
+| Search below `memories/dana` | Filter candidates by prefix | `Scope.SUBTREE` with that block as the root |
+| Delete everything for `dana` | List and delete each key | One `delete_subtree` call |
 
-- **The second row is the important one.** The lamp does not delete the keyed bindings. They go when the blocks they point at go, because a binding refers to a block rather than copying it. So a namespace cannot be half-retired, and a freed address can be inserted into again.
-- **"Everything" means everything, not only the items.** Dana's profile and its revision history go, and so does any conversation still queued for her. Nothing is left that could write into the namespace after it is retired, which is the failure a per-key cleanup is most likely to miss: a pending reflection would otherwise come due later and recreate the namespace it was supposed to be deleted with.
-- **`forget` returns the items it removed and nothing else.** The profile and the queued submissions are not items, so they are not listed even though they went.
-- **Search is the other half of the split that Genie draws.** Choosing candidates is the backend's job: the prefix becomes a scope, the item type and any metadata filter go into the query, and one search runs per query term. Scoring is the lamp's job, because Genie has no ranking.
-- **Scoring detail:** a candidate counts a term only when the term appears in the candidate's own value, and the score is the share of terms that do. Ties break on the item address rather than on `MemoryBlock.id`, because block ids are new UUIDs on every run and a tie broken by id would make scores differ between runs.
+- **The second row is the important one.** The lamp does not delete the keyed bindings. A binding refers to a block and does not copy it. So the binding goes away when its block goes away. The lamp cannot retire only part of a namespace, and a later insert can use a freed address again.
+- **"Everything" means everything, not only the items.** The delete also removes the profile of Dana, its revision history, and each conversation that is still queued for her. So nothing stays that can write into the namespace after the lamp retires it. A per-key cleanup is most likely to miss this failure. If a queued conversation stays after the cleanup, its reflection becomes due later and creates the deleted namespace again.
+- **`forget` returns only the items that it removed.** The profile and the queued submissions are not items. So the list does not include them, but the delete removed them too.
+- **Search is the other half of the division of work in Genie.** The backend selects the candidates. The prefix becomes a scope. The item type and the metadata filter, if any, go into the query. One search runs for each query term. The lamp calculates the score, because Genie has no ranking.
+- **Score detail:** a candidate counts a term only if the term is in the value of the candidate. The score is the share of terms that the value contains. The item address breaks ties, not `MemoryBlock.id`. Block ids are new UUIDs on each run, so a tie broken by id makes the result order different between runs.
 
 ## Two shapes for semantic memory
 
-LangMem's two shapes for the same kind of memory need two different Genie
+LangMem has 2 shapes for the same kind of memory. They need 2 different Genie
 structures. That is why `store.py` and `profiles.py` are separate modules.
 
 | Shape | Behavior | Structure |
 | --- | --- | --- |
-| Collection | Many documents build up; retrieval picks the relevant ones | `KeyedCollection` |
-| Profile | One document per namespace, replaced on write | `VersionedRecords` |
+| Collection | Many documents accumulate. Retrieval selects the relevant ones | `KeyedCollection` |
+| Profile | One document for each namespace. Each write replaces it | `VersionedRecords` |
 
-- **A profile is almost exactly `VersionedRecords`.** The profile is the identity, so a reader always asks for "Dana's preferences" rather than for a particular document.
-- **Each write is a revision,** so the wording it replaced is still readable, which a single mutable document cannot offer at all.
-- **Updates merge fields** instead of replacing the whole value, and a revision is written only when the merged value really differs. So a conversation that repeats what the profile already records leaves no version behind.
+- **A profile is almost exactly `VersionedRecords`.** The profile is the identity. So a reader always asks for "Dana's preferences", not for a specific document.
+- **Each write is a revision.** So the replaced text is still readable. A single mutable document cannot give this.
+- **Updates merge fields.** They do not replace the whole value. The store writes a revision only if the merged value is really different. So a conversation that repeats the profile adds no version.
 
 ## Who is allowed to forget
 
-- **The manager is what makes LangMem a memory system rather than a store.** It reads an exchange, looks at what is already on file, and returns the changes it wants to make.
-- **Because the changes are returned rather than written, each kind can be permitted separately** — and upstream, deletes are off by default.
-- **The profile is gated by the same permissions.** A profile revision is a patch of a document `register` already created, so `enable_updates` is what it asks for. A manager that may not update leaves the profile at the version it already had and reports `profile_refused`, the same way a refused patch comes back as a result rather than an error.
+- **The manager makes LangMem a memory system, not only a store.** It reads an exchange, examines the stored memories, and returns the changes that it wants to make.
+- **The manager returns the changes and does not write them. So a configuration can permit each kind of change separately.** Upstream, deletes are off by default.
+- **The same permissions control the profile.** A profile revision patches a document that `register` created before. So a revision needs `enable_updates`. A manager without the update permission keeps the profile at its current version and reports `profile_refused`. In the same way, a refused patch comes back as a result, not as an error.
 
-Two things follow, and the demo shows both directly:
+This has 2 results. The lamp tests show the first, and the demo shows the second:
 
-- **Reconciliation.** An extractor that proposes an insert has not necessarily looked at the address. So a proposal that collides with a stored memory becomes a patch of it, and a proposal to patch a memory that is gone becomes an insert. The read that decides this is the address itself.
-- **The same change can be allowed on one path and refused on the other.** The hot-path tool here is built with `actions_permitted=("create", "update")`, and the background manager with `enable_deletes=True`. So the agent is refused a delete during the conversation, and the same memory is deleted an hour later by a reflection. Both refusals are returned as results rather than raised, so they stay visible in the call log.
+- **Reconciliation.** An extractor that proposes an insert possibly did not examine the address. So a proposed insert that collides with a stored memory becomes a patch of that memory. A proposed patch of a memory that is gone becomes an insert. A read of the address itself decides this.
+- **One path can allow a change that the other path refuses.** Here, the hot-path tool has `actions_permitted=("create", "update")`, and the background manager has `enable_deletes=True`. So the tool refuses a delete from the agent during the conversation. A later reflection, at 11:00, deletes the same memory. Both gates return a refusal as a result and do not raise an error, so the refusal stays visible in the call log.
 
-Where provenance goes:
+Where the lamp records provenance:
 
-- **Provenance is a `LineageDAG` edge rather than a stored field.** So "what taught the agent this?" is a graph read, and a memory patched by three conversations has three predecessors without the lamp keeping a list.
-- **Hot-path writes have no such edge,** for the honest reason that no conversation was recorded to point at.
+- **Provenance is a `LineageDAG` edge, not a stored field.** So "what taught the agent this?" is a graph read. A memory that 3 conversations patched has 3 predecessors, and the lamp keeps no list.
+- **Hot-path writes have no such edge.** The reason is simple: the lamp recorded no conversation for the edge to refer to.
 
 ## The debounce, and what it leaves behind
 
-- **`ReflectionExecutor` is where LangMem's background path gets interesting.** Work is submitted with an `after_seconds` window. If another turn arrives on the same thread before that window closes, the pending task is cancelled and rescheduled with the new messages folded in. A three-turn exchange then produces one reflection over the whole exchange instead of three over fragments.
+- **`ReflectionExecutor` holds the important part of the LangMem background path.** A caller submits work with an `after_seconds` window. If another turn arrives on the same thread before that window closes, the executor cancels the pending task. Then it schedules the task again, with the new messages merged in. So a 3-turn exchange produces one reflection over the whole exchange, not 3 reflections over parts of it.
 
-Two facades anchored on the same tier carry this:
+The lamp uses 2 facades with their anchor on the same tier:
 
 | Facade | What it holds |
 | --- | --- |
-| `EventLog` | The order submissions arrived in, including the cancelled ones |
-| `TemporalCollection` | Each submission's due time, as its event time |
+| `EventLog` | The arrival order of the submissions, with the cancelled ones |
+| `TemporalCollection` | The due time of each submission, as its event time |
 
-- **"What is ready to run?" is a half-open time query,** rather than a scan the lamp writes.
-- **Cancelling is dropping the temporal entry.** The log entry stays, and that is the part worth keeping: a superseded submission is still readable, marked `superseded` and naming the submission that replaced it. Deferred work that never ran is usually the hardest thing to see in a memory system. Here it is the same kind of read as everything else.
-- **Folding is deterministic.** Messages build up, so the manager sees the whole exchange. A proposed change is dropped when the newer conversation speaks to the same address, because the fresher proposal is the one worth applying. Profile fields merge the same way.
-- **In the demo:** the first turn says the billing service runs on FastAPI, and the second, four minutes later, corrects it to Litestar. Only the correction is ever applied. The stored memory is at version 1, not 2, because the superseded proposal never reached the store.
+- **"What is ready to run?" is a half-open time query.** It is not a scan that the lamp writes.
+- **To cancel, the lamp removes the temporal entry.** The log entry stays, and that is the useful part. A superseded submission is still readable. Its state is `superseded`, and it names the submission that replaced it. In a memory system, deferred work that never ran is usually the hardest thing to see. Here, a reader finds it with the same kind of read as all other data.
+- **The merge is deterministic.** Messages accumulate, so the manager sees the whole exchange. If the newer conversation has a change for the same address, the queue drops the older proposed change. The newer proposal is the one to apply. Profile fields merge the same way.
+- **In the demo:** the first turn says that the billing service runs on FastAPI. The second turn, 4 minutes later, corrects this to Litestar. The manager applies only the correction. The stored memory is at version 1, not 2, because the superseded proposal never reached the store.
 
 ## Procedural memory
 
-- **The other lamps change what an agent knows. This one changes how it behaves.** LangMem stores the agent's prompt as memory and revises it from feedback on past runs, so memory and configuration stop being separate things.
-- **`VersionedRecords` fits again.** The prompt is the identity, so the agent reads "the current code-review prompt" rather than a fixed text. Each optimization is a revision, so a prompt that drifted somewhere unhelpful can be read back.
-- **`LineageDAG` edges from the annotated exchanges** answer what a versioned prompt otherwise cannot: not just what changed, but which piece of feedback changed it.
-- **Upstream a model rewrites the prompt,** using one of three strategies. The lamp keeps the shape of the cheapest one, `prompt_memory`, which carries successful patterns forward from past interactions.
-- **Feedback names a keyed rule.** A rule with a known key replaces its earlier wording instead of piling up beside it, and the prompt is the base text plus its rules in the order they were acquired. A revision is written only when the rule set changes, and only the exchanges that changed it are credited for it.
+- **The other lamps change what an agent knows. This one changes how it behaves.** LangMem stores the prompt of the agent as memory. It revises the prompt from feedback on past runs. So memory and configuration are no longer separate things.
+- **`VersionedRecords` fits again.** The prompt is the identity. So the agent reads "the current code-review prompt", not a fixed text. Each optimization is a revision. So if a revision makes the prompt worse, a reader can read the earlier versions.
+- **`LineageDAG` edges from the annotated exchanges** answer a question that a versioned prompt alone cannot answer: not only what changed, but which piece of feedback changed it.
+- **Upstream, a model rewrites the prompt** with one of 3 strategies. The lamp keeps the shape of the strategy with the lowest cost, `prompt_memory`. That strategy takes successful patterns from past interactions into the next prompt.
+- **Feedback names a keyed rule.** A rule with a known key replaces its earlier text, so the 2 texts do not accumulate side by side. The prompt is the base text plus its rules, in the order that the optimizer learned them. The optimizer writes a revision only if the rule set changes. It credits only the exchanges that changed the rule set.
 
-In the demo, three pieces of feedback produce two versions:
+In the demo, 3 pieces of feedback produce 2 versions:
 
 - **r1:** name the test that fails in every comment.
 - **r2:** also lead with what breaks before any style comment.
-- **The third repeats a rule already on file,** so no version is written.
+- **The third repeats a rule that the prompt already has.** So the optimizer writes no version.
 
 ## Tools and workflow
 
 | Tool | Capability |
 | --- | --- |
 | `manage_memory` | Write one memory now, within `actions_permitted` |
-| `search_memory` | Search below the bound namespace, with a metadata filter and paging |
-| `submit_conversation` | Queue a conversation for background formation, debounced per thread |
-| `run_reflection` | Apply every submission that has come due |
-| `get_profile` | Read the single profile document and the versions before it |
-| `optimize_prompt` | Fold feedback into a prompt, if it changes the rules |
-| `get_prompt` | Read the prompt the agent runs with, and its earlier versions |
+| `search_memory` | Search below the bound namespace, with a metadata filter, an offset, and a limit |
+| `submit_conversation` | Queue a conversation for background formation, debounced for each thread |
+| `run_reflection` | Apply each submission that is due |
+| `get_profile` | Read the single profile document and its earlier versions |
+| `optimize_prompt` | Merge feedback into a prompt, if it changes the rules |
+| `get_prompt` | Read the prompt that the agent uses, and its earlier versions |
 
-- **Every namespace-addressed tool is bound to `("memories", "{user_id}")`,** with `user_id` supplied once at construction. No tool argument names a user, so a tool set built for one user cannot address another user's memories. The lamp's tests check that by building two tool sets over one store.
-- **One queue tier holds every namespace's submissions,** so `submit_conversation` and `run_reflection` pass the bound namespace down. A tool set runs only its own user's due work and sees only its own user's pending threads. A thread name is unique inside one namespace, not across the store, so the debounce matches on the pair and two users picking the same thread name leave each other alone.
-- **`optimize_prompt` and `get_prompt` sit outside that boundary, on purpose.** A prompt is the agent's own instructions rather than one user's memory, so prompts live in a shared `("prompts",)` namespace outside the user path. Every tool set reads and revises the same ones, and a revision one user's feedback produces governs the agent for all of them.
+- **Each namespace-addressed tool is bound to `("memories", "{user_id}")`.** The caller supplies `user_id` once, at construction. No tool argument names a user. So a tool set for one user cannot address the memories of another user. The lamp tests make 2 tool sets over one store to check this.
+- **One queue tier holds the submissions of all namespaces.** So `submit_conversation` and `run_reflection` give the bound namespace to the queue. A tool set runs only the due work of its own user, and sees only the pending threads of its own user. A thread name is unique in one namespace, not in the whole store. So the debounce matches on the pair of namespace and thread. If 2 users choose the same thread name, their submissions do not affect each other.
+- **`optimize_prompt` and `get_prompt` are outside that boundary, on purpose.** A prompt is the instructions of the agent, not the memory of one user. So prompts are in a shared `("prompts",)` namespace outside the user path. All tool sets read and revise the same prompts. A revision from the feedback of one user controls the agent for all users.
 
-The agent learns Dana's code-review preferences from three conversations:
+The agent learns the code-review preferences of Dana from 3 conversations:
 
-- **The first two arrive four minutes apart on one thread,** so the second supersedes the first inside its debounce window and one reflection covers the whole exchange: three memories stored, and the profile revised to r2.
-- **Then the hot path:** the agent writes an episode and is refused a delete there.
-- **A later thread** deletes the same memory through the manager, and patches the test-tooling memory in place, taking it to version 2.
-- **Finally,** three pieces of feedback revise the review prompt twice.
+- **The first 2 conversations arrive 4 minutes apart on one thread.** So the second supersedes the first inside its debounce window, and one reflection covers the whole exchange. The reflection stores 3 memories and revises the profile to r2.
+- **Then the hot path:** the agent writes an episode. The tool refuses a delete there.
+- **A later thread** deletes the same memory through the manager. It also patches the memory about test tools in place, to version 2.
+- **At the end,** 3 pieces of feedback revise the review prompt 2 times.
 
 | Tool | Calls |
 | --- | ---: |
@@ -195,14 +195,16 @@ The agent learns Dana's code-review preferences from three conversations:
 
 ## Limits
 
-**Left out:** LangMem's language-model extraction and prompt rewriting, its
-Pydantic integration, embeddings and vector search, the `gradient` and
-`metaprompt` optimizer strategies, `create_multi_prompt_optimizer` and its
-feedback attribution across several prompts, real threaded or remote background
-execution, `query_model` and `query_limit` for the manager's own retrieval pass,
-`default_factory`, `phases`, `update_instructions`, `response_format`, and the
-LangGraph `BaseStore` and `RunnableConfig` integration that supplies the
-namespace values upstream.
+**Left out:**
+
+- **Model work:** the LangMem language-model extraction and prompt rewrites.
+- **Pydantic:** the LangMem Pydantic integration.
+- **Vectors:** embeddings and vector search.
+- **Optimizers:** the `gradient` and `metaprompt` optimizer strategies, and `create_multi_prompt_optimizer` with its feedback attribution across several prompts.
+- **Execution:** real threaded or remote background execution.
+- **Manager retrieval:** `query_model` and `query_limit` for the retrieval pass of the manager itself.
+- **Other options:** `default_factory`, `phases`, `update_instructions`, and `response_format`.
+- **LangGraph:** the `BaseStore` and `RunnableConfig` integration that supplies the namespace values upstream.
 
 **Replaced by:**
 
@@ -213,13 +215,13 @@ namespace values upstream.
 | Embeddings | Token overlap |
 | A clock and a thread pool | Explicit calls with supplied timestamps |
 
-- **These omissions are on purpose.** A lamp exists to show that Genie's blocks, links, and structure facades can carry another system's memory model. Upstream features that are pure ranking, model inference, or scheduling are exactly what Genie leaves to applications by design, so writing them here would add a hand-written algorithm and demonstrate nothing.
+- **These omissions are on purpose.** A lamp shows that Genie blocks, links, and structure facades can hold the memory model of another system. By design, Genie leaves pure ranking, model inference, and task schedules to applications. If the lamp implemented these upstream features, it would add a hand-written algorithm and show nothing about Genie.
 
-**Three modelling notes matter when you read the results:**
+**Read the results with these 3 model notes:**
 
-- **`when_to_update` is stored on the prompt identity but is not enforced.** The lamp's acceptance rule is the rule key, while upstream a model reads the condition.
-- **A profile revision is a separate block owned by the profile it revises.** So history survives a rewording, but a profile and its whole history go together in one subtree delete. Upstream a profile is one mutable document with no history at all.
-- **Mapping a namespace to an ownership path is this lamp's addition,** rather than an upstream feature. `BaseStore` namespaces have no lifecycle, so `forget` has no upstream counterpart.
+- **The prompt identity stores `when_to_update`, but the lamp does not enforce it.** The lamp accepts a change by its rule key. Upstream, a model reads the condition.
+- **A profile revision is a separate block, and the profile that it revises owns it.** So the history stays after a change of text. But one subtree delete removes a profile and its whole history together. Upstream, a profile is one mutable document with no history.
+- **The map from a namespace to an ownership path is an addition of this lamp.** It is not an upstream feature. `BaseStore` namespaces have no lifecycle, so `forget` has no upstream equivalent.
 
 References: [conceptual guide](https://langchain-ai.github.io/langmem/concepts/conceptual_guide/),
 [memory API](https://langchain-ai.github.io/langmem/reference/memory/),
@@ -228,5 +230,4 @@ References: [conceptual guide](https://langchain-ai.github.io/langmem/concepts/c
 [semantic memory guide](https://langchain-ai.github.io/langmem/guides/extract_semantic_memories/), and
 [delayed processing](https://langchain-ai.github.io/langmem/guides/delayed_processing/).
 
-The shared agent-demo output format is described in the [lamp
-guide](../README.md).
+The [lamp guide](../README.md) describes the shared agent-demo output format.

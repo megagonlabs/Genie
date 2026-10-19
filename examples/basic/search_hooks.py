@@ -1,12 +1,13 @@
-"""Rewrite a search request and review its results with transforming hooks.
+"""Rewrite a search request and review its results with hooks that change them.
 
-`before_search` receives the normalized `MemoryQuery` and returns the query that
-actually runs, so a guardrail can narrow what a caller asked for.
-`after_search` receives the results and returns what the caller receives, so a
-redaction step can remove blocks before they leave the memory system.
-
-Both hooks fail fast and ignore `fail_open`: a contained failure would hand back
-the unreviewed query or results the hook existed to change.
+- **`before_search`:** gets the normalized `MemoryQuery` and returns the query
+  that runs. So a guardrail can narrow the request of a caller.
+- **`after_search`:** gets the results and returns the results that the caller
+  gets. So a redaction step can remove blocks before they leave the memory
+  system.
+- **Fail fast:** both hooks fail fast and ignore `fail_open`. The hook exists to
+  change the query or the results. So a failure stops the search. The search
+  does not run the unreviewed query or return the unreviewed results.
 
 Run from the repository root:
 
@@ -39,19 +40,19 @@ from genie import (
 
 
 class QueryGuard(MemoryHook):
-    """Cap how much memory one search may pull back.
+    """Cap the `limit` of each search query.
 
     Attributes:
-        max_limit: Largest limit this guard allows.
-        clamped: Limits that were requested and then reduced.
-        seen_filters: Filters as the hook received them, already normalized.
+        max_limit: The largest `limit` that this guard allows.
+        clamped: The requested limits that the guard reduced.
+        seen_filters: The filters as the hook got them, in normalized form.
     """
 
     def __init__(self, *, max_limit: int) -> None:
         """Create a guard for one maximum limit.
 
         Args:
-            max_limit: Largest limit to allow through.
+            max_limit: The largest `limit` that the guard allows.
         """
 
         self.max_limit = max_limit
@@ -59,7 +60,7 @@ class QueryGuard(MemoryHook):
         self.seen_filters: list[dict[str, object]] = []
 
     def before_search(self, context: HookContext, query: MemoryQuery) -> MemoryQuery:
-        """Return the query that should actually run."""
+        """Return the query that runs, with its `limit` reduced to `max_limit` if it is larger."""
 
         self.seen_filters.append(dict(query.filters))
         if query.limit <= self.max_limit:
@@ -69,15 +70,15 @@ class QueryGuard(MemoryHook):
 
 
 class Redactor(MemoryHook):
-    """Remove confidential blocks from what a caller receives.
+    """Remove confidential blocks from the results that a caller gets.
 
     Attributes:
-        offline: Whether the redaction service is unreachable.
-        removed: Number of results withheld so far.
+        offline: `True` if the redaction service is unreachable.
+        removed: The number of results that the redactor removed until now.
     """
 
-    # Declared, but `after_search` ignores it: returning unredacted results
-    # would defeat the hook.
+    # The hook declares `fail_open`, but the hook registry ignores it for
+    # `after_search`. So a failure of the hook never returns unredacted results.
     fail_open = True
 
     def __init__(self) -> None:
@@ -92,7 +93,7 @@ class Redactor(MemoryHook):
         query: MemoryQuery,
         results: list[SearchResult],
     ) -> list[SearchResult]:
-        """Return only the results the caller may see.
+        """Return only the results that the caller can see.
 
         Raises:
             RuntimeError: If the redaction service is unreachable.
@@ -147,14 +148,14 @@ def main() -> None:
     # The guard capped the search before it ran.
     assert guard.clamped == [50]
     assert len(results) <= guard.max_limit
-    # Friendly operators are normalized before any hook sees the query.
+    # `MemoryQuery` normalizes the friendly operators before a hook sees the query.
     assert guard.seen_filters[0] == {"metadata.priority": {"$gte": 0}}
 
     # Nothing confidential reached the caller.
     assert all(not result.block.metadata.get("confidential") for result in results)
 
-    # Raise the cap so the confidential block is a candidate, and confirm the
-    # redactor is what keeps it out.
+    # Search for a word that only the confidential block has, so the block is a
+    # candidate. Then confirm that the redactor is the step that removes it.
     wide = memory.search("embargoed", root=project, scope="subtree", limit=2)
 
     print(f"results mentioning the embargoed finding: {len(wide)}")
@@ -162,11 +163,11 @@ def main() -> None:
 
     assert wide == []
     assert redactor.removed >= 1
-    # The block itself is readable; only search results are reviewed.
+    # The block itself stays readable. The redactor reviews only search results.
     assert memory.get(secret) is not None
 
-    # A failing result review stops the search instead of returning results
-    # nobody reviewed, even though the hook declares `fail_open`.
+    # If the result review fails, the search raises the error. It does not return
+    # results that nobody reviewed, although the hook declares `fail_open`.
     redactor.offline = True
     try:
         memory.search("retrieval", root=project, scope="subtree")
@@ -175,7 +176,7 @@ def main() -> None:
     else:
         raise AssertionError("A failing after_search hook must not return results.")
 
-    # Reads that do not produce search results are unaffected.
+    # The offline redactor has no effect on reads that do not return search results.
     assert memory.get(secret) is not None
     redactor.offline = False
 

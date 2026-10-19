@@ -1,4 +1,4 @@
-"""MemoryOS-inspired tiered agent memory example."""
+"""Example of tiered agent memory, based on MemoryOS."""
 
 from examples.lamps.memoryos.agent import MemoryOSAgent, MemoryOSTools, ToolCallRecord, ToolDefinition
 from examples.lamps.memoryos.long_term import LongTermMemory

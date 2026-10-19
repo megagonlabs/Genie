@@ -1,4 +1,4 @@
-"""Shared path setup for examples run before Genie is installed."""
+"""Shared `sys.path` configuration for examples that run without an installed Genie package."""
 
 from __future__ import annotations
 
@@ -7,10 +7,13 @@ from pathlib import Path
 
 
 def ensure_repo_on_path() -> None:
-    """Allow examples to run before Genie is installed as a package.
+    """Let the examples run when Genie is not installed as a package.
 
-    Puts two directories on `sys.path`: `lib/src`, so `import genie` works from a
-    clone, and the repository root, so `import examples` works as well.
+    The function adds 2 directories to the start of `sys.path`. It skips a
+    directory that is already in `sys.path`.
+
+    - **`lib/src`:** `import genie` works from a clone.
+    - **Repository root:** `import examples` works.
     """
 
     repo_root = Path(__file__).resolve().parents[1]

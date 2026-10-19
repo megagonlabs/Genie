@@ -1,4 +1,4 @@
-"""Run a travel assistant with MemoryOS-inspired tiered memory.
+"""Run a travel assistant with tiered memory, based on MemoryOS.
 
 From the repository root:
 
@@ -41,14 +41,14 @@ QUERY = "window seat booking passport Austin"
 
 
 def at(hour: int, minute: int = 0) -> datetime:
-    """Return one moment on the afternoon the demo takes place.
+    """Return one time on the day of the demo.
 
     Args:
         hour: Hour of the day in UTC.
         minute: Minute of the hour.
 
     Returns:
-        A timezone-aware timestamp, so no run reads a clock.
+        A fixed timestamp with a timezone. So no run reads a clock.
     """
 
     return datetime(2025, 4, 8, hour, minute, tzinfo=UTC)
@@ -141,15 +141,20 @@ CONVERSATION: tuple[Exchange, ...] = (
 
 
 def build_agent() -> MemoryOSAgent:
-    """Assemble one user's hierarchy and an agent bound to it.
+    """Build the hierarchy of one user and an agent bound to it.
 
-    The capacities are far below MemoryOS's defaults so the demo reaches every
-    boundary: the queue overflows after three exchanges, the paged tier holds
-    three sessions, and each knowledge base holds two facts. The heat threshold
-    is upstream's own 5.0, and a session gets there on its own.
+    The capacities are much smaller than the MemoryOS defaults, so the demo
+    reaches each boundary:
+
+    - **Queue:** it overflows after 3 exchanges.
+    - **Paged tier:** it holds 3 sessions.
+    - **Knowledge bases:** each one holds 2 facts.
+    - **Retrieval:** it keeps at most 3 mid-term pages.
+    - **Heat threshold:** 5.0, the upstream value. One session gets to it with
+      no forced analysis.
 
     Returns:
-        An agent whose only memory access is the named tool set.
+        An agent that uses memory only through the named tool set.
     """
 
     backend = InMemoryBackend()
@@ -181,21 +186,21 @@ def build_agent() -> MemoryOSAgent:
 
 
 def run_conversation(agent: MemoryOSAgent) -> dict[str, Any]:
-    """Talk to the agent until every tier boundary has been crossed.
+    """Talk to the agent until the conversation crossed each tier boundary.
 
-    - The three seat exchanges page into one session, one retrieval visits it,
-      and the third page takes its heat to exactly the threshold. So the
-      promotion is the hierarchy's own decision rather than a call the agent
-      made.
-    - Later the hotel session is evicted before it was ever hot enough to be
-      read, which is the other half of what a heat rule means.
+    - **Promotion from heat:** the 3 seat exchanges page into one session, and
+      one retrieval visits it. The third page brings its heat to the threshold
+      exactly. So the hierarchy decides the promotion. The agent does not call
+      for it.
+    - **Eviction:** later, the lamp evicts the hotel session before it is ever
+      hot enough for an analysis. This is the other half of a heat rule.
 
     Args:
         agent: Agent to talk to.
 
     Returns:
-        The page id of the first paged-out exchange and the ids of the facts the
-        first promotion wrote, which the report reads back afterwards.
+        The page id of the first paged-out exchange, and the ids of the facts
+        that the first promotion wrote. The report reads them back later.
     """
 
     opening = [agent.record(exchange) for exchange in CONVERSATION[:4]]
@@ -214,11 +219,11 @@ def run_conversation(agent: MemoryOSAgent) -> dict[str, Any]:
 
 
 def report(agent: MemoryOSAgent, found: dict[str, Any]) -> str:
-    """Have the agent answer, tracing one promoted fact and one chain on the way.
+    """Get the answer of the agent, which traces one promoted fact and one chain.
 
     Args:
-        agent: Agent that has been talked to.
-        found: Page and knowledge ids collected while talking.
+        agent: Agent that the demo talked to.
+        found: Page id and knowledge ids that the conversation collected.
 
     Returns:
         The readable answer.
@@ -235,7 +240,7 @@ def report(agent: MemoryOSAgent, found: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    """Run the complete deterministic MemoryOS-inspired agent workflow."""
+    """Run the full deterministic agent workflow of the MemoryOS lamp."""
 
     agent = build_agent()
     found = run_conversation(agent)
@@ -264,7 +269,7 @@ def main() -> None:
 
 
 def _first_page(result: dict[str, Any]) -> str:
-    """Return the page id of the first exchange that was paged out.
+    """Return the page id of the first exchange that left the queue in this call.
 
     Args:
         result: Result of the `add_memory` call that caused the overflow.
@@ -283,14 +288,15 @@ def _first_page(result: dict[str, Any]) -> str:
 
 
 def _promoted_facts(result: dict[str, Any], key: str) -> tuple[str, ...]:
-    """Return the ids of the facts one promotion wrote to a knowledge base.
+    """Return the ids of the facts that one promotion wrote to a knowledge base.
 
     Args:
-        result: Result of the `add_memory` call whose heat check promoted.
-        key: Either `user_knowledge` or `assistant_knowledge`.
+        result: Result of the `add_memory` call whose heat check caused a
+            promotion.
+        key: `user_knowledge` or `assistant_knowledge`.
 
     Returns:
-        The block ids, in the order they were written.
+        The block ids, in write order.
 
     Raises:
         KeyError: If the call promoted nothing.

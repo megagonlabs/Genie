@@ -1,12 +1,15 @@
-"""Rewrite and observe every write a memory system performs.
+"""Rewrite and observe every write that a memory system does.
 
-Write hooks come in two shapes. A `before_*` callback that returns a value is a
-transform: what it returns is what gets stored, and raising from it refuses the
-operation. An `after_*` callback returns `None` and can only observe, which is
-why the paired callbacks hand it both versions of what changed.
+Write hooks have 2 shapes:
 
-Link transforms may only adjust metadata. Rewriting an endpoint or the relation
-is rejected, so a hook cannot quietly redirect a link.
+- **Transform:** a `before_*` callback that returns a value is a transform.
+  `Memory` stores the value that the callback returns.
+- **Refusal:** an exception from a `before_*` callback refuses the operation.
+- **Observer:** an `after_*` callback returns `None` and can only observe. Thus
+  the paired update callbacks give it both versions of the changed item.
+- **Link limits:** a link transform can change only metadata. `Memory` refuses
+  a changed endpoint or relation with `ValueError`, so a hook cannot secretly
+  redirect a link.
 
 Run from the repository root:
 
@@ -42,10 +45,11 @@ PROTECTED = "retention-hold"
 
 
 class Stamper(MemoryHook):
-    """Transforming hook that annotates everything written through it.
+    """Transform hook that adds metadata to each block and link that `Memory` writes.
 
     Attributes:
-        proposed_updates: Current and proposed values seen by `before_update`.
+        proposed_updates: Current version and proposed value of each update that
+            `before_update` receives.
     """
 
     def __init__(self) -> None:
@@ -54,7 +58,7 @@ class Stamper(MemoryHook):
         self.proposed_updates: list[tuple[int, str]] = []
 
     def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
-        """Return the block that should actually be stored."""
+        """Add the `audited` flag to the block metadata, and return the block to store."""
 
         return block.with_updates(metadata={**block.metadata, "audited": True})
 
@@ -64,10 +68,11 @@ class Stamper(MemoryHook):
         current: MemoryBlock,
         proposed: MemoryBlock,
     ) -> MemoryBlock:
-        """Return the update that should actually be applied.
+        """Add 1 to the `edits` counter, and return the update to apply.
 
-        The stored block and the proposal are both available, so a transform
-        can carry values forward instead of guessing them.
+        The hook receives both the stored block and the proposal. Thus a
+        transform can read old values from the stored block and does not guess
+        them.
         """
 
         self.proposed_updates.append((current.version, str(proposed.value)))
@@ -75,10 +80,10 @@ class Stamper(MemoryHook):
         return proposed.with_updates(metadata={**proposed.metadata, "edits": edits})
 
     def before_add_link(self, context: HookContext, link: MemoryLink) -> MemoryLink:
-        """Return the link that should actually be stored.
+        """Add the `stamped` flag to the link metadata, and return the link to store.
 
-        `replace` keeps every other field, including `created_at`, which the
-        invariant check treats as identity rather than annotation.
+        `replace` keeps every other field, for example `created_at`. The
+        invariant check treats `created_at` as identity, not as an annotation.
         """
 
         return replace(link, metadata={**link.metadata, "stamped": True})
@@ -89,21 +94,23 @@ class Stamper(MemoryHook):
         current: MemoryLink,
         proposed: MemoryLink,
     ) -> MemoryLink:
-        """Return the link update that should actually be applied."""
+        """Add the `restamped` flag to the link metadata, and return the link update to apply."""
 
         return replace(proposed, metadata={**proposed.metadata, "restamped": True})
 
 
 class Journal(MemoryHook):
-    """Observing hook that records what each write actually did.
+    """Observer hook that records the result of each read, write, and traversal.
 
     Attributes:
-        reads: Requested id and whether the block was found.
-        stored: Ids of blocks written.
+        reads: Requested id, and `True` if the read found the block.
+        stored: Ids of the stored blocks.
         updates: Version before and after each update.
-        deletes: Types of blocks reported before and after deletion.
+        deletes: Phase (`"before"` or `"after"`) and block type of each delete
+            event.
         links: Relation and metadata of each link event.
-        traversals: Phase and number of results attached when the event fired.
+        traversals: Phase, and the number of result blocks that the traversal
+            had at that event.
     """
 
     def __init__(self) -> None:
@@ -118,17 +125,17 @@ class Journal(MemoryHook):
         self._pending_read = ""
 
     def before_get(self, context: HookContext, block_id: str) -> None:
-        """Record the id a read asked for, before it is known to exist."""
+        """Record the id that a read requests, before `Memory` knows if the block exists."""
 
         self._pending_read = block_id
 
     def after_get(self, context: HookContext, block: MemoryBlock | None) -> None:
-        """Record whether the read found anything."""
+        """Record if the read found a block."""
 
         self.reads.append((self._pending_read, block is not None))
 
     def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-        """Record a stored block."""
+        """Record the id of a stored block."""
 
         self.stored.append(block.id)
 
@@ -138,22 +145,22 @@ class Journal(MemoryHook):
         previous: MemoryBlock,
         stored: MemoryBlock,
     ) -> None:
-        """Record both versions of an updated block."""
+        """Record the old and new version numbers of an updated block."""
 
         self.updates.append((previous.version, stored.version))
 
     def before_delete(self, context: HookContext, block: MemoryBlock) -> None:
-        """Record a block that is about to be deleted."""
+        """Record the type of a block before `Memory` deletes it."""
 
         self.deletes.append(("before", block.type))
 
     def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
-        """Record a block that was deleted. A recursive delete reports each."""
+        """Record the type of a deleted block. A recursive delete reports each deleted block."""
 
         self.deletes.append(("after", block.type))
 
     def after_add_link(self, context: HookContext, link: MemoryLink) -> None:
-        """Record a stored link."""
+        """Record the relation and metadata of a stored link."""
 
         self.links.append((link.relation, dict(link.metadata)))
 
@@ -163,29 +170,29 @@ class Journal(MemoryHook):
         previous: MemoryLink,
         stored: MemoryLink,
     ) -> None:
-        """Record both versions of an updated link."""
+        """Record the relation and metadata of the new version of an updated link."""
 
         self.links.append((stored.relation, dict(stored.metadata)))
 
     def before_traverse(self, context: HookContext, traversal: Traversal) -> None:
-        """Record a traversal before its results are known."""
+        """Record the result count of a traversal before the read runs."""
 
         self.traversals.append(("before", len(traversal.blocks)))
 
     def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
-        """Record a traversal once its results are attached."""
+        """Record the result count of a traversal after the read attaches its results."""
 
         self.traversals.append(("after", len(traversal.blocks)))
 
 
 class RetentionGuard(MemoryHook):
-    """Hook that refuses to delete blocks under a retention hold."""
+    """Hook that refuses the delete of a block under a retention hold."""
 
     def before_delete(self, context: HookContext, block: MemoryBlock) -> None:
-        """Refuse deletion of a held block.
+        """Refuse the delete of a held block.
 
         Raises:
-            PermissionError: If the block carries a retention hold.
+            PermissionError: If the block metadata has a retention hold.
         """
 
         if block.metadata.get(PROTECTED):
@@ -193,25 +200,25 @@ class RetentionGuard(MemoryHook):
 
 
 class Redirector(MemoryHook):
-    """Hook that tries to repoint a link, which Genie rejects."""
+    """Hook that tries to change the target of a link. `Memory` refuses this change."""
 
     def __init__(self, target_id: str) -> None:
         """Create a redirector.
 
         Args:
-            target_id: Target this hook tries to substitute.
+            target_id: Id of the target that this hook tries to put in the link.
         """
 
         self.target_id = target_id
 
     def before_add_link(self, context: HookContext, link: MemoryLink) -> MemoryLink:
-        """Return a link pointing somewhere else."""
+        """Return a copy of the link with a different target."""
 
         return replace(link, target_id=self.target_id)
 
 
 def main() -> None:
-    """Exercise every write callback, transforming and observing."""
+    """Run each write callback of the transform hooks and the observer hooks."""
 
     print("== Write hooks ==")
     stamper = Stamper()
@@ -222,8 +229,8 @@ def main() -> None:
         hooks=[stamper, journal, RetentionGuard()],
     )
 
-    # `before_put` decides what is stored, so the stored block already carries
-    # the annotation the caller never supplied.
+    # `before_put` decides what `Memory` stores. Thus the stored block already has
+    # the annotation, although the caller did not supply it.
     task = memory.put(type="task", value={"title": "Draft outline", "status": "open"})
 
     print(f"metadata added before storage: {task.metadata}")
@@ -231,8 +238,8 @@ def main() -> None:
     assert task.metadata == {"audited": True}
     assert journal.stored == [task.id]
 
-    # Reads report the requested id first and the outcome afterwards, so a miss
-    # is recorded rather than invisible.
+    # A read reports the requested id first and the result after it. Thus the
+    # journal also records a miss, and the miss does not stay invisible.
     found = memory.get(task)
     missing = memory.get("block-that-was-never-stored")
 
@@ -242,8 +249,9 @@ def main() -> None:
     assert missing is None
     assert journal.reads == [(task.id, True), ("block-that-was-never-stored", False)]
 
-    # `before_update` sees the stored block and the proposal together, so it can
-    # carry a counter forward. `after_update` sees both resulting versions.
+    # `before_update` receives the stored block and the proposal together. Thus it
+    # can increase a counter from the stored value. `after_update` receives the
+    # old and the new version.
     updated = memory.update(task, value={"status": "review"})
     again = memory.update(updated, value={"status": "done"})
 
@@ -256,7 +264,7 @@ def main() -> None:
     assert journal.updates == [(task.version, updated.version), (updated.version, again.version)]
     assert again.value == {"title": "Draft outline", "status": "done"}
 
-    # Link transforms annotate, and the observing callback sees the result.
+    # Link transforms add metadata, and the observer callback receives the result.
     note = memory.put(type="note", value="Outline reviewed")
     link = memory.add_link(task, note, "documents", metadata={"confidence": 0.9})
     relinked = memory.update_link(link, metadata={"confidence": 1.0})
@@ -264,8 +272,8 @@ def main() -> None:
     print(f"stored link metadata: {link.metadata}")
     print(f"updated link metadata: {relinked.metadata}")
 
-    # `update_link` merges metadata into what the link already carried, so the
-    # annotation from the original insert survives the update.
+    # `update_link` merges the new metadata into the stored link metadata. Thus
+    # the annotation from the first insert stays after the update.
     assert link.metadata == {"confidence": 0.9, "stamped": True}
     assert relinked.metadata == {"confidence": 1.0, "stamped": True, "restamped": True}
     assert journal.links == [
@@ -273,8 +281,8 @@ def main() -> None:
         ("documents", {"confidence": 1.0, "stamped": True, "restamped": True}),
     ]
 
-    # A traversal event fires before results exist and again once they do, so
-    # the trail records how much one call disclosed.
+    # A traversal event occurs before the read has results, and again after the
+    # read has them. Thus the trail records how much one call disclosed.
     subtask = memory.put(parent=task, type="task", value={"title": "Collect sources"})
     children = memory.children(task)
 
@@ -283,7 +291,7 @@ def main() -> None:
     assert [block.id for block in children] == [subtask.id]
     assert journal.traversals == [("before", 0), ("after", 1)]
 
-    # A before_* hook refuses an operation by raising, and nothing is written.
+    # A `before_*` hook refuses an operation with an exception, and `Memory` writes nothing.
     held = memory.put(type="record", value="Audited transaction", metadata={PROTECTED: True})
     try:
         memory.delete(held)
@@ -295,7 +303,7 @@ def main() -> None:
     assert memory.get(held) is not None
     assert ("after", "record") not in journal.deletes
 
-    # A recursive delete reports every block it removes, parent and child.
+    # A recursive delete reports each block that it removes, both parent and child.
     parent = memory.put(type="project", value="Retired workspace")
     memory.put(parent=parent, type="note", value="Superseded note")
     journal.deletes.clear()
@@ -307,8 +315,8 @@ def main() -> None:
     assert journal.deletes.count(("after", "note")) == 1
     assert journal.deletes.count(("after", "project")) == 1
 
-    # A link transform may adjust metadata but not topology. Repointing a link
-    # is rejected instead of silently redirecting it.
+    # A link transform can change metadata but not topology. `Memory` refuses a
+    # changed link target with `ValueError` and does not silently redirect the link.
     other = Memory(backend=InMemoryBackend(), principal="app:writer")
     first = other.put(type="node", value="first")
     second = other.put(type="node", value="second")

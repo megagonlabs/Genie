@@ -207,10 +207,10 @@ KNOWN_AT = "2025-06-10T00:00:00Z"
 
 
 def build_agent() -> TemporalGraphAgent:
-    """Assemble an empty graph, its tool set, and an agent over them.
+    """Build an empty graph, its tool set, and an agent that uses them.
 
     Returns:
-        An agent whose only graph access is the named tool set.
+        An agent that can use the graph only through the named tool set.
     """
 
     backend = InMemoryBackend()
@@ -233,7 +233,7 @@ def build_agent() -> TemporalGraphAgent:
 
 
 def main() -> None:
-    """Let an agent ingest episodes and answer through graph tools."""
+    """Run an agent that ingests episodes and answers through graph tools."""
 
     agent = build_agent()
     agent.learn(OBSERVATIONS, communities_as_of=AS_OF)

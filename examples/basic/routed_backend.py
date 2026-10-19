@@ -1,4 +1,4 @@
-"""Route memory blocks across multiple backend stores.
+"""Route memory blocks to more than one backend store.
 
 Run from the repository root:
 
@@ -33,10 +33,11 @@ def route_by_region(block: MemoryBlock) -> str | None:
     """Choose a backend route from block metadata.
 
     Args:
-        block: Block being stored.
+        block: The block that the backend stores.
 
     Returns:
-        Route key when the block declares a region, otherwise `None`.
+        The route key if the block metadata has a string `region`. Otherwise
+        `None`.
     """
 
     region = block.metadata.get("region")
@@ -44,7 +45,7 @@ def route_by_region(block: MemoryBlock) -> str | None:
 
 
 def main() -> None:
-    """Run a focused routed backend walkthrough."""
+    """Run a short walkthrough of a routed backend."""
 
     print("== Routed storage and mounts ==")
     us_store = InMemoryBackend()
@@ -73,9 +74,9 @@ def main() -> None:
         type="note",
         value="EU launch requires data residency review.",
     )
-    # The symbolic link is the `MemoryLink` returned by `add_mount`. It is attached
-    # to a source block and points at the EU project, but it does not create a
-    # local child block and does not make the EU tree part of the US subtree.
+    # `add_mount` returns the symbolic link as a `MemoryLink`. The link starts at
+    # a source block and refers to the EU project. It does not create a local
+    # child block. It does not make the EU tree part of the US subtree.
     eu_rollout_link = memory.add_mount(
         us_project,
         eu_project,
@@ -93,11 +94,12 @@ def main() -> None:
     apac_memory = Memory(backend=apac_store)
     apac_project = apac_memory.put(type="project", value="APAC rollout")
     apac_note = apac_memory.put(parent=apac_project, type="note", value="APAC launch checklist")
-    # Public memory.add_mount() validates both endpoints, so it is used when
-    # the target route is already registered. A pending mount discovered from an
-    # external catalog or import can instead be written by adapter code as a
-    # mount link in a shared `LinkStore`. That link's metadata carries route
-    # information, not a live database connection.
+    # There are 2 ways to write a mount link.
+    # - **Public API:** `memory.add_mount()` validates both endpoints. Use it when
+    #   the target route is already registered.
+    # - **Adapter code:** for a pending mount from an external catalog or an
+    #   import, adapter code can write the mount link in a shared `LinkStore`.
+    #   The link metadata holds route information, not a live database connection.
     pending_apac_mount = link_store.add_link(
         MemoryLink(
             source_id=us_note.id,

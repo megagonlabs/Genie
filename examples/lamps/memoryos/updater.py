@@ -1,34 +1,42 @@
-"""The two moves that make MemoryOS a hierarchy instead of three stores.
+"""The 2 moves that make MemoryOS a hierarchy and not 3 separate stores.
 
-Everything interesting in MemoryOS happens at a tier boundary, and there are
-only two boundaries to cross.
+All important behavior in MemoryOS occurs at a tier boundary. There are only 2
+boundaries.
 
-**Paging out.** When short-term memory is full, the oldest exchanges leave it
-and are filed in mid-term memory under a themed summary, joining a segment about
-the same thing when one is open. Consecutive exchanges that continue each other
-are linked, so the dialogue chain survives the queue that held them - including
-across two separate page-outs, which is why the updater remembers the last page
-it wrote.
+**Page-out.** When short-term memory is full, the oldest exchanges leave it.
+The updater files them in mid-term memory under a themed summary. If a segment
+about the same subject is open, they join that segment.
 
-**Promotion.** After every write, the hottest segment is checked against a heat
-threshold. If it is over the line its unread pages are analyzed:
+- **Dialogue chain:** the updater links consecutive exchanges that continue each
+  other. So the chain stays after the queue that held them moves on.
+- **Across page-outs:** the chain also links pages from 2 separate page-outs.
+  For this reason, the updater remembers the last page that it wrote.
 
-- what they say about the user goes into the profile;
-- what they say about the world goes into the two knowledge bases; and
-- the pages are marked so they stop counting toward the segment's length.
+**Promotion.** After each write, the updater compares the hottest segment with a
+heat threshold. If the heat is at or above the threshold, the updater analyzes
+the unread pages of the segment:
 
-The segment then cools, and something else gets a turn.
+- **Profile:** what the pages tell about the user goes into the profile.
+- **Knowledge:** the facts that the pages declare go into the 2 knowledge bases.
+- **Marks:** the updater marks the pages, so they no longer count toward the
+  length of the segment.
 
-Two notes on both moves:
+Then the segment cools, and another segment can become the hottest.
 
-- They are copy-then-drop rather than a move, because Genie has no reparent
-  operation. A page is written under its new owner and removed from its old one.
-  That is also what upstream does, since the two tiers are two different stores.
-- The analysis itself is two model calls upstream - one to rewrite the profile
-  and one to split what was learned into user and assistant knowledge.
-  `DeclaredAnalyst` replaces both by collecting what each exchange said it would
-  contribute when it was recorded. That keeps the model's judgment at the
-  boundary and makes every stored fact name the page it came from.
+Notes:
+
+- **A page-out is a delete and a copy, not a move:** Genie has no reparent
+  operation. So the queue first deletes the exchange under its old owner. Then
+  the updater writes a page with the same exchange under its new owner. Upstream
+  does the same, because the 2 tiers are 2 different stores.
+- **Promotion is a copy only:** the analysis writes new long-term records. The
+  pages stay in mid-term memory, marked as analyzed.
+- **No model:** upstream, the analysis is 2 model calls. One call writes the
+  profile again. The other call splits what the pages showed into user
+  knowledge and assistant knowledge. `DeclaredAnalyst` replaces both calls. It
+  collects the contribution that each exchange declared when the lamp recorded
+  it. So the judgment of the model stays at the boundary, and each stored fact
+  names the page that it came from.
 """
 
 from __future__ import annotations
@@ -64,9 +72,10 @@ class PageOut:
 
     Attributes:
         evicted: The exchanges that left the queue, oldest first.
-        writes: One write per themed group the batch was split into.
-        pages: Every page written, in batch order.
-        evictions: Segments the mid-term capacity rule dropped.
+        writes: One write for each themed group of the batch.
+        pages: All pages that the page-out wrote, in write order: one themed
+            group after the other.
+        evictions: Segments that the mid-term capacity rule removed.
     """
 
     evicted: tuple[QAPair, ...]
@@ -77,34 +86,37 @@ class PageOut:
 
 @dataclass(frozen=True, slots=True)
 class DeclaredAnalyst:
-    """Stands in for the two model calls promotion makes upstream.
+    """Replaces the 2 model calls that promotion makes upstream.
 
-    Upstream, promotion sends a hot segment's pages to a model twice: once to
-    rewrite the user profile against the profile already on file, and once to
-    split what the pages revealed into private user knowledge and assistant
-    knowledge. Neither judgment can be reproduced without a model, so each
-    exchange declares its own contribution when it is recorded, and this analyst
-    collects the contributions of the pages being analyzed.
+    - **Upstream:** promotion sends the pages of a hot segment to a model 2
+      times. The first call writes the user profile again, from the current
+      profile. The second call splits what the pages showed into private user
+      knowledge and assistant knowledge.
+    - **Here:** a lamp without a model cannot make these judgments. So each
+      exchange declares its own contribution when the lamp records it. This
+      analyst collects the contributions of the analyzed pages.
 
-    The collection is not nothing:
+    The collection still has rules:
 
-    - the order decides which of two traits wins;
-    - repeated facts are written once; and
-    - every fact keeps the page that declared it, which is the provenance
-      upstream discards.
+    - **Order:** a later page replaces an earlier trait with the same name.
+    - **No repeats:** the analyst writes a repeated fact only once, with the
+      first page that declared it.
+    - **Provenance:** each fact keeps the page that declared it. Upstream does
+      not keep this provenance.
     """
 
     def analyze(self, segment: Segment, pages: Sequence[Page]) -> Analysis:
         """Return what an analysis of these pages would write.
 
         Args:
-            segment: Segment being analyzed. A model-backed analyst would read
-                its summary; the declared one does not need to.
-            pages: Its pages that no analysis has read yet, in dialogue order.
+            segment: Segment that the analysis reads. An analyst with a model
+                would read its summary. The declared analyst does not use it.
+            pages: The pages of the segment that no analysis has read, in
+                dialogue order.
 
         Returns:
-            The profile traits and knowledge entries to promote, each fact
-            paired with the page it came from.
+            The profile traits and knowledge entries to promote. Each fact has
+            the id of the page that it came from.
         """
 
         traits: dict[str, str] = {}
@@ -126,7 +138,7 @@ class DeclaredAnalyst:
 
 
 class Updater:
-    """Moves dialogue up the hierarchy: out of the queue, then into the profile."""
+    """Moves dialogue up the hierarchy: out of the queue, and then into the profile and the knowledge bases."""
 
     def __init__(
         self,
@@ -137,14 +149,15 @@ class Updater:
         analyst: DeclaredAnalyst | None = None,
         heat_threshold: float = 5.0,
     ) -> None:
-        """Wire the updater to the three tiers it moves things between.
+        """Connect the updater to the 3 tiers that it moves data between.
 
         Args:
             short_term: The FIFO queue.
             mid_term: The paged tier.
-            long_term: The profile and knowledge bases.
-            analyst: What stands in for the promotion model calls.
-            heat_threshold: Heat a segment must reach to be analyzed,
+            long_term: The profile and the knowledge bases.
+            analyst: The replacement for the promotion model calls. `None`
+                selects a new `DeclaredAnalyst`.
+            heat_threshold: Minimum heat for an analysis of a segment,
                 `mid_term_heat_threshold` upstream.
 
         Raises:
@@ -162,16 +175,20 @@ class Updater:
     def page_out(self, *, now: datetime) -> PageOut:
         """Move the oldest exchanges out of a full queue into mid-term memory.
 
-        This is upstream's `process_short_term_to_mid_term`. The queue is drained
-        until it has room, the batch is split into themed groups the way the
-        multi-summary call splits it, each group is filed under the segment that
-        fits it, and consecutive exchanges that continue each other are chained.
+        This is upstream `process_short_term_to_mid_term`:
+
+        - **Drain:** the updater removes exchanges from the queue until the
+          queue has room.
+        - **Group:** it splits the batch into themed groups, as the upstream
+          multi-summary call does.
+        - **File:** it files each group under the segment that matches it.
+        - **Chain:** it links consecutive exchanges that continue each other.
 
         Args:
-            now: Time the write is being made at.
+            now: Time of the write.
 
         Returns:
-            What left the queue and where it went. Every field is empty when the
+            What left the queue and where it went. All fields are empty when the
             queue was not full.
         """
 
@@ -202,19 +219,22 @@ class Updater:
         return PageOut(evicted=tuple(evicted), writes=tuple(writes), pages=tuple(pages), evictions=tuple(evictions))
 
     def promote_if_hot(self, *, now: datetime, threshold: float | None = None) -> Promotion | None:
-        """Analyze the hottest segment when it is over the heat threshold.
+        """Analyze the hottest segment when its heat is at or above the threshold.
 
-        This is upstream's `_trigger_profile_and_knowledge_update_if_needed`,
-        which runs after every write. Only the hottest segment is considered, so
-        promotion is a trickle rather than a sweep.
+        This is upstream `_trigger_profile_and_knowledge_update_if_needed`,
+        which runs after each write. The method examines only the hottest
+        segment. So each check promotes one segment at most, not all hot
+        segments at once.
 
         Args:
-            now: Time the check is being made at.
-            threshold: Heat to require instead of the configured one, which is
-                how upstream's `force_mid_term_analysis` promotes on demand.
+            now: Time of the check.
+            threshold: Heat to require in place of the configured threshold.
+                Upstream `force_mid_term_analysis` uses this to promote on
+                demand.
 
         Returns:
-            What was promoted, or `None` when nothing was hot enough.
+            What the analysis promoted, or `None` when no segment was hot
+            enough.
         """
 
         moment = normalize_timestamp(now, field="now")
@@ -225,20 +245,23 @@ class Updater:
         return self.promote(segment, now=moment, threshold=floor)
 
     def promote(self, segment: Segment, *, now: datetime, threshold: float | None = None) -> Promotion:
-        """Analyze one segment's unread pages and write what they revealed.
+        """Analyze the unread pages of one segment, and write what they showed.
 
-        The pages are marked analyzed whether or not the analysis found
-        anything, and then the segment cools. That order matters: a segment that
-        stayed hot after being read would be analyzed again on the next write and
-        never let anything else through.
+        - **Always mark:** the updater marks the pages as analyzed, also when
+          the analysis found nothing. Then the segment cools.
+        - **Why the order is important:** a segment that stays hot after the
+          analysis would get a new analysis on the next write. Then no other
+          segment could get a promotion.
 
         Args:
             segment: Segment to analyze.
-            now: Time the analysis finished.
-            threshold: Heat the check required, recorded for readability.
+            now: Time when the analysis finished.
+            threshold: Heat that the check required. The result records it for
+                readers. `None` records the configured threshold.
 
         Returns:
-            What the analysis wrote, and the heat the segment cooled to.
+            What the analysis wrote, and the heat of the segment after it
+            cooled.
         """
 
         moment = normalize_timestamp(now, field="now")
@@ -270,7 +293,7 @@ class Updater:
         now: datetime,
         evictions: list[Eviction],
     ) -> list[KnowledgeItem]:
-        """Append promoted facts to one knowledge base, collecting what it dropped."""
+        """Append promoted facts to one knowledge base, and collect the entries that it removed."""
 
         written: list[KnowledgeItem] = []
         for fact, page_id in facts:
@@ -281,7 +304,11 @@ class Updater:
         return written
 
     def _chain(self, page: Page) -> None:
-        """Link a page to the one before it when the dialogue continued."""
+        """Link a page to the page before it when the dialogue continued.
+
+        The page before is the last page that this updater wrote. If that page
+        is no longer in mid-term memory, the method adds no link.
+        """
 
         previous = self._last_page
         self._last_page = page
@@ -293,18 +320,20 @@ class Updater:
 
 
 def _themed_groups(exchanges: Iterable[Exchange]) -> tuple[tuple[Exchange, ...], ...]:
-    """Split a paged-out batch into runs that share a themed summary.
+    """Split a paged-out batch into groups that share a themed summary.
 
-    Upstream a model reads the whole batch and returns several summaries, each
-    with the pages that belong to it. Each exchange already carries the summary
-    a model wrote for it, so grouping is a matter of keeping equal topics
-    together instead of guessing them again.
+    - **Upstream:** a model reads the full batch and returns some summaries,
+      each with the pages that belong to it.
+    - **Here:** each exchange already has the summary that a model wrote for it.
+      So the function puts exchanges with equal topics together, and does not
+      guess the topics again. Exchanges with the same topic go into one group,
+      also when they are not adjacent.
 
     Args:
-        exchanges: Exchanges in the order they left the queue.
+        exchanges: Exchanges in the order that they left the queue.
 
     Returns:
-        One group per distinct topic, in first-seen order.
+        One group for each distinct topic, in the order of first occurrence.
     """
 
     grouped: dict[str, list[Exchange]] = {}

@@ -1,4 +1,4 @@
-"""Run a travel agent with Mem0-inspired memory tools.
+"""Run a travel agent with memory tools based on the design of Mem0.
 
 From the repository root:
 
@@ -87,16 +87,17 @@ QUERY = "Alice window seats vegetarian Austin"
 
 
 def build_agent() -> Mem0Agent:
-    """Assemble an empty store, its structures, and an agent over them.
+    """Build an empty store, its structures, and an agent over them.
 
-    The tool set is bound to one user and one agent, so no tool argument can
-    name another user's memories. The client below keeps upstream's flat id
-    space, so the tools taking a memory id check it against the bound scope. A
-    run is a tool argument, because upstream a run is one conversation and is
-    passed per call.
+    - **Bound scope:** the tool set is bound to one user and one agent. Thus no
+      tool argument can name the memories of a different user.
+    - **Id check:** the client below keeps the flat id space of upstream. Thus
+      the tools that take a memory id check it against the bound scope.
+    - **Run as an argument:** a run is a tool argument, because upstream a run
+      is one conversation and the caller gives it for each call.
 
     Returns:
-        An agent whose only memory access is the named tool set.
+        An agent that uses memory only through the named tool set.
     """
 
     backend = InMemoryBackend()
@@ -119,25 +120,28 @@ def build_agent() -> Mem0Agent:
 
 
 def teach_agent(agent: Mem0Agent) -> str:
-    """Run every write path Mem0 offers and return the seat memory's id.
+    """Run each write path of Mem0 and return the id of the seat memory.
 
-    - First exchange: nothing to reconcile against, so all five candidates are
-      added.
-    - Second exchange: the update phase earns its keep. The new seat preference
-      replaces the old one in place, the repeated diet fact is a no-write, and
-      the layover retraction removes the memory it contradicts. The same turn
-      retracts one graph relationship and adds another.
-    - Then the paths that skip the pipeline: one procedural summary of how the
-      task was carried out, a later conversation transcribed verbatim in its own
-      run, and two memories changed by the caller rather than by the pipeline -
-      one corrected in place and one deleted outright.
-    - Finally the transcript run is retired in a single call.
+    - **First exchange:** no stored memories exist for a comparison. Thus the
+      update phase adds all 5 candidates.
+    - **Second exchange:** the update phase has work to do. The new seat
+      preference replaces the old one in place. The repeated diet fact writes
+      nothing. The layover retraction removes the memory that it contradicts.
+      The same turn retracts one graph relationship and adds a different one.
+    - **Paths that skip the pipeline:** one procedural summary of the task
+      steps, and a later conversation in its own run and in its original words.
+      Then the caller, not the pipeline, changes 2 memories. It corrects one
+      memory in place and deletes the other memory.
+    - **History read:** the agent reads the history of the deleted layover
+      memory.
+    - **Last step:** one call retires the transcript run.
 
     Args:
         agent: Agent to teach.
 
     Returns:
-        Id of the seat-preference memory, which is now at its second version.
+        Id of the seat-preference memory. That memory is now at its second
+        version.
     """
 
     first = agent.learn(FIRST_EXCHANGE, at=FIRST_TURN_AT, run=PLANNING_RUN, metadata={"source": "chat"})
@@ -152,11 +156,11 @@ def teach_agent(agent: Mem0Agent) -> str:
 
 
 def answer_question(agent: Mem0Agent, memory_id: str) -> str:
-    """Have the agent answer from both halves of its memory and one history.
+    """Make the agent answer from the 2 halves of its memory and one history.
 
     Args:
-        agent: Agent that has been taught.
-        memory_id: Memory whose recorded changes are shown in the answer.
+        agent: Agent after `teach_agent`.
+        memory_id: Memory whose recorded changes the answer shows.
 
     Returns:
         The readable answer.
@@ -166,7 +170,7 @@ def answer_question(agent: Mem0Agent, memory_id: str) -> str:
 
 
 def main() -> None:
-    """Run the complete deterministic Mem0-inspired agent workflow."""
+    """Run the full deterministic agent workflow based on Mem0."""
 
     agent = build_agent()
     memory_id = teach_agent(agent)
@@ -192,11 +196,11 @@ def main() -> None:
 
 
 def _id(result: dict[str, Any], memory: str) -> str:
-    """Return the id of the memory one add call wrote for a given text.
+    """Return the id of the memory with a given text that one add call wrote.
 
     Args:
         result: Result of an `add_memories` call.
-        memory: Memory text to look for.
+        memory: Memory text to find.
 
     Returns:
         The memory id.
@@ -212,16 +216,16 @@ def _id(result: dict[str, Any], memory: str) -> str:
 
 
 def _removed(result: dict[str, Any]) -> str:
-    """Return the id of the memory one add call deleted.
+    """Return the id of the memory that one add call deleted.
 
     Args:
         result: Result of an `add_memories` call.
 
     Returns:
-        The deleted memory's id.
+        The id of the deleted memory.
 
     Raises:
-        KeyError: If the call deleted nothing.
+        KeyError: If the call deleted no memory.
     """
 
     for entry in result["results"]:

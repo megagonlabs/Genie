@@ -1,20 +1,28 @@
-"""Mental models: standing questions with an answer already written down.
+"""Mental models: standing questions with an answer that is already written.
 
-An observation is discovered. A mental model is commissioned.
+Consolidation finds an observation in the facts. A caller asks for a mental
+model on purpose.
 
-- A caller names a question once - "what should I know before changing this
-  service?" - and the bank keeps an answer to it current in the background. So
-  reading it at request time is a lookup instead of a retrieval and a synthesis.
-- Hindsight rebuilds a model only when memories inside its scope actually
-  change, and it keeps the previous versions so the drift is inspectable.
+- **Standing question:** a caller names a question once, for example "what is
+  important before I change this service?". Upstream Hindsight keeps an
+  answer to it current in the background. So a read at request time is a
+  lookup, not a retrieval followed by a synthesis.
+- **Rebuild rule:** Hindsight rebuilds a model only when memories inside its
+  scope really change. It keeps the previous versions, so a user can examine
+  the drift.
+- **Here:** the lamp rebuilds a model with an explicit `refresh` call, not in
+  the background.
 
-This is `VersionedRecords` almost verbatim: the standing question is the stable
-identity, each rebuild is a revision, `current` is the fast read, and `history`
-is the drift.
+This is almost exactly `VersionedRecords`:
 
-The lamp adds two rules of its own - which memories are in scope, and how the
-answer is composed from them. Genie supplies the rest, including the
-`LineageDAG` edges that say which observations a given version was written from.
+- **Stable identity:** the standing question.
+- **Revision:** each rebuild.
+- **`current`:** the fast read.
+- **`history`:** the drift.
+
+The lamp adds 2 rules of its own: which memories are in scope, and how the lamp
+composes the answer from them. Genie supplies the rest. This includes the
+`LineageDAG` edges that show which observations a version was written from.
 """
 
 from __future__ import annotations
@@ -43,14 +51,15 @@ from genie.structures import MemoryAddress, RevisionItem
 
 
 class MentalModelStore:
-    """Standing questions whose answers are rebuilt as the bank learns."""
+    """Standing questions, with answers that the store rebuilds when the bank learns."""
 
     def __init__(self, bank: HindsightMemoryBank, consolidation: ConsolidationEngine) -> None:
         """Create a mental-model store over one bank.
 
         Args:
-            bank: Bank the models read from.
-            consolidation: Engine supplying the observations models summarize.
+            bank: Bank that the models read from.
+            consolidation: Engine that supplies the observations that the
+                models summarize.
         """
 
         self.bank = bank
@@ -60,15 +69,15 @@ class MentalModelStore:
         """Register a standing question, before it has any answer.
 
         Args:
-            name: Stable model name used to fetch it later.
-            question: Question this model keeps an answer to.
+            name: Stable model name for later reads.
+            question: Question that this model keeps an answer for.
             tags: Scope tags. An empty scope reads the whole bank.
 
         Returns:
             The registered model, with no revision yet.
 
         Raises:
-            ValueError: If the name is already registered or text is empty.
+            ValueError: If the name is already registered, or a text is empty.
         """
 
         model_name = required_text(name, field="name")
@@ -90,14 +99,22 @@ class MentalModelStore:
         return _model(identity, None, sources=())
 
     def refresh(self, name: str, *, at: datetime) -> MentalModel:
-        """Rebuild one model's answer if anything in its scope changed.
+        """Compose the answer of one model again, and write a revision only if the answer changed.
+
+        - **Rebuild rule:** the method composes the answer from the
+          observations in scope. It writes a new revision only if the new
+          answer is not empty and is different from the current answer.
+        - **No rebuild for more evidence:** more evidence for a known belief
+          does not change the answer. So it writes no revision.
+        - **Lineage:** a new revision gets a lineage edge from each observation
+          in scope.
 
         Args:
             name: Registered model name.
-            at: Timestamp recorded on the revision, when one is written.
+            at: Timestamp that the method records on a new revision.
 
         Returns:
-            The model, with a new revision only when the answer changed.
+            The model. It has a new revision only if the answer changed.
 
         Raises:
             ValueError: If the model is not registered.
@@ -137,14 +154,16 @@ class MentalModelStore:
         return refreshed
 
     def in_scope(self, tags: Sequence[str]) -> list[Observation]:
-        """Return the observations a model with these tags summarizes.
+        """Return the observations that a model with these tags summarizes.
 
         Args:
-            tags: Model scope tags. An empty scope matches everything.
+            tags: Model scope tags. An empty scope matches all observations.
+                Otherwise, an observation matches if it has at least one of
+                the tags.
 
         Returns:
-            Observations ordered by evidence, strongest first.
-
+            Observations with the highest proof count first, then in claim
+            order.
         """
 
         scope = set(tags)
@@ -156,13 +175,13 @@ class MentalModelStore:
         return sorted(selected, key=lambda item: (-item.proof_count, item.claim))
 
     def current(self, name: str) -> MentalModel | None:
-        """Return the answer currently on file for a standing question.
+        """Return the current stored answer of a standing question.
 
         Args:
             name: Registered model name.
 
         Returns:
-            The model, or `None` when it is not registered.
+            The model, or `None` if it is not registered.
         """
 
         address = _model_address(name)
@@ -173,7 +192,7 @@ class MentalModelStore:
         return _model(identity, current, sources=self._sources(current))
 
     def history(self, name: str) -> list[MentalModel]:
-        """Return every answer this question has had, oldest first.
+        """Return every answer of this question, oldest first.
 
         Args:
             name: Registered model name.
@@ -208,7 +227,7 @@ class MentalModelStore:
         return sorted((model for model in results if model is not None), key=lambda item: item.name)
 
     def _sources(self, revision: RevisionItem | None) -> tuple[str, ...]:
-        """Return the observation revisions one model version was written from."""
+        """Return the ids of the observation revisions that one model version was written from."""
 
         if revision is None:
             return ()
@@ -222,10 +241,10 @@ class MentalModelStore:
 def _compose(observations: Sequence[Observation]) -> str:
     """Write one model answer from the observations in its scope.
 
-    The answer is the beliefs themselves in claim order. Leaving out both the
-    proof counts and any evidence-based ordering is what makes a rebuild mean
-    something: more evidence for a belief already on file changes the count but
-    not the answer, so no new version is written.
+    - **Content:** the answer is the beliefs themselves, in claim order.
+    - **Why:** the answer has no proof counts and no order by evidence. So more
+      evidence for a known belief changes the count but not the answer, and the
+      store writes no new version. Thus a new version always means a new answer.
     """
 
     ordered = sorted(observations, key=lambda observation: observation.claim)
@@ -238,7 +257,7 @@ def _model(
     *,
     sources: tuple[str, ...],
 ) -> MentalModel:
-    """Assemble one mental model from its identity and current revision."""
+    """Assemble one mental model from its identity and one revision."""
 
     value = identity.value
     if not isinstance(value, dict):

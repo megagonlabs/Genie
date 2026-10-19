@@ -1,4 +1,4 @@
-"""Mem0-inspired agent memory example."""
+"""Agent memory example based on the design of Mem0."""
 
 from examples.lamps.mem0.agent import Mem0Agent, Mem0Tools, ToolCallRecord, ToolDefinition
 from examples.lamps.mem0.client import Mem0Memory

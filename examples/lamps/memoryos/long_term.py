@@ -1,29 +1,31 @@
-"""MemoryOS's slow tier: the profile and the two knowledge bases.
+"""The slow tier of MemoryOS: the profile and the 2 knowledge bases.
 
-Long-term memory is the only tier that is not a window. Nothing lands here
-because it arrived. It lands here because a mid-term segment got hot enough for
-an analysis to read it, and the analysis decided that something in it was worth
-keeping after the dialogue itself is gone.
+Long-term memory is the only tier that is not a window. Data does not come here
+because it arrived. It comes here because a mid-term segment became hot enough
+for an analysis, and the analysis found something in it to keep after the
+dialogue is gone.
 
-MemoryOS keeps three things here:
+MemoryOS keeps 3 things here:
 
-- a profile of who the user is;
-- a capped base of facts about them; and
-- a separate capped base of what the assistant learned about doing its job.
+- **Profile:** a description of the user.
+- **User knowledge:** a base of facts about the user, with a capacity.
+- **Assistant knowledge:** a separate base of what the assistant learned about
+  how to do its job, with a capacity.
 
-How they map:
+How they map to Genie:
 
-- The two knowledge bases are `EventLog`s with a capacity, which is the deque
-  with `maxlen` upstream. Writing past the cap drops the oldest entry.
-- The profile is a `VersionedRecords` identity instead, and that is a deliberate
-  difference. Upstream calls `update_user_profile(..., merge=False)`, so each
-  analysis overwrites the profile and the reading it replaced is gone. A
-  revision log costs nothing extra here and keeps them, so "what did it think
+- **Knowledge bases:** each one is an `EventLog` that the lamp keeps at a
+  capacity. Upstream uses a deque with `maxlen`. A write past the capacity
+  removes the oldest entry.
+- **Profile:** a `VersionedRecords` identity. This is a deliberate difference.
+  Upstream calls `update_user_profile(..., merge=False)`, so each analysis
+  replaces the profile and the old profile is lost. Here the revision log keeps
+  each old profile with no extra work. So the question "what did it think
   before this?" has an answer.
-- Every fact carries the pages it was extracted from, both as ids in its own
+- **Provenance:** each fact keeps the pages that it came from, as ids in its own
   record and as `memoryos.extracted_from` edges. Upstream stores a knowledge
-  entry as text, a timestamp, and an embedding, so it cannot answer where a fact
-  came from at all.
+  entry as text, a timestamp, and an embedding. So upstream cannot tell where a
+  fact came from.
 """
 
 from __future__ import annotations
@@ -63,16 +65,16 @@ from genie.structures import EventLog, MemoryAddress
 
 
 class LongTermMemory:
-    """The user profile, the user's knowledge base, and the assistant's."""
+    """The user profile, the knowledge base of the user, and the knowledge base of the assistant."""
 
     def __init__(self, memory: MemoryHandle, *, structures: MemoryOSStructures, knowledge_capacity: int = 100) -> None:
-        """Bind the slow tier to one user's long-term stores.
+        """Bind the slow tier to the long-term stores of one user.
 
         Args:
-            memory: Handle bounded to one user's memory.
+            memory: Handle bounded to the memory of one user.
             structures: Structure bundle for that memory.
-            knowledge_capacity: Entries each knowledge base holds,
-                `long_term_knowledge_capacity` upstream.
+            knowledge_capacity: Maximum number of entries in each knowledge
+                base, `long_term_knowledge_capacity` upstream.
 
         Raises:
             TypeError: If the capacity is not an integer.
@@ -90,20 +92,22 @@ class LongTermMemory:
         now: datetime,
         source_page_ids: Sequence[str] = (),
     ) -> ProfileRevision | None:
-        """Write the profile an analysis produced as its next revision.
+        """Write the profile from an analysis as its next revision.
 
-        Upstream the analysis is handed the current profile and returns the whole
-        thing, which then replaces it. Merging the new traits over the current
-        ones is the same effect, and appending rather than overwriting is what
-        keeps the reading it replaced readable.
+        - **Upstream:** the analysis receives the current profile and returns a
+          full profile, which replaces the current profile.
+        - **Here:** the method merges the new traits over the current traits,
+          which has the same effect. It appends a revision and does not
+          overwrite, so the old profile stays readable.
 
         Args:
-            traits: Traits the analysis set. An empty mapping writes nothing.
-            now: Time the analysis finished.
-            source_page_ids: Pages the analysis read.
+            traits: Traits that the analysis set. An empty mapping writes
+                nothing.
+            now: Time when the analysis finished.
+            source_page_ids: Ids of the pages that the analysis read.
 
         Returns:
-            The new revision, or `None` when the analysis changed no traits.
+            The new revision, or `None` when the analysis set no traits.
         """
 
         changes = string_mapping(traits, field="traits")
@@ -128,17 +132,17 @@ class LongTermMemory:
         """Return the current profile.
 
         Returns:
-            The newest revision, or `None` when no analysis has run.
+            The newest revision, or `None` when no analysis set traits yet.
         """
 
         item = self.structures.profile.current(PROFILE_ADDRESS)
         return None if item is None else _revision(item.block, item.entry.revision)
 
     def profile_history(self, *, limit: int = 100) -> list[ProfileRevision]:
-        """Return every profile an analysis has written, oldest first.
+        """Return each profile that an analysis wrote, oldest first.
 
         Args:
-            limit: Maximum revisions to return.
+            limit: Maximum number of revisions to return.
 
         Returns:
             The revisions in order.
@@ -154,16 +158,17 @@ class LongTermMemory:
         now: datetime,
         source_page_ids: Sequence[str] = (),
     ) -> tuple[KnowledgeItem, Eviction | None]:
-        """Append one fact to a knowledge base, dropping the oldest if full.
+        """Append one fact to a knowledge base, and remove the oldest fact if the base is over capacity.
 
         Args:
-            owner: Which knowledge base to write to.
+            owner: The owner of the knowledge base to write to.
             knowledge: The fact.
-            now: Time the analysis finished.
-            source_page_ids: Pages the fact was extracted from.
+            now: Time when the analysis finished.
+            source_page_ids: Ids of the pages that the fact came from.
 
         Returns:
-            The stored entry and the entry the capacity rule dropped, if any.
+            The stored entry, and the entry that the capacity rule removed or
+            `None`.
 
         Raises:
             ValueError: If the fact is blank.
@@ -199,11 +204,11 @@ class LongTermMemory:
         """Return one knowledge base, oldest first.
 
         Args:
-            owner: Which knowledge base to read.
-            limit: Maximum entries to return.
+            owner: The owner of the knowledge base to read.
+            limit: Maximum number of entries to return.
 
         Returns:
-            The entries in the order they were written.
+            The entries in write order.
         """
 
         return [_knowledge(item.block, item.entry.sequence) for item in self._log(owner).read(limit=limit)]
@@ -218,23 +223,25 @@ class LongTermMemory:
     ) -> list[KnowledgeHit]:
         """Return the entries in one knowledge base that match a query.
 
-        Genie selects the candidates inside that owner's tier, one search per
-        query term, and the score is the share of query terms the fact contains.
-        Upstream this is cosine distance over embeddings against the same
-        thresholds.
+        - **Candidates:** Genie selects them inside the tier of that owner, with
+          one search for each query term.
+        - **Score:** the fraction of query terms that the fact contains. An
+          entry with a score of zero is never kept.
+        - **Upstream:** it uses cosine distance over embeddings, with the same
+          thresholds.
 
         Args:
-            owner: Which knowledge base to search.
-            query: Free text to retrieve for.
-            threshold: Minimum score to keep, as upstream.
-            top_k: Maximum entries to return.
+            owner: The owner of the knowledge base to search.
+            query: Free text to retrieve entries for.
+            threshold: Minimum score to keep an entry, as upstream.
+            top_k: Maximum number of entries to return.
 
         Returns:
-            Hits in descending score order, ties broken on write time and then
-            text so runs agree.
+            Hits, highest score first. Ties break on write time and then on
+            text, so all runs give the same result.
 
         Raises:
-            ValueError: If the query is blank or a bound is out of range.
+            ValueError: If the query is blank or a limit is out of range.
         """
 
         text = required_text(query, field="query")
@@ -250,20 +257,20 @@ class LongTermMemory:
         return hits[:depth]
 
     def sources_of(self, block: MemoryBlock) -> list[MemoryBlock]:
-        """Return the pages a stored fact or profile revision was taken from.
+        """Return the pages that a stored fact or profile revision came from.
 
-        - The record keeps the page ids it read, and the graph keeps edges to
-          the pages themselves.
-        - The two can disagree, because a page evicted from mid-term memory
-          takes its edges with it while the ids stay written down.
-        - That difference is the useful part. The ids say what the analysis
-          read, and the edges say what can still be read back.
+        - **2 sources:** the record keeps the ids of the pages that the analysis
+          read. The graph keeps edges to the pages.
+        - **They can disagree:** when mid-term memory evicts a page, its edges go
+          away, but the ids stay in the record.
+        - **The difference is useful:** the ids tell what the analysis read. The
+          edges tell which pages a reader can still read.
 
         Args:
-            block: A knowledge entry or profile revision block.
+            block: A knowledge entry block or a profile revision block.
 
         Returns:
-            The page blocks still reachable, in id order.
+            The page blocks that the edges still reach, in page id order.
         """
 
         neighbors = self.structures.provenance.neighbors(block, relation=EXTRACTED_FROM, direction="out")
@@ -272,10 +279,11 @@ class LongTermMemory:
         return pages
 
     def counts(self) -> dict[str, int]:
-        """Return how much each long-term store holds.
+        """Return the quantity in each long-term store.
 
         Returns:
-            Entry counts per store, plus the profile's revision number.
+            The number of entries in each knowledge base, and the revision
+            number of the profile.
         """
 
         current = self.profile()
@@ -286,7 +294,7 @@ class LongTermMemory:
         }
 
     def _profile_identity(self) -> MemoryBlock:
-        """Return the profile's stable identity, registering it once."""
+        """Return the stable identity of the profile, and register it the first time."""
 
         existing = self.structures.profile.identity(PROFILE_ADDRESS)
         if existing is not None:
@@ -301,7 +309,7 @@ class LongTermMemory:
         return identity
 
     def _record_sources(self, block: MemoryBlock, source_page_ids: Sequence[str]) -> None:
-        """Link a promoted record to the pages it was extracted from."""
+        """Link a promoted record to the pages that it came from. A page id with no page gets no edge."""
 
         for page_id in source_page_ids:
             page = self.structures.ids.get(MemoryAddress(PAGE_NAMESPACE, page_id))
@@ -309,7 +317,7 @@ class LongTermMemory:
                 self.structures.provenance.add_edge(block, page, EXTRACTED_FROM, metadata={"page_id": page_id})
 
     def _enforce_capacity(self, owner: KnowledgeOwner) -> Eviction | None:
-        """Drop the oldest entry when a knowledge base is over capacity."""
+        """Remove the oldest entry when a knowledge base is over capacity."""
 
         entries = self.knowledge(owner)
         if len(entries) <= self.knowledge_capacity:
@@ -324,7 +332,7 @@ class LongTermMemory:
         )
 
     def _candidates(self, owner: KnowledgeOwner, terms: frozenset[str]) -> set[str]:
-        """Return the ids Genie's search offers for a set of query terms."""
+        """Return the ids that the Genie search finds for a set of query terms."""
 
         found: set[str] = set()
         for term in sorted(terms):
@@ -344,13 +352,13 @@ class LongTermMemory:
         return self.structures.user_root if owner == USER else self.structures.assistant_root
 
     def _log(self, owner: KnowledgeOwner) -> EventLog:
-        """Return the capped log for one knowledge base."""
+        """Return the `EventLog` of one knowledge base."""
 
         return self.structures.user_knowledge if owner == USER else self.structures.assistant_knowledge
 
 
 def _knowledge(block: MemoryBlock, sequence: int) -> KnowledgeItem:
-    """Assemble one knowledge entry from its block and log position."""
+    """Build one knowledge entry from its block and its log position."""
 
     owner = USER if block.value.get("owner") == USER else ASSISTANT
     return KnowledgeItem(
@@ -364,7 +372,7 @@ def _knowledge(block: MemoryBlock, sequence: int) -> KnowledgeItem:
 
 
 def _revision(block: MemoryBlock, revision: int) -> ProfileRevision:
-    """Assemble one profile revision from its block and revision number."""
+    """Build one profile revision from its block and its revision number."""
 
     return ProfileRevision(
         block=block,

@@ -1,22 +1,24 @@
-"""Genie structure facades wired to the Hindsight lamp's ownership tiers.
+"""Genie structure facades connected to the ownership tiers of the Hindsight lamp.
 
-A Hindsight memory bank is an isolated brain: one bank never reads another
-bank's memories.
+A Hindsight memory bank is isolated. One bank never reads the memories of
+another bank.
 
-- Here a bank is a root block plus a bounded `MemoryHandle`.
-- Its internal separation - documents, extracted facts, entities, observations,
-  and mental models - becomes ownership tiers below that root.
-- Each tier anchors the facades that tier needs, so deleting a bank deletes
-  everything in it and deleting a tier deletes the layer it holds.
+- **Bank:** here a bank is a root block plus a bounded `MemoryHandle`.
+- **Tiers:** the internal layers of a bank (documents, extracted facts,
+  entities, observations, and mental models) are ownership tiers below that
+  root.
+- **Delete scope:** each tier anchors the facades that the tier uses. So a
+  delete of the bank deletes everything in it, and a delete of a tier deletes
+  the layer in that tier.
 
-Two wiring choices carry most of the model:
+2 connection choices hold most of the model:
 
-- Facts join one `TemporalCollection` that holds both of Hindsight's time axes
-  at once. The event time is when the bank learned the fact, and the validity
-  interval is the period the fact describes.
-- Observations and mental models are `VersionedRecords`, because both are
-  refined rather than overwritten and both must be able to show what they used
-  to say.
+- **One timeline for 2 time axes:** facts join one `TemporalCollection` that
+  holds both Hindsight time axes. The event time is when the bank learned the
+  fact. The validity interval is the period that the fact describes.
+- **Versioned beliefs and answers:** observations and mental models are
+  `VersionedRecords`. The lamp refines both and does not overwrite them, so both
+  can show their earlier wording.
 """
 
 from __future__ import annotations
@@ -47,27 +49,28 @@ class HindsightStructureStore(
     TemporalStore,
     Protocol,
 ):
-    """Backend capabilities required by the Hindsight structure bundle."""
+    """Backend capabilities that the Hindsight structure bundle uses."""
 
 
 @dataclass(frozen=True, slots=True)
 class HindsightStructures:
-    """The structural views this lamp composes over one memory bank.
+    """The structure views that this lamp composes over one memory bank.
 
     Attributes:
-        tiers: Ownership view of the five tiers below the bank root.
+        tiers: Ownership view of the 5 tiers below the bank root.
         graph: Entity mentions and the associative links between facts.
         lineage: Acyclic derivation chain from documents through facts and
             observations to mental-model revisions.
-        retention: Append-only order in which facts were learned, and the
-            cursor consolidation reads from.
+        retention: Append-only order in which the bank learned facts.
+            Consolidation reads it from a cursor.
         timeline: Learned-at event time and described-period validity of every
             fact.
-        entities: Canonical entities addressed by every surface form that has
-            resolved to them.
-        observations: Consolidated beliefs, one revision per refinement.
-        mental_models: Standing answers, one revision per rebuild.
-        documents: Block that owns retained source payloads.
+        entities: Canonical entities. Every surface form that resolved to an
+            entity is an address of that entity.
+        observations: Consolidated beliefs, with 1 revision for each
+            refinement.
+        mental_models: Standing answers, with 1 revision for each rebuild.
+        documents: Block that owns the retained source payloads.
     """
 
     tiers: OwnershipTree
@@ -86,23 +89,26 @@ class HindsightStructures:
         memory: MemoryHandle,
         store: HindsightStructureStore,
     ) -> HindsightStructures:
-        """Build or reopen every structural anchor below one bounded root.
+        """Build or reopen every structure anchor below one bounded root.
 
-        Existing anchors are found by scanning the root's children, so
-        reopening a bank returns the same structures instead of duplicating
-        them. A bounded handle refuses ids outside its root, so the scan is
-        used rather than a direct lookup of the derived anchor id.
+        - **Reopen:** the method finds the anchors that already exist in the
+          children of the root. So a second call returns the same structures and does not make
+          duplicates.
+        - **Why a scan:** a bounded handle treats an unknown id as outside its
+          root and raises `AccessDenied`. So a direct read of the derived
+          anchor id fails before the anchor exists, and the method scans the
+          children instead.
 
         Args:
-            memory: Handle rooted at the block that owns the whole bank.
-            store: Backend providing acyclic-link, keyed, sequence, and
+            memory: Handle with its root at the block that owns the whole bank.
+            store: Backend with the acyclic-link, keyed, sequence, and
                 temporal capabilities.
 
         Returns:
             The structure bundle for that bank.
 
         Raises:
-            ValueError: If the handle is unbounded.
+            ValueError: If the handle is unbounded (it has no root).
         """
 
         if memory.root_id is None:
@@ -147,11 +153,11 @@ class HindsightStructures:
 
 
 def _anchor(tiers: OwnershipTree, name: str) -> MemoryBlock:
-    """Return the tier anchor with this name, creating it when absent.
+    """Return the tier anchor with this name, and create it if it does not exist.
 
-    Anchors are matched on metadata rather than value, because the
-    consolidation cursor lives in the observations anchor's value and would
-    otherwise stop the tier from being found again.
+    The function matches anchors on metadata, not on value. The consolidation
+    cursor is in the value of the observations anchor. So a match on value
+    would not find that tier again.
     """
 
     existing = next(

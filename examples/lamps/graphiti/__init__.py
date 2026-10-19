@@ -1,4 +1,4 @@
-"""Graphiti-inspired bi-temporal knowledge graph example."""
+"""Bi-temporal knowledge graph lamp, based on the design of Graphiti."""
 
 from examples.lamps.graphiti.agent import (
     Observation,

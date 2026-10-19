@@ -1,15 +1,15 @@
 """Assemble one backend from SQL blocks, a graph index, and a vector index.
 
-`RoutedBackend` accepts a shared traversal index, search index, and link store
-alongside its block routes, so a single `MemoryBackend` can be built from
-different kinds of storage. Here blocks live in SQLite, ownership edges and
-typed links live in a graph component, and searches are answered by a vector
-index.
-
-The link store needs no application wiring, because `RoutedBackend` already
-sends every link write, read, and cleanup to it. The traversal and search
-indexes are derived state that the routed backend only reads, so a hook
-refreshes them after each committed write.
+- **Shared parts:** `RoutedBackend` accepts a shared traversal index, search
+  index, and link store together with its block routes. Thus you can build one
+  `MemoryBackend` from different kinds of storage.
+- **This example:** SQLite stores the blocks. A graph component stores the
+  ownership edges and typed links. A vector index answers searches.
+- **Link store:** the application does not connect the link store to other
+  code. `RoutedBackend` already sends each link write, read, and cleanup to it.
+- **Derived indexes:** the traversal and search indexes hold derived state that
+  the routed backend only reads. Thus a hook updates them after each committed
+  write.
 
 Run from the repository root:
 
@@ -50,7 +50,7 @@ from genie import (
 from genie.query import matches_filters
 
 DIMENSIONS = 256
-"""Length of the stand-in embedding vectors."""
+"""Number of components in each example embedding vector."""
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
@@ -58,8 +58,9 @@ _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 def embed(text: str) -> tuple[float, ...]:
     """Return a deterministic bag-of-tokens vector for one text value.
 
-    A deployment would call an embedding model here. Hashing tokens into a
-    fixed number of buckets keeps the example dependency-free and repeatable.
+    A real deployment calls an embedding model here. This function hashes each
+    token into one of the `DIMENSIONS` buckets. Thus the example has no dependencies
+    and gives the same result each time.
 
     Args:
         text: Text to embed.
@@ -82,7 +83,8 @@ def cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
         right: Second vector.
 
     Returns:
-        Similarity in `[0.0, 1.0]`, or `0.0` when either vector is empty.
+        Similarity in `[0.0, 1.0]` for the non-negative vectors from `embed`.
+        The result is `0.0` if either vector is empty or has only zeros.
     """
 
     dot = sum(a * b for a, b in zip(left, right, strict=False))
@@ -94,32 +96,32 @@ def cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
 
 
 def index_text(block: MemoryBlock) -> str:
-    """Return the text an external index would embed for one block.
+    """Return the text that an external index embeds for one block.
 
     Args:
         block: Committed block as the backend stores it.
 
     Returns:
-        Type and stored value joined into one searchable string.
+        The block type and the stored value in one searchable string.
     """
 
     return f"{block.type} {block.value}"
 
 
 class GraphIndex:
-    """Ownership edges and typed links held outside the block store.
+    """Ownership edges and typed links outside the block store.
 
-    This class implements the `TraversalIndex` and `LinkStore` capability
+    The class implements the `TraversalIndex` and `LinkStore` capability
     protocols.
 
-    - It stores ids and links only, and reads every block it returns back from
-      the store that owns it. That is what lets topology live in one database
-      while block values live in another.
-    - Link storage is delegated to `InMemoryLinkStore`, which stands in for a
-      graph database's edge storage.
+    - **Ids only:** the index stores only ids and links. It reads each block
+      that it returns from the store that owns the block. Thus topology can
+      live in one database and block values in a different database.
+    - **Link storage:** the index gives link storage to `InMemoryLinkStore`.
+      That class takes the place of the edge storage of a graph database.
 
     Attributes:
-        blocks: Block store used to resolve ids into blocks.
+        blocks: Block store that the index reads to find the block for each id.
     """
 
     def __init__(self, blocks: SQLiteBackend) -> None:
@@ -135,10 +137,10 @@ class GraphIndex:
         self._edges = InMemoryLinkStore()
 
     def track(self, block: MemoryBlock) -> None:
-        """Record or move one block's ownership edge.
+        """Record the ownership edge of one block, or move the edge to a new parent.
 
         Args:
-            block: Committed block whose parent edge should be indexed.
+            block: Committed block. The index records its parent edge.
         """
 
         if block.id in self._parents:
@@ -152,7 +154,7 @@ class GraphIndex:
             self._children.setdefault(block.parent_id, []).append(block.id)
 
     def forget(self, block_id: str) -> None:
-        """Drop one block's ownership edges after it is deleted.
+        """Remove the ownership edges of one deleted block.
 
         Args:
             block_id: Id of the deleted block.
@@ -197,7 +199,7 @@ class GraphIndex:
 
         Args:
             block_id: Root block id.
-            include_self: Whether to include `block_id` in the result.
+            include_self: `True` to include `block_id` in the result.
 
         Returns:
             Descendant blocks.
@@ -212,11 +214,11 @@ class GraphIndex:
         return self._resolve(ids)
 
     def contains(self, root_id: str, block_id: str) -> bool:
-        """Return whether a block is equal to or below a root.
+        """Return `True` if a block is equal to a root or is below it.
 
         Args:
-            root_id: Potential subtree root id.
-            block_id: Candidate block id.
+            root_id: Id of the possible subtree root.
+            block_id: Id of the block to check.
 
         Returns:
             `True` when `block_id` is equal to or below `root_id`.
@@ -232,7 +234,7 @@ class GraphIndex:
         return False
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
-        """Persist one typed edge.
+        """Store one typed link.
 
         Args:
             link: Link to store.
@@ -244,10 +246,10 @@ class GraphIndex:
         return self._edges.add_link(link)
 
     def update_link(self, link: MemoryLink) -> MemoryLink:
-        """Replace the metadata of one typed edge.
+        """Replace the metadata of one typed link.
 
         Args:
-            link: Link containing the replacement metadata.
+            link: Link that contains the replacement metadata.
 
         Returns:
             Stored replacement link.
@@ -262,52 +264,55 @@ class GraphIndex:
         relation: str | None = None,
         direction: Literal["out", "in", "both"] = "out",
     ) -> list[MemoryLink]:
-        """List typed edges connected to a block.
+        """List the typed links connected to a block.
 
         Args:
             block_id: Block id to inspect.
             relation: Optional relation type filter.
-            direction: Edge direction relative to `block_id`.
+            direction: Link direction relative to `block_id`.
 
         Returns:
-            Matching links.
+            Links that match the relation and direction.
         """
 
         return self._edges.list_links(block_id, relation=relation, direction=direction)
 
     def delete_links_for_block(self, block_id: str) -> None:
-        """Delete every typed edge touching a block.
+        """Delete every typed link connected to a block.
 
         Args:
-            block_id: Block id whose edges should be removed.
+            block_id: Id of the block whose links the index removes.
         """
 
         self._edges.delete_links_for_block(block_id)
 
     def _resolve(self, block_ids: Iterable[str]) -> list[MemoryBlock]:
-        """Read ids back as blocks, skipping ids the block store no longer has."""
+        """Read the block for each id, and skip ids that the block store no longer has."""
 
         blocks = [self.blocks.get_block(block_id) for block_id in block_ids]
         return [block for block in blocks if block is not None]
 
 
 class VectorIndex:
-    """Similarity search over blocks that are stored somewhere else.
+    """Similarity search over blocks that a different store holds.
 
-    This class implements the `SearchIndex` capability protocol and ranks by
-    cosine similarity between the query vector and one vector per block.
+    The class implements the `SearchIndex` capability protocol. It ranks blocks
+    by the cosine similarity between the query vector and the vector of each
+    block.
 
-    A vector store holds embeddings and metadata, not ownership.
-
-    - Genie still hands it a scope and a root id, so this index asks the graph
-      index which blocks are in scope before ranking anything.
-    - Skipping that step would rank the whole corpus and leave `Memory` to
-      discard almost every result, since `Memory` reapplies the scope after the
-      backend has already applied `limit`.
+    - **No ownership:** a vector store holds embeddings and metadata, not
+      ownership.
+    - **Scope first:** Genie still gives the index a scope and a root id. Thus
+      the index asks the graph index which blocks are in scope before it ranks
+      blocks.
+    - **Why:** without that step, the index ranks the whole corpus. Then
+      `Memory` discards almost every result, because `Memory` applies the scope
+      again after the backend applies `limit`.
 
     Attributes:
-        blocks: Block store used to resolve ids into blocks.
-        graph: Graph index consulted to resolve query scope.
+        blocks: Block store that the index reads to find the block for each id.
+        graph: Graph index that the index reads to find the blocks in the query
+            scope.
     """
 
     def __init__(self, blocks: SQLiteBackend, graph: GraphIndex) -> None:
@@ -332,7 +337,7 @@ class VectorIndex:
         self._vectors[block.id] = embed(index_text(block))
 
     def forget(self, block_id: str) -> None:
-        """Drop one block's vector after it is deleted.
+        """Remove the vector of one deleted block.
 
         Args:
             block_id: Id of the deleted block.
@@ -347,8 +352,11 @@ class VectorIndex:
             query: Normalized query from the public API.
 
         Returns:
-            Results ordered by descending similarity, limited to `query.limit`.
-            A query with no text returns every in-scope block.
+            In-scope blocks that match `query.types` and `query.filters`, at
+            most `query.limit`. The order is by similarity, highest first, and
+            then by block id. The index drops blocks with a similarity of `0.0`
+            or less. A query with no text returns each of these blocks with a
+            score of `1.0`.
         """
 
         query_vector = embed(query.text) if query.text else None
@@ -378,7 +386,7 @@ class VectorIndex:
         return results[: query.limit]
 
     def _scope_candidate_ids(self, query: MemoryQuery) -> list[str]:
-        """Resolve one query scope into candidate ids using the graph index."""
+        """Find the candidate ids for one query scope with the graph index."""
 
         if query.root_id is None or query.scope == Scope.GLOBAL:
             return list(self._vectors)
@@ -401,17 +409,17 @@ class VectorIndex:
 class IndexSync(MemoryHook):
     """Refresh the derived traversal and search indexes after each write.
 
-    `RoutedBackend` routes every link operation into the shared link store, but
-    it only reads the shared traversal and search indexes. Both are derived from
-    committed blocks, so they are rebuilt here instead.
+    `RoutedBackend` sends every link operation to the shared link store, but it
+    only reads the shared traversal and search indexes. The 2 indexes hold data
+    that comes from committed blocks, so this hook updates them.
 
     Attributes:
-        graph: Graph index holding ownership edges.
-        vectors: Vector index holding block embeddings.
+        graph: Graph index that holds ownership edges.
+        vectors: Vector index that holds block embeddings.
     """
 
     def __init__(self, graph: GraphIndex, vectors: VectorIndex) -> None:
-        """Create a synchronizer for one graph and vector index pair.
+        """Create a hook that keeps one graph index and one vector index current.
 
         Args:
             graph: Graph index to keep current.
@@ -422,7 +430,7 @@ class IndexSync(MemoryHook):
         self.vectors = vectors
 
     def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-        """Index a newly stored block."""
+        """Add a new stored block to both indexes."""
 
         self.graph.track(block)
         self.vectors.index(block)
@@ -433,27 +441,32 @@ class IndexSync(MemoryHook):
         previous: MemoryBlock,
         stored: MemoryBlock,
     ) -> None:
-        """Re-index a block whose value or parent changed."""
+        """Index an updated block again.
+
+        `Memory.update` and `Memory.set` can change the value, but not the
+        parent. Thus `GraphIndex.track` keeps the same ownership edge, and only
+        the vector can change.
+        """
 
         self.graph.track(stored)
         self.vectors.index(stored)
 
     def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
-        """Drop every derived record for a deleted block."""
+        """Remove every derived record of a deleted block."""
 
         self.graph.forget(block.id)
         self.vectors.forget(block.id)
 
 
 def main() -> None:
-    """Store blocks in SQLite while a graph and a vector index serve queries."""
+    """Store blocks in SQLite, and answer queries from a graph index and a vector index."""
 
     print("== Heterogeneous routed backend ==")
     blocks = SQLiteBackend(":memory:")
     graph = GraphIndex(blocks)
     vectors = VectorIndex(blocks, graph)
-    # One `MemoryBackend` assembled from three components: blocks in SQL, topology
-    # in the graph index, ranking in the vector index.
+    # One `MemoryBackend` from 3 components. SQL holds the blocks, the graph index
+    # holds the topology, and the vector index ranks the results.
     backend = RoutedBackend(
         {"sql": blocks},
         default_route="sql",
@@ -483,11 +496,11 @@ def main() -> None:
     glossary = memory.put(type="note", value="Glossary of retrieval terms")
     reference = memory.add_link(project, glossary, "references")
 
-    # Word order is reversed and the phrase never appears in the stored value,
-    # so a substring matcher would find nothing. Cosine similarity still ranks
+    # The query reverses the word order, and the stored value does not contain the
+    # phrase. Thus a substring matcher finds nothing. Cosine similarity still ranks
     # the requirement first.
     semantic_results = memory.search("agnostic database", scope="global")
-    # The vector index has no idea what a subtree is; it asked the graph index.
+    # The vector index does not know what a subtree is. It asks the graph index.
     subtree_results = memory.search("retrieval", root=project, scope="subtree")
     linked_results = memory.search("glossary", root=project, scope="links")
     filtered_results = memory.search(
@@ -506,28 +519,28 @@ def main() -> None:
     print(f"link search reached the glossary: {linked_results[0].block.value}")
     print(f"filtered subtree search: {filtered_results[0].block.value}")
 
-    # Blocks really do live in SQLite and nowhere else.
+    # The blocks are in SQLite and in no other component.
     assert blocks.get_block(agnostic.id) is not None
     assert graph.blocks is blocks
 
-    # Ownership really does come from the graph index, not from SQLite.
+    # The ownership data comes from the graph index, not from SQLite.
     assert [block.id for block in memory.children(project)] == [agnostic.id, notes.id]
     assert graph.contains(project.id, notes.id)
     assert not graph.contains(project.id, glossary.id)
 
-    # Ranking really does come from the vector index.
+    # The vector index ranks the results.
     assert [result.block.id for result in semantic_results] == [agnostic.id]
     assert 0.0 < semantic_results[0].score < 1.0
     assert semantic_results[0].reason is not None
     assert semantic_results[0].reason.startswith("cosine ")
 
-    # Scope resolution reached the graph index before ranking ran.
+    # The vector index read the scope from the graph index before it ranked the blocks.
     assert [result.block.id for result in subtree_results] == [project.id]
     assert [result.block.id for result in linked_results] == [glossary.id]
     assert [result.block.id for result in filtered_results] == [agnostic.id]
     assert memory.list_links(project) == [reference]
 
-    # A recursive delete prunes all three components together.
+    # A recursive delete removes the data from all 3 components together.
     memory.delete(project)
 
     assert memory.get(agnostic) is None

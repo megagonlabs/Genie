@@ -1,21 +1,21 @@
-"""A tool interface and deterministic agent for the MemoryOS lamp.
+"""A tool interface and a deterministic agent for the MemoryOS lamp.
 
-MemoryOS is used through a handful of calls. What makes it interesting to put
-behind a tool boundary is how much happens that the caller did not ask for.
+An agent uses MemoryOS through a small number of calls. A tool boundary is
+useful here, because much occurs that the caller did not ask for:
 
-- `add_memory` takes one exchange, and on the way out it may have paged the
-  oldest exchange into a segment, opened that segment, evicted a colder one,
-  promoted the hottest one into the profile, and dropped the oldest fact from a
-  knowledge base to make room.
-- So every tool here returns what the tiers did rather than a success flag. The
-  call log is where the hierarchy becomes visible.
-- Retrieving is not free. `retrieve_memory` raises the heat of every segment it
-  reaches, which is what eventually promotes one. An agent that keeps asking
-  about seats is an agent that ends up with a profile that mentions seats.
-- Every tool set is bound to one user's memory at construction, so no tool
-  argument can name another user's tiers.
-- The example agent chooses its calls from explicit inputs rather than from a
-  model, which keeps the demo runnable with no API key.
+- **`add_memory` has many effects:** it takes one exchange. Before it returns,
+  it can page the oldest exchange into a segment, open that segment, evict a
+  colder segment, promote the hottest segment into the profile, and remove the
+  oldest fact from a knowledge base to make room.
+- **Results, not success flags:** so each tool here returns what the tiers did.
+  The call log shows the hierarchy.
+- **Retrieval has an effect:** `retrieve_memory` raises the heat of each segment
+  that it reaches, and heat promotes a segment at a later time. An agent that
+  asks about seats again and again gets a profile that mentions seats.
+- **Bound to one user:** each tool set is bound to the memory of one user when
+  it is created. So no tool argument can name the tiers of another user.
+- **No model:** the example agent selects its calls from explicit inputs and not
+  from a model. So the demo runs with no API key.
 """
 
 from __future__ import annotations
@@ -44,11 +44,11 @@ from examples.lamps.memoryos.model import (
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """Description of a tool presented to an agent.
+    """Description of a tool that an agent receives.
 
     Attributes:
-        name: Stable tool name used for calls.
-        description: Plain-language guidance for the agent.
+        name: Stable tool name for calls.
+        description: Plain-language description for the agent.
         parameters: Mapping of argument names to short type descriptions.
     """
 
@@ -59,10 +59,10 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class ToolCallRecord:
-    """One inspectable tool call made by the example agent.
+    """One tool call of the example agent, kept for inspection.
 
     Attributes:
-        name: Invoked tool name.
+        name: Name of the called tool.
         arguments: Copy of the JSON-compatible arguments.
         result: Copy of the JSON-compatible result.
     """
@@ -73,15 +73,15 @@ class ToolCallRecord:
 
 
 class MemoryOSTools:
-    """Memory tools bound to one user's hierarchy, with JSON-compatible calls."""
+    """Memory tools bound to the hierarchy of one user, with JSON-compatible calls."""
 
     def __init__(self, system: MemoryOS, *, user_id: str, assistant_id: str) -> None:
-        """Bind one tool set to one user's memory operating system.
+        """Bind one tool set to the memory operating system of one user.
 
         Args:
-            system: The hierarchy every call reads and writes.
-            user_id: Whose memory this is, shown in the tool descriptions.
-            assistant_id: Which assistant it is paired with.
+            system: The hierarchy that each call reads and writes.
+            user_id: The owner of this memory. The tool descriptions show it.
+            assistant_id: The assistant that this memory is paired with.
         """
 
         self.system = system
@@ -100,7 +100,7 @@ class MemoryOSTools:
         }
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        """Invoke one named tool with JSON-compatible arguments.
+        """Call one named tool with JSON-compatible arguments.
 
         Args:
             name: Tool name.
@@ -119,17 +119,17 @@ class MemoryOSTools:
         return handler(**arguments)
 
     def _add_memory(self, **exchange: Any) -> dict[str, Any]:
-        """Implement `add_memory`, one exchange and everything it sets off."""
+        """Implement `add_memory`: store one exchange, and return all effects that it started."""
 
         return self.system.add_memory(exchange_from_json(exchange)).as_json()
 
     def _retrieve_memory(self, *, query: str, at: str) -> dict[str, Any]:
-        """Implement `retrieve_memory` across all four tiers."""
+        """Implement `retrieve_memory` across all 4 tiers."""
 
         return self.system.retrieve_memory(query, now=parse_timestamp(at, field="at")).as_json()
 
     def _get_user_profile(self) -> dict[str, Any]:
-        """Implement `get_user_profile`, including the readings it replaced."""
+        """Implement `get_user_profile`, with the old profiles that the current profile replaced."""
 
         current = self.system.get_user_profile()
         history = self.system.profile_history()
@@ -141,7 +141,7 @@ class MemoryOSTools:
         }
 
     def _inspect_sessions(self, *, at: str) -> dict[str, Any]:
-        """Implement `inspect_sessions`, the heat table promotion reads."""
+        """Implement `inspect_sessions`, which returns the heat table that promotion reads."""
 
         now = parse_timestamp(at, field="at")
         segments = self.system.segments(now=now)
@@ -154,13 +154,13 @@ class MemoryOSTools:
         }
 
     def _analyze_now(self, *, at: str) -> dict[str, Any]:
-        """Implement `analyze_now`, upstream's forced mid-term analysis."""
+        """Implement `analyze_now`, the forced mid-term analysis of upstream."""
 
         promotion = self.system.force_mid_term_analysis(now=parse_timestamp(at, field="at"))
         return {"promoted": promotion.as_json() if promotion is not None else None}
 
     def _trace_knowledge(self, *, owner: str, knowledge_id: str) -> dict[str, Any]:
-        """Implement `trace_knowledge`, the provenance read upstream cannot make."""
+        """Implement `trace_knowledge`, the provenance read that upstream cannot do."""
 
         selected = owner_of(owner)
         item = next((entry for entry in self.system.knowledge(selected) if entry.id == knowledge_id), None)
@@ -189,19 +189,19 @@ class MemoryOSTools:
         }
 
     def _memory_stats(self) -> dict[str, Any]:
-        """Implement `memory_stats`, the counts each tier holds."""
+        """Implement `memory_stats`, which returns the counts of each tier."""
 
         return {"user_id": self.user_id, "assistant_id": self.assistant_id, **self.system.memory_stats()}
 
 
 @dataclass(slots=True)
 class MemoryOSAgent:
-    """A deterministic agent whose only memory access is the tool set.
+    """A deterministic agent that uses memory only through the tool set.
 
     Attributes:
-        name: Agent name shown in the demo output.
-        tools: Tool set bound to one user's hierarchy.
-        call_log: Every call the agent made, in order.
+        name: Agent name in the demo output.
+        tools: Tool set bound to the hierarchy of one user.
+        call_log: Each call that the agent made, in order.
     """
 
     name: str
@@ -209,50 +209,50 @@ class MemoryOSAgent:
     call_log: list[ToolCallRecord] = field(default_factory=list)
 
     def record(self, exchange: Exchange) -> dict[str, Any]:
-        """Hand one exchange to the hierarchy and read back what moved.
+        """Give one exchange to the hierarchy, and return what moved.
 
         Args:
-            exchange: The turn pair, its time, its themed summary, whether it
-                continues the previous one, and what an analysis of it would
-                conclude.
+            exchange: The user turn and the reply, its time, its themed summary,
+                a flag that tells if it continues the previous exchange, and
+                what an analysis of it would conclude.
 
         Returns:
-            The stored exchange plus every page-out, promotion, and eviction the
-            call caused.
+            The stored exchange, and each page-out, promotion, and eviction that
+            the call caused.
         """
 
         return self._call("add_memory", exchange.as_json())
 
     def recall(self, query: str, *, at: datetime) -> dict[str, Any]:
-        """Retrieve context, which also heats every segment the query reaches.
+        """Retrieve context. This also makes each segment that the query reaches hotter.
 
         Args:
-            query: Free text to retrieve for.
+            query: Free text to retrieve context for.
             at: Time of the retrieval.
 
         Returns:
-            One block of context per tier.
+            One part of the context for each tier.
         """
 
         return self._call("retrieve_memory", {"query": query, "at": format_timestamp(at)})
 
     def review(self, *, at: datetime) -> dict[str, Any]:
-        """Read the heat table that decides what gets promoted next.
+        """Read the heat table that decides the next promotion.
 
         Args:
-            at: Time heat is being taken at.
+            at: Time for the heat calculation.
 
         Returns:
-            Every open session with its three heat terms.
+            Each open session with its 3 heat terms.
         """
 
         return self._call("inspect_sessions", {"at": format_timestamp(at)})
 
     def analyze(self, *, at: datetime) -> dict[str, Any]:
-        """Promote the hottest session now instead of waiting for it to warm.
+        """Promote the hottest session now, and do not wait until it becomes hot.
 
         Args:
-            at: Time the analysis is taken at.
+            at: Time of the analysis.
 
         Returns:
             What the analysis wrote into long-term memory.
@@ -261,14 +261,15 @@ class MemoryOSAgent:
         return self._call("analyze_now", {"at": format_timestamp(at)})
 
     def trace(self, owner: KnowledgeOwner, knowledge_id: str) -> dict[str, Any]:
-        """Ask which pages a stored fact was extracted from.
+        """Ask which pages a stored fact came from.
 
         Args:
-            owner: Whose knowledge base holds the fact.
+            owner: The owner of the knowledge base that holds the fact.
             knowledge_id: Block id of the entry.
 
         Returns:
-            The pages the analysis read, and which of them are still stored.
+            The ids of the pages that the analysis read, and the pages that are
+            still stored.
         """
 
         return self._call("trace_knowledge", {"owner": owner, "knowledge_id": knowledge_id})
@@ -278,7 +279,7 @@ class MemoryOSAgent:
 
         Args:
             page_id: Page to start from.
-            depth: Maximum edges to follow.
+            depth: Maximum number of edges to follow.
 
         Returns:
             The pages that continue the conversation.
@@ -287,10 +288,10 @@ class MemoryOSAgent:
         return self._call("read_dialogue_chain", {"page_id": page_id, "depth": depth})
 
     def stats(self) -> dict[str, Any]:
-        """Read how much each tier holds.
+        """Read the quantity in each tier.
 
         Returns:
-            Counts per tier, plus the profile's revision number.
+            Counts for each tier, and the revision number of the profile.
         """
 
         return self._call("memory_stats", {})
@@ -305,18 +306,20 @@ class MemoryOSAgent:
         chain_from: str,
         owner: KnowledgeOwner = USER,
     ) -> str:
-        """Answer from every tier, and say what each one contributed.
+        """Answer from each tier, and tell what each tier gave.
 
         Args:
-            question: User-facing question included in the report.
-            query: Retrieval text the tiers are searched with.
+            question: The question for the user, which the report shows.
+            query: Retrieval text for the search of the tiers.
             at: Time of the retrieval.
-            knowledge_id: Promoted fact to trace back to the pages it came from.
-            chain_from: Page to walk the dialogue chain forward from.
-            owner: Whose knowledge base holds the traced fact.
+            knowledge_id: Promoted fact to trace back to the pages that it came
+                from.
+            chain_from: Page from which the walk along the dialogue chain
+                starts.
+            owner: The owner of the knowledge base that holds the traced fact.
 
         Returns:
-            Readable answer assembled from tool results.
+            Readable answer made from the tool results.
         """
 
         context = self.recall(query, at=at)
@@ -346,16 +349,16 @@ class MemoryOSAgent:
         return "\n".join(lines)
 
     def tool_usage(self) -> dict[str, int]:
-        """Return call counts per tool in first-call order.
+        """Return the number of calls for each tool, in first-call order.
 
         Returns:
-            Tool names mapped to how often the agent called them.
+            Tool names mapped to the number of times that the agent called them.
         """
 
         return dict(Counter(record.name for record in self.call_log))
 
     def _call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        """Call one tool and retain an isolated trace record."""
+        """Call one tool, and keep a trace record with separate copies of the arguments and the result."""
 
         result = self.tools.call(name, arguments)
         self.call_log.append(ToolCallRecord(name=name, arguments=deepcopy(dict(arguments)), result=deepcopy(result)))
@@ -363,7 +366,7 @@ class MemoryOSAgent:
 
 
 def _definitions(tools: MemoryOSTools) -> tuple[ToolDefinition, ...]:
-    """Describe the tool set, naming the hierarchy every call is bound to."""
+    """Describe the tool set, and name the hierarchy that each call is bound to."""
 
     bound = f"{tools.user_id}/{tools.assistant_id}"
     capacity = tools.system.short_term.capacity
@@ -423,7 +426,7 @@ def _definitions(tools: MemoryOSTools) -> tuple[ToolDefinition, ...]:
 
 
 def _profile_lines(profile: Mapping[str, Any]) -> list[str]:
-    """Render the profile traits, or say nothing has been promoted."""
+    """Format the profile traits, or tell that no promotion set traits yet."""
 
     if not profile:
         return ["- nothing promoted yet"]
@@ -431,7 +434,7 @@ def _profile_lines(profile: Mapping[str, Any]) -> list[str]:
 
 
 def _queue_lines(entries: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Render the resident queue entries, or say the queue is empty."""
+    """Format the entries in the queue, or tell that the queue is empty."""
 
     if not entries:
         return ["- none"]
@@ -439,7 +442,7 @@ def _queue_lines(entries: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _page_lines(pages: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Render retrieved mid-term pages with the session they came from."""
+    """Format the retrieved mid-term pages with the session of each page, or tell that none matched."""
 
     if not pages:
         return ["- none"]
@@ -447,7 +450,7 @@ def _page_lines(pages: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _knowledge_lines(hits: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Render retrieved knowledge entries, or say none matched."""
+    """Format the retrieved knowledge entries, or tell that no entry matched."""
 
     if not hits:
         return ["- none"]
@@ -455,7 +458,7 @@ def _knowledge_lines(hits: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _trace_lines(traced: Mapping[str, Any]) -> list[str]:
-    """Render where one promoted fact came from, which upstream cannot say."""
+    """Format the source of one promoted fact, which upstream cannot tell."""
 
     if not traced["found"]:
         return ["That fact is no longer in the knowledge base:", "- it was dropped when the base reached capacity"]
@@ -466,7 +469,7 @@ def _trace_lines(traced: Mapping[str, Any]) -> list[str]:
 
 
 def _chain_lines(chain: Mapping[str, Any]) -> list[str]:
-    """Render a dialogue chain as the exchange that opened it and its sequels."""
+    """Format a dialogue chain as the exchange that started it and the exchanges that followed."""
 
     if not chain["found"]:
         return ["- that page is no longer in mid-term memory"]

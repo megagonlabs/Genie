@@ -1,1 +1,1 @@
-"""Example memory systems assembled from Genie building blocks."""
+"""Example memory systems, called lamps, that combine Genie parts."""

@@ -1,23 +1,26 @@
-"""Hybrid fact retrieval for the Graphiti-inspired lamp.
+"""Hybrid fact retrieval for the Graphiti lamp.
 
-Graphiti retrieves by running several retrievers over the graph and fusing their
-ranked results, rather than by hitting one index. Its default recipe,
-`EDGE_HYBRID_SEARCH_RRF`, combines full-text search, embedding similarity, and
-breadth-first graph traversal over facts under reciprocal rank fusion. This
-module implements that one recipe.
+- **Upstream:** Graphiti does not use one index for retrieval. It runs several
+  retrievers over the graph and fuses their ranked results.
+- **Default recipe:** `EDGE_HYBRID_SEARCH_RRF` combines full-text search,
+  embedding similarity, and breadth-first graph traversal over facts. It fuses
+  the results with reciprocal rank fusion. This module implements only this
+  recipe.
 
-Ranking is exactly what Genie leaves to applications, so only the retrievers
-reach into the library:
+Genie leaves ranking to applications. So the lamp uses the library only in the
+retrievers and the filters:
 
-- `keyword` issues one `MemoryHandle.search` per query term.
-- `graph` walks `PropertyGraph` outward from a center entity.
-- `similarity` is token-set cosine overlap, a visible stand-in for embeddings.
-- The bi-temporal filters are the other Genie-facing part. They narrow the
-  candidate set through the same temporal collections the graph stores facts in.
+- **`keyword`:** sends one `MemoryHandle.search` for each query term.
+- **`graph`:** walks `PropertyGraph` outward from a center entity.
+- **`similarity`:** uses the cosine overlap of token sets, without Genie. It is
+  a visible replacement for embeddings.
+- **Bi-temporal filters:** these are the other part that uses Genie. They narrow
+  the candidate set through the same temporal collections in which the graph
+  stores facts.
 
-Graphiti's other recipes and its MMR, node-distance, episode-mention, and
-cross-encoder rerankers are deliberately not reproduced. The lamp README lists
-them as omissions.
+The lamp intentionally does not reproduce the other recipes of Graphiti, or its
+MMR, node-distance, episode-mention, and cross-encoder rerankers. The lamp
+README lists them as omissions.
 """
 
 from __future__ import annotations
@@ -41,15 +44,20 @@ _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
 @dataclass(frozen=True, slots=True)
 class SearchFilters:
-    """Restrictions applied before retrieval runs.
+    """Restrictions that apply before retrieval starts.
 
-    `as_of` and `known_at` are the bi-temporal filters: the first keeps facts
-    that were true then, the second keeps facts the graph had on record then.
+    - **`as_of`:** a bi-temporal filter. It keeps the facts that were true at
+      that time.
+    - **`known_at`:** a bi-temporal filter. It keeps the facts that the graph
+      had on record at that time.
 
     Attributes:
-        as_of: Optional effective time facts must have been true at.
-        known_at: Optional ingestion time facts must have been on record at.
-        relations: Optional relation names to keep.
+        as_of: Optional effective time. Search keeps only facts that were true
+            at this time.
+        known_at: Optional ingestion time. Search keeps only facts that were on
+            record at this time.
+        relations: Optional relation names to keep. An empty tuple keeps all
+            relations.
     """
 
     as_of: datetime | None = None
@@ -62,9 +70,10 @@ class SearchHit:
     """One ranked fact.
 
     Attributes:
-        fact: The matching fact with both of its time intervals.
-        text: Sentence the retrievers scored.
-        score: Fused score, higher first.
+        fact: The fact that matches, with both of its time intervals.
+        text: Sentence that the retrievers scored.
+        score: Fused score, rounded to 6 decimal places. A higher score ranks
+            first.
     """
 
     fact: TemporalFact
@@ -83,13 +92,14 @@ class _Candidate:
     """Internal retrieval candidate before fusion.
 
     Attributes:
-        fact: The fact this candidate stands for.
-        text: Sentence the retrievers score.
+        fact: The fact that this candidate represents.
+        text: Sentence that the retrievers score.
         tokens: Tokens of the fact sentence and its resolved triplet.
-        order: Stable tie-break key. Ranking must never fall back on
-            `MemoryBlock.id`, which is a fresh UUID on every run: an id-ordered
-            tie changes a fact's rank inside a retriever, which changes its
-            reciprocal-rank contribution and makes scores differ run to run.
+        order: Stable tie-break key from the resolved triplet and the start of
+            the valid time. Ranking never uses `MemoryBlock.id`, because the
+            id is a new UUID on every run. A tie that the id breaks changes the
+            rank of a fact inside a retriever. That changes its reciprocal-rank
+            contribution, and the scores differ from run to run.
     """
 
     fact: TemporalFact
@@ -105,7 +115,7 @@ class GraphitiSearch:
         """Create a search facade over a graph.
 
         Args:
-            graph: Graph whose facts are searched.
+            graph: Graph with the facts to search.
         """
 
         self._graph = graph
@@ -118,20 +128,22 @@ class GraphitiSearch:
         filters: SearchFilters | None = None,
         limit: int = 10,
     ) -> list[SearchHit]:
-        """Run the hybrid recipe and return fused hits.
+        """Run the hybrid recipe and return the fused hits.
 
         Args:
             query: Natural-language query text.
-            center: Optional entity that anchors graph traversal. Without one
-                the `graph` retriever contributes nothing.
+            center: Optional entity at the start of the graph traversal.
+                Without it, the `graph` retriever adds nothing.
             filters: Optional bi-temporal and relation restrictions.
-            limit: Maximum hits to return.
+            limit: Maximum number of hits to return.
 
         Returns:
-            Hits ordered by fused score, highest first.
+            Hits in fused score order, highest first. Ties use the stable
+            order key of each fact.
 
         Raises:
-            ValueError: If the query is empty or `limit` is negative.
+            ValueError: If the query is not a string or is empty, or if `limit`
+                is not an integer, is a boolean, or is negative.
         """
 
         if not isinstance(query, str) or not query.strip():
@@ -183,11 +195,12 @@ class GraphitiSearch:
         }
 
     def _keyword_ranking(self, query: str, candidates: dict[str, _Candidate]) -> list[str]:
-        """Rank candidates by how many query terms Genie search matched.
+        """Rank candidates by the number of query terms that Genie search found.
 
-        One `MemoryHandle.search` per term is a transparent stand-in for BM25:
-        the portable query layer does the matching, and the lamp only counts
-        which candidates each term reached.
+        - **Replacement for BM25:** one `MemoryHandle.search` for each term is a
+          transparent replacement for BM25.
+        - **Division of work:** the portable query layer matches the terms. The
+          lamp only counts the candidates that each term found.
         """
 
         matches: dict[str, int] = {}
@@ -234,11 +247,14 @@ class GraphitiSearch:
 def _reciprocal_rank_fusion(rankings: Sequence[Sequence[str]]) -> dict[str, float]:
     """Fuse ranked id lists with reciprocal rank fusion.
 
+    Each ranking adds `1 / (_RRF_CONSTANT + rank)` to the score of each id. The
+    first rank is 1.
+
     Args:
-        rankings: One ranked id list per retriever.
+        rankings: One ranked id list for each retriever.
 
     Returns:
-        Fused score per id that appeared in at least one ranking.
+        The fused score of each id that is in 1 or more rankings.
     """
 
     fused: dict[str, float] = {}
@@ -249,7 +265,10 @@ def _reciprocal_rank_fusion(rankings: Sequence[Sequence[str]]) -> dict[str, floa
 
 
 def _similarity_ranking(tokens: frozenset[str], candidates: dict[str, _Candidate]) -> list[str]:
-    """Rank candidates by token-set cosine overlap with the query."""
+    """Rank candidates by the cosine overlap of their tokens with the query.
+
+    The ranking leaves out candidates with no overlap.
+    """
 
     matched = [
         (fact_id, score)
@@ -266,7 +285,7 @@ def _similarity_ranking(tokens: frozenset[str], candidates: dict[str, _Candidate
 
 
 def _cosine(left: frozenset[str], right: frozenset[str]) -> float:
-    """Return cosine similarity between two token sets."""
+    """Return the cosine similarity between 2 token sets."""
 
     if not left or not right:
         return 0.0
@@ -274,6 +293,6 @@ def _cosine(left: frozenset[str], right: frozenset[str]) -> float:
 
 
 def _tokenize(value: str) -> frozenset[str]:
-    """Split text into lowercase alphanumeric tokens."""
+    """Split case-folded text into tokens of letters `a` to `z` and digits."""
 
     return frozenset(_TOKEN_PATTERN.findall(value.casefold()))

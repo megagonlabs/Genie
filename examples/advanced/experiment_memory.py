@@ -1,4 +1,4 @@
-"""Compose all seven optional structures around the same memory blocks.
+"""Compose all 7 optional structures around the same memory blocks.
 
 Run from the repository root:
 
@@ -35,7 +35,7 @@ from genie.structures import (
 
 
 def main() -> None:
-    """Use the characteristic operations of every optional structure."""
+    """Use the typical operations of each optional structure."""
 
     print("== Experiment memory using all seven structures ==")
     backend = InMemoryBackend()
@@ -151,7 +151,8 @@ def main() -> None:
     assert [item.entry.revision for item in versions.history(record_address)] == [1, 2]
     assert current.block == second_result
 
-    # `LineageDAG` uses the backend's atomic acyclic-link capability.
+    # `LineageDAG` adds each edge with the atomic acyclic-link capability of
+    # the backend. So an edge that makes a cycle causes `MemoryConflict`.
     try:
         lineage.add(second_result, experiment)
     except MemoryConflict:

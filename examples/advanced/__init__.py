@@ -1,1 +1,1 @@
-"""Advanced runnable examples for optional Genie structures."""
+"""Advanced runnable examples for the optional Genie structures."""

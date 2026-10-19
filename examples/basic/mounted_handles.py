@@ -1,13 +1,15 @@
-"""Let a bounded handle follow symbolic mounts without widening its subtree.
+"""Let a bounded handle follow symbolic mounts and keep its subtree boundary.
 
-Mount access is a separate handle capability.
+Mount access is a separate handle capability (`allow_mounts`).
 
-- Without `allow_mounts`, a handle cannot list, resolve, or create mounts at
-  all.
-- With it, a handle may resolve a mount and receive a block outside its own
-  subtree.
-- Ordinary reads, searches, and deletes still stay inside the boundary.
-- A sub-handle can never grant itself a capability its parent lacks.
+- **Without `allow_mounts`:** a handle cannot list, discover, resolve, or create
+  mounts.
+- **With `allow_mounts`:** a handle can resolve a mount and get a block outside
+  its own subtree.
+- **Same boundary:** ordinary reads, searches, and deletes stay inside the
+  boundary.
+- **No escalation:** a sub-handle cannot give itself a capability that its
+  parent does not have.
 
 Run from the repository root:
 
@@ -34,8 +36,8 @@ def main() -> None:
     """Compare a bounded handle with and without mount access."""
 
     print("== Mounted handles ==")
-    # This example focuses on handle capabilities rather than policies, so
-    # blocks are readable by every principal.
+    # This example shows handle capabilities, not policies. So
+    # `MemoryPolicy.public()` lets every principal read the blocks.
     memory = Memory(
         backend=InMemoryBackend(),
         principal="system",
@@ -46,13 +48,13 @@ def main() -> None:
     reference = memory.put(type="project", value="Shared compliance reference")
     reference_note = memory.put(parent=reference, type="note", value="Retention is 30 days")
 
-    # Trusted application code decides which memory a subtree may point at.
+    # Trusted application code decides which memory a subtree can refer to.
     mount = memory.add_mount(project, reference, metadata={"label": "compliance"})
 
     plain = memory.get_handle(root=project, principal="agent:planner")
     linked = memory.get_handle(root=project, principal="agent:auditor", allow_mounts=True)
 
-    # Without the capability, every mount operation is refused.
+    # Without the capability, the handle raises `AccessDenied` for every mount operation.
     try:
         plain.list_mounts(project)
     except AccessDenied:
@@ -66,7 +68,7 @@ def main() -> None:
     else:
         raise AssertionError("A handle without mount access must not resolve mounts.")
 
-    # With the capability, the handle discovers and resolves the mount.
+    # With the capability, the handle lists, discovers, and resolves the mount.
     mounts = linked.list_mounts(project)
     discovered = linked.discover_mounts(project)
     target = linked.resolve_mount(mount)
@@ -80,8 +82,8 @@ def main() -> None:
     assert target is not None
     assert target.id == reference.id
 
-    # Resolving is explicit and does not widen the boundary. The mounted tree
-    # is still outside the handle's subtree for every ordinary operation.
+    # A resolve is explicit and does not make the boundary wider. For each
+    # ordinary operation, the mounted tree stays outside the subtree of the handle.
     assert linked.search("retention", scope="subtree") == []
     assert [block.id for block in linked.children(project)] == [task.id]
     try:
@@ -91,7 +93,7 @@ def main() -> None:
     else:
         raise AssertionError("A mount must not widen ordinary subtree reads.")
 
-    # A sub-handle cannot add a capability its parent does not have.
+    # A sub-handle cannot add a capability that its parent does not have.
     try:
         plain.get_handle(root=task, allow_mounts=True)
     except AccessDenied:
@@ -99,9 +101,9 @@ def main() -> None:
     else:
         raise AssertionError("A sub-handle must not escalate its capabilities.")
 
-    # A sub-handle may keep mount access, but narrowing its root moves the
-    # project's mount out of reach. The capability is not a way around the
-    # boundary.
+    # A sub-handle can keep mount access. But its narrower root puts the mount
+    # source (the project) outside its subtree, so it cannot resolve the mount.
+    # The capability does not bypass the boundary.
     nested = linked.get_handle(root=task, allow_mounts=True)
     assert nested.allow_mounts
     try:

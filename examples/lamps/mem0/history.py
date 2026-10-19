@@ -1,26 +1,28 @@
-"""The change history Mem0 keeps beside its memories.
+"""The change history that Mem0 keeps with its memories.
 
-Mem0 runs a second store purely for provenance.
+Mem0 has a second store only for provenance, that is, the source of each memory:
 
-- Every write the pipeline applies appends a row saying which memory changed,
-  what it said before, what it says now, which of `ADD`, `UPDATE`, or `DELETE`
-  happened, and who the turn came from.
-- `Memory.history(memory_id)` reads the rows for one memory.
-- A decision of `NONE` writes nothing, so the history records changes rather
-  than attempts.
+- **One row for each write:** each write that the pipeline applies adds a row.
+  The row tells which memory changed, its old text, and its new text. It also
+  tells which of `ADD`, `UPDATE`, or `DELETE` occurred, and the speaker of the
+  source turn.
+- **One memory:** `Memory.history(memory_id)` reads the rows for one memory.
+- **No row for `NONE`:** a `NONE` decision writes nothing. Thus the history
+  records changes, not attempts.
 
-Two Genie facades over the same event blocks give both readings:
+2 Genie facades over the same event blocks give the 2 views:
 
-- `VersionedRecords`, anchored on one identity per memory, is that memory's own
-  history in order.
-- `EventLog`, anchored on the tier, is the journal across every memory in the
-  order changes were applied.
-- The events are owned by the history tier rather than by the memory they
-  describe, which is the point: a deleted memory still has a readable history,
-  and its final row is the deletion.
-- Each identity also keeps the scope path of the memory it describes. The events
-  outlive the memory, so the store can no longer answer who owned it, and a
-  caller that wants to scope-check a history read needs that answer here.
+- **`VersionedRecords`:** its anchor is one identity for each memory. It is the
+  history of that memory, in order.
+- **`EventLog`:** its anchor is the tier. It is the journal of all memories, in
+  the order that the lamp applied the changes.
+- **The history tier owns the events:** the memory that the events describe does
+  not own them. This is the purpose of the split. A deleted memory still has a
+  history that a caller can read, and the last row is the delete.
+- **Scope on the identity:** each identity also keeps the scope path of its
+  memory. The events continue to exist after the delete of the memory, but then
+  the store cannot tell who owned the memory. Thus a caller that checks the
+  scope of a history read uses the scope on the identity.
 """
 
 from __future__ import annotations
@@ -48,14 +50,14 @@ from genie.structures import MemoryAddress
 
 
 class HistoryLog:
-    """Append-only history of every change made to every memory."""
+    """Append-only history of all changes to all memories."""
 
     def __init__(self, memory: MemoryHandle, *, structures: Mem0Structures) -> None:
         """Create a history log over one bounded handle.
 
         Args:
-            memory: Bounded Genie handle owning the history tier.
-            structures: Facade bundle built over the same handle.
+            memory: Bounded Genie handle that owns the history tier.
+            structures: Facade bundle over the same handle.
         """
 
         self.memory = memory
@@ -73,31 +75,34 @@ class HistoryLog:
         role: str | None = None,
         at: datetime,
     ) -> HistoryEntry:
-        """Append one change to a memory's history and to the journal.
+        """Append one change to the history of a memory and to the journal.
 
-        The identity a memory's history hangs from is registered on its first
-        event, so a memory that is never written has no history record at all.
-        The scope is written on that identity and never changed afterwards,
-        because a memory stays in the scope it was created in.
+        - **Identity at the first event:** the method registers the identity of
+          a memory history at the first event of that memory. Thus a memory
+          with no writes has no history record.
+        - **Fixed scope:** the method writes the scope on that identity once,
+          and does not change it later. A memory stays in the scope where the
+          lamp created it.
 
         Args:
-            memory_id: Memory the change applies to.
+            memory_id: Memory that the change applies to.
             event: `ADD`, `UPDATE`, or `DELETE`.
-            session: Scope the memory belongs to, kept on the identity so the
-                history stays attributable after the memory is deleted.
-            old_memory: Text before the change, absent for an `ADD`.
-            new_memory: Text after the change, absent for a `DELETE`.
-            actor_id: Who the change came from, when a turn named a speaker.
+            session: Scope of the memory. The identity keeps it. Thus the
+                history still shows the owner scope after the delete of the
+                memory.
+            old_memory: Text before the change. `None` for an `ADD`.
+            new_memory: Text after the change. `None` for a `DELETE`.
+            actor_id: Speaker that the change came from, if a turn named a
+                speaker.
             role: Role of that turn.
-            at: When the change was applied.
+            at: Time when the lamp applied the change.
 
         Returns:
-            The recorded event, carrying both its revision and its journal
-            position.
+            The recorded event, with its revision and its journal position.
 
         Raises:
-            ValueError: If the event is not a recordable change, or the texts
-                do not match the event.
+            ValueError: If the history does not record this event type, or if
+                the texts do not agree with the event.
         """
 
         identifier = required_text(memory_id, field="memory_id")
@@ -134,15 +139,15 @@ class HistoryLog:
         return _entry(block, revision=revision.entry.revision, sequence=entry.entry.sequence)
 
     def history(self, memory_id: str, *, limit: int = READ_LIMIT) -> list[HistoryEntry]:
-        """Return every recorded change to one memory, oldest first.
+        """Return all recorded changes to one memory, the oldest first.
 
         Args:
             memory_id: Memory to read the history of.
-            limit: Maximum events to return.
+            limit: Maximum number of events to return.
 
         Returns:
-            Events in ascending revision order, empty when the memory was
-            never written. A deleted memory keeps its history.
+            Events in ascending revision order. The list is empty if the memory
+            had no writes. A deleted memory keeps its history.
         """
 
         address = MemoryAddress(HISTORY_NAMESPACE, required_text(memory_id, field="memory_id"))
@@ -152,15 +157,15 @@ class HistoryLog:
         ]
 
     def owner(self, memory_id: str) -> tuple[str, ...] | None:
-        """Return the scope path of the memory one history belongs to.
+        """Return the scope path of the memory that one history belongs to.
 
         Args:
-            memory_id: Memory to look the owning scope up for.
+            memory_id: Memory for which to find the owner scope.
 
         Returns:
-            The recorded path, or `None` when no memory with that id was ever
-            written. A deleted memory still answers, because the identity
-            outlives it.
+            The recorded path, or `None` if the log has no history for that id.
+            A deleted memory still gives its path, because its identity
+            continues to exist after the delete.
         """
 
         address = MemoryAddress(HISTORY_NAMESPACE, required_text(memory_id, field="memory_id"))
@@ -173,10 +178,10 @@ class HistoryLog:
         return tuple(str(segment) for segment in recorded)
 
     def journal(self, *, limit: int = READ_LIMIT) -> list[HistoryEntry]:
-        """Return every recorded change to any memory, in applied order.
+        """Return all recorded changes to all memories, in the order that the lamp applied them.
 
         Args:
-            limit: Maximum events to return.
+            limit: Maximum number of events to return.
 
         Returns:
             Events in ascending journal order.
@@ -185,14 +190,14 @@ class HistoryLog:
         return [_entry(item.block, sequence=item.entry.sequence) for item in self.structures.journal.read(limit=limit)]
 
     def recorded_ids(self, *, limit: int = READ_LIMIT) -> list[str]:
-        """Return the ids of every memory that has a history.
+        """Return the ids of all memories that have a history.
 
         Args:
-            limit: Maximum identities to return.
+            limit: Maximum number of identities to return.
 
         Returns:
-            Memory ids in ascending address order, including ids whose memory
-            has since been deleted.
+            Memory ids in ascending address order. The list includes the ids of
+            deleted memories.
         """
 
         found = self.structures.history.identities(namespace=HISTORY_NAMESPACE, limit=limit)
@@ -203,9 +208,9 @@ def _entry(block: MemoryBlock, *, revision: int | None = None, sequence: int | N
     """Decode one recorded change.
 
     Args:
-        block: Block holding a recorded event.
-        revision: Position in the memory's own history, when known.
-        sequence: Position in the store-wide journal, when known.
+        block: Block that holds a recorded event.
+        revision: Position in the history of the memory, if known.
+        sequence: Position in the store-wide journal, if known.
 
     Returns:
         The decoded event.
@@ -233,10 +238,10 @@ def _entry(block: MemoryBlock, *, revision: int | None = None, sequence: int | N
 
 
 def _require_change(event: str, old_memory: str | None, new_memory: str | None) -> MemoryEvent:
-    """Validate that an event and its texts describe one another.
+    """Validate that an event and its texts agree.
 
     Args:
-        event: Event name supplied by the caller.
+        event: Event name from the caller.
         old_memory: Text before the change.
         new_memory: Text after the change.
 
@@ -244,8 +249,8 @@ def _require_change(event: str, old_memory: str | None, new_memory: str | None) 
         The validated event name.
 
     Raises:
-        ValueError: If the event is not recordable, or the texts do not match
-            it.
+        ValueError: If the history does not record this event type, or if the
+            texts do not agree with it.
     """
 
     if event not in {"ADD", "UPDATE", "DELETE"}:

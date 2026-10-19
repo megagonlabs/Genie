@@ -1,30 +1,32 @@
-"""A tool interface and deterministic agent for the LangMem lamp.
+"""A tool interface and a deterministic agent for the LangMem lamp.
 
-LangMem gives an agent two ways to write memory and expects both to be used:
+LangMem gives an agent 2 ways to write memory, and it expects the agent to use
+both:
 
-- The hot path is a tool the agent calls mid-conversation, when it notices
-  something worth keeping.
-- The background path is a queued reflection that reads the whole exchange
-  afterwards and proposes changes to what is already on file.
+- **Hot path:** a tool that the agent calls during the conversation, when it
+  sees something to keep.
+- **Background path:** a queued reflection. It reads the whole exchange after
+  the conversation and proposes changes to the stored memories.
 
-They are different tools with different guardrails. The hot-path tool is
-restricted by `actions_permitted`, the manager by `enable_inserts` and its
-siblings. This module keeps both gates, so the difference is visible in the call
-log.
+The 2 paths are different tools with different gates. `actions_permitted`
+limits the hot-path tool. `enable_inserts` and the related flags limit the
+manager. This module keeps both gates, so the call log shows the difference.
 
-- Every namespace-addressed tool is bound to a namespace template resolved once,
-  at construction, from request-scoped values. So no tool argument names a user,
-  and a tool set built for one user cannot address another's memories. One queue
-  tier holds every namespace's submissions, so the two queue tools pass the bound
-  namespace down and see only their own user's work.
-- `optimize_prompt` and `get_prompt` are the exception, on purpose. A prompt is
-  the agent's own instructions rather than one user's memory, so prompts live in
-  a shared `("prompts",)` namespace outside the user path and every tool set
-  reads and revises the same ones.
-- The agent decides which tools to call from explicit inputs rather than from a
-  model, which keeps the example runnable with no API key. Extraction and prompt
-  rewriting are the two steps that genuinely need a model upstream, so the agent
-  receives proposed changes and keyed feedback rules already formed.
+- **Bound namespace:** each namespace-addressed tool is bound to a namespace
+  template. The tool set resolves the template once, at construction, from
+  request-scoped values. So no tool argument names a user, and a tool set for
+  one user cannot address the memories of another user.
+- **Shared queue tier:** one queue tier holds the submissions of all
+  namespaces. So the 2 queue tools give the bound namespace to the queue, and
+  they see only the work of their own user.
+- **One exception, on purpose:** `optimize_prompt` and `get_prompt`. A prompt
+  is the instructions of the agent, not the memory of one user. So prompts are
+  in a shared `("prompts",)` namespace outside the user path. All tool sets
+  read and revise the same prompts.
+- **No model:** the agent selects tools from explicit inputs, not from a model.
+  So the example runs without an API key. Upstream, extraction and the prompt
+  rewrite are the 2 steps that really need a model. So the agent receives
+  proposed changes and keyed feedback rules that are already complete.
 """
 
 from __future__ import annotations
@@ -67,12 +69,12 @@ TOOL_ACTIONS: tuple[str, ...] = ("create", "update", "delete")
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """Description of a tool presented to an agent.
+    """Description of a tool for an agent.
 
     Attributes:
-        name: Stable tool name used for calls.
-        description: Plain-language guidance for the agent.
-        parameters: Mapping of argument names to short type descriptions.
+        name: Stable tool name for calls.
+        description: Plain-language instructions for the agent.
+        parameters: Argument names and their short type descriptions.
     """
 
     name: str
@@ -82,10 +84,10 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class ToolCallRecord:
-    """One inspectable tool call made by the example agent.
+    """One tool call of the example agent, kept for inspection.
 
     Attributes:
-        name: Invoked tool name.
+        name: Name of the called tool.
         arguments: Copy of the JSON-compatible arguments.
         result: Copy of the JSON-compatible result.
     """
@@ -115,18 +117,20 @@ class LangMemTools:
         Args:
             store: Collection-shaped memory.
             profiles: Profile-shaped memory.
-            manager: Manager the queue runs against due submissions.
+            manager: Manager that the queue runs on due submissions.
             queue: Deferred reflection queue.
-            optimizer: Procedural memory for the agent's prompts.
-            namespace: Namespace template, whose `{placeholder}` segments are
-                filled from `context`.
-            context: Request-scoped values the template is resolved with.
-            actions_permitted: Hot-path actions this tool set allows, from
-                `create`, `update`, and `delete`.
+            optimizer: Procedural memory for the prompts of the agent.
+            namespace: Namespace template. The tool set fills its
+                `{placeholder}` segments from `context`.
+            context: Request-scoped values for the template.
+            actions_permitted: Hot-path actions that this tool set allows. Each
+                one is `create`, `update`, or `delete`.
 
         Raises:
-            KeyError: If the template has a placeholder `context` does not fill.
-            ValueError: If an action outside the three names is permitted.
+            KeyError: If `context` has no value for a placeholder of the
+                template.
+            ValueError: If `actions_permitted` has a name other than the 3
+                action names.
         """
 
         self.store = store
@@ -152,7 +156,7 @@ class LangMemTools:
         }
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        """Invoke one named tool with JSON-compatible arguments.
+        """Call one named tool with JSON-compatible arguments.
 
         Args:
             name: Tool name.
@@ -326,7 +330,7 @@ class LangMemTools:
         }
 
     def _get_prompt(self, *, name: str) -> dict[str, Any]:
-        """Implement `get_prompt` and report the versions behind it."""
+        """Implement `get_prompt`, and report the earlier versions of the prompt."""
 
         current = self.optimizer.current(name)
         if current is None:
@@ -347,13 +351,13 @@ class LangMemTools:
 
 
 class LangMemAgent:
-    """Deterministic agent whose only memory access is the tool set."""
+    """Deterministic agent that can access memory only through the tool set."""
 
     def __init__(self, *, name: str, tools: LangMemTools) -> None:
-        """Create an agent over one bound tool set.
+        """Create an agent with one bound tool set.
 
         Args:
-            name: Agent name shown in the demo.
+            name: Agent name that the demo shows.
             tools: Namespace-bound tool set.
         """
 
@@ -369,15 +373,16 @@ class LangMemAgent:
         at: str,
         after_seconds: int = 0,
     ) -> dict[str, Any]:
-        """Hand a conversation to the reflection queue.
+        """Give a conversation to the reflection queue.
 
         Args:
-            conversation: `Exchange` and the changes proposed from it.
-            at: ISO 8601 time the exchange was handed over.
-            after_seconds: Debounce window before the manager may run it.
+            conversation: The exchange and its proposed changes.
+            at: ISO 8601 time when the agent gave the exchange to the queue.
+            after_seconds: Debounce window before the manager can run it.
 
         Returns:
-            The queued submission, naming anything it superseded.
+            The queued submission, with the submission that it superseded, if
+            any.
         """
 
         return self._call(
@@ -393,13 +398,14 @@ class LangMemAgent:
         )
 
     def reflect(self, *, now: str) -> dict[str, Any]:
-        """Run the manager over every submission that has come due.
+        """Run the manager over each due submission.
 
         Args:
             now: ISO 8601 current time.
 
         Returns:
-            What each run applied, refused, and left pending.
+            What each run applied and refused, and the submissions that are
+            still pending.
         """
 
         return self._call("run_reflection", {"now": now})
@@ -412,17 +418,18 @@ class LangMemAgent:
         key: str,
         value: Any | None = None,
     ) -> dict[str, Any]:
-        """Write one memory on the hot path, mid-conversation.
+        """Write one memory on the hot path, during the conversation.
 
         Args:
             action: `create`, `update`, or `delete`.
             collection: Namespace segment below the bound namespace.
-            key: Key inside that namespace.
+            key: Key in that namespace.
             value: Value for a create or an update.
 
         Returns:
-            The stored item, or the refusal if the tool does not permit the
-            action.
+            The stored item, or a refusal with its reason. The tool refuses an
+            action that it does not permit, a create at an occupied address,
+            and an update or a delete at an empty address.
         """
 
         arguments: dict[str, Any] = {"action": action, "collection": collection, "key": key}
@@ -437,15 +444,16 @@ class LangMemAgent:
         trajectories: Sequence[AnnotatedTrajectory],
         at: str,
     ) -> dict[str, Any]:
-        """Fold feedback on past exchanges into the agent's own instructions.
+        """Merge feedback on past exchanges into the instructions of the agent.
 
         Args:
             prompt: Registered prompt name.
             trajectories: Past exchanges with keyed feedback rules.
-            at: ISO 8601 time recorded on a revision, if one is written.
+            at: ISO 8601 time for a revision, if the optimizer writes one.
 
         Returns:
-            The prompt after the optimization, and whether it changed.
+            The prompt after the optimization, and a flag that tells if it
+            changed.
         """
 
         return self._call(
@@ -475,18 +483,18 @@ class LangMemAgent:
         example_schema: str,
         limit: int = 2,
     ) -> str:
-        """Answer using procedural, profile, semantic, and episodic memory.
+        """Answer from procedural, profile, semantic, and episodic memory.
 
         Args:
-            question: User-facing question included in the report.
-            prompt: Prompt whose current version governs the answer.
-            query: Retrieval text for both searches.
+            question: Question text. The answer shows it first.
+            prompt: Prompt whose current version controls the answer.
+            query: Search text for the 2 searches.
             schema: Schema filter for the semantic search.
             example_schema: Schema filter for the episodic search.
-            limit: Semantic hits to show.
+            limit: Maximum number of semantic hits to show.
 
         Returns:
-            Readable answer assembled from tool results.
+            A readable answer, made from the tool results.
         """
 
         instructions = self._call("get_prompt", {"name": prompt})
@@ -514,16 +522,16 @@ class LangMemAgent:
         return "\n".join(lines)
 
     def tool_usage(self) -> dict[str, int]:
-        """Return call counts per tool in first-call order.
+        """Return the call count of each tool, in the order of the first calls.
 
         Returns:
-            Tool names mapped to how often the agent called them.
+            Tool names, each with the number of times that the agent called it.
         """
 
         return dict(Counter(record.name for record in self.call_log))
 
     def _call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Call one tool and retain an isolated trace record."""
+        """Call one tool, and keep an independent record of the call."""
 
         result = self._toolbox.call(name, arguments)
         self.call_log.append(
@@ -541,7 +549,7 @@ def _definitions(
     actions_permitted: Sequence[str],
     manager: MemoryManager,
 ) -> tuple[ToolDefinition, ...]:
-    """Describe the tool set, including the guardrails on each write path."""
+    """Describe the tool set, with the gates on each write path."""
 
     permitted = " | ".join(actions_permitted)
     enabled = ", ".join(f"{action}={str(allowed).lower()}" for action, allowed in manager.permissions.items())
@@ -672,13 +680,13 @@ def _profile(profile: Profile) -> dict[str, Any]:
 
 
 def _fields(value: Mapping[str, Any]) -> str:
-    """Render a profile value as a compact key list."""
+    """Render a profile value as a short `key=value` list, or `empty`."""
 
     return ", ".join(f"{key}={value[key]}" for key in sorted(value)) or "empty"
 
 
 def _result_lines(results: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Render search hits for the agent's answer, or say there were none."""
+    """Render search hits for the answer of the agent, or `- none` if there are no hits."""
 
     if not results:
         return ["- none"]
@@ -698,7 +706,7 @@ def _text(value: Any) -> str:
 
 
 def _refused(action: str, collection: str, key: str, reason: str) -> dict[str, Any]:
-    """Return the result of a hot-path write the tool would not make."""
+    """Return the result of a hot-path write that the tool refused."""
 
     return {
         "action": action,

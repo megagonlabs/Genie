@@ -1,12 +1,15 @@
 """Walk a derivation graph several hops and annotate the edges you followed.
 
-One-hop reads answer "what is next to this block". Walks answer "how did this
-block come to exist", returning bounded simple paths in breadth-first order so
-shorter explanations arrive first. Edge metadata is updatable, so a link can
-carry the job or confidence that produced the relationship.
-
-`LineageDAG` is a cycle-protected view of one relation. `PropertyGraph` reads the
-same links with an explicit relation and depth bound.
+- **One-hop reads:** they answer "what is next to this block".
+- **Walks:** they answer "how did this block come to exist". A walk returns
+  bounded simple paths (no block occurs twice in one path) in breadth-first
+  order, so shorter explanations come first.
+- **Edge metadata:** an update can change it, so a link can record the job or
+  the confidence that produced the relationship.
+- **`LineageDAG`:** a view of one relation. It refuses an edge that makes a
+  cycle.
+- **`PropertyGraph`:** it reads the same links. It has no fixed relation, so
+  this example gives `relation` and `max_depth` in each call.
 
 Run from the repository root:
 
@@ -33,7 +36,7 @@ DERIVES = "derives"
 
 
 def main() -> None:
-    """Traverse a four-stage derivation chain in both directions."""
+    """Traverse a derivation chain of 4 stages in both directions."""
 
     print("== Graph traversal ==")
     memory = Memory(backend=InMemoryBackend(), principal="app:pipeline")
@@ -47,8 +50,8 @@ def main() -> None:
     lineage.add(cleaned, features)
     lineage.add(features, ranker)
 
-    # One hop in each direction. A neighbor carries the block, the link that
-    # reached it, and the direction it was followed.
+    # Read one hop in each direction. A neighbor holds the block, the link to
+    # the block, and the direction that the read followed.
     upstream = lineage.predecessors(features)
     downstream = lineage.successors(features)
 
@@ -60,7 +63,8 @@ def main() -> None:
     assert upstream[0].direction == "in"
     assert downstream[0].direction == "out"
 
-    # Multi-hop walks return one path per reachable distance, shortest first.
+    # A multi-hop walk returns each simple path from the start block, shortest
+    # first. This chain has 1 path for each length.
     provenance = lineage.walk_predecessors(ranker, max_depth=3)
     products = lineage.walk_successors(raw, max_depth=3)
 
@@ -74,11 +78,12 @@ def main() -> None:
     assert [len(path) for path in products] == [1, 2, 3]
     assert products[-1].block_ids == (raw.id, cleaned.id, features.id, ranker.id)
 
-    # A shorter bound stops the walk early instead of failing.
+    # A smaller `max_depth` stops the walk earlier. It does not cause an error.
     assert [len(path) for path in lineage.walk_predecessors(ranker, max_depth=2)] == [1, 2]
 
-    # Edges carry application metadata, and updating one replaces the values
-    # it holds without touching either endpoint block.
+    # Edges hold application metadata. An update merges the given fields into
+    # the edge metadata and returns a new link object. The old object keeps its
+    # old metadata. The update does not change either endpoint block.
     annotated = lineage.update_edge(first, metadata={"job": "clean-2026-01-10"})
 
     print(f"annotated derivation: {annotated.metadata}")
@@ -88,8 +93,9 @@ def main() -> None:
     assert first.metadata == {}
     assert memory.get(raw) == raw
 
-    # The same links read through a property graph, which needs the relation
-    # and the depth stated explicitly.
+    # A property graph reads the same links. It has no fixed relation, so the
+    # script gives `relation` and `max_depth` in each call. Without `relation`,
+    # a walk follows all relations. The default `max_depth` is 1.
     graph = PropertyGraph(memory)
     two_hops = graph.walk(raw, relation=DERIVES, max_depth=2)
     inbound = graph.walk(ranker, relation=DERIVES, direction="in", max_depth=1)
@@ -100,7 +106,7 @@ def main() -> None:
     assert [len(path) for path in two_hops] == [1, 2]
     assert [path.block_ids for path in inbound] == [(ranker.id, features.id)]
 
-    # Annotating an edge through either facade updates the same stored link.
+    # An edge update through either facade changes the same stored link.
     documented = graph.update_edge(annotated, metadata={"job": "clean-2026-01-11"})
 
     assert documented.id == first.id
@@ -110,14 +116,14 @@ def main() -> None:
 
 
 def require(memory: Memory, block_id: str) -> MemoryBlock:
-    """Return a block that must exist.
+    """Return a stored block, and fail with `AssertionError` if it is missing.
 
     Args:
-        memory: Memory to read from.
-        block_id: Block id to fetch.
+        memory: The memory to read.
+        block_id: The id of the block to read.
 
     Returns:
-        Stored memory block.
+        The stored memory block.
     """
 
     block = memory.get(block_id)

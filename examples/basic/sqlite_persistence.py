@@ -1,4 +1,4 @@
-"""Persist memory blocks and links with the bundled SQLite backend.
+"""Store memory blocks and links on disk with the bundled SQLite backend.
 
 Run from the repository root:
 

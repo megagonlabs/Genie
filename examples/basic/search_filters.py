@@ -22,7 +22,7 @@ from genie import InMemoryBackend, Memory, MemoryQuery, Scope, SearchResult
 
 
 def main() -> None:
-    """Run a focused search and filter walkthrough."""
+    """Run a short walkthrough of search and filters."""
 
     print("== Search and filters ==")
     memory = Memory(backend=InMemoryBackend())
@@ -41,7 +41,7 @@ def main() -> None:
     )
     memory.put(type="note", value="Global note outside the project", metadata={"priority": 5})
 
-    # Memory.search accepts friendly keyword arguments for application code.
+    # `Memory.search` accepts friendly keyword arguments for application code.
     friendly_results = memory.search(
         "proposal",
         root=project,
@@ -50,8 +50,9 @@ def main() -> None:
         filters={"metadata.priority": {">=": 2}, "owner": {"in": ["team"]}},
     )
 
-    # `MemoryQuery` is the validated, backend-portable request shape. Friendly
-    # filter operators are normalized when the query is constructed.
+    # `MemoryQuery` is the validated request shape. It is the same for all backends.
+    # The `MemoryQuery` constructor normalizes the friendly filter operators, for
+    # example `>=` to `$gte`.
     query = MemoryQuery(
         text="proposal",
         root_id=project.id,

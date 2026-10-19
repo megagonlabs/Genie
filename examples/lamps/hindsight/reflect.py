@@ -1,20 +1,26 @@
-"""Reflection: answering from the highest layer that already knows.
+"""Reflection: an answer from the highest layer that already knows.
 
-Hindsight's `reflect` runs an agentic loop with a fixed preference order:
+Upstream, the Hindsight `reflect` operation runs an agent loop with a fixed
+order of preference:
 
-1. A mental model, because a fresh one is a written answer and costs a single
-   read.
-2. Observations, which are already consolidated.
-3. Raw facts, which it also uses to verify an observation that has gone stale.
+1. A mental model. A fresh mental model is a written answer, and it costs a
+   single read.
+2. Observations, because they are already consolidated.
+3. Raw facts. Upstream also uses them to verify an observation that is stale.
 
-The lamp keeps that hierarchy and drops the model call. The tiers are consulted
-in the same order, the highest tier with something to say writes the answer, and
-everything consulted is reported as evidence.
+The lamp keeps that order and removes the model call:
 
-Provenance is a `LineageDAG`, so each piece of evidence can name what it was
-derived from without the reflection storing anything: a fact points back at its
-source document, an observation at its supporting facts, and a mental-model
-version at the observations it summarized.
+- **Same order:** the lamp consults the tiers in the same order.
+- **Answer:** the highest tier with content writes the answer.
+- **Evidence:** the reflection reports every item that it consulted as
+  evidence.
+- **Stale note:** the lamp does not verify a stale observation. It adds an
+  `Unverified:` note to the answer.
+
+Provenance is a `LineageDAG`. So each piece of evidence names its sources, and
+the reflection stores nothing. A fact refers back to its source document, an
+observation to the facts that support it, and a mental-model version to the
+observations that it summarized.
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ TIER_ORDER = ("search_mental_models", "search_observations", "recall")
 
 
 class Reflector:
-    """Answers a question from mental models, observations, then raw facts."""
+    """Answers a question from mental models first, then observations, then raw facts."""
 
     def __init__(
         self,
@@ -42,13 +48,13 @@ class Reflector:
         models: MentalModelStore,
         recall: HindsightRecall,
     ) -> None:
-        """Create a reflector over one bank's retrieval layers.
+        """Create a reflector over the retrieval layers of one bank.
 
         Args:
-            bank: Bank holding facts and provenance.
-            models: Store holding standing answers and the observations they
-                summarize.
-            recall: Four-way retrieval used for the raw-fact tier.
+            bank: Bank that holds the facts and the provenance.
+            models: Store that holds the standing answers and the observations
+                that they summarize.
+            recall: 4-way retrieval for the raw-fact tier.
         """
 
         self.bank = bank
@@ -71,11 +77,11 @@ class Reflector:
         Args:
             question: Question to reflect on.
             model_name: Optional standing question to check first.
-            query: Optional retrieval text, defaulting to the question.
-            entity: Optional entity anchoring graph retrieval.
-            tags: Scope tags, defaulting to the mental model's own scope.
+            query: Optional retrieval text. The default is the question.
+            entity: Optional entity where graph retrieval starts.
+            tags: Scope tags. The default is the scope of the mental model.
             window: Optional time range for the temporal retriever.
-            max_tokens: Budget for the raw-fact tier.
+            max_tokens: Token budget for the raw-fact tier.
 
         Returns:
             The composed answer, the evidence behind it, and the tiers used.

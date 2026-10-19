@@ -190,7 +190,7 @@ WINDOW_END = "2025-04-01T00:00:00Z"
 
 
 def build_agent() -> HindsightAgent:
-    """Assemble an empty bank, its tool set, and an agent over them.
+    """Build an empty bank, its tool set, and an agent that uses them.
 
     Returns:
         An agent whose only memory access is the named tool set.

@@ -1,9 +1,11 @@
-"""Test subtree membership and tell reportable absence from a real error.
+"""Test subtree membership, and show how a reportable absence differs from a real error.
 
-Genie separates two kinds of absence. A read of a block that is not there is an
-answer: `get` returns `None` and `contains` returns `False`. An operation that
-must act on a specific block cannot report that as a value, so it raises
-`MemoryNotFound`.
+Genie has 2 kinds of absence:
+
+- **Absence as an answer:** a read of a block that is not there returns a
+  value. `get` returns `None`, and `contains` returns `False`.
+- **Absence as an error:** an operation that acts on a specific block cannot
+  report the absence as a value. So it raises `MemoryNotFound`.
 
 Run from the repository root:
 
@@ -29,7 +31,7 @@ MISSING = "block-that-was-never-stored"
 
 
 def main() -> None:
-    """Walk membership tests and the absence each API reports."""
+    """Run the membership tests and show the absence that each API reports."""
 
     print("== Block presence ==")
     memory = Memory(backend=InMemoryBackend(), principal="app:demo")
@@ -38,7 +40,7 @@ def main() -> None:
     checklist = memory.put(parent=note, type="checklist", value=["draft", "review"])
     unrelated = memory.put(type="project", value="Another workspace")
 
-    # contains follows ownership at any depth, and a root contains itself.
+    # `contains` follows ownership at all depths. A root contains itself.
     print(f"project contains its note: {memory.contains(project, note)}")
     print(f"project contains a grandchild: {memory.contains(project, checklist)}")
     print(f"project contains an unrelated block: {memory.contains(project, unrelated)}")
@@ -49,12 +51,12 @@ def main() -> None:
     assert not memory.contains(project, unrelated)
     assert not memory.contains(note, project)
 
-    # A missing candidate is a reportable answer rather than an error.
+    # A missing candidate gives a reportable answer, not an error.
     assert not memory.contains(project, MISSING)
     assert memory.get(MISSING) is None
     print("reading a block that was never stored: None")
 
-    # A missing root is not, because there is no subtree to test against.
+    # A missing root gives an error, because there is no subtree to test.
     try:
         memory.contains(MISSING, note)
     except MemoryNotFound:
@@ -62,7 +64,8 @@ def main() -> None:
     else:
         raise AssertionError("A membership test needs an existing root.")
 
-    # Operations that must act on one block raise instead of doing nothing.
+    # An operation that acts on one block raises `MemoryNotFound`. It does not
+    # skip the missing block silently.
     try:
         memory.update(MISSING, metadata={"reviewed": True})
     except MemoryNotFound:
@@ -82,8 +85,8 @@ def main() -> None:
     else:
         raise AssertionError("Linking to a missing block must fail.")
 
-    # Deleting the note recursively removes the checklist it owned, and both
-    # then answer membership tests with False rather than raising.
+    # A delete of the note also deletes the checklist that it owned, recursively.
+    # After that, membership tests for both blocks return `False` and do not raise.
     memory.delete(note)
 
     assert not memory.contains(project, note)

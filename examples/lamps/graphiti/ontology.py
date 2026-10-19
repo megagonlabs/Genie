@@ -1,20 +1,25 @@
-"""Prescribed and learned ontologies for the Graphiti-inspired lamp.
+"""Prescribed and learned ontologies for the Graphiti lamp.
 
-Graphiti offers two ways to define structure:
+Graphiti has 2 ways to define structure:
 
-- Prescribed ontology: entity and edge types declared up front with Pydantic
-  models and an `edge_type_map`.
-- Learned ontology: the structure emerges from the ingested data.
+- **Prescribed ontology:** the application declares entity and edge types
+  before ingestion, with Pydantic models and an `edge_type_map`.
+- **Learned ontology:** the structure comes from the ingested data.
 
-Both are application concerns, so this module owns them. Genie stores block
-types, values, and metadata without attaching meaning to any of them.
+Both ontologies are application concerns, so this module owns them. Genie stores
+block types, values, and metadata, and gives them no meaning.
 
-Cardinality is the one piece of semantics this lamp needs beyond naming.
-Upstream asks a language model whether a newly extracted fact contradicts an
-existing one. A deterministic example cannot call a model, so an edge type
-declares `single_valued=True` when a subject may hold only one active object for
-that relation. Contradiction then becomes a rule the example can check instead
-of a judgement it has to infer.
+Cardinality:
+
+- **Only extra meaning:** cardinality is the only meaning that this lamp needs
+  in addition to names.
+- **Upstream:** Graphiti asks a language model if a new extracted fact
+  contradicts an existing fact.
+- **Here:** a deterministic example cannot call a model. So an edge type
+  declares `single_valued=True` when a subject can hold only 1 active object for
+  that relation.
+- **Result:** a contradiction is a rule that the example can check, not a
+  judgement that it infers.
 """
 
 from __future__ import annotations
@@ -33,14 +38,14 @@ class EntityType:
 
     Attributes:
         name: Type name stored on entity blocks, such as `"person"`.
-        description: Plain-language guidance for whoever extracts entities.
+        description: Guidance in plain language for the extractor of entities.
     """
 
     name: str
     description: str
 
     def __post_init__(self) -> None:
-        """Validate that both fields carry usable text."""
+        """Validate that both fields hold text that is not empty."""
 
         _require_text(self.name, field="EntityType name")
         _require_text(self.description, field="EntityType description")
@@ -50,17 +55,17 @@ class EntityType:
 class EdgeType:
     """One declared kind of relationship between entity nodes.
 
-    `subject_types` and `object_types` are this lamp's compact stand-in for
-    Graphiti's `edge_type_map`, which lists the edge names allowed between
-    each pair of entity types.
+    `subject_types` and `object_types` are a short replacement in this lamp for
+    the Graphiti `edge_type_map`. The `edge_type_map` lists the edge names that
+    each pair of entity types can use.
 
     Attributes:
         name: Relation name stored on fact blocks, such as `"lives_in"`.
-        description: Plain-language guidance for whoever extracts facts.
-        subject_types: Entity types allowed at the source of the relation.
-        object_types: Entity types allowed at the target of the relation.
-        single_valued: Whether one subject may hold only one active object for
-            this relation, so a new fact invalidates the previous one.
+        description: Guidance in plain language for the extractor of facts.
+        subject_types: Entity types that can be at the source of the relation.
+        object_types: Entity types that can be at the target of the relation.
+        single_valued: `True` if one subject can hold only 1 active object for
+            this relation. Then a new fact invalidates the previous fact.
     """
 
     name: str
@@ -82,14 +87,14 @@ class EdgeType:
             raise TypeError(f"EdgeType {self.name!r} single_valued must be a boolean.")
 
     def allows(self, *, subject_type: str, object_type: str) -> bool:
-        """Report whether this relation may connect two entity types.
+        """Report if this relation can connect 2 entity types.
 
         Args:
             subject_type: Entity type at the source of the proposed fact.
             object_type: Entity type at the target of the proposed fact.
 
         Returns:
-            `True` when both endpoint types are declared for this relation.
+            `True` if this relation declares both endpoint types.
         """
 
         return subject_type in self.subject_types and object_type in self.object_types
@@ -97,18 +102,21 @@ class EdgeType:
 
 @dataclass(frozen=True, slots=True)
 class Ontology:
-    """Entity and edge types a graph accepts, or an open schema.
+    """Entity and edge types that a graph accepts, or an open schema.
 
-    A prescribed ontology validates every entity and fact before it is stored.
-    A learned ontology accepts any name and treats every relation as
-    multi-valued, which mirrors Graphiti's emergent-structure mode: without a
-    declared cardinality there is no deterministic contradiction rule left, so
-    nothing is invalidated automatically.
+    - **Prescribed:** the ontology validates every entity and fact before the
+      graph stores it.
+    - **Learned:** the ontology accepts any name and treats every relation as
+      multi-valued. This is the same as the Graphiti mode where the structure
+      comes from the data.
+    - **No automatic invalidation when learned:** without a declared
+      cardinality, no deterministic contradiction rule is left. So the graph
+      invalidates nothing automatically.
 
     Attributes:
-        entity_types: Declared entity types by name, empty when learned.
-        edge_types: Declared edge types by name, empty when learned.
-        prescribed: Whether declarations are enforced.
+        entity_types: Declared entity types by name. Empty when learned.
+        edge_types: Declared edge types by name. Empty when learned.
+        prescribed: `True` if the ontology enforces the declarations.
     """
 
     entity_types: Mapping[str, EntityType]
@@ -125,15 +133,16 @@ class Ontology:
         """Declare a closed set of entity and edge types.
 
         Args:
-            entities: Entity types the graph accepts.
-            edges: Edge types the graph accepts.
+            entities: Entity types that the graph accepts.
+            edges: Edge types that the graph accepts.
 
         Returns:
-            An ontology that rejects undeclared names and mismatched endpoints.
+            An ontology that rejects undeclared names and endpoint types that
+            do not match.
 
         Raises:
-            ValueError: If a name repeats or an edge references an entity type
-                that was not declared.
+            ValueError: If 2 declarations use the same name, or an edge refers
+                to an entity type that the ontology does not declare.
         """
 
         entity_types = _by_name(entities, label="entity type")
@@ -149,7 +158,7 @@ class Ontology:
 
     @classmethod
     def learned(cls) -> Ontology:
-        """Accept any entity or relation name without declaring it first.
+        """Accept any entity or relation name without a declaration.
 
         Returns:
             An open ontology with no cardinality rules.
@@ -165,11 +174,11 @@ class Ontology:
         """Validate one entity type name.
 
         Args:
-            entity_type: Type name proposed for an entity node.
+            entity_type: Proposed type name for an entity node.
 
         Raises:
-            ValueError: If the name is empty, or undeclared in a prescribed
-                ontology.
+            ValueError: If the name is empty, or if a prescribed ontology does
+                not declare it.
         """
 
         _require_text(entity_type, field="entity type")
@@ -189,16 +198,16 @@ class Ontology:
         """Validate one relation against its endpoint entity types.
 
         Args:
-            relation: Relation name proposed for a fact.
+            relation: Proposed relation name for a fact.
             subject_type: Entity type at the source of the fact.
             object_type: Entity type at the target of the fact.
 
         Returns:
-            The declared edge type, or `None` under a learned ontology.
+            The declared edge type, or `None` for a learned ontology.
 
         Raises:
-            ValueError: If the relation is empty, undeclared, or connects
-                endpoint types it was not declared for.
+            ValueError: If the relation is empty or not declared, or if its
+                declaration does not include these endpoint types.
         """
 
         _require_text(relation, field="relation")
@@ -218,13 +227,13 @@ class Ontology:
         return edge
 
     def is_single_valued(self, relation: str) -> bool:
-        """Report whether a new fact should invalidate the previous one.
+        """Report if a new fact invalidates the previous fact for this relation.
 
         Args:
-            relation: Relation name of the incoming fact.
+            relation: Relation name of the new fact.
 
         Returns:
-            `True` only when a prescribed edge type declares the relation
+            `True` only if a prescribed edge type declares the relation as
             single-valued.
         """
 
@@ -244,7 +253,7 @@ def _by_name(values: Iterable[Declaration], *, label: str) -> Mapping[str, Decla
 
 
 def _require_text(value: object, *, field: str) -> None:
-    """Validate that a declaration field holds non-empty text."""
+    """Validate that a declaration field holds text that is not empty."""
 
     if not isinstance(value, str):
         raise TypeError(f"{field} must be a string.")

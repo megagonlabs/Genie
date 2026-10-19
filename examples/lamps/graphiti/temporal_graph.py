@@ -3,15 +3,17 @@
 Graphiti ingests a stream of episodes and extracts entities and relationship
 facts from them.
 
-- Every fact sits on a bi-temporal timeline: two timestamps say when it was true
-  in the world, and two more say when the system believed it.
-- A contradicted fact is invalidated rather than deleted, so the graph can
-  answer both "what was true then" and "what did we know then".
-
-This module owns those rules. Genie supplies blocks, ownership, scoped access,
-links, search, and the structure facades. The graph class decides what an
-episode, entity, fact, provenance edge, mention, and validity interval mean, and
-in what order a write resolves entities, dedupes, and invalidates.
+- **Bi-temporal timeline:** 2 timestamps tell when a fact was true in the
+  world, and 2 more tell when the system believed it.
+- **Invalidation, not deletion:** the graph invalidates a contradicted fact and
+  does not delete it. So the graph can answer "what was true then?" and also
+  "what did we know then?".
+- **Rules in the lamp:** this module owns these rules. Genie supplies blocks,
+  ownership, scoped access, links, search, and the structure facades.
+- **Meaning in the lamp:** the graph class decides what an episode, entity,
+  fact, provenance edge, mention, and validity interval mean. It also decides
+  the order in which a write resolves entities, removes duplicates, and
+  invalidates facts.
 """
 
 from __future__ import annotations
@@ -55,15 +57,16 @@ from genie.structures import MemoryAddress, TemporalCollection, ValidityInterval
 
 
 class TemporalKnowledgeGraph:
-    """Graphiti-inspired bi-temporal graph over a bounded Genie handle.
+    """Bi-temporal graph over a bounded Genie handle, based on Graphiti.
 
-    The graph owns every episode, entity, summary revision, fact, and community
-    below one root. All taxonomy, contradiction, and time semantics live here;
-    Genie only stores blocks, links, and structure membership.
-
-    A graph partition corresponds to one Graphiti `group_id`: separate roots
-    with separate handles cannot see each other's nodes, so namespacing is a
-    property of the handle rather than a field on every record.
+    - **Ownership:** the graph owns every episode, entity, summary revision,
+      fact, and community below one root.
+    - **Rules in the lamp:** all rules for taxonomy, contradiction, and time are
+      in this class. Genie only stores blocks, links, and structure membership.
+    - **Partition:** one graph partition is the same as one Graphiti
+      `group_id`. Separate roots with separate handles cannot see the nodes of
+      each other. So the handle gives the namespace, and no record needs a
+      namespace field.
     """
 
     def __init__(
@@ -104,24 +107,29 @@ class TemporalKnowledgeGraph:
     ) -> Episode:
         """Append one source record to the episodic subgraph.
 
-        The episode joins the ingestion event log and receives its reference
-        time as event time. Ingestion times must not move backwards, because
-        transaction time is the clock that closes superseded facts.
+        - **Logs:** the episode joins the ingestion event log. Its reference
+          time becomes its event time.
+        - **Order:** ingestion times cannot move backwards, because transaction
+          time is the clock that closes superseded facts. The method accepts an
+          `ingested_at` that is equal to the newest ingestion time.
 
         Args:
             name: Short episode name.
             content: Raw episode body.
-            reference_time: When the source event happened.
-            ingested_at: When this graph processed the episode.
-            source: Episode kind, mirroring Graphiti's `EpisodeType`.
+            reference_time: Time of the source event.
+            ingested_at: Time when this graph processed the episode.
+            source: Episode kind. It is the same as `EpisodeType` in Graphiti.
             source_description: Free-text description of the origin.
 
         Returns:
             The stored episode.
 
         Raises:
-            ValueError: If a field is empty, a timestamp is naive, the source
-                kind is unknown, or `ingested_at` precedes the newest episode.
+            TypeError: If `name` or `content` is not a string, or a timestamp is
+                not a `datetime`.
+            ValueError: If `name` or `content` is empty, a timestamp has no
+                timezone, the source kind is unknown, or `ingested_at` is
+                earlier than the ingestion time of the newest episode.
         """
 
         require_text(name, field="Episode name")
@@ -167,11 +175,12 @@ class TemporalKnowledgeGraph:
         """Return episodes in ingestion order.
 
         Args:
-            reverse: Whether to return the newest episodes first.
-            limit: Maximum episodes to return.
+            reverse: If `True`, return the newest episodes first.
+            limit: Maximum number of episodes to return.
 
         Returns:
-            Episodes in ingestion order.
+            Episodes in ingestion order, or in the opposite order if `reverse`
+            is `True`.
         """
 
         return [
@@ -186,15 +195,15 @@ class TemporalKnowledgeGraph:
         stop: datetime | None = None,
         limit: int = SEARCH_LIMIT,
     ) -> list[Episode]:
-        """Return episodes whose reference time falls in a half-open range.
+        """Return the episodes with a reference time in a half-open range.
 
         Args:
             start: Optional inclusive lower bound on reference time.
             stop: Optional exclusive upper bound on reference time.
-            limit: Maximum episodes to return.
+            limit: Maximum number of episodes to return.
 
         Returns:
-            Matching episodes ordered by reference time then name.
+            The episodes that match, in order of reference time and then name.
         """
 
         items = self.structures.episode_time.events(
@@ -215,8 +224,8 @@ class TemporalKnowledgeGraph:
             The resolved episode.
 
         Raises:
-            TypeError: If the referenced block is not an episode.
-            ValueError: If the block or its log entry is missing.
+            TypeError: If the block is not an episode.
+            ValueError: If the block or its log entry does not exist.
         """
 
         if isinstance(episode, Episode):
@@ -225,10 +234,11 @@ class TemporalKnowledgeGraph:
         return self._episode_from_block(block)
 
     def latest_ingestion(self) -> datetime | None:
-        """Return the ingestion time of the newest episode, if any.
+        """Return the ingestion time of the newest episode, if there is one.
 
         Returns:
-            The newest ingestion timestamp, or `None` for an empty graph.
+            The newest ingestion timestamp, or `None` if the graph has no
+            episodes.
         """
 
         newest = self.structures.episodes.read(reverse=True, limit=1)
@@ -240,7 +250,7 @@ class TemporalKnowledgeGraph:
         )
 
     def mentioned_entities(self, episode: str | MemoryBlock | Episode) -> list[MemoryBlock]:
-        """Return the entity nodes an episode mentions.
+        """Return the entity nodes that an episode mentions.
 
         Args:
             episode: Episode, block, or block id.
@@ -262,7 +272,8 @@ class TemporalKnowledgeGraph:
             episode: Episode, block, or block id.
 
         Returns:
-            Facts supported by that episode, ordered by valid time.
+            Facts that the episode supports, in order of valid time and then
+            statement.
         """
 
         block = self.get_episode(episode).block
@@ -279,24 +290,25 @@ class TemporalKnowledgeGraph:
     # -- Semantic tier: entities and summaries ---------------------------
 
     def resolve_entity(self, name: str, *, entity_type: str, summary: str | None = None) -> Entity:
-        """Return the entity for a type and name, creating it when unseen.
+        """Return the entity for a type and name, and create it if it is new.
 
-        Keyed identity is this lamp's deterministic stand-in for Graphiti's
-        entity resolution: names are matched case-insensitively inside their
-        type instead of by embedding similarity.
+        Keyed identity is the deterministic replacement in this lamp for entity
+        resolution in Graphiti. Names match without case sensitivity inside
+        their type, not by embedding similarity.
 
         Args:
             name: Display name of the entity.
             entity_type: Application-defined entity type.
-            summary: Optional first summary. A short generated sentence is
-                stored when omitted.
+            summary: Optional first summary. If it is `None`, the graph stores
+                a short generated sentence. The graph ignores this value for an
+                existing entity.
 
         Returns:
-            The existing or newly created entity.
+            The existing entity or the new entity.
 
         Raises:
-            ValueError: If the name is empty or the type is not allowed by a
-                prescribed ontology.
+            ValueError: If the name is empty, or a prescribed ontology does not
+                allow the type.
         """
 
         require_text(name, field="Entity name")
@@ -326,18 +338,19 @@ class TemporalKnowledgeGraph:
         return self._entity_from_block(block, address=address)
 
     def get_entity(self, name: str, *, entity_type: str | None = None) -> Entity | None:
-        """Look up one entity by name, optionally inside a single type.
+        """Find one entity by name, and optionally search only inside one type.
 
         Args:
             name: Display name of the entity.
-            entity_type: Optional type to disambiguate the lookup.
+            entity_type: Optional type. Use it when entities of several types
+                have the same name.
 
         Returns:
-            The matching entity, or `None` when no entity matches.
+            The entity that matches, or `None` if no entity matches.
 
         Raises:
-            ValueError: If the name matches entities of several types and no
-                type was supplied.
+            ValueError: If the name is empty, or if the name matches entities of
+                several types and the call gives no type.
         """
 
         require_text(name, field="Entity name")
@@ -368,8 +381,8 @@ class TemporalKnowledgeGraph:
             The resolved entity with its current summary.
 
         Raises:
-            TypeError: If the referenced block is not an entity.
-            ValueError: If the block is missing.
+            TypeError: If the block is not an entity.
+            ValueError: If the block does not exist.
         """
 
         if isinstance(entity, Entity):
@@ -385,11 +398,12 @@ class TemporalKnowledgeGraph:
         """Return entity nodes in stable address order.
 
         Args:
-            entity_type: Optional type whose namespace should be listed.
-            limit: Maximum entities to return.
+            entity_type: Optional type. If you give it, the method lists only
+                the namespace of this type.
+            limit: Maximum number of entities to return.
 
         Returns:
-            Entities ordered by type then normalized name.
+            Entities in order of type and then normalized name.
         """
 
         namespace = (ENTITY_NAMESPACE, entity_type) if entity_type is not None else (ENTITY_NAMESPACE,)
@@ -411,22 +425,26 @@ class TemporalKnowledgeGraph:
     ) -> Entity:
         """Append a new immutable summary revision for an entity.
 
-        Graphiti refreshes an entity summary whenever a new episode adds
-        information about it, keeping the earlier text. Here each revision is
-        its own block in the entity's revision log, so the whole history stays
-        readable.
+        - **Upstream:** Graphiti updates an entity summary each time a new
+          episode adds information about the entity. It keeps the earlier text.
+        - **Here:** each revision is a separate block in the revision log of the
+          entity. So the full history stays readable.
 
         Args:
             entity: Entity, block, or block id.
             summary: New summary text.
-            recorded_at: Optional ingestion time for the revision. Defaults to
-                the newest episode's ingestion time.
+            recorded_at: Optional ingestion time for the revision. The default
+                is the ingestion time of the newest episode. If the graph has
+                no episodes, the revision uses `EPOCH`.
 
         Returns:
             The entity with its new current summary.
 
         Raises:
-            ValueError: If the summary is empty or the entity is unregistered.
+            ValueError: If the summary is empty or the entity block does not
+                exist.
+            MemoryNotFound: If the entity block is not registered as an
+                identity in `VersionedRecords`.
         """
 
         require_text(summary, field="Entity summary")
@@ -440,7 +458,7 @@ class TemporalKnowledgeGraph:
         return self._entity_from_block(resolved.block, address=resolved.address)
 
     def summary_history(self, entity: str | MemoryBlock | Entity) -> list[SummaryRevision]:
-        """Return every summary revision recorded for an entity.
+        """Return every summary revision that the graph recorded for an entity.
 
         Args:
             entity: Entity, block, or block id.
@@ -479,33 +497,44 @@ class TemporalKnowledgeGraph:
     ) -> TripletResult:
         """Write one relationship fact extracted from an episode.
 
-        The write follows Graphiti's edge-resolution order. A triplet already
-        on record gains the new episode as extra provenance. Otherwise, when
-        the ontology declares the relation single-valued, the subject's active
-        fact for that relation is closed on both time axes and linked to the
-        replacement, and only then is the new fact stored.
+        The write follows the edge-resolution order of Graphiti:
+
+        - **Repeated triplet:** if the triplet is already on record, the fact
+          gets the new episode as extra provenance. The write stores no new
+          fact.
+        - **Single-valued relation:** if the ontology declares the relation
+          single-valued, the write closes the active facts of the subject for
+          that relation on both time axes. It does not close a fact whose valid
+          time ended at or before `valid_at`. Each closed fact also gets the
+          new episode as provenance.
+        - **New fact:** after that, the write stores the new fact. Then it links
+          each closed fact to the new fact with a succession edge.
 
         Args:
-            subject: Subject entity, block, or block id, or an entity name
-                when `subject_type` is also supplied.
+            subject: Subject entity, block, or block id. It can also be an
+                entity name if you also give `subject_type`.
             relation: Application-defined relationship name.
-            object: Object entity, block, or block id, or an entity name when
-                `object_type` is also supplied.
+            object: Object entity, block, or block id. It can also be an entity
+                name if you also give `object_type`.
             episode: Episode that supports the fact.
-            valid_at: When the fact became true in the world.
-            invalid_at: Optional time the fact stopped being true.
-            subject_type: Entity type that makes `subject` a name to resolve.
-            object_type: Entity type that makes `object` a name to resolve.
-            fact: Optional sentence stored on the fact. A sentence is derived
-                from the triplet when omitted.
+            valid_at: Time when the fact became true in the world.
+            invalid_at: Optional time when the fact was no longer true.
+            subject_type: Entity type. If you give it, the graph resolves
+                `subject` as a name and creates the entity if it does not exist.
+            object_type: Entity type. If you give it, the graph resolves
+                `object` as a name and creates the entity if it does not exist.
+            fact: Optional sentence to store on the fact. If you omit it, the
+                graph makes a sentence from the triplet.
 
         Returns:
-            The fact now on record, plus anything this write invalidated.
+            The fact that is now on record, and the facts that this write
+            invalidated.
 
         Raises:
-            TypeError: If a referenced block has the wrong type.
+            TypeError: If a block has the wrong type.
             ValueError: If the ontology rejects the triplet, a timestamp is
-                invalid, or the write would close an interval backwards.
+                invalid, `invalid_at` is not later than `valid_at`, or the
+                write would close an interval at or before its start.
         """
 
         subject_entity = self._as_entity(subject, entity_type=subject_type, role="subject")
@@ -591,16 +620,16 @@ class TemporalKnowledgeGraph:
         relation: str | None = None,
         limit: int = SEARCH_LIMIT,
     ) -> list[TemporalFact]:
-        """Return facts matching portable metadata filters.
+        """Return the facts that match portable metadata filters.
 
         Args:
             subject: Optional subject entity, block, or id.
             object: Optional object entity, block, or id.
             relation: Optional relation name.
-            limit: Maximum facts to return.
+            limit: Maximum number of facts to return.
 
         Returns:
-            Facts ordered by relation, statement, and valid time.
+            Facts in order of relation, statement, and valid time.
         """
 
         filters: dict[str, Any] = {}
@@ -626,21 +655,24 @@ class TemporalKnowledgeGraph:
     ) -> list[TemporalFact]:
         """Return facts on a bi-temporal slice of the graph.
 
-        With `known_at` omitted this answers "what is true at `when`, as best
-        we know now". With `known_at` supplied it answers Graphiti's harder
-        question: "what did the graph believe at `known_at` about `when`".
-        Each axis is one `TemporalCollection` slice, and the answer is their
-        intersection.
+        - **Without `known_at`:** the method answers "what is true at `when`, as
+          far as we know now?".
+        - **With `known_at`:** the method answers the harder Graphiti question:
+          "what did the graph believe at `known_at` about `when`?".
+        - **How:** each axis is one `TemporalCollection` slice. The answer is
+          the intersection of the 2 slices.
 
         Args:
-            when: Effective time the fact must have been true at.
-            known_at: Optional ingestion time the fact must have been on
-                record at.
+            when: Effective time. The method returns only facts that were true
+                at this time.
+            known_at: Optional ingestion time. If you give it, the method
+                returns only facts that were on record at this time.
             subject: Optional subject entity, block, or id.
             relation: Optional relation name.
 
         Returns:
-            Matching facts ordered by relation, statement, and valid time.
+            The facts that match, in order of relation, statement, and valid
+            time.
         """
 
         instant = normalize_timestamp(when, field="when")
@@ -673,20 +705,24 @@ class TemporalKnowledgeGraph:
         subject: str | MemoryBlock | Entity | None = None,
         relation: str | None = None,
     ) -> list[TemporalFact]:
-        """Return the facts this graph held on record at an ingestion time.
+        """Return the facts that this graph held on record at an ingestion time.
 
-        This is the transaction-time axis on its own: it answers "what had the
-        graph been told by then", regardless of when those facts were true.
-        Comparing it with `facts_at` exposes the ingestion lag Graphiti's
-        bi-temporal model exists to make visible.
+        - **One axis:** this is the transaction-time axis alone. It answers
+          "what did the graph know at that time?", and it ignores when those
+          facts were true.
+        - **Ingestion lag:** a comparison with `facts_at` shows the ingestion
+          lag. The bi-temporal model of Graphiti exists to make this lag
+          visible.
 
         Args:
-            known_at: Ingestion time the fact must have been on record at.
+            known_at: Ingestion time. The method returns only facts that were on
+                record at this time.
             subject: Optional subject entity, block, or id.
             relation: Optional relation name.
 
         Returns:
-            Matching facts ordered by relation, statement, and valid time.
+            The facts that match, in order of relation, statement, and valid
+            time.
         """
 
         recorded = normalize_timestamp(known_at, field="known_at")
@@ -710,16 +746,18 @@ class TemporalKnowledgeGraph:
         as_of: datetime,
         known_at: datetime | None = None,
     ) -> list[TemporalFact]:
-        """Return facts touching one entity on a bi-temporal slice.
+        """Return the facts on a bi-temporal slice that connect to one entity.
 
         Args:
             entity: Entity, block, or id at the center of the neighborhood.
-            as_of: Effective time the facts must have been true at.
-            known_at: Optional ingestion time the facts must have been on
-                record at.
+            as_of: Effective time. The method returns only facts that were true
+                at this time.
+            known_at: Optional ingestion time. If you give it, the method
+                returns only facts that were on record at this time.
 
         Returns:
-            Incoming and outgoing facts in deterministic order.
+            Facts with the entity as subject or as object, in deterministic
+            order.
         """
 
         center = self.entity_of(entity)
@@ -735,14 +773,15 @@ class TemporalKnowledgeGraph:
         *,
         relation: str | None = None,
     ) -> list[TemporalFact]:
-        """Return the full recorded history of a subject's relationship.
+        """Return the full recorded history of the relationships of a subject.
 
         Args:
             subject: Subject entity, block, or id.
             relation: Optional relation name.
 
         Returns:
-            Facts ordered by valid-time start, including invalidated ones.
+            Facts in order of valid-time start and then statement. The list
+            includes invalidated facts.
         """
 
         return sorted(
@@ -753,14 +792,14 @@ class TemporalKnowledgeGraph:
     def provenance(self, fact: TemporalFact | MemoryBlock | str) -> list[Episode]:
         """Return the episodes that support a fact.
 
-        The episode that invalidated a fact is included, because it is the
-        evidence for closing that fact's intervals.
+        The list includes the episode that invalidated the fact, because that
+        episode is the evidence for the close of the fact intervals.
 
         Args:
             fact: Fact, block, or block id.
 
         Returns:
-            Episodes in link insertion order.
+            Episodes in the order in which the graph added the links.
         """
 
         block = fact.block if isinstance(fact, TemporalFact) else self._require_type(fact, FACT_TYPE, role="fact")
@@ -770,13 +809,13 @@ class TemporalKnowledgeGraph:
         ]
 
     def superseded_by(self, fact: TemporalFact | MemoryBlock | str) -> TemporalFact | None:
-        """Return the fact that replaced a closed fact, if any.
+        """Return the fact that replaced a closed fact, if there is one.
 
         Args:
             fact: Fact, block, or block id.
 
         Returns:
-            The replacement fact, or `None` when the fact was never replaced.
+            The replacement fact, or `None` if no fact replaced it.
         """
 
         block = fact.block if isinstance(fact, TemporalFact) else self._require_type(fact, FACT_TYPE, role="fact")
@@ -793,8 +832,10 @@ class TemporalKnowledgeGraph:
             The resolved fact.
 
         Raises:
-            TypeError: If the referenced block is not a fact.
-            ValueError: If either time axis is missing an interval.
+            TypeError: If the block is not a fact.
+            ValueError: If the block does not exist, a time axis has no interval
+                for the fact, or the fact does not have exactly one subject edge
+                and one object edge.
         """
 
         if isinstance(fact, TemporalFact):
@@ -847,7 +888,7 @@ class TemporalKnowledgeGraph:
         *,
         recorded_at: datetime | None,
     ) -> None:
-        """Store one summary block and append it to the entity's log."""
+        """Store one summary block and append it to the log of the entity."""
 
         stamp = recorded_at if recorded_at is not None else EPOCH
         block = self.memory.put(
@@ -866,14 +907,14 @@ class TemporalKnowledgeGraph:
             raise
 
     def _add_provenance(self, fact: MemoryBlock, episode: MemoryBlock) -> None:
-        """Link a fact to a supporting episode at most once."""
+        """Link a fact to an episode that supports it, without duplicates."""
 
         edges = self.structures.graph.edges(fact, relation=PROVENANCE_RELATION)
         if not any(edge.target_id == episode.id for edge in edges):
             self.structures.graph.add_edge(fact, episode, PROVENANCE_RELATION)
 
     def _add_mentions(self, episode: MemoryBlock, entities: Iterable[MemoryBlock]) -> None:
-        """Link an episode to the entities it mentions at most once each."""
+        """Link an episode to each mentioned entity, without duplicates."""
 
         linked = {
             edge.target_id
@@ -924,7 +965,7 @@ class TemporalKnowledgeGraph:
         entity_type: str | None,
         role: str,
     ) -> Entity:
-        """Resolve a triplet endpoint, creating it when given as a name."""
+        """Resolve a triplet endpoint. Create the entity for a new typed name."""
 
         del role
         if isinstance(entity, str) and entity_type is not None:
@@ -932,7 +973,7 @@ class TemporalKnowledgeGraph:
         return self.entity_of(entity)
 
     def _require_type(self, block: str | MemoryBlock, expected: str, *, role: str) -> MemoryBlock:
-        """Fetch a visible block and validate its application-defined type."""
+        """Read a visible block and validate its application-defined type."""
 
         block_id = block.id if isinstance(block, MemoryBlock) else block
         stored = self.memory.get(block_id)
@@ -943,7 +984,7 @@ class TemporalKnowledgeGraph:
         return stored
 
     def _single_neighbor(self, block: MemoryBlock, relation: str) -> MemoryBlock:
-        """Resolve exactly one outgoing structural edge for a fact role."""
+        """Resolve exactly one structural edge from a fact for a fact role."""
 
         neighbors = self.structures.graph.neighbors(block, relation=relation)
         if len(neighbors) != 1:

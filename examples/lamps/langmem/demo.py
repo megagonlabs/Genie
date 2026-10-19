@@ -1,6 +1,6 @@
 """Run a code-review agent with LangMem-inspired memory tools.
 
-From the repository root:
+Run this command from the repository root:
 
     python -m examples.lamps.langmem.demo
 """
@@ -193,15 +193,17 @@ QUERY = "billing service Litestar migration tests"
 
 
 def build_agent() -> LangMemAgent:
-    """Assemble an empty store, its five structures, and an agent over them.
+    """Assemble an empty store, its structure facades, and an agent over them.
 
-    The tool set is bound to `("memories", "{user_id}")` with `user_id` supplied
-    once, so nothing the agent passes later can name another user's namespace.
-    The hot-path tool may create and update but not delete, while the background
-    manager may delete, which is how the two write paths differ upstream.
+    - **Bound namespace:** the tool set is bound to `("memories", "{user_id}")`,
+      and `user_id` is supplied once. So nothing that the agent gives later can
+      name the namespace of another user.
+    - **2 write paths:** the hot-path tool can create and update, but not
+      delete. The background manager can delete. This is how the 2 write paths
+      differ upstream.
 
     Returns:
-        An agent whose only memory access is the named tool set.
+        An agent that can access memory only through the named tool set.
     """
 
     backend = InMemoryBackend()
@@ -241,13 +243,17 @@ def build_agent() -> LangMemAgent:
 
 
 def teach_agent(agent: LangMemAgent) -> None:
-    """Run both write paths and let feedback revise the agent's own prompt.
+    """Run both write paths, and let feedback revise the prompt of the agent.
 
-    The first two turns arrive four minutes apart on one thread, so the second
-    supersedes the first inside its debounce window and one reflection covers
-    the whole exchange. The agent then writes an episode on the hot path and is
-    refused a delete there, before a later thread deletes the same memory
-    through the manager.
+    - **Debounce:** the first 2 turns arrive 4 minutes apart on one thread. So
+      the second turn supersedes the first inside its debounce window, and one
+      reflection covers the whole exchange.
+    - **Hot path:** the agent writes an episode. The tool refuses a delete
+      there.
+    - **Background path:** a later thread deletes the same memory through the
+      manager.
+    - **Feedback:** the agent gives 3 pieces of feedback to the optimizer, one
+      at a time.
     """
 
     agent.submit(FIRST_TURNS, at=FIRST_TURN_AT, after_seconds=DEBOUNCE_SECONDS)
@@ -262,7 +268,7 @@ def teach_agent(agent: LangMemAgent) -> None:
 
 
 def answer_question(agent: LangMemAgent) -> str:
-    """Have the agent answer from all four kinds of memory it keeps."""
+    """Let the agent answer from all 4 kinds of memory that it keeps."""
 
     return agent.answer(
         QUESTION,

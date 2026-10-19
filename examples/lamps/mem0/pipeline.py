@@ -1,28 +1,30 @@
-"""The two phases every Mem0 write goes through.
+"""The 2 phases of each Mem0 write.
 
-Mem0 does not store what you tell it. A call to `add` hands it messages, and it
-runs them through two model passes before anything is written:
+Mem0 does not store its input directly. A call to `add` gives it messages. Mem0
+sends them through 2 model passes before it writes anything:
 
-1. Extraction reads the exchange and emits candidate facts.
-2. The update phase takes each candidate, fetches the stored memories most
-   similar to it, and returns one of four operations: `ADD` it beside them,
-   `UPDATE` one of them in place, `DELETE` one they contradict, or `NONE`.
+1. **Extraction:** reads the exchange and makes candidate facts.
+2. **Update phase:** takes each candidate and gets the stored memories that are
+   most similar to it. Then it returns one of 4 operations: `ADD` the candidate
+   beside them, `UPDATE` one of them in place, `DELETE` one that the candidate
+   contradicts, or `NONE`.
 
-The second pass is what makes Mem0 a memory system rather than a store, because
-it is the part that decides what to forget.
+The second pass makes Mem0 a memory system and not only a store, because this
+pass decides what to forget.
 
-Both passes are model calls upstream, and the lamp runs with no model, so both
-are replaced by something deterministic:
+Upstream, both passes are model calls. The lamp runs with no model, so a
+deterministic step replaces each pass:
 
-- Extraction takes candidates the caller already formed, the way the other lamps
-  take declared changes.
-- The decision is computed from the same two inputs the model gets - the
-  candidate and the stored memories nearest to it - using an exact-repeat check
-  on Mem0's own digest, a similarity floor, and the extractor's statement of
-  whether the candidate contradicts what came before.
+- **Extraction:** takes the candidates that the caller made already. The other
+  lamps take declared changes in the same way.
+- **Decision:** uses the same 2 inputs that the model gets: the candidate, and
+  the stored memories that are nearest to it. It uses an exact-repeat check on
+  the Mem0 digest, a similarity floor, and the statement of the extractor about
+  a contradiction of an earlier memory.
 
-Nothing here writes to Genie. The decisions are returned so the caller applies
-them, which is also why they can be printed and asserted on.
+This module does not write to Genie. It returns the decisions, and the caller
+applies them. Thus a caller can also print the decisions and make assertions
+about them.
 """
 
 from __future__ import annotations
@@ -43,11 +45,11 @@ from examples.lamps.mem0.model import (
 
 @dataclass(frozen=True, slots=True)
 class FactExtractor:
-    """Phase one: turn one exchange into candidate memories.
+    """Phase one: change one exchange into candidate memories.
 
     Attributes:
-        include_roles: Roles whose turns are read. Mem0 skips system messages,
-            which is the whole of the filtering here.
+        include_roles: Roles of the turns that the extractor reads. Mem0 skips
+            system messages, and this filter is the only filter here.
     """
 
     include_roles: tuple[str, ...] = ("user", "assistant")
@@ -55,18 +57,19 @@ class FactExtractor:
     def extract(self, messages: Sequence[Message], declared: Sequence[Fact] = ()) -> tuple[Fact, ...]:
         """Return the candidate facts for one exchange.
 
-        Upstream a model reads the turns and writes the facts. Here the caller
-        supplies them, and this phase does the surrounding work: it drops
-        repeats within the call and credits a fact that names no speaker to the
-        last turn of the exchange it came from, so the history rows say who a
-        memory came from.
+        - **Upstream:** a model reads the turns and writes the facts.
+        - **Here:** the caller supplies the facts. This phase removes the
+          repeats in the call.
+        - **Speaker:** if a fact has no `actor_id` and no `role`, this phase
+          gives it the speaker of the last turn that the extractor reads. Thus
+          the history rows tell who a memory came from.
 
         Args:
             messages: Turns in the exchange.
-            declared: Candidates a model would have produced.
+            declared: Candidates, as a model would make them.
 
         Returns:
-            The candidates in supplied order, without repeats.
+            The candidates in the supplied order, without repeats.
         """
 
         turns = self._turns(messages)
@@ -88,16 +91,18 @@ class FactExtractor:
         return tuple(found)
 
     def verbatim(self, messages: Sequence[Message]) -> tuple[Fact, ...]:
-        """Return one candidate per turn, storing the exchange as it was said.
+        """Return one candidate for each turn, and keep the exchange in its original words.
 
-        This is Mem0's `infer=False` path. No extraction runs, so each kept turn
-        becomes a memory in its own words, credited to whoever said it.
+        This is the Mem0 `infer=False` path. No extraction runs. Thus each turn
+        that the extractor reads becomes a memory in its own words, with its
+        speaker as the actor. The extractor reads a turn if its role is in
+        `include_roles`.
 
         Args:
             messages: Turns in the exchange.
 
         Returns:
-            One candidate per kept turn, in turn order.
+            One candidate for each turn that the extractor reads, in turn order.
         """
 
         return tuple(
@@ -106,21 +111,23 @@ class FactExtractor:
         )
 
     def _turns(self, messages: Sequence[Message]) -> tuple[Message, ...]:
-        """Return the turns this extractor reads."""
+        """Return the turns that this extractor reads."""
 
         return tuple(message for message in messages if message.role in self.include_roles)
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryUpdater:
-    """Phase two: decide what one candidate does to the memories on file.
+    """Phase two: decide the effect of one candidate on the stored memories.
 
     Attributes:
-        threshold: How similar a candidate and a stored memory must be for the
-            candidate to be treated as another wording of it rather than as
-            something new. Upstream this judgment is the model's.
-        neighbors: How many of the nearest stored memories are considered, the
-            way upstream passes the top matches into the update prompt.
+        threshold: Minimum similarity between a candidate and a stored memory.
+            At or above this value, the updater treats the candidate as a
+            different wording of the stored memory, not as a new memory.
+            Upstream, the model makes this decision.
+        neighbors: Number of nearest stored memories that the client gives to
+            the updater. Upstream gives the top matches to the update prompt in
+            the same way.
     """
 
     threshold: float = 0.5
@@ -131,8 +138,8 @@ class MemoryUpdater:
 
         Raises:
             TypeError: If a bound has the wrong runtime type.
-            ValueError: If the threshold is outside zero to one, or fewer than
-                one neighbor would be read.
+            ValueError: If the threshold is not greater than zero and at most
+                one, or if `neighbors` is less than one.
         """
 
         if isinstance(self.threshold, bool) or not isinstance(self.threshold, int | float):
@@ -145,26 +152,28 @@ class MemoryUpdater:
             raise ValueError("neighbors must be greater than zero.")
 
     def decide(self, fact: Fact, neighbors: Sequence[tuple[StoredMemory, float]]) -> Decision:
-        """Return the operation one candidate fact calls for.
+        """Return the operation that one candidate fact causes.
 
-        The four outcomes are the ones Mem0's update prompt chooses between,
-        decided in the same order it describes:
+        The outcomes are the 4 events that the Mem0 update prompt selects from.
+        The method checks them in the same order as that prompt:
 
-        - `NONE` when the candidate is already on file word for word, because a
-          repeat is not a change.
-        - `UPDATE` when it is close enough to a stored memory to replace its
-          wording.
-        - `DELETE` when it is that close and the extractor says it contradicts
-          it.
-        - `ADD` for anything else.
+        - **`NONE` for a repeat:** a neighbor has the same text, word for word.
+          A repeat is not a change.
+        - **`UPDATE`:** the similarity of the nearest neighbor is at or above
+          `threshold`. The candidate replaces the wording of that neighbor.
+        - **`DELETE`:** the nearest neighbor is at or above `threshold`, and the
+          extractor says that the candidate contradicts it.
+        - **`NONE` for a retraction with no target:** the candidate retracts,
+          but no neighbor is at or above `threshold`.
+        - **`ADD`:** all other cases.
 
         Args:
             fact: Candidate from the extraction phase.
-            neighbors: Stored memories nearest to it, most similar first, as
-                `MemoryStore.neighbors` returns them.
+            neighbors: Stored memories that are nearest to the candidate, the
+                most similar first, as `MemoryStore.neighbors` returns them.
 
         Returns:
-            The decision, naming the memory it applies to and why.
+            The decision, with the memory that it applies to and the reason.
         """
 
         digest = content_hash(fact.text)
@@ -211,14 +220,14 @@ class MemoryUpdater:
         )
 
     def similarity(self, fact: Fact, memory: StoredMemory) -> float:
-        """Return how similar one candidate and one stored memory are.
+        """Return the similarity of one candidate and one stored memory.
 
         Args:
             fact: Candidate from the extraction phase.
-            memory: Stored memory to compare against.
+            memory: Stored memory for the comparison.
 
         Returns:
-            The overlap between their token sets, between zero and one.
+            The overlap of their token sets, from zero to one.
         """
 
         return overlap(tokenize(fact.text), memory.terms)

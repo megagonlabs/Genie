@@ -1,20 +1,25 @@
-"""MemoryOS's public surface over the four tiers and the two movers.
+"""The public interface of MemoryOS over the 4 tiers, the updater, and the retriever.
 
-Upstream this is the `Memoryos` class, and its interface is small:
+Upstream, this is the `Memoryos` class. Its interface is small:
 
-- Hand it an exchange with `add_memory`.
-- Ask it for context with `retrieve_memory`.
-- Read the profile it inferred.
-- Look at what each store holds.
+- **`add_memory`:** give it an exchange.
+- **`retrieve_memory`:** get context from it.
+- **Profile:** read the profile that it inferred.
+- **Stats:** see what each store holds.
 
-Everything else - paging out, segment grouping, heat, promotion, eviction -
-happens because you called `add_memory`, not because you asked for it.
+All other behavior occurs because the caller called `add_memory`, not because
+the caller asked for it: page-out, topic segments, heat, promotion, and
+eviction.
 
-That is the part worth preserving, so `add_memory` here returns what it set in
-motion rather than nothing. One call can page the oldest exchange out of the
-queue, open or extend a segment, evict the coldest segment, promote the hottest
-one, and drop the oldest fact from a knowledge base to make room. Returning all
-of that is what makes a hierarchy inspectable instead of implied.
+This lamp keeps that property. So `add_memory` here returns the effects that it
+started, and not nothing:
+
+- **One call, many effects:** one call can page the oldest exchange out of the
+  queue, open or extend a segment, evict the coldest segment, promote the
+  hottest segment, and remove the oldest fact from a knowledge base to make
+  room.
+- **Visible hierarchy:** the result contains all of these effects. So a caller
+  can inspect the hierarchy from the result alone.
 """
 
 from __future__ import annotations
@@ -45,7 +50,7 @@ from genie import MemoryBlock, MemoryHandle
 
 
 class MemoryOS:
-    """One user's memory operating system, wired to one assistant."""
+    """The memory operating system of one user, connected to one assistant."""
 
     def __init__(
         self,
@@ -58,16 +63,16 @@ class MemoryOS:
         updater: Updater,
         retriever: Retriever,
     ) -> None:
-        """Wire the four tiers, the updater, and the retriever together.
+        """Connect the 4 tiers, the updater, and the retriever.
 
         Args:
-            memory: Handle bounded to one user's memory.
+            memory: Handle bounded to the memory of one user.
             structures: Structure bundle for that memory.
             short_term: The FIFO queue.
             mid_term: The paged tier.
-            long_term: The profile and knowledge bases.
-            updater: What moves dialogue between tiers.
-            retriever: What reads every tier for a query.
+            long_term: The profile and the knowledge bases.
+            updater: The part that moves dialogue between tiers.
+            retriever: The part that reads each tier for a query.
         """
 
         self.memory = memory
@@ -79,18 +84,22 @@ class MemoryOS:
         self.retriever = retriever
 
     def add_memory(self, exchange: Exchange) -> AddResult:
-        """Record one exchange, and run whatever that sets in motion.
+        """Record one exchange, and run all steps that it starts.
 
-        The order is upstream's: make room in the queue first so nothing is lost
-        to an overflow, store the exchange, then check whether the hottest
-        segment has crossed the heat threshold.
+        The order is the upstream order:
+
+        - **Make room:** first, the updater pages out from a full queue, so no
+          exchange is lost to an overflow.
+        - **Store:** the queue stores the exchange.
+        - **Check heat:** the updater promotes the hottest segment if its heat is
+          at or above the heat threshold.
 
         Args:
-            exchange: The user turn and the assistant's reply, carrying the time
-                it happened and what an analysis of it would conclude.
+            exchange: The user turn and the reply of the assistant, with the
+                time when it occurred and what an analysis of it would conclude.
 
         Returns:
-            The stored exchange and every tier movement the call caused.
+            The stored exchange and each tier movement that the call caused.
         """
 
         now = normalize_timestamp(exchange.occurred_at, field="occurred_at")
@@ -103,48 +112,49 @@ class MemoryOS:
         return AddResult(stored=stored, paged_out=paged.pages, promotion=promotion, evictions=tuple(evictions))
 
     def retrieve_memory(self, query: str, *, now: datetime) -> RetrievedContext:
-        """Read every tier for one query, heating the segments it reaches.
+        """Read each tier for one query, and make the segments that it reaches hotter.
 
         Args:
-            query: Free text to retrieve for.
+            query: Free text to retrieve context for.
             now: Time of the retrieval.
 
         Returns:
-            The context a prompt would be built from.
+            The context for a prompt.
         """
 
         return self.retriever.retrieve(query, now=now)
 
     def force_mid_term_analysis(self, *, now: datetime) -> Promotion | None:
-        """Analyze the hottest segment whatever its heat.
+        """Analyze the hottest segment, at any heat.
 
-        Upstream this drops the threshold to zero, runs the check, and puts the
-        threshold back, which is how a caller promotes on demand instead of
-        waiting for a segment to warm up.
+        Upstream sets the threshold to zero, runs the check, and sets the
+        threshold back. A caller uses this to promote on demand, and does not
+        wait until a segment becomes hot.
 
         Args:
-            now: Time the analysis is taken at.
+            now: Time of the analysis.
 
         Returns:
-            What was promoted, or `None` when there is no segment at all.
+            What the analysis promoted, or `None` when no segment exists.
         """
 
         return self.updater.promote_if_hot(now=now, threshold=0.0)
 
     def get_user_profile(self) -> ProfileRevision | None:
-        """Return the profile the analyses have arrived at.
+        """Return the profile that the analyses produced.
 
         Returns:
-            The newest revision, or `None` when nothing has been promoted.
+            The newest revision, or `None` when no promotion set profile traits
+            yet.
         """
 
         return self.long_term.profile()
 
     def profile_history(self, *, limit: int = 100) -> list[ProfileRevision]:
-        """Return every profile an analysis has written, oldest first.
+        """Return each profile that an analysis wrote, oldest first.
 
         Args:
-            limit: Maximum revisions to return.
+            limit: Maximum number of revisions to return.
 
         Returns:
             The revisions in order.
@@ -153,10 +163,10 @@ class MemoryOS:
         return self.long_term.profile_history(limit=limit)
 
     def knowledge(self, owner: KnowledgeOwner) -> list[KnowledgeItem]:
-        """Return one knowledge base in full.
+        """Return one full knowledge base.
 
         Args:
-            owner: Whose knowledge base to read.
+            owner: The owner of the knowledge base to read.
 
         Returns:
             The entries, oldest first.
@@ -168,7 +178,7 @@ class MemoryOS:
         """Return the open mid-term segments with their heat.
 
         Args:
-            now: Time heat is being taken at.
+            now: Time for the heat calculation.
 
         Returns:
             The segments in creation order.
@@ -193,7 +203,7 @@ class MemoryOS:
 
         Args:
             page_id: Page to start from.
-            depth: Maximum edges to follow.
+            depth: Maximum number of edges to follow.
 
         Returns:
             The pages that continue it, nearest first.
@@ -202,15 +212,15 @@ class MemoryOS:
         return self.mid_term.chain_from(page_id, depth=positive(depth, field="depth"))
 
     def sources_of(self, block: MemoryBlock) -> list[Page]:
-        """Return the pages a promoted record was extracted from.
+        """Return the pages that a promoted record came from.
 
         Args:
-            block: A knowledge entry or profile revision block.
+            block: A knowledge entry block or a profile revision block.
 
         Returns:
-            The pages still held in mid-term memory, in page-id order. A page
-            evicted from mid-term memory is not among them, because Genie drops
-            a deleted block's links.
+            The pages that are still in mid-term memory, in page id order. The
+            list does not include a page that mid-term memory evicted, because
+            Genie removes the links of a deleted block.
         """
 
         found: list[Page] = []
@@ -221,10 +231,11 @@ class MemoryOS:
         return found
 
     def memory_stats(self) -> dict[str, int]:
-        """Return how much each tier holds, as upstream's `get_memory_stats`.
+        """Return the quantity in each tier, as upstream `get_memory_stats` does.
 
         Returns:
-            Counts per tier, plus the profile's current revision number.
+            Counts for each tier, the capacities of the short-term and mid-term
+            tiers, and the current revision number of the profile.
         """
 
         return {

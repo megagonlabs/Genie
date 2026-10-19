@@ -38,21 +38,21 @@ from genie.codecs.stdlib import (
 
 @dataclass(frozen=True)
 class AuditRecord:
-    """Small trusted dataclass that can be reconstructed by `DataclassCodec`."""
+    """Small trusted dataclass that `DataclassCodec` can reconstruct."""
 
     request_id: str
     tags: list[str]
 
 
 class Priority(str, enum.Enum):
-    """Trusted enum reconstructed by `EnumCodec`."""
+    """Trusted enum that `EnumCodec` reconstructs."""
 
     HIGH = "high"
     LOW = "low"
 
 
 def main() -> None:
-    """Run a focused stdlib codec walkthrough."""
+    """Run a short walkthrough of the stdlib codecs."""
 
     print("== Standard-library codecs ==")
     section("JsonCodec stays the default")
@@ -148,14 +148,14 @@ def main() -> None:
 
 
 def require_get(memory: Memory, block_id: str) -> MemoryBlock:
-    """Return a decoded block that must exist.
+    """Read a decoded block, assert that it exists, and return it.
 
     Args:
-        memory: Memory handle.
+        memory: `Memory` instance to read from.
         block_id: Block id to fetch.
 
     Returns:
-        Decoded memory block.
+        The decoded memory block.
     """
 
     block = memory.get(block_id)
@@ -164,14 +164,14 @@ def require_get(memory: Memory, block_id: str) -> MemoryBlock:
 
 
 def require_raw(memory: Memory, block_id: str) -> MemoryBlock:
-    """Return a raw backend block that must exist.
+    """Read a raw backend block, assert that it exists, and return it.
 
     Args:
-        memory: Memory handle.
+        memory: `Memory` instance to read from.
         block_id: Block id to fetch.
 
     Returns:
-        Stored backend block before codec decoding.
+        The block as the backend stores it, before a codec decodes the value.
     """
 
     block = memory.backend.get_block(block_id)

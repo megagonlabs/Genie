@@ -1,27 +1,33 @@
-"""Four-way recall over facts and observations, fused and capped at a budget.
+"""4-way recall over facts and observations, with fusion and a token budget.
 
-Hindsight does not answer a query from one index. It runs four retrievers at
-once - semantic, keyword, graph, and temporal - fuses their ranked lists with
-reciprocal rank fusion, then fills a token budget rather than returning a fixed
-number of rows. Observations ride along with raw facts, so a consolidated belief
-can outrank the sentences it was built from.
+- **Upstream:** Hindsight does not answer a query from one index. It runs 4
+  retrievers in parallel: semantic, keyword, graph, and temporal. Reciprocal
+  rank fusion merges their ranked lists. Then recall fills a token budget and
+  does not return a fixed number of rows.
+- **Here:** the lamp runs the same 4 retrievers one after another, and then
+  applies the same fusion and token budget.
+- **Facts and observations together:** recall ranks observations together with
+  raw facts. So a consolidated belief can rank above the sentences that it was
+  built from.
 
-Three of the four retrievers are Genie calls, which is the point of showing this
-recipe at all:
+Genie calls do the work in 3 of the 4 retrievers. That is the reason to show
+this recipe:
 
-- `keyword` issues one `MemoryHandle.search` per query term, so the portable
-  query layer does the matching.
-- `graph` walks the `PropertyGraph` outward from an entity, which reaches the
-  facts that mention it, the facts those are linked to, and the observations
-  derived from them.
-- `temporal` reads the `TemporalCollection` on both of its axes: facts learned
-  inside the window, and facts describing a period that overlaps it.
-- Only `similarity` is hand-written, as a visible stand-in for embeddings.
+- **`keyword`:** one `MemoryHandle.search` for each query term. So the portable
+  query layer finds the matches.
+- **`graph`:** a walk of the `PropertyGraph` from an entity. The walk reaches
+  the facts that mention the entity, the facts that are linked to those facts,
+  and the observations derived from them.
+- **`temporal`:** a read of the `TemporalCollection` on both of its axes. It
+  finds the facts that the bank learned inside the window, and the facts that
+  describe a period that overlaps the window.
+- **`similarity`:** the only hand-written retriever. It is a visible
+  replacement for embeddings.
 
-Fusion and the budget are the lamp's own code, because ranking is exactly what
-Genie leaves to applications. Hindsight's cross-encoder reranker and its
-recency, temporal-proximity, and proof-count boosts are not reproduced. The
-README lists them as omissions.
+Fusion and the budget are code of the lamp, because Genie leaves ranking to
+applications. The lamp does not copy the Hindsight cross-encoder reranker or its
+recency, temporal-proximity, and proof-count boosts. The README lists them as
+omissions.
 """
 
 from __future__ import annotations
@@ -57,7 +63,7 @@ _MAX_GRAPH_DEPTH = 2
 
 @dataclass(frozen=True, slots=True)
 class RecallWindow:
-    """The half-open time range a temporal query asks about.
+    """The half-open time range of a temporal query.
 
     Attributes:
         start: Inclusive lower bound.
@@ -68,7 +74,7 @@ class RecallWindow:
     end: datetime
 
     def __post_init__(self) -> None:
-        """Normalize both bounds to UTC and reject a reversed range."""
+        """Convert both bounds to UTC, and reject an empty or reversed range."""
 
         start = normalize_timestamp(self.start, field="window start")
         end = normalize_timestamp(self.end, field="window end")
@@ -88,11 +94,11 @@ class RecallResponse:
     """What one recall returned, and what the budget left out.
 
     Attributes:
-        query: Query text that was run.
+        query: Query text that recall ran.
         hits: Selected results, highest fused score first.
-        tokens_used: Estimated tokens the selected results cost.
-        max_tokens: Budget the selection was capped at.
-        dropped: Number of ranked candidates the budget excluded.
+        tokens_used: Estimated token cost of the selected results.
+        max_tokens: Token budget of the selection.
+        dropped: Number of ranked candidates that the budget excluded.
     """
 
     query: str
@@ -104,18 +110,20 @@ class RecallResponse:
 
 @dataclass(frozen=True, slots=True)
 class _Candidate:
-    """One retrievable item before fusion.
+    """One item that recall can return, before fusion.
 
     Attributes:
-        block: Fact or observation revision block.
-        text: Text the retrievers score.
+        block: Fact block or observation revision block.
+        text: Text that the retrievers score.
         kind: `world`, `experience`, or `observation`.
-        tokens: Token set used by the similarity retriever.
-        cost: Estimated token cost charged to the recall budget.
-        order: Stable tie-break key. Ranking must never fall back on
-            `MemoryBlock.id`, which is a fresh UUID on every run: an id-ordered
-            tie would change a candidate's rank inside a retriever, change its
-            reciprocal-rank contribution, and make scores differ run to run.
+        tokens: Token set for the similarity retriever.
+        cost: Estimated token cost that counts against the recall budget.
+        order: Stable tie-break key: `fact|<text>` for a fact, and
+            `observation|<claim>` for an observation. Ranking never breaks a
+            tie on `MemoryBlock.id`, because the id is a new UUID on every
+            run. A tie broken by id would change the rank of a candidate
+            inside a retriever, change its reciprocal rank contribution, and
+            make the scores different between runs.
     """
 
     block: MemoryBlock
@@ -127,14 +135,14 @@ class _Candidate:
 
 
 class HindsightRecall:
-    """The lamp's one recall recipe: four retrievers, fused, then budgeted."""
+    """The one recall recipe of the lamp: 4 retrievers, then fusion, then the token budget."""
 
     def __init__(self, bank: HindsightMemoryBank, consolidation: ConsolidationEngine) -> None:
         """Create recall over one bank and its consolidated beliefs.
 
         Args:
-            bank: Bank holding the facts and the structures searched.
-            consolidation: Engine supplying current observations.
+            bank: Bank that holds the facts and the structures to search.
+            consolidation: Engine that supplies the current observations.
         """
 
         self.bank = bank
@@ -151,23 +159,27 @@ class HindsightRecall:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         limit: int = 10,
     ) -> RecallResponse:
-        """Run all four retrievers and return the fused results.
+        """Run all 4 retrievers and return the fused results.
 
         Args:
             query: Natural-language query.
-            entity: Optional entity anchoring graph traversal. Without one,
-                entities named in the query are used.
+            entity: Optional entity name or alias where graph traversal
+                starts. If it is `None`, traversal starts from the entities
+                that the query names.
             types: Optional subset of `world`, `experience`, `observation`.
-            tags: Tags every returned item must carry.
-            window: Optional time range enabling the temporal retriever.
-            max_tokens: Budget the selected results must fit inside.
-            limit: Maximum results, applied before the budget.
+                Empty means all 3.
+            tags: Recall returns only the items that have all of these tags.
+            window: Optional time range. The temporal retriever runs only
+                with a window.
+            max_tokens: Token budget for the selected results.
+            limit: Maximum number of results, applied before the budget.
 
         Returns:
-            The fused, budgeted results.
+            The fused results inside the token budget.
 
         Raises:
-            ValueError: If the query is empty or a bound is negative.
+            ValueError: If the query is empty, a bound is negative, or a type
+                is unknown.
         """
 
         text = required_text(query, field="query")
@@ -196,7 +208,7 @@ class HindsightRecall:
         )
 
     def _candidates(self, *, types: frozenset[str], tags: tuple[str, ...]) -> dict[str, _Candidate]:
-        """Collect the valid facts and current observations recall may return."""
+        """Collect the valid facts and the current observations that recall can return."""
 
         required_tags = set(tags)
         candidates: dict[str, _Candidate] = {}
@@ -231,11 +243,11 @@ class HindsightRecall:
         query_tokens: frozenset[str],
         candidates: dict[str, _Candidate],
     ) -> list[str]:
-        """Rank candidates by how many query terms Genie search matched.
+        """Rank candidates by the number of query terms that Genie search matched.
 
-        One `MemoryHandle.search` per term is a transparent stand-in for BM25:
-        the portable query layer does the matching, and the lamp only counts
-        which candidates each term reached.
+        One `MemoryHandle.search` for each term is a transparent replacement
+        for BM25. The portable query layer finds the matches. The lamp only
+        counts the candidates that each term reached.
         """
 
         matches: dict[str, int] = {}
@@ -256,11 +268,11 @@ class HindsightRecall:
         *,
         entity: str | None,
     ) -> list[str]:
-        """Rank candidates by how few hops separate them from a named entity.
+        """Rank candidates by the number of hops from a named entity, fewest first.
 
-        The walk crosses three relations without knowing it: the mention edges
-        into facts about the entity, the associative edges between those facts,
-        and the lineage edges out to the observations built from them.
+        The walk has no relation filter, so it crosses 3 relations: the mention
+        edges into facts about the entity, the associative edges between those
+        facts, and the lineage edges out to the observations built from them.
         """
 
         distances: dict[str, int] = {}
@@ -284,9 +296,13 @@ class HindsightRecall:
     ) -> list[str]:
         """Rank candidates by both temporal axes inside a window.
 
-        Facts learned in the window and facts describing a period that overlaps
-        it both qualify, which is the distinction Hindsight draws between when
-        something happened and when the bank found out.
+        - **Match:** a fact matches if the bank learned it in the window, or if
+          it describes a period that overlaps the window. This is the
+          difference that Hindsight makes between when something happened and
+          when the bank learned it.
+        - **Order:** a smaller time distance from the start of the window ranks
+          first.
+        - **No window:** the retriever returns no candidates.
         """
 
         if window is None:
@@ -303,7 +319,7 @@ class HindsightRecall:
         return sorted(distances, key=lambda item: (distances[item], candidates[item].order))
 
     def _anchors(self, query: str, *, entity: str | None) -> list[MemoryBlock]:
-        """Return the entity blocks graph traversal should start from."""
+        """Return the entity blocks where graph traversal starts."""
 
         if entity is not None:
             resolved = self.bank.entity(entity)
@@ -324,7 +340,7 @@ def _fit_budget(
     rankings: dict[str, list[str]],
     max_tokens: int,
 ) -> RecallResponse:
-    """Take fused results in order until the token budget is spent."""
+    """Take the fused results in order, and skip each result that does not fit in the rest of the token budget."""
 
     hits: list[RecallHit] = []
     used = 0
@@ -357,11 +373,14 @@ def _fit_budget(
 def _reciprocal_rank_fusion(rankings: Iterable[Sequence[str]]) -> dict[str, float]:
     """Fuse ranked id lists with reciprocal rank fusion.
 
+    Each ranking adds `1 / (_RRF_CONSTANT + rank)` to the score of each id in
+    it, with the first rank as `1`.
+
     Args:
-        rankings: One ranked id list per retriever.
+        rankings: One ranked id list for each retriever.
 
     Returns:
-        Fused score per id that appeared in at least one ranking.
+        Fused score for each id that is in at least one ranking.
     """
 
     fused: dict[str, float] = {}
@@ -375,7 +394,7 @@ def _similarity_ranking(
     query_tokens: frozenset[str],
     candidates: dict[str, _Candidate],
 ) -> list[str]:
-    """Rank candidates by token-set cosine overlap with the query."""
+    """Rank candidates by token-set cosine overlap with the query, and leave out candidates with no overlap."""
 
     matched = [
         (block_id, score)
@@ -400,7 +419,7 @@ def _cosine(left: frozenset[str], right: frozenset[str]) -> float:
 
 
 def _validated_types(types: Sequence[str]) -> frozenset[str]:
-    """Return the recall types to include, defaulting to all three."""
+    """Return the recall types to include. No types means all 3."""
 
     if not types:
         return RECALL_TYPES

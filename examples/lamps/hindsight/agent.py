@@ -1,18 +1,19 @@
-"""A tool interface and deterministic agent for the Hindsight lamp.
+"""A tool interface and a deterministic agent for the Hindsight lamp.
 
-Hindsight is a service an agent calls. It retains payloads, consolidates them in
-the background, keeps standing answers current, and serves recall and
-reflection. This module exposes that surface as named tools with
-JSON-compatible arguments and results, so an application could hand the same
-definitions to a function-calling loop without changing the bank underneath.
+Hindsight is a service that an agent calls. It retains payloads, consolidates
+them in the background, keeps standing answers current, and serves recall and
+reflection. This module makes that surface available as named tools with
+JSON-compatible arguments and results. So an application can give the same
+definitions to a function-calling loop, and the bank below does not change.
 
-Two deliberate simplifications keep the example runnable with no API key:
+The example uses 2 deliberate simplifications, so it runs without an API key:
 
-- The agent decides which tools to call from explicit inputs rather than from a
-  model, and receives already-extracted facts. Fact extraction is the step that
-  genuinely needs a language model upstream.
-- Consolidation is an explicit call, though upstream runs it automatically after
-  every `retain`, so the example can show when it happened.
+- **No model decisions:** the agent selects the tools to call from explicit
+  inputs, not from a model. It also gets facts that are already extracted.
+  Upstream, fact extraction is the step that really needs a language model.
+- **Explicit consolidation:** upstream runs consolidation automatically after
+  every `retain`. Here it is an explicit call, so the example can show when it
+  happened.
 """
 
 from __future__ import annotations
@@ -44,12 +45,12 @@ from examples.lamps.hindsight.reflect import Reflector
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """Description of a tool presented to an agent.
+    """Description of a tool that the agent gets.
 
     Attributes:
-        name: Stable tool name used for calls.
+        name: Stable tool name for calls.
         description: Plain-language guidance for the agent.
-        parameters: Mapping of argument names to short type descriptions.
+        parameters: Map of argument names to short type descriptions.
     """
 
     name: str
@@ -59,10 +60,10 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class ToolCallRecord:
-    """One inspectable tool call made by the example agent.
+    """One tool call of the example agent, kept for inspection.
 
     Attributes:
-        name: Invoked tool name.
+        name: Name of the called tool.
         arguments: Copy of the JSON-compatible arguments.
         result: Copy of the JSON-compatible result.
     """
@@ -74,12 +75,12 @@ class ToolCallRecord:
 
 @dataclass(frozen=True, slots=True)
 class EntityCandidate:
-    """A canonical entity the agent declares before retaining anything.
+    """A canonical entity that the agent declares before it retains a payload.
 
     Attributes:
         name: Canonical display name.
         kind: Application-defined entity kind.
-        aliases: Extra surface forms bound to the same entity.
+        aliases: Extra surface forms to bind to the same entity.
     """
 
     name: str
@@ -89,20 +90,21 @@ class EntityCandidate:
 
 @dataclass(frozen=True, slots=True)
 class FactCandidate:
-    """One fact an extractor pulled out of a document.
+    """One fact that an extractor took from a document.
 
     Attributes:
-        key: Agent-local name so links and corrections can refer to it.
+        key: Agent-local name, so links and corrections can refer to the fact.
         text: Narrative sentence to store.
         fact_type: `world` or `experience`.
-        context: Situation the fact came from.
+        context: Situation that the fact came from.
         entities: Entity names as written in the source.
-        occurred_at: Optional ISO 8601 start of the period described.
+        occurred_at: Optional ISO 8601 start of the described period.
         occurred_until: Optional ISO 8601 exclusive end of that period.
         tags: Visibility tags.
-        claim: Optional belief key this fact is evidence for.
-        belief: Sentence the claim asserts, required with `claim`.
-        stance: Whether the fact supports or contradicts that belief.
+        claim: Optional key of the belief that this fact is evidence for.
+        belief: Sentence that the claim states. The `retain` tool raises
+            `ValueError` if only one of `claim` and `belief` is set.
+        stance: `supports` or `contradicts`, for that belief.
     """
 
     key: str
@@ -123,9 +125,9 @@ class LinkCandidate:
     """A temporal, semantic, or causal link between two retained facts.
 
     Attributes:
-        source_key: Fact the directed link starts at.
-        target_key: Fact the directed link ends at.
-        relation: One of the lamp's associative relations.
+        source_key: Key of the fact where the directed link starts.
+        target_key: Key of the fact where the directed link ends.
+        relation: One of the associative relations of the lamp.
         metadata: Optional link properties.
     """
 
@@ -142,11 +144,12 @@ class DocumentCandidate:
     Attributes:
         source: Where the payload came from.
         content: Raw payload text.
-        retained_at: ISO 8601 time the bank learned the payload.
-        context: Optional framing describing the situation.
+        retained_at: ISO 8601 time when the bank learned the payload.
+        context: Optional text that describes the situation.
         facts: Facts extracted from the payload.
-        links: Associative links between facts retained so far.
-        corrections: Keys of earlier facts this payload retires.
+        links: Associative links between facts of this payload or of earlier
+            payloads.
+        corrections: Keys of earlier facts that this payload retires.
     """
 
     source: str
@@ -160,12 +163,12 @@ class DocumentCandidate:
 
 @dataclass(frozen=True, slots=True)
 class ModelCandidate:
-    """A standing question the agent wants an answer kept for.
+    """A standing question that the agent wants a current answer for.
 
     Attributes:
         name: Stable model name.
-        question: Question the model answers.
-        tags: Scope tags restricting which memories feed it.
+        question: Question that the model answers.
+        tags: Scope tags that select the observations that the model reads.
     """
 
     name: str
@@ -174,7 +177,7 @@ class ModelCandidate:
 
 
 class HindsightTools:
-    """Expose one memory bank's operations as named agent tools."""
+    """Make the operations of one memory bank available as named agent tools."""
 
     def __init__(
         self,
@@ -185,14 +188,14 @@ class HindsightTools:
         recall: HindsightRecall,
         reflector: Reflector,
     ) -> None:
-        """Create the tool set an agent receives instead of the bank itself.
+        """Create the tool set that an agent gets instead of the bank.
 
         Args:
             bank: Retain, entity, link, and invalidation operations.
             consolidation: Observation consolidation.
             models: Standing questions and their answers.
-            recall: Four-way retrieval.
-            reflector: Hierarchical reflection.
+            recall: 4-way retrieval.
+            reflector: Reflection in tiers.
         """
 
         self._bank = bank
@@ -306,7 +309,7 @@ class HindsightTools:
         }
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Invoke a named tool.
+        """Call a named tool.
 
         Args:
             name: Tool name from `definitions`.
@@ -317,7 +320,7 @@ class HindsightTools:
 
         Raises:
             ValueError: If the tool name is unknown.
-            TypeError: If arguments do not match the selected tool.
+            TypeError: If the arguments do not match the selected tool.
         """
 
         handler = self._handlers.get(name)
@@ -488,11 +491,14 @@ class HindsightTools:
 class HindsightAgent:
     """Small agent that learns and answers only through named tools.
 
-    The decision policy is deterministic so the example runs without an API
-    key. `learn` walks each source payload through retention, linking,
-    correction, consolidation, and a model refresh, mirroring what Hindsight
-    does automatically after every write. `answer` selects the read tools. The
-    agent never receives the `Memory`, the handle, or the bank.
+    - **Deterministic:** the decision policy is deterministic, so the example
+      runs without an API key.
+    - **`learn`:** sends each source payload through retention, links,
+      corrections, consolidation, and a model refresh, in that order.
+      Hindsight does the same automatically after every write.
+    - **`answer`:** selects the read tools.
+    - **No direct access:** the agent never gets the `Memory`, the handle, or
+      the bank.
     """
 
     def __init__(self, *, name: str, tools: HindsightTools) -> None:
@@ -500,7 +506,7 @@ class HindsightAgent:
 
         Args:
             name: Human-readable agent name.
-            tools: Only interface the agent receives for memory access.
+            tools: The only interface for memory access that the agent gets.
         """
 
         self.name = name
@@ -519,10 +525,11 @@ class HindsightAgent:
         """Retain payloads, then consolidate and refresh after each one.
 
         Args:
-            documents: Source payloads in the order the bank learned them.
-            entities: Canonical entities declared before retention.
-            models: Standing questions registered before retention, so every
-                payload can refresh them.
+            documents: Source payloads in the order that the bank learned them.
+            entities: Canonical entities that the agent declares before
+                retention.
+            models: Standing questions that the agent registers before
+                retention, so every payload can refresh them.
         """
 
         for candidate in entities:
@@ -563,19 +570,20 @@ class HindsightAgent:
         window_end: str,
         max_tokens: int = 45,
     ) -> str:
-        """Answer a question using only the read tools.
+        """Answer a question with only the read tools.
 
         Args:
-            question: User-facing question included in the report.
+            question: User question to include in the report.
             model_name: Standing answer to read first.
             query: Retrieval text for recall and reflection.
-            entity: Entity anchoring graph retrieval.
-            window_start: Inclusive start of the recall window.
+            entity: Entity where graph retrieval starts.
+            window_start: Inclusive start of the recall window. Only the
+                `recall` call uses the window.
             window_end: Exclusive end of the recall window.
-            max_tokens: Budget the recalled results must fit inside.
+            max_tokens: Token budget for the `recall` and `reflect` calls.
 
         Returns:
-            Readable answer assembled from tool results.
+            Readable answer that the agent builds from the tool results.
         """
 
         model = self._call("get_mental_model", {"name": model_name})
@@ -620,7 +628,7 @@ class HindsightAgent:
         return "\n".join(lines)
 
     def memory_id(self, key: str) -> str:
-        """Return the stored id assigned to a retained fact key.
+        """Return the stored id of the fact that has this key.
 
         Args:
             key: Agent-local fact key.
@@ -629,7 +637,7 @@ class HindsightAgent:
             The stored memory block id.
 
         Raises:
-            ValueError: If the key was never retained.
+            ValueError: If the agent never retained a fact with this key.
         """
 
         memory_id = self._memory_ids.get(key)
@@ -638,7 +646,7 @@ class HindsightAgent:
         return memory_id
 
     def tool_usage(self) -> str:
-        """Return a compact summary of all tool calls.
+        """Return a short summary of all tool calls.
 
         Returns:
             Tool names with their call counts.
@@ -648,7 +656,7 @@ class HindsightAgent:
         return ", ".join(f"{name} x{count}" for name, count in counts.items())
 
     def _retain_document(self, document: DocumentCandidate) -> None:
-        """Retain one payload, then link and correct what it changed."""
+        """Retain one payload, then add its links and apply its corrections."""
 
         result = self._call(
             "retain",
@@ -677,7 +685,7 @@ class HindsightAgent:
             self._call("invalidate_memory", {"memory_id": self.memory_id(key)})
 
     def _call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Call one tool and retain an isolated trace record."""
+        """Call one tool and add a copy of the call to `call_log`."""
 
         result = self._toolbox.call(name, arguments)
         self.call_log.append(
@@ -832,7 +840,7 @@ def _evidence_result(evidence: Evidence) -> dict[str, Any]:
 
 
 def _window(start: str | None, end: str | None) -> RecallWindow | None:
-    """Build a recall window from two optional tool timestamps."""
+    """Build a recall window from 2 optional tool timestamps."""
 
     if start is None and end is None:
         return None

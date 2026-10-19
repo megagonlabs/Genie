@@ -1,23 +1,27 @@
-"""Value types, constants, and the arithmetic the MemoryOS lamp shares.
+"""Value types, constants, and the shared calculations of the MemoryOS lamp.
 
-MemoryOS borrows its shape from an operating system:
+MemoryOS copies its shape from an operating system:
 
-- A dialogue page is the unit that moves.
-- Short-term memory is the fast tier that holds only the newest few.
-- Mid-term memory is the paged tier where pages are grouped into topic segments.
-- Long-term memory is the slow tier that keeps what turned out to matter.
-- Promotion is decided by *heat*, not age. A segment's score rises when a
-  retrieval visits it and when it gains pages, and falls as it is left alone.
+- **Page:** a dialogue page is the unit that moves between tiers.
+- **Short-term memory:** the fast tier. It holds only the newest few exchanges.
+- **Mid-term memory:** the paged tier. It groups pages into topic segments.
+- **Long-term memory:** the slow tier. It keeps the information that an analysis
+  found important.
+- **Heat, not age, decides promotion:** the score of a segment increases when a
+  retrieval visits it and when it gets pages. The score decreases while nothing
+  uses the segment.
 
-Three things in this module are the reason the rest of the lamp can be small:
+3 parts of this module let the rest of the lamp stay small:
 
-- The block types keep the four tiers' contents apart.
-- The records are what the tiers hand back, each with a JSON form so the same
-  values can cross a tool boundary.
-- `segment_heat` and `time_decay` are MemoryOS's own formulas, written once here
-  so both the updater and the retriever read heat the same way.
+- **Block types:** they keep the contents of the 4 tiers separate.
+- **Records:** the tiers return these records. Each record has a JSON form, so
+  the same values can cross a tool boundary.
+- **`segment_heat` and `time_decay`:** the MemoryOS formulas. They are only in
+  this module, so the updater and the retriever calculate heat the same way.
 
-Nothing in this module touches Genie, so every other module can depend on it.
+This module makes no Genie calls. It imports only the `MemoryBlock` and
+`MemoryAddress` types from Genie, and it imports no other lamp module. So each
+other module can import from it.
 """
 
 from __future__ import annotations
@@ -57,19 +61,19 @@ KNOWLEDGE_OWNERS: tuple[str, ...] = (USER, ASSISTANT)
 KnowledgeOwner = Literal["user", "assistant"]
 
 HEAT_ALPHA = 1.0
-"""Weight MemoryOS gives to how often a segment has been visited."""
+"""Weight that MemoryOS gives to the number of visits to a segment."""
 
 HEAT_BETA = 1.0
-"""Weight MemoryOS gives to how much unanalyzed dialogue a segment holds."""
+"""Weight that MemoryOS gives to the quantity of dialogue in a segment that no analysis has read."""
 
 HEAT_GAMMA = 1.0
-"""Weight MemoryOS gives to how recently a segment was visited."""
+"""Weight that MemoryOS gives to the recency of the last visit to a segment."""
 
 RECENCY_TAU_HOURS = 24.0
-"""Hours after which MemoryOS's recency term has decayed by a factor of e."""
+"""Number of hours after which the MemoryOS recency term decreases by a factor of e."""
 
 READ_LIMIT = 1_000
-"""Upper bound on one candidate read, kept well above every demo size."""
+"""Maximum number of candidates in one read. This value is much larger than each demo size."""
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
@@ -140,27 +144,27 @@ _STOPWORDS: frozenset[str] = frozenset(
 
 
 def new_id(prefix: str) -> str:
-    """Create an identifier in MemoryOS's own `prefix_hex` form.
+    """Create an identifier in the MemoryOS `prefix_hex` form.
 
     Args:
-        prefix: Short kind name such as `"page"` or `"session"`.
+        prefix: Short kind name, for example `"page"` or `"session"`.
 
     Returns:
-        An id built from the prefix and eight hex characters.
+        An id made from the prefix and 8 hex characters.
     """
 
     return f"{prefix}_{uuid4().hex[:8]}"
 
 
 def normalize_timestamp(value: datetime, *, field: str) -> datetime:
-    """Return a timezone-aware timestamp normalized to UTC.
+    """Return a timestamp with a timezone, converted to UTC.
 
     Args:
-        value: Timestamp supplied by application code.
-        field: Field name used in error messages.
+        value: Timestamp from application code.
+        field: Field name for error messages.
 
     Returns:
-        The same instant expressed in UTC.
+        The same instant in UTC.
 
     Raises:
         TypeError: If `value` is not a `datetime`.
@@ -178,28 +182,28 @@ def format_timestamp(value: datetime) -> str:
     """Format a timestamp as a JSON-compatible ISO 8601 string in UTC.
 
     Args:
-        value: Timezone-aware timestamp.
+        value: Timestamp with a timezone.
 
     Returns:
-        An ISO 8601 string ending in `Z`.
+        An ISO 8601 string that ends in `Z`.
     """
 
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def parse_timestamp(value: object, *, field: str) -> datetime:
-    """Parse an ISO 8601 timestamp arriving from a JSON tool argument.
+    """Parse an ISO 8601 timestamp from a JSON tool argument.
 
     Args:
-        value: Timestamp text, which may end in `Z`.
-        field: Field name used in error messages.
+        value: Timestamp text. It can end in `Z`.
+        field: Field name for error messages.
 
     Returns:
         The parsed timestamp in UTC.
 
     Raises:
         TypeError: If `value` is not a string.
-        ValueError: If the text is not ISO 8601 or carries no timezone.
+        ValueError: If the text is not ISO 8601 or has no timezone.
     """
 
     if not isinstance(value, str):
@@ -212,18 +216,18 @@ def parse_timestamp(value: object, *, field: str) -> datetime:
 
 
 def required_text(value: object, *, field: str) -> str:
-    """Return non-empty text or reject the input.
+    """Return text that is not empty, or refuse the input.
 
     Args:
         value: Candidate text.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
-        The text with surrounding whitespace removed.
+        The text without whitespace at the start and the end.
 
     Raises:
         TypeError: If `value` is not a string.
-        ValueError: If the text is empty.
+        ValueError: If the text is empty or contains only whitespace.
     """
 
     if not isinstance(value, str):
@@ -235,14 +239,15 @@ def required_text(value: object, *, field: str) -> str:
 
 
 def text_tuple(values: Iterable[Any], *, field: str) -> tuple[str, ...]:
-    """Return a tuple of non-empty strings with repeats removed.
+    """Return a tuple of strings that are not empty, with no repeated strings.
 
     Args:
-        values: Candidate strings, normally arriving from JSON.
-        field: Field name used in error messages.
+        values: Candidate strings, usually from JSON.
+        field: Field name for error messages.
 
     Returns:
-        The strings in supplied order, each seen once.
+        The strings without whitespace at the start and the end, in the given
+        order, each string once.
 
     Raises:
         TypeError: If an entry is not a string.
@@ -258,11 +263,11 @@ def text_tuple(values: Iterable[Any], *, field: str) -> tuple[str, ...]:
 
 
 def string_mapping(value: Any, *, field: str) -> dict[str, str]:
-    """Return a flat string-to-string mapping copied from caller input.
+    """Return a copy of caller input as a flat mapping from strings to strings.
 
     Args:
-        value: Candidate mapping, or `None` for an empty one.
-        field: Field name used in error messages.
+        value: Candidate mapping, or `None` for an empty mapping.
+        field: Field name for error messages.
 
     Returns:
         A new mapping with validated keys and values.
@@ -280,17 +285,17 @@ def string_mapping(value: Any, *, field: str) -> dict[str, str]:
 
 
 def positive(value: object, *, field: str) -> int:
-    """Return a positive integer or reject the input.
+    """Return a positive integer, or refuse the input.
 
     Args:
         value: Candidate number.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
         The integer.
 
     Raises:
-        TypeError: If `value` is not an integer.
+        TypeError: If `value` is not an integer, or is a `bool`.
         ValueError: If the integer is not greater than zero.
     """
 
@@ -302,18 +307,18 @@ def positive(value: object, *, field: str) -> int:
 
 
 def fraction(value: object, *, field: str) -> float:
-    """Return a number between zero and one, inclusive.
+    """Return a number from zero to one, inclusive.
 
     Args:
         value: Candidate number.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
         The value as a float.
 
     Raises:
-        TypeError: If `value` is not a number.
-        ValueError: If the value falls outside zero to one.
+        TypeError: If `value` is not a number, or is a `bool`.
+        ValueError: If the value is not in the range from zero to one.
     """
 
     if isinstance(value, bool) or not isinstance(value, int | float):
@@ -324,17 +329,17 @@ def fraction(value: object, *, field: str) -> float:
 
 
 def non_negative(value: object, *, field: str) -> float:
-    """Return a number that is zero or greater.
+    """Return a number that is zero or more.
 
     Args:
         value: Candidate number.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
         The value as a float.
 
     Raises:
-        TypeError: If `value` is not a number.
+        TypeError: If `value` is not a number, or is a `bool`.
         ValueError: If the value is negative.
     """
 
@@ -346,7 +351,7 @@ def non_negative(value: object, *, field: str) -> float:
 
 
 def tokenize(text: str) -> frozenset[str]:
-    """Split text into the lowercase tokens similarity is measured over.
+    """Split text into the lowercase tokens that the similarity measure compares.
 
     Args:
         text: Free text.
@@ -359,11 +364,14 @@ def tokenize(text: str) -> frozenset[str]:
 
 
 def keywords(text: str) -> frozenset[str]:
-    """Return the tokens MemoryOS would keep as a summary's keywords.
+    """Return the tokens that MemoryOS would keep as the keywords of a summary.
 
-    Upstream a model writes the keyword list beside each summary it generates.
-    Dropping a small stopword list is the deterministic stand-in, which is
-    enough for the Jaccard term the segment score adds on top of similarity.
+    - **Upstream:** a model writes the keyword list next to each summary that it
+      makes.
+    - **Here:** the function removes the tokens in a small stopword list and the
+      tokens of 2 characters or fewer. This deterministic replacement is
+      sufficient for the Jaccard term that the segment score adds to the
+      similarity.
 
     Args:
         text: Free text.
@@ -376,18 +384,18 @@ def keywords(text: str) -> frozenset[str]:
 
 
 def overlap(left: frozenset[str], right: frozenset[str]) -> float:
-    """Return the share of one token set that appears in another.
+    """Return the fraction of the tokens in one set that are also in another set.
 
-    This stands in for cosine similarity between two normalized embeddings: it
-    is one when every term is present and zero when none is, which is the range
-    MemoryOS's thresholds are written against.
+    This value replaces the cosine similarity between 2 normalized embeddings.
+    It is one when each term is present, and zero when no term is present. The
+    MemoryOS thresholds use this range.
 
     Args:
-        left: Tokens to look for, normally a query's.
-        right: Tokens to look in.
+        left: Tokens to find, usually the tokens of a query.
+        right: Tokens to search in.
 
     Returns:
-        A value from zero to one.
+        A value from zero to one. The value is zero when `left` is empty.
     """
 
     if not left:
@@ -396,14 +404,15 @@ def overlap(left: frozenset[str], right: frozenset[str]) -> float:
 
 
 def jaccard(left: frozenset[str], right: frozenset[str]) -> float:
-    """Return the Jaccard index MemoryOS uses to compare keyword sets.
+    """Return the Jaccard index that MemoryOS uses to compare keyword sets.
 
     Args:
         left: First keyword set.
         right: Second keyword set.
 
     Returns:
-        Intersection over union, or zero when both sets are empty.
+        The size of the intersection divided by the size of the union, or zero
+        when both sets are empty.
     """
 
     union = left | right
@@ -413,15 +422,17 @@ def jaccard(left: frozenset[str], right: frozenset[str]) -> float:
 
 
 def time_decay(event: datetime, now: datetime, *, tau_hours: float = RECENCY_TAU_HOURS) -> float:
-    """Return MemoryOS's exponential recency factor for one timestamp.
+    """Return the MemoryOS exponential recency factor for one timestamp.
 
     Args:
-        event: When the thing being scored last happened.
-        now: Time the score is being taken at.
-        tau_hours: Hours over which the factor falls by a factor of e.
+        event: Time of the last occurrence of the scored item.
+        now: Time of the score calculation.
+        tau_hours: Number of hours in which the factor decreases by a factor
+            of e.
 
     Returns:
-        A value in `(0, 1]`, which is one at `now` and decays with age.
+        A value in `(0, 1]`. It is one at `now` and decreases with age. An
+        `event` after `now` also gives one.
 
     Raises:
         ValueError: If `tau_hours` is not positive.
@@ -442,29 +453,32 @@ def segment_heat(
     beta: float = HEAT_BETA,
     gamma: float = HEAT_GAMMA,
 ) -> float:
-    """Return `H_segment`, the score that decides what reaches long-term memory.
+    """Return `H_segment`, the score that decides what goes to long-term memory.
 
-    This is MemoryOS's formula unchanged:
+    The formula is the MemoryOS formula with no change:
     `H = alpha * N_visit + beta * L_interaction + gamma * R_recency`.
 
-    What the lamp changes is where the three terms come from:
+    The lamp changes only the sources of the 3 terms:
 
-    - Visits are counted on the segment.
-    - Recency comes from the temporal index.
-    - Length is the number of pages the segment owns that no analysis has read
-      yet. That is the same quantity upstream keeps in `L_interaction` and
-      resets to zero the moment it marks a segment's pages analyzed.
+    - **Visits:** the segment block stores the visit count.
+    - **Recency:** comes from the temporal index.
+    - **Length:** the number of pages of the segment that no analysis has read.
+      Upstream keeps the same quantity in `L_interaction`. Upstream sets it to
+      zero at the same time that it marks the pages of a segment as analyzed.
 
     Args:
-        visits: `N_visit`, how often retrieval has reached this segment.
-        length: `L_interaction`, how much unanalyzed dialogue it holds.
+        visits: `N_visit`, the number of times that retrieval reached this
+            segment.
+        length: `L_interaction`, the quantity of dialogue in the segment that no
+            analysis has read.
         recency: `R_recency`, the decay factor for its last visit.
         alpha: Weight on visits.
         beta: Weight on length.
         gamma: Weight on recency.
 
     Returns:
-        The heat score, rounded to four places so runs agree exactly.
+        The heat score, rounded to 4 decimal places, so that all runs give the
+        same result.
     """
 
     return round(alpha * visits + beta * length + gamma * recency, 4)
@@ -474,19 +488,20 @@ def segment_heat(
 class Insight:
     """What one exchange would tell an analysis about the user.
 
-    - Upstream, promotion runs two model calls over a hot segment's pages: one
-      rewrites the user profile, and one splits what was learned into private
-      user knowledge and assistant knowledge.
-    - The lamp has no model, so each exchange declares its own contribution when
-      it is recorded, and the analysis is the collection of the contributions
-      belonging to the pages being analyzed.
-    - That keeps the model's judgment at the boundary and makes the provenance
-      edges exact, because every stored fact names the page that declared it.
+    - **Upstream:** promotion makes 2 model calls on the pages of a hot segment.
+      One call writes the user profile again. The other call splits what the
+      pages showed into private user knowledge and assistant knowledge.
+    - **Here:** the lamp has no model. So each exchange declares its own
+      contribution when the lamp records it. The analysis collects the
+      contributions of the pages that it analyzes.
+    - **Result:** the judgment of the model stays at the boundary. The
+      provenance edges are exact, because each stored fact names the page that
+      declared it.
 
     Attributes:
-        profile: Profile traits this exchange would set or overwrite.
-        user_knowledge: Facts about the user it would add.
-        assistant_knowledge: Facts about doing the job it would add.
+        profile: Profile traits that this exchange would set or replace.
+        user_knowledge: Facts about the user that it would add.
+        assistant_knowledge: Facts about how to do the job that it would add.
     """
 
     profile: dict[str, str] = field(default_factory=dict)
@@ -495,12 +510,12 @@ class Insight:
 
     @property
     def empty(self) -> bool:
-        """Return whether this exchange would tell an analysis nothing."""
+        """Return `True` if this exchange would tell an analysis nothing."""
 
         return not (self.profile or self.user_knowledge or self.assistant_knowledge)
 
     def as_json(self) -> dict[str, Any]:
-        """Return the JSON-compatible form kept on a page.
+        """Return the JSON-compatible form that a page keeps.
 
         Returns:
             The declared contribution as plain JSON values.
@@ -517,11 +532,11 @@ class Insight:
         """Rebuild a declared contribution from its stored JSON form.
 
         Args:
-            value: Mapping produced by `as_json`, or `None`.
-            field_name: Field name used in error messages.
+            value: Mapping from `as_json`, or `None`.
+            field_name: Field name for error messages.
 
         Returns:
-            The contribution, empty when nothing was declared.
+            The contribution. It is empty when the exchange declared nothing.
 
         Raises:
             TypeError: If `value` is not a mapping.
@@ -540,16 +555,16 @@ class Insight:
 
 @dataclass(frozen=True, slots=True)
 class Exchange:
-    """One user turn and the assistant's reply, as MemoryOS is handed them.
+    """One user turn and the reply of the assistant, as MemoryOS receives them.
 
     Attributes:
         user_input: What the user said.
         agent_response: What the assistant answered.
-        occurred_at: When the exchange happened.
-        topic: The themed summary a model would have written for it, which is
-            what segment grouping compares against.
-        continues: Whether this exchange continues the previous one, which
-            upstream decides with a continuity model call.
+        occurred_at: When the exchange occurred.
+        topic: The themed summary that a model would write for it. The lamp
+            compares this summary when it puts pages into segments.
+        continues: `True` if this exchange continues the previous exchange.
+            Upstream, a continuity model call decides this.
         insight: What an analysis of this exchange would conclude.
     """
 
@@ -579,12 +594,12 @@ class Exchange:
 
 @dataclass(frozen=True, slots=True)
 class QAPair:
-    """One exchange while it is still resident in short-term memory.
+    """One exchange while it is still in short-term memory.
 
     Attributes:
-        block: Block holding the exchange.
+        block: Block that holds the exchange.
         sequence: Position in the FIFO queue, oldest first.
-        exchange: The exchange itself.
+        exchange: The exchange.
     """
 
     block: MemoryBlock
@@ -593,13 +608,13 @@ class QAPair:
 
     @property
     def id(self) -> str:
-        """Return the block id, which is also the queue entry's identity."""
+        """Return the block id, which is also the identity of the queue entry."""
 
         return self.block.id
 
     @property
     def terms(self) -> frozenset[str]:
-        """Return the tokens this exchange is matched on."""
+        """Return the tokens of the user input and the assistant reply, which a match compares."""
 
         return tokenize(f"{self.exchange.user_input} {self.exchange.agent_response}")
 
@@ -607,7 +622,7 @@ class QAPair:
         """Return the JSON-compatible form of this queue entry.
 
         Returns:
-            The queue position and the exchange it holds.
+            The queue position and the exchange in it.
         """
 
         return {"sequence": self.sequence, **self.exchange.as_json()}
@@ -615,15 +630,15 @@ class QAPair:
 
 @dataclass(frozen=True, slots=True)
 class Page:
-    """One dialogue page after it has been paged out into mid-term memory.
+    """One dialogue page after a page-out to mid-term memory.
 
     Attributes:
-        block: Block holding the page.
-        page_id: MemoryOS page id, an address rather than a scan target.
-        segment_id: Id of the segment that owns it.
-        exchange: The exchange the page was made from.
-        analyzed: Whether an analysis has already read this page, which is
-            what takes it out of its segment's `L_interaction`.
+        block: Block that holds the page.
+        page_id: MemoryOS page id. It is an address, not a scan target.
+        segment_id: Id of the segment that owns the page.
+        exchange: The exchange that the page was made from.
+        analyzed: `True` if an analysis already read this page. An analyzed
+            page does not count toward the `L_interaction` of its segment.
     """
 
     block: MemoryBlock
@@ -640,13 +655,13 @@ class Page:
 
     @property
     def occurred_at(self) -> datetime:
-        """Return when the exchange on this page happened."""
+        """Return the time of the exchange on this page."""
 
         return self.exchange.occurred_at
 
     @property
     def terms(self) -> frozenset[str]:
-        """Return the tokens a page-level match is measured over."""
+        """Return the tokens that a page-level match compares: the user input, the assistant reply, and the topic."""
 
         return tokenize(f"{self.exchange.user_input} {self.exchange.agent_response} {self.exchange.topic}")
 
@@ -670,20 +685,22 @@ class Segment:
     """One mid-term session: a topic, the pages under it, and its heat.
 
     MemoryOS calls this a session and scores it as a segment. The pages are its
-    children, so `length` is a read of the store rather than a counter that has
-    to be kept in step with it.
+    children, so `length` reads the store. It is not a counter that the lamp
+    keeps in step with the store.
 
     Attributes:
-        block: Block holding the segment.
+        block: Block that holds the segment.
         segment_id: MemoryOS session id.
-        summary: Themed summary the pages were grouped under.
+        summary: Themed summary that the pages were grouped under.
         keywords: Keywords that came with the summary.
-        visits: `N_visit`, incremented every time retrieval reaches it.
-        lfu_count: `access_count_lfu`, the counter eviction reads and no
-            analysis resets.
+        visits: `N_visit`. Each retrieval that reaches the segment adds one,
+            and promotion sets it to zero.
+        lfu_count: `access_count_lfu`, the counter that eviction reads. No
+            analysis sets it to zero.
         created_at: When the segment was opened.
-        last_visit_at: When it was last created, extended, or retrieved.
-        recency: `R_recency` at the time it was read.
+        last_visit_at: When the segment was last created, extended, retrieved,
+            or cooled after a promotion.
+        recency: `R_recency` at the time of the read.
         pages: Its pages, oldest first.
     """
 
@@ -706,25 +723,25 @@ class Segment:
 
     @property
     def length(self) -> int:
-        """Return `L_interaction`: the pages here that no analysis has read."""
+        """Return `L_interaction`: the number of pages here that no analysis has read."""
 
         return sum(1 for page in self.pages if not page.analyzed)
 
     @property
     def heat(self) -> float:
-        """Return `H_segment` from the three terms as they stand now."""
+        """Return `H_segment` from the current values of the 3 terms."""
 
         return segment_heat(visits=self.visits, length=self.length, recency=self.recency)
 
     @property
     def keyword_set(self) -> frozenset[str]:
-        """Return the segment's keywords as a set for Jaccard comparison."""
+        """Return the keywords of the segment as a set for the Jaccard comparison."""
 
         return frozenset(self.keywords)
 
     @property
     def summary_terms(self) -> frozenset[str]:
-        """Return the tokens a segment-level match is measured over."""
+        """Return the tokens that a segment-level match compares."""
 
         return tokenize(self.summary)
 
@@ -732,7 +749,7 @@ class Segment:
         """Return the JSON-compatible form of this segment.
 
         Returns:
-            The session fields MemoryOS keeps, plus its computed heat.
+            The session fields that MemoryOS keeps, and the calculated heat.
         """
 
         return {
@@ -752,16 +769,16 @@ class Segment:
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeItem:
-    """One entry in the user or assistant long-term knowledge base.
+    """One entry in the long-term knowledge base of the user or the assistant.
 
     Attributes:
-        block: Block holding the entry.
-        owner: Whose knowledge base it belongs to.
-        knowledge: The fact itself.
+        block: Block that holds the entry.
+        owner: The owner of the knowledge base that contains the entry.
+        knowledge: The fact.
         recorded_at: When promotion wrote it.
-        sequence: Position in the capped log, oldest first.
-        source_page_ids: Pages the fact was extracted from, which upstream
-            does not keep.
+        sequence: Position in the log of the knowledge base, oldest first.
+        source_page_ids: Ids of the pages that the analysis took the fact from.
+            Upstream does not keep this data.
     """
 
     block: MemoryBlock
@@ -779,7 +796,7 @@ class KnowledgeItem:
 
     @property
     def terms(self) -> frozenset[str]:
-        """Return the tokens a knowledge match is measured over."""
+        """Return the tokens that a knowledge match compares."""
 
         return tokenize(self.knowledge)
 
@@ -801,14 +818,14 @@ class KnowledgeItem:
 
 @dataclass(frozen=True, slots=True)
 class ProfileRevision:
-    """One version of the user profile, as promotion left it.
+    """One version of the user profile, as promotion wrote it.
 
     Attributes:
-        block: Block holding this revision.
-        revision: Logical revision number, starting at one.
+        block: Block that holds this revision.
+        revision: Logical revision number. The first revision is one.
         data: The profile traits after this analysis.
         recorded_at: When promotion wrote it.
-        source_page_ids: Pages the analysis read.
+        source_page_ids: Ids of the pages that the analysis read.
     """
 
     block: MemoryBlock
@@ -821,7 +838,7 @@ class ProfileRevision:
         """Return the JSON-compatible form of this revision.
 
         Returns:
-            The revision number, its traits, and where they came from.
+            The revision number, its traits, and their source pages.
         """
 
         return {
@@ -837,11 +854,13 @@ class Analysis:
     """What one promotion decided to write into long-term memory.
 
     Attributes:
-        profile: Traits to merge into the profile, or nothing to leave it.
-        user_knowledge: Facts for the user's knowledge base, each with the
-            page it came from.
-        assistant_knowledge: Facts for the assistant's knowledge base.
-        source_page_ids: Every page the analysis read.
+        profile: Traits to merge into the profile. An empty mapping keeps the
+            profile as it is.
+        user_knowledge: Facts for the knowledge base of the user. Each fact has
+            the id of the page that it came from.
+        assistant_knowledge: Facts for the knowledge base of the assistant, in
+            the same form.
+        source_page_ids: Ids of all pages that the analysis read.
     """
 
     profile: dict[str, str]
@@ -851,22 +870,22 @@ class Analysis:
 
     @property
     def empty(self) -> bool:
-        """Return whether the analysis found nothing worth promoting."""
+        """Return `True` if the analysis found nothing to promote."""
 
         return not (self.profile or self.user_knowledge or self.assistant_knowledge)
 
 
 @dataclass(frozen=True, slots=True)
 class PageHit:
-    """One mid-term page retrieval kept, with the segment it came from.
+    """One mid-term page that retrieval kept, with the segment that it came from.
 
     Attributes:
-        page: The page itself.
-        segment_id: Session the page belongs to.
-        segment_summary: That session's summary, which upstream shows beside
-            the page as its conversation overview.
+        page: The page.
+        segment_id: Session that the page belongs to.
+        segment_summary: The summary of that session. Upstream shows it next to
+            the page as the conversation overview.
         segment_score: How well the session matched the query.
-        score: How well the page itself matched.
+        score: How well the page matched the query.
     """
 
     page: Page
@@ -879,7 +898,7 @@ class PageHit:
         """Return the JSON-compatible form of this hit.
 
         Returns:
-            The page, its session's overview, and both scores.
+            The page, the overview of its session, and both scores.
         """
 
         return {
@@ -892,10 +911,10 @@ class PageHit:
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeHit:
-    """One knowledge entry retrieval kept.
+    """One knowledge entry that retrieval kept.
 
     Attributes:
-        item: The entry itself.
+        item: The entry.
         score: How well it matched the query.
     """
 
@@ -906,7 +925,7 @@ class KnowledgeHit:
         """Return the JSON-compatible form of this hit.
 
         Returns:
-            The entry with the score it was kept on.
+            The entry and its score.
         """
 
         return {**self.item.as_json(), "score": round(self.score, 4)}
@@ -914,20 +933,23 @@ class KnowledgeHit:
 
 @dataclass(frozen=True, slots=True)
 class RetrievedContext:
-    """Everything one retrieval gathered, tier by tier.
+    """All context that one retrieval collected, tier by tier.
 
-    This is the value MemoryOS's generation module turns into a prompt. The
-    lamp stops here, because the step after it is a model call.
+    The MemoryOS generation module turns this value into a prompt. The lamp
+    stops here, because the next step is a model call.
 
     Attributes:
-        query: Text the retrieval ran for.
-        retrieved_at: Time the retrieval was taken at.
-        short_term: The whole FIFO queue, which upstream includes in full.
+        query: Text that the retrieval used.
+        retrieved_at: Time of the retrieval.
+        short_term: The full FIFO queue. Upstream puts all of it in the prompt.
         pages: Mid-term pages that matched, best first.
-        profile: The current profile traits, or nothing when none was written.
-        profile_revision: Which revision those traits are, or zero.
-        user_knowledge: Matching entries from the user's knowledge base.
-        assistant_knowledge: Matching entries from the assistant's.
+        profile: The current profile traits, or an empty mapping when no
+            analysis wrote a profile.
+        profile_revision: The revision number of those traits, or zero.
+        user_knowledge: Entries from the knowledge base of the user that match
+            the query.
+        assistant_knowledge: Entries from the knowledge base of the assistant
+            that match the query.
     """
 
     query: str
@@ -943,7 +965,7 @@ class RetrievedContext:
         """Return the JSON-compatible form of this retrieval.
 
         Returns:
-            One mapping per tier, in the order MemoryOS reads them.
+            One mapping for each tier, in the order that MemoryOS reads them.
         """
 
         return {
@@ -960,21 +982,23 @@ class RetrievedContext:
 
 @dataclass(frozen=True, slots=True)
 class Promotion:
-    """One heat-triggered move from mid-term into long-term memory.
+    """One move from mid-term memory into long-term memory, caused by heat.
 
     Attributes:
-        segment_id: Session that was hot enough to be analyzed.
-        heat: Its heat when the check fired.
-        threshold: Heat the check required.
-        analyzed_page_ids: Pages the analysis read and marked.
-        profile_revision: Revision the profile reached, or zero when the
-            analysis changed no traits.
-        user_knowledge: Entries written to the user's knowledge base.
-        assistant_knowledge: Entries written to the assistant's.
-        cooled_heat: The segment's heat once its visit and length terms had
-            been reset.
-        evictions: Entries a knowledge base dropped to make room for the new
-            ones.
+        segment_id: Session that was hot enough for an analysis.
+        heat: Its heat when the check started the promotion.
+        threshold: Heat that the check required.
+        analyzed_page_ids: Ids of the pages that the analysis read and marked.
+        profile_revision: Revision number of the profile after the analysis,
+            or zero when the analysis set no traits.
+        user_knowledge: Entries that the promotion wrote to the knowledge base
+            of the user.
+        assistant_knowledge: Entries that the promotion wrote to the knowledge
+            base of the assistant.
+        cooled_heat: The heat of the segment after the reset of its visit and
+            length terms.
+        evictions: Entries that a knowledge base removed to make room for the
+            new entries.
     """
 
     segment_id: str
@@ -991,7 +1015,8 @@ class Promotion:
         """Return the JSON-compatible form of this promotion.
 
         Returns:
-            What was analyzed, what was written, and the heat before and after.
+            What the analysis read, what it wrote, and the heat before and
+            after.
         """
 
         return {
@@ -1009,13 +1034,14 @@ class Promotion:
 
 @dataclass(frozen=True, slots=True)
 class Eviction:
-    """One page-out or drop the tiers performed on their own.
+    """One removal that a tier made on its own to stay inside its capacity.
 
     Attributes:
-        tier: Tier the eviction happened in.
-        reason: Why it happened, in MemoryOS's own terms.
-        item_id: Identifier of what left, a page or a session id.
-        detail: Short readable note about what it held.
+        tier: Tier where the eviction occurred.
+        reason: Why it occurred, in MemoryOS terms.
+        item_id: Identifier of the item that left: a session id for a mid-term
+            segment, or a block id for a knowledge entry.
+        detail: Short readable note about what the item held.
     """
 
     tier: str
@@ -1027,7 +1053,7 @@ class Eviction:
         """Return the JSON-compatible form of this eviction.
 
         Returns:
-            Which tier lost what, and why.
+            The tier, the item that left it, and the reason.
         """
 
         return {"tier": self.tier, "reason": self.reason, "id": self.item_id, "detail": self.detail}
@@ -1035,17 +1061,19 @@ class Eviction:
 
 @dataclass(frozen=True, slots=True)
 class AddResult:
-    """Everything one `add_memory` call set in motion.
+    """All effects that one `add_memory` call started.
 
-    A single call can page out the oldest exchange, open or extend a segment,
-    evict the coldest segment, and promote the hottest one. Returning all of it
-    is what makes the tiering inspectable instead of implied.
+    One call can page out the oldest exchange, open or extend a segment, evict
+    the coldest segment, and promote the hottest segment. The result contains
+    all of these effects, so a caller can inspect the tiers from the result
+    alone.
 
     Attributes:
-        stored: The exchange as it now sits in short-term memory.
-        paged_out: Pages the overflow moved into mid-term memory.
-        promotion: The long-term update the heat check triggered, if any.
-        evictions: Anything the tiers dropped to stay inside capacity.
+        stored: The exchange as it is now in short-term memory.
+        paged_out: Pages that the overflow moved into mid-term memory.
+        promotion: The long-term update that the heat check started, or `None`.
+        evictions: All items that the tiers removed to stay inside their
+            capacity.
     """
 
     stored: QAPair
@@ -1057,7 +1085,7 @@ class AddResult:
         """Return the JSON-compatible form of this call's effects.
 
         Returns:
-            The stored exchange and every tier movement it caused.
+            The stored exchange and each tier movement that the call caused.
         """
 
         return {
@@ -1072,14 +1100,15 @@ def exchange_from_json(value: Mapping[str, Any]) -> Exchange:
     """Rebuild an exchange from JSON tool arguments.
 
     Args:
-        value: Mapping with the fields `as_json` produces.
+        value: Mapping with the fields that `as_json` makes.
 
     Returns:
         The exchange.
 
     Raises:
         TypeError: If a field has the wrong runtime type.
-        ValueError: If required text is missing.
+        ValueError: If required text is empty or absent, or the timestamp is
+            not ISO 8601 with a timezone.
     """
 
     return Exchange(
@@ -1093,18 +1122,18 @@ def exchange_from_json(value: Mapping[str, Any]) -> Exchange:
 
 
 def owner_of(value: object, *, field: str = "owner") -> KnowledgeOwner:
-    """Return a validated knowledge-base owner.
+    """Return a validated owner of a knowledge base.
 
     Args:
         value: Candidate owner name.
-        field: Field name used in error messages.
+        field: Field name for error messages.
 
     Returns:
-        Either `"user"` or `"assistant"`.
+        `"user"` or `"assistant"`.
 
     Raises:
         TypeError: If `value` is not a string.
-        ValueError: If the name is not a knowledge-base owner.
+        ValueError: If the name is not an owner of a knowledge base.
     """
 
     owner = required_text(value, field=field)
@@ -1114,13 +1143,13 @@ def owner_of(value: object, *, field: str = "owner") -> KnowledgeOwner:
 
 
 def ordered_topics(pages: Sequence[Page]) -> tuple[str, ...]:
-    """Return the distinct topics a run of pages was grouped under.
+    """Return the distinct topics of a sequence of pages.
 
     Args:
-        pages: Pages in the order they were paged out.
+        pages: Pages in page-out order.
 
     Returns:
-        Each topic once, in first-seen order.
+        Each topic once, in the order of first occurrence.
     """
 
     return text_tuple((page.exchange.topic for page in pages), field="topic")

@@ -1,8 +1,10 @@
-"""Catalog of the runnable examples and where their captured output lives.
+"""Catalog of the runnable examples and the location of their captured output.
 
-`lib/scripts/capture_example_output.py` writes the captured output and
-`lib/tests/test_examples.py` compares live runs against it. Both read the rules
-from this module so the two cannot drift apart.
+- **Writer:** `lib/scripts/capture_example_output.py` writes the captured output.
+- **Checker:** `lib/tests/test_examples.py` compares live runs with the captured
+  output.
+- **One source of rules:** both tools read their rules from this module, so the
+  rules in the 2 tools are always the same.
 """
 
 from __future__ import annotations
@@ -21,11 +23,13 @@ DEMO_NAME = "demo.py"
 def discover_examples() -> tuple[str, ...]:
     """Find every runnable example under `examples/`.
 
-    A script in `basic/` or `advanced/` is one example. A lamp is a package, so
-    only its `demo.py` entry point counts, not the modules it imports.
+    - **Scripts:** each `.py` file in `basic/` or `advanced/` is one example.
+      The function skips `__init__.py`.
+    - **Lamps:** a lamp is a package, so only its `demo.py` entry point is an
+      example. The modules that the lamp imports are not examples.
 
     Returns:
-        Sorted example paths relative to `examples/`, such as
+        The example paths relative to `examples/`, in sorted order. For example,
         `basic/crud_blocks.py` and `lamps/mem0/demo.py`.
     """
 
@@ -43,13 +47,13 @@ def discover_examples() -> tuple[str, ...]:
 
 
 def is_lamp_demo(example: str) -> bool:
-    """Report whether an example is a lamp demo rather than a single script.
+    """Report if an example is a lamp demo and not a single script.
 
     Args:
         example: Example path relative to `examples/`.
 
     Returns:
-        True when the example lives under `examples/lamps/`.
+        `True` if the example is under `examples/lamps/`.
     """
 
     return example.startswith(f"{LAMPS_DIR}/")
@@ -60,11 +64,11 @@ def command_for(example: str, *, python: str) -> list[str]:
 
     Args:
         example: Example path relative to `examples/`.
-        python: Interpreter to run the example with.
+        python: The interpreter that runs the example.
 
     Returns:
-        The argv to run from the repository root. Scripts run by path. Lamp
-        demos run as modules, because each lamp is a package.
+        The argv to run from the repository root. A script runs by its path. A
+        lamp demo runs as a module, because each lamp is a package.
     """
 
     if is_lamp_demo(example):
@@ -74,13 +78,14 @@ def command_for(example: str, *, python: str) -> list[str]:
 
 
 def documented_command(example: str) -> str:
-    """Return the command a reader would copy from the guides.
+    """Return the command that the examples guides show to the reader.
 
     Args:
         example: Example path relative to `examples/`.
 
     Returns:
-        The command as written in the examples guides.
+        The command as the examples guides write it. It uses `python`, and a
+        script path starts with `examples/`.
     """
 
     return " ".join(command_for(example, python="python")).replace(f"{EXAMPLES_ROOT}/", "examples/")
@@ -93,8 +98,9 @@ def expected_path_for(example: str) -> Path:
         example: Example path relative to `examples/`.
 
     Returns:
-        Path of the `.out` file under `examples/expected/`. A lamp demo is named
-        after its lamp, so `lamps/mem0/demo.py` maps to `lamps/mem0.out`.
+        The path of the `.out` file under `examples/expected/`. The file of a
+        lamp demo has the name of its lamp, so `lamps/mem0/demo.py` maps to
+        `lamps/mem0.out`.
     """
 
     if is_lamp_demo(example):

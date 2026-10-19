@@ -1,10 +1,11 @@
-"""Browse a catalog of versioned records and retire one by pruning its subtree.
+"""Browse a catalog of versioned records, then prune one to retire it.
 
-`VersionedRecords.identities` lists what a catalog has registered, by exact
-namespace or recursively, without reading any revision history. Retiring a
-record is an ownership decision rather than a catalog one: `delete_subtree`
-removes an identity block and the revisions it owns, and the catalog then
-reports that record as absent instead of raising.
+- **Listing:** `VersionedRecords.identities` lists the records that a catalog
+  registered, by exact namespace or recursively. It does not read revision
+  history.
+- **Retirement is an ownership decision, not a catalog decision:**
+  `delete_subtree` removes an identity block and the revisions that it owns.
+  Then the catalog reports that record as absent. It does not raise an error.
 
 Run from the repository root:
 
@@ -45,8 +46,8 @@ def main() -> None:
     catalog_root = tree.create_child(type="collection", value="registered rankers")
     catalog = VersionedRecords(handle, backend, collection=catalog_root)
 
-    # Each record has one stable identity block that owns its revisions, so
-    # pruning the identity prunes the history with it.
+    # Each record has one stable identity block that owns its revisions. So a
+    # prune of the identity block also prunes its history.
     production = tree.create_child(type="identity", value="production ranker")
     canary = tree.create_child(type="identity", value="canary ranker")
     nightly = tree.create_child(type="identity", value="nightly ranker")
@@ -67,7 +68,7 @@ def main() -> None:
         tree.create_child(parent=canary, type="revision", value={"recall": 0.80}),
     )
 
-    # An exact namespace lists only what is registered directly under it.
+    # An exact namespace lists only the records registered directly under it.
     direct = catalog.identities(namespace=("rankers",))
     nested = catalog.identities(namespace=("rankers",), recursive=True)
     everything = catalog.identities()
@@ -75,15 +76,15 @@ def main() -> None:
     print(f"registered directly under 'rankers': {[item.binding.address.key for item in direct]}")
     print(f"registered below 'rankers': {[item.binding.address.key for item in nested]}")
 
-    # Listings are ordered by full address, so the namespace sorts before the
-    # key and a nested namespace follows the entries directly above it.
+    # A listing sorts by full address: first by namespace, then by key. So a
+    # nested namespace comes after the entries of its parent namespace.
     assert [item.binding.address.key for item in direct] == ["canary", "production"]
     assert [item.binding.address for item in nested] == [CANARY, PRODUCTION, NIGHTLY]
     assert len(everything) == 3
-    # Listing identities does not read revision history.
+    # `identities` does not read revision history.
     assert [item.block.id for item in direct] == [canary.id, production.id]
 
-    # History is per record and revision numbers start at one.
+    # Each record has its own history, and revision numbers start at 1.
     current = catalog.current(PRODUCTION)
     history = catalog.history(PRODUCTION)
     assert current is not None
@@ -98,8 +99,8 @@ def main() -> None:
     # A registered record with no appended revision has no current revision.
     assert catalog.current(NIGHTLY) is None
 
-    # Retiring the canary is an ownership decision. The target is required, so
-    # deleting a whole tree is never implicit.
+    # The retirement of the canary is an ownership decision. `delete_subtree`
+    # requires a target, so a delete of the whole tree is always explicit.
     canary_revision = catalog.current(CANARY)
     assert canary_revision is not None
     tree.delete_subtree(canary)
@@ -108,16 +109,17 @@ def main() -> None:
 
     assert memory.get(canary) is None
     assert memory.get(canary_revision.block) is None
-    # The catalog lists visible records, so the retired one simply drops out.
+    # The catalog lists only visible records, so the retired record is not in
+    # the list.
     assert [item.binding.address for item in catalog.identities()] == [PRODUCTION, NIGHTLY]
-    # Asking for that exact address reports absence rather than raising.
+    # A read of that exact address reports absence and does not raise an error.
     assert catalog.identity(CANARY) is None
     assert catalog.current(CANARY) is None
     assert catalog.history(CANARY) == []
     print("the retired record reports absence rather than an error")
 
-    # The facade root is a boundary: a block outside the tree cannot be pruned
-    # through it.
+    # The facade root is a boundary. The tree refuses to prune a block outside
+    # its root, with `AccessDenied`.
     outside = memory.put(type="workspace", value="another registry")
     try:
         tree.delete_subtree(outside)

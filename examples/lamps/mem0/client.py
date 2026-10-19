@@ -1,24 +1,28 @@
-"""Mem0's public surface, assembled from the four pieces below it.
+"""The public surface of Mem0, made from the 4 parts below it.
 
-Upstream this is one class:
+Upstream, this surface is one class:
 
-- `add` runs the two phases and writes what they decide.
-- `search` returns the matching memories with the relationships beside them.
-- `get`, `update`, and `delete` work on a memory id.
-- `get_all` and `delete_all` work on a session.
-- `history` reads what happened to one memory.
+- **`add`:** runs the 2 phases and writes their decisions.
+- **`search`:** returns the memories that match, with their relationships.
+- **`get`, `update`, and `delete`:** operate on a memory id.
+- **`get_all` and `delete_all`:** operate on a session.
+- **`history`:** reads the changes to one memory.
 
-Keeping that shape in one place is the point of this module. The store, the
-history log, the graph, and the pipeline each know one thing, and this is where
-a call becomes all four.
+This module keeps that form in one place. The store, the history log, the
+graph, and the pipeline each know one thing. This module joins all 4 parts for
+each call.
 
-Two behaviors follow from the composition rather than from any one piece:
+2 behaviors come from the composition, not from one part:
 
-- The neighbor lookup is redone for every candidate in a call, so two candidates
-  saying the same thing become an add and then a repeat instead of two adds.
-- A memory removed here keeps its history, because the recorded events are owned
-  by the history tier. A deletion is the last thing you can read about a memory
-  rather than the end of reading about it.
+- **Neighbor lookup for each candidate:** the client does the neighbor lookup
+  again for each candidate in a call. Thus a candidate sees the memories that
+  earlier candidates of the same call wrote. 2 wordings of the same fact give
+  an `ADD` and then an `UPDATE`, not 2 adds. The extractor removes exact
+  repeats in a call before this step.
+- **A delete keeps the history:** a memory that the client removes keeps its
+  history, because the history tier owns the recorded events. A delete is the
+  last event that a caller can read about a memory. It does not stop the reads
+  of that history.
 """
 
 from __future__ import annotations
@@ -65,15 +69,15 @@ class Mem0Memory:
         extractor: FactExtractor | None = None,
         updater: MemoryUpdater | None = None,
     ) -> None:
-        """Compose one memory client from its four parts.
+        """Compose one memory client from its 4 parts.
 
         Args:
-            memory: Bounded Genie handle the parts were built over.
+            memory: Bounded Genie handle under the parts.
             store: Scoped memory records.
             history_log: Recorded changes to those records.
-            graph: Entities and relationships beside them.
-            extractor: Phase-one extraction. Defaults to `FactExtractor()`.
-            updater: Phase-two decision. Defaults to `MemoryUpdater()`.
+            graph: Entities and their relationships.
+            extractor: Phase-one extraction. The default is `FactExtractor()`.
+            updater: Phase-two decision. The default is `MemoryUpdater()`.
         """
 
         self.memory = memory
@@ -95,35 +99,37 @@ class Mem0Memory:
         metadata: Mapping[str, Any] | None = None,
         at: datetime,
     ) -> AddResult:
-        """Run one exchange through the pipeline and write what it decides.
+        """Send one exchange through the pipeline and write its decisions.
 
-        Three paths lead through here, and they are the three Mem0 offers.
+        The 3 paths through this method are the 3 paths that Mem0 has:
 
-        - `infer` set: the extracted candidates go through the update phase and
-          may add, replace, or remove memories.
-        - `infer` cleared: the turns are stored as they were said, and every one
-          of them is new.
-        - A procedural write stores one summary of the whole exchange without
-          consulting what is already on file, because a trajectory summary is not
-        a competing wording of anything.
+        - **`infer` is `True`:** the extracted candidates go through the update
+          phase. They can add, replace, or remove memories.
+        - **`infer` is `False`:** the method stores the turns in their original
+          words. Each turn becomes a new memory.
+        - **Procedural write:** the method stores one summary of the full
+          exchange and does not compare it with the stored memories. A summary
+          of a task trajectory is not a different wording of another memory.
+          This path does not apply `relations`.
 
         Args:
             session: Scope to write in.
             messages: Turns in the exchange.
-            facts: Candidates a model would have extracted, or the single
-                summary for a procedural write.
+            facts: Candidates, as a model would extract them. For a procedural
+                write, the one summary.
             relations: Candidate relationships for the graph half.
-            infer: Whether to run extraction and the update phase, as upstream.
+            infer: If `True`, the method runs extraction and the update phase,
+                as upstream.
             memory_type: `factual` or `procedural_memory`.
             metadata: Application metadata to keep and index with each memory.
-            at: Time recorded on every write this call makes.
+            at: Time that the method records on each write of this call.
 
         Returns:
-            What happened to every candidate, and to every relationship.
+            The result for each candidate and for each relationship.
 
         Raises:
-            ValueError: If a procedural write does not carry exactly one
-                summary, or the memory type is unknown.
+            ValueError: If a procedural write does not have exactly 1 summary,
+                or if the call stores a new memory with an unknown memory type.
         """
 
         written_at = normalize_timestamp(at, field="at")
@@ -158,17 +164,18 @@ class Mem0Memory:
         limit: int = 10,
         threshold: float = 0.0,
     ) -> SearchResult:
-        """Return the memories matching a query and the relationships beside them.
+        """Return the memories that match a query, with their relationships.
 
         Args:
             session: Scope to search below.
-            query: Free text whose terms are matched against memory text.
-            filters: Metadata filter passed through to Genie.
-            limit: Maximum memories to return.
-            threshold: Minimum score a memory must reach.
+            query: Free text. The method matches its terms against the memory
+                text.
+            filters: Metadata filter for the Genie search.
+            limit: Maximum number of memories to return.
+            threshold: Minimum score of a memory.
 
         Returns:
-            Both halves of the search, as upstream returns them together.
+            The 2 halves of the search. Upstream also returns them together.
         """
 
         text = required_text(query, field="query")
@@ -179,30 +186,31 @@ class Mem0Memory:
         )
 
     def get(self, memory_id: str) -> StoredMemory | None:
-        """Look one memory up by id, without naming a scope.
+        """Find one memory by its id, with no scope.
 
         Args:
-            memory_id: Id to look up.
+            memory_id: Id to find.
 
         Returns:
-            The memory, or `None` when the id is unknown.
+            The memory, or `None` if the id is unknown.
         """
 
         return self.store.get(memory_id)
 
     def owner(self, memory_id: str) -> tuple[str, ...] | None:
-        """Return the scope path one memory id belongs to.
+        """Return the scope path of one memory id.
 
-        The id space is flat, so this is the lookup a caller needs to decide
-        whether an id it was handed is inside the scope it is allowed to touch.
-        It is answered from the history tier rather than from the store, so a
-        deleted id still resolves and cannot be mistaken for an unused one.
+        - **Why:** the id space is flat. A caller uses this lookup to decide if
+          an id that it received is in the scope that the caller can access.
+        - **Source:** the history tier gives the answer, not the store. Thus a
+          deleted id still gives its scope, and a caller cannot think that it
+          is an unused id.
 
         Args:
-            memory_id: Id to look up.
+            memory_id: Id to find.
 
         Returns:
-            The path, or `None` when no memory with that id was ever written.
+            The path, or `None` if no memory with that id had a write.
         """
 
         return self.history_log.owner(memory_id)
@@ -214,16 +222,16 @@ class Mem0Memory:
         filters: Mapping[str, Any] | None = None,
         limit: int = READ_LIMIT,
     ) -> list[StoredMemory]:
-        """Return every memory in one session's scope.
+        """Return all memories in the scope of one session.
 
         Args:
-            session: Scope to read. A session naming only a user returns the
-                memories of every agent and run below it.
-            filters: Metadata filter passed through to Genie.
-            limit: Maximum memories to return.
+            session: Scope to read. A session that names only a user returns
+                the memories of all agents and runs below that user.
+            filters: Metadata filter for the Genie search.
+            limit: Maximum number of memories to return.
 
         Returns:
-            Memories in ascending creation-time and text order.
+            Memories in ascending order of creation time, and then of text.
         """
 
         return self.store.memories(session, filters=filters, limit=limit)
@@ -238,22 +246,23 @@ class Mem0Memory:
         role: str | None = None,
         at: datetime,
     ) -> MemoryChange:
-        """Rewrite one memory because the caller said so, not the pipeline.
+        """Rewrite one memory because the caller asks for it, not the pipeline.
 
-        Mem0 exposes this beside the inferred path so an application can correct
-        a memory directly. The write and its history row are the same as an
-        `UPDATE` the update phase decided on; only the reason differs.
+        Mem0 has this call in addition to the inferred path, so an application
+        can correct a memory directly. The write and its history row are the
+        same as for an `UPDATE` from the update phase. Only the reason is
+        different.
 
         Args:
             memory_id: Id of the memory to rewrite.
-            text: Replacement text.
+            text: New text.
             metadata: Application metadata to merge into the record.
-            actor_id: Who asked for the change.
-            role: Role of the turn it was asked in.
-            at: Time recorded on the write.
+            actor_id: Speaker that asked for the change.
+            role: Role of the turn with the request.
+            at: Time that the method records on the write.
 
         Returns:
-            The change that was applied.
+            The applied change.
 
         Raises:
             KeyError: If no memory has that id.
@@ -271,16 +280,16 @@ class Mem0Memory:
         return self._apply(target.session, decision, kind=target.kind, metadata=metadata, at=at)
 
     def delete(self, memory_id: str, *, actor_id: str | None = None, role: str | None = None, at: datetime) -> MemoryChange:
-        """Delete one memory because the caller said so.
+        """Delete one memory because the caller asks for it.
 
         Args:
             memory_id: Id of the memory to delete.
-            actor_id: Who asked for the deletion.
-            role: Role of the turn it was asked in.
-            at: Time recorded on the history row.
+            actor_id: Speaker that asked for the delete.
+            role: Role of the turn with the request.
+            at: Time that the method records on the history row.
 
         Returns:
-            The change that was applied, carrying the deleted memory.
+            The applied change, with the deleted memory.
 
         Raises:
             KeyError: If no memory has that id.
@@ -297,22 +306,25 @@ class Mem0Memory:
         return self._apply(target.session, decision, kind=target.kind, metadata=None, at=at)
 
     def delete_all(self, session: Session, *, at: datetime) -> list[MemoryChange]:
-        """Retire one scope and everything stored below it.
+        """Retire one scope and all memories below it.
 
-        This is the operation a payload filter cannot give you. Because each
-        session segment owns the memories addressed below it, retiring a user,
-        an agent, or a single run is one subtree delete rather than a scan and a
-        delete per record, and every removed memory still has a history saying
-        it was deleted.
+        - **Not a filter operation:** a payload filter cannot give this
+          operation.
+        - **One subtree delete:** each session segment owns the memories below
+          it. Thus the retire of a user, an agent, or a single run is one
+          subtree delete. It is not a scan with one delete for each record.
+        - **History:** each removed memory still has a history that records its
+          delete.
 
         Args:
-            session: Scope to retire, at whatever level its identifiers name.
-            at: Time recorded on every history row.
+            session: Scope to retire, at the level that its identifiers name.
+            at: Time that the method records on each history row.
 
         Returns:
-            One change per removed memory, in ascending creation-time order.
-            Retiring a whole entity namespace also drops its graph half, as
-            upstream clears graph memory alongside the vector store.
+            One change for each removed memory, in ascending order of creation
+            time. If the session names a full entity namespace, the method also
+            clears its graph half. Upstream also clears the graph memory
+            together with the vector store.
         """
 
         applied_at = normalize_timestamp(at, field="at")
@@ -344,23 +356,23 @@ class Mem0Memory:
         return changes
 
     def history(self, memory_id: str) -> list[HistoryEntry]:
-        """Return every recorded change to one memory, oldest first.
+        """Return all recorded changes to one memory, the oldest first.
 
         Args:
             memory_id: Memory to read the history of.
 
         Returns:
             Events in ascending revision order. A deleted memory keeps its
-            history, ending with the deletion.
+            history, and the delete is its last event.
         """
 
         return self.history_log.history(memory_id)
 
     def journal(self, *, limit: int = READ_LIMIT) -> list[HistoryEntry]:
-        """Return every recorded change to any memory, in applied order.
+        """Return all recorded changes to all memories, in the order that the lamp applied them.
 
         Args:
-            limit: Maximum events to return.
+            limit: Maximum number of events to return.
 
         Returns:
             Events in ascending journal order.
@@ -369,15 +381,15 @@ class Mem0Memory:
         return self.history_log.journal(limit=limit)
 
     def relations(self, session: Session, *, include_retracted: bool = False) -> list[GraphRelation]:
-        """Return the relationships stored in one scope's entity namespace.
+        """Return the relationships in the entity namespace of one scope.
 
         Args:
             session: Scope to read.
-            include_retracted: Whether relationships marked as no longer true
-                are returned as well.
+            include_retracted: If `True`, the result also includes the
+                relationships that are marked as no longer true.
 
         Returns:
-            Relationships in ascending source, relation, and target order.
+            Relationships in ascending order of source, relation, and target.
         """
 
         return self.graph.relations(session, include_retracted=include_retracted)
@@ -391,7 +403,7 @@ class Mem0Memory:
         metadata: Mapping[str, Any] | None,
         at: datetime,
     ) -> MemoryChange:
-        """Carry out one decision and record it, unless it was a `NONE`."""
+        """Apply one decision and record it in the history, unless the decision is `NONE`."""
 
         if decision.event == "ADD":
             return self._add(session, decision.fact, kind=kind, metadata=metadata, at=at, decision=decision)
@@ -433,7 +445,7 @@ class Mem0Memory:
         at: datetime,
         decision: Decision | None = None,
     ) -> MemoryChange:
-        """Store one new memory and record the addition."""
+        """Store one new memory and record the `ADD` in the history."""
 
         stored = self.store.create(
             session.with_actor(fact.actor_id or session.actor_id),

@@ -1,23 +1,25 @@
-"""One read across all four tiers, which is what MemoryOS hands a prompt.
+"""One read across all 4 tiers, which gives the context that MemoryOS puts in a prompt.
 
-MemoryOS retrieves before it answers, and it retrieves from everywhere at once:
+MemoryOS retrieves before it answers. For each query, it retrieves from all
+tiers:
 
-- the whole short-term queue verbatim;
-- the mid-term pages whose segments match the query; and
-- the matching entries from each knowledge base, with the current profile
-  alongside.
+- **Short-term:** the full queue, word for word.
+- **Mid-term:** the pages in the segments that match the query.
+- **Long-term:** the entries from each knowledge base that match the query, and
+  the current profile.
 
-Upstream runs the three searching halves in a thread pool, which changes the
-latency and not the result. Here they run in order.
+Notes:
 
-Retrieval is not read-only. Reaching a mid-term segment counts as a visit, which
-raises its heat, which is what eventually promotes it. So the queries an agent
-asks are part of what its memory decides to keep, and that is the mechanism, not
-a side effect.
-
-Retrieval is also where the lamp stops. The step after it upstream is the
-generation module, which formats all of this into a prompt and calls a model.
-`RetrievedContext` is exactly the value that would be formatted.
+- **Order:** upstream runs the 3 search parts in a thread pool. This changes the
+  latency but not the result. Here they run one after the other.
+- **Not read-only:** when retrieval reaches a mid-term segment, it records a
+  visit. The visit raises the heat of the segment, and heat promotes the segment
+  at a later time. So the queries of an agent help decide what its memory keeps.
+  This is the mechanism, not a side effect.
+- **End of the lamp:** upstream, the next step is the generation module. That
+  module formats this context into a prompt and calls a model. The lamp stops
+  before that step. `RetrievedContext` is the value that the generation module
+  would format.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from examples.lamps.memoryos.short_term import ShortTermMemory
 
 
 class Retriever:
-    """Gathers context from the queue, the segments, and the knowledge bases."""
+    """Collects context from the queue, the segments, and the knowledge bases."""
 
     def __init__(
         self,
@@ -55,23 +57,24 @@ class Retriever:
         knowledge_threshold: float = 0.01,
         top_k_knowledge: int = 20,
     ) -> None:
-        """Bind a retriever to the tiers it reads, with MemoryOS's own bounds.
+        """Bind a retriever to the tiers that it reads, with the MemoryOS limits.
 
         Args:
-            short_term: The FIFO queue, read in full.
-            mid_term: The paged tier, searched and visited.
-            long_term: The profile and knowledge bases.
-            queue_capacity: Mid-term pages kept, `retrieval_queue_capacity`
-                upstream.
-            segment_threshold: Minimum segment score to look inside.
-            page_threshold: Minimum page score to keep.
-            top_k_segments: How many matching segments to look inside.
-            knowledge_threshold: Minimum knowledge score to keep.
-            top_k_knowledge: Maximum entries per knowledge base.
+            short_term: The FIFO queue. The retriever reads all of it.
+            mid_term: The paged tier. The retriever searches and visits it.
+            long_term: The profile and the knowledge bases.
+            queue_capacity: Maximum number of mid-term pages to keep,
+                `retrieval_queue_capacity` upstream.
+            segment_threshold: Minimum segment score for a search of its pages.
+            page_threshold: Minimum page score to keep a page.
+            top_k_segments: Maximum number of matched segments to search for
+                pages.
+            knowledge_threshold: Minimum knowledge score to keep an entry.
+            top_k_knowledge: Maximum number of entries from each knowledge base.
 
         Raises:
-            TypeError: If a bound has the wrong runtime type.
-            ValueError: If a bound is out of range.
+            TypeError: If a limit has the wrong runtime type.
+            ValueError: If a limit is out of range.
         """
 
         self.short_term = short_term
@@ -85,15 +88,15 @@ class Retriever:
         self.top_k_knowledge = positive(top_k_knowledge, field="top_k_knowledge")
 
     def retrieve(self, query: str, *, now: datetime) -> RetrievedContext:
-        """Read every tier for one query.
+        """Read each tier for one query.
 
         Args:
-            query: Free text to retrieve for.
-            now: Time of the retrieval, which becomes a visit on every segment
-                the query reaches.
+            query: Free text to retrieve context for.
+            now: Time of the retrieval. Each segment that the query reaches
+                records this time as a visit.
 
         Returns:
-            The context MemoryOS would turn into a prompt.
+            The context that MemoryOS would turn into a prompt.
 
         Raises:
             ValueError: If the query is blank.

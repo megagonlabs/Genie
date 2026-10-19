@@ -1,19 +1,24 @@
-"""Build an audit trail from the events a memory system reports.
+"""Build an audit trail from the events that a memory system reports.
 
-`genie.hooks` is the observability surface. This example walks it end to end:
+`genie.hooks` is the observability surface. The example shows each part of it:
 
-- scopes that name work Genie does not model;
-- traversal events that report what one read disclosed;
-- refusals recorded as observations;
-- terminal events that close every operation;
-- a registry whose mandatory hook can be neither detached nor silenced;
-- suppression windows announced before dispatch stops; and
-- `fail_open` for a sink whose own outages must not reach callers.
+- **Scopes:** a scope names work that Genie does not model.
+- **Traversal events:** each event reports what one read disclosed.
+- **Refusals:** the hook records each refusal as an observation.
+- **Terminal events:** a terminal event closes each operation.
+- **Mandatory hook:** code cannot unregister or suppress the mandatory hook of a
+  registry.
+- **Suppression windows:** the registry tells each hook about a window before
+  dispatch stops.
+- **`fail_open`:** a sink with `fail_open` does not send its own outages to
+  callers.
 
-Covered elsewhere: transforming hooks that rewrite what is stored or returned
-live in `write_hooks.py` and `search_hooks.py`. Structural membership events are
-reported only by `genie.structures` facades, so they are in
-`../advanced/structure_hooks.py`.
+Other examples:
+
+- **Transform hooks:** `write_hooks.py` and `search_hooks.py` show hooks that
+  rewrite what `Memory` stores or returns.
+- **Structure membership events:** only `genie.structures` facades report
+  them, so `../advanced/structure_hooks.py` shows them.
 
 Run from the repository root:
 
@@ -59,17 +64,20 @@ class AuditHook(MemoryHook):
     """Record the audit surface of one memory system.
 
     Attributes:
-        created: Ids of the blocks this hook observed being stored.
-        disclosed: Kind, starting block, and record count of each structural
-            read, so one call that returns many blocks stays one event.
-        refusals: Refused operation, the check that refused it, the block it
-            applies to, and the handle that attempted it.
-        windows: Reach, silenced hook names, and witnessing hook names of each
+        created: Ids of the stored blocks that this hook observed.
+        disclosed: Kind, start block id, and record count of each structural
+            read. One call that returns many blocks stays one event.
+        refusals: Refused operation, the check that refused it, the block that
+            the refusal applies to, and the id of the handle that tried the
+            operation.
+        windows: `SuppressionScope` value, names of the suppressed hooks, and
+            names of the mandatory hooks that continue to report, for each
             suppression window.
-        outcomes: Operation, outcome, and turn label of every operation that
-            started, whether it committed, was refused, or failed.
-        pending: Start times stashed when an operation begins, released by the
-            terminal event of the same operation.
+        outcomes: Operation, outcome, and `run_id` turn label of each operation
+            that started. The list includes each outcome: success, refusal, and
+            failure.
+        pending: Start times that `before_put` keeps when an operation starts.
+            The terminal event of the same operation removes each entry.
     """
 
     def __init__(self) -> None:
@@ -83,18 +91,18 @@ class AuditHook(MemoryHook):
         self.pending: dict[str, dt.datetime] = {}
 
     def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
-        """Stash when this write started and store the block unchanged."""
+        """Keep the start time of this write, and return the block without a change."""
 
         self.pending[context.operation_id] = context.started_at
         return block
 
     def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-        """Record stored block ids."""
+        """Record the id of a stored block."""
 
         self.created.append(block.id)
 
     def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
-        """Record how much memory one structural read disclosed."""
+        """Record how many blocks and links one structural read disclosed."""
 
         self.disclosed.append(
             (
@@ -111,7 +119,7 @@ class AuditHook(MemoryHook):
         subject_id: str | None,
         reason: str,
     ) -> None:
-        """Record a refusal together with the sandbox that attempted it."""
+        """Record a refusal and the handle that tried the operation."""
 
         self.refusals.append(
             (
@@ -123,7 +131,7 @@ class AuditHook(MemoryHook):
         )
 
     def on_suppressed(self, context: HookContext, suppression: Suppression) -> None:
-        """Record a window in which other hooks stop reporting."""
+        """Record a suppression window, in which other hooks do not report."""
 
         self.windows.append(
             (
@@ -139,18 +147,19 @@ class AuditHook(MemoryHook):
         outcome: HookOutcome,
         error: BaseException | None,
     ) -> None:
-        """Record every operation's outcome and release the stashed start."""
+        """Record the outcome of each operation, and remove its kept start time."""
 
         self.pending.pop(context.operation_id, None)
         self.outcomes.append((context.operation, outcome, context.attributes.get("run_id")))
 
 
 class BestEffortSink(MemoryHook):
-    """Observing hook whose own outages must not reach callers.
+    """Observer hook whose own outages do not reach callers.
 
     Attributes:
-        offline: Whether the sink fails instead of recording.
-        observed: Ids of the blocks recorded while the sink was reachable.
+        offline: `True` if the sink fails and does not record.
+        observed: Ids of the blocks that the sink recorded while it was
+            reachable.
     """
 
     fail_open = True
@@ -162,10 +171,11 @@ class BestEffortSink(MemoryHook):
         self.observed: list[str] = []
 
     def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-        """Send a stored block id to a sink that may be unreachable.
+        """Send the id of a stored block to a sink that can be unreachable.
 
         Raises:
-            RuntimeError: If the sink is offline. `fail_open` contains it.
+            RuntimeError: If the sink is offline. Because of `fail_open`, the
+                registry contains this error and logs it.
         """
 
         if self.offline:
@@ -174,14 +184,14 @@ class BestEffortSink(MemoryHook):
 
 
 class ContainedFailureLog(logging.Handler):
-    """Collect the failures Genie contains for fail-open hooks.
+    """Collect the failures that Genie contains for hooks with `fail_open`.
 
     Attributes:
-        messages: Messages logged by the `genie.hooks.registry` logger.
+        messages: Messages that the `genie.hooks.registry` logger logs.
     """
 
     def __init__(self) -> None:
-        """Create an empty handler."""
+        """Create an empty handler for `logging.ERROR` records and higher."""
 
         super().__init__(level=logging.ERROR)
         self.messages: list[str] = []
@@ -190,22 +200,24 @@ class ContainedFailureLog(logging.Handler):
         """Record one contained failure.
 
         Args:
-            record: Log record describing the contained failure.
+            record: Log record that describes the contained failure.
         """
 
         self.messages.append(record.getMessage())
 
 
 def main() -> None:
-    """Walk the hook audit surface from registration to detachment."""
+    """Show each part of the hook audit surface, from registration to unregistration."""
 
     print("== Hook audit ==")
     contained = ContainedFailureLog()
     logging.getLogger("genie.hooks.registry").addHandler(contained)
 
-    # Which hooks are installed is itself auditable. A mandatory hook can be
-    # neither unregistered nor suppressed by the code that runs after it, and
-    # `Memory.hooks` is read-only, so the registry cannot be swapped either.
+    # The list of installed hooks is also auditable.
+    # - **Mandatory hook:** code that runs after the registration cannot
+    #   unregister or suppress it.
+    # - **Fixed registry:** `Memory.hooks` is read-only, so code cannot replace
+    #   the registry.
     audit = AuditHook()
     sink = BestEffortSink()
     registry = HookRegistry()
@@ -221,14 +233,14 @@ def main() -> None:
     assert memory.hooks.hooks == (audit, sink)
     assert memory.hooks.mandatory == (audit,)
 
-    # A scope names work Genie does not model, such as one agent turn.
-    # Operations started inside it become its children and inherit its labels.
+    # A scope names work that Genie does not model, for example one agent turn.
+    # Operations that start inside the scope become its children and get its labels.
     with memory.hooks.scope("agent.turn", attributes={"run_id": "run-1"}):
         goal = memory.put(type="goal", value="Summarize the launch thread")
         step = memory.put(type="step", value="Collect the open questions")
         recalled_goal = memory.get(goal)
         recalled_step = memory.get(step)
-        # Backend access is a trusted boundary and reports no hook event.
+        # Direct backend access is a trusted boundary and reports no hook event.
         raw_goal = memory.backend.get_block(goal.id)
 
     assert recalled_goal is not None
@@ -242,11 +254,11 @@ def main() -> None:
         [HookOperation.PUT] * 2 + [HookOperation.GET] * 2
     )
     assert {outcome for _, outcome, _ in audit.outcomes} == {HookOutcome.SUCCESS}
-    # Every operation inside the scope inherited its label.
+    # Each operation inside the scope got the label of the scope.
     assert {label for _, _, label in audit.outcomes} == {"run-1"}
 
-    # A traversal names the block a read starts from rather than the blocks it
-    # returns, so the trail records how much one call disclosed.
+    # A traversal names the block where a read starts, not the blocks that the
+    # read returns. Thus the trail records how much one call disclosed.
     project = memory.put(type="project", value="Launch notes")
     note = memory.put(parent=project, type="note", value="Draft the outline")
     children = memory.children(project)
@@ -262,9 +274,11 @@ def main() -> None:
         (TraversalKind.ANCESTORS, note.id, 1),
     ]
 
-    # Refusals are observations rather than decisions: the hook records the
-    # boundary that refused, the block it applies to, and the sandbox that
-    # attempted it, and the operation reports a denied terminal event.
+    # A refusal is an observation, not a decision.
+    # - **Hook record:** the hook records the check that refused, the block that
+    #   the refusal applies to, and the handle that tried the operation.
+    # - **Terminal event:** the operation reports a `HookOutcome.DENIED` terminal
+    #   event.
     handle = memory.get_handle(root=project)
     outside = memory.put(type="tenant", value="Another tenant's note")
     try:
@@ -277,9 +291,11 @@ def main() -> None:
     assert audit.refusals == [(HookOperation.GET, HandleCapability.SUBTREE, outside.id, handle.id)]
     assert (HookOperation.GET, HookOutcome.DENIED, None) in audit.outcomes
 
-    # Turning hooks off is an operation rather than a silent gap: every hook is
-    # told before dispatch stops, the mandatory hook keeps reporting inside the
-    # window, and a terminal event closes it.
+    # A suppression window is an operation, not a silent gap.
+    # - **Notice:** the registry tells each hook before dispatch stops.
+    # - **Mandatory hook:** the mandatory hook continues to report inside the
+    #   window.
+    # - **Close:** a terminal event closes the window.
     with memory.hooks.suppress(sink, attributes={"migration": "m1"}):
         migrated = memory.put(type="internal", value="Backfilled by a migration")
     with memory.hooks.suppress(attributes={"migration": "m1"}):
@@ -295,9 +311,9 @@ def main() -> None:
     assert not {migrated.id, bootstrapped.id} & set(sink.observed)
     assert audit.outcomes.count((HookOperation.SUPPRESS, HookOutcome.SUCCESS, None)) == 2
 
-    # A best-effort sink declares that its own outages must not reach callers.
-    # Contained failures are logged with their traceback to the
-    # `genie.hooks.registry` logger, so a failing sink stays visible.
+    # A best-effort sink sets `fail_open`, so its own outages do not reach callers.
+    # The registry logs each contained failure with its traceback to the
+    # `genie.hooks.registry` logger. Thus a sink failure stays visible.
     sink.offline = True
     resilient = memory.put(type="note", value="Stored while the sink is down")
     sink.offline = False
@@ -309,7 +325,7 @@ def main() -> None:
     assert resilient.id not in sink.observed
     assert len(contained.messages) == 1
 
-    # Ordinary hooks can be detached; the mandatory audit hook cannot.
+    # Code can unregister an ordinary hook. Code cannot unregister the mandatory audit hook.
     memory.hooks.unregister(sink)
     try:
         memory.hooks.unregister(audit)
@@ -321,7 +337,7 @@ def main() -> None:
     print(f"operations with a terminal event: {len(audit.outcomes)}")
 
     assert memory.hooks.hooks == (audit,)
-    # Every operation that started ended, so no stashed state was left behind.
+    # Each operation that started also ended, so no kept start time stays.
     assert audit.pending == {}
 
 

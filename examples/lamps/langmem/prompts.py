@@ -1,32 +1,35 @@
-"""Procedural memory: the agent's own instructions, learned from feedback.
+"""Procedural memory: the instructions of the agent, learned from feedback.
 
-This is the LangMem idea that has no counterpart in the other lamps.
+The other lamps have no equivalent of this LangMem idea.
 
-- Semantic and episodic memory change what an agent knows. Procedural memory
-  changes how it behaves, and LangMem stores it as the agent's prompt.
-- Past exchanges are annotated with feedback, an optimizer folds that feedback
-  into the prompt, and the next run of the agent is governed by the result. So
-  memory and configuration stop being separate things.
+- **What it changes:** semantic and episodic memory change what an agent knows.
+  Procedural memory changes how the agent behaves. LangMem stores it as the
+  prompt of the agent.
+- **Loop:** the application annotates past exchanges with feedback. An
+  optimizer merges that feedback into the prompt. The result controls the next
+  run of the agent. So memory and configuration are no longer separate things.
 
 `VersionedRecords` is the structure that fits:
 
-- A prompt is a stable identity, so the agent always reads "the current
-  code-review prompt" rather than a specific text.
-- Each optimization is a revision, so a prompt that has drifted somewhere
-  unhelpful can be read back to the version before it.
-- `LineageDAG` edges from the annotated exchanges to the revision they produced
-  answer the question a versioned prompt otherwise cannot: not just what
-  changed, but which piece of feedback changed it.
+- **Identity:** a prompt is a stable identity. So the agent always reads "the
+  current code-review prompt", not a specific text.
+- **Revision:** each optimization is a revision. If a revision makes the prompt
+  worse, a reader can read the version before it.
+- **Lineage:** `LineageDAG` edges go from the annotated exchanges to the
+  revision that they produced. They answer a question that a versioned prompt
+  alone cannot answer: not only what changed, but which piece of feedback
+  changed it.
 
-Upstream a language model rewrites the prompt from the feedback, in one of three
-strategies. The lamp keeps the shape of the cheapest one, `prompt_memory`, which
-carries successful patterns forward from past interactions:
+Upstream, a language model rewrites the prompt from the feedback with one of 3
+strategies. The lamp keeps the shape of the strategy with the lowest cost,
+`prompt_memory`. That strategy takes successful patterns from past
+interactions into the next prompt:
 
-- Feedback names a keyed rule, and rules with the same key replace each other
-  rather than piling up.
-- The prompt is the base text plus its rules in acquisition order.
-- A revision is written only when the rule set actually changes, so feedback
-  that repeats what the prompt already says leaves no version behind.
+- **Keyed rules:** feedback names a keyed rule. A rule replaces the earlier rule
+  with the same key, so rules with the same key do not accumulate.
+- **Prompt text:** the base text plus its rules, in acquisition order.
+- **New revision:** the optimizer writes a revision only if the rule set really
+  changes. So feedback that repeats the prompt adds no version.
 """
 
 from __future__ import annotations
@@ -55,34 +58,37 @@ from genie.structures import MemoryAddress, RevisionItem
 
 
 class PromptOptimizer:
-    """Prompts an agent runs with, and the feedback that revised them."""
+    """The prompts that an agent uses, and the feedback that revised them."""
 
     def __init__(self, memory: MemoryHandle, *, structures: LangMemStructures) -> None:
         """Create an optimizer over one bounded handle.
 
         Args:
-            memory: Bounded Genie handle owning the prompt and trajectory tiers.
-            structures: Facade bundle built over the same handle.
+            memory: Bounded Genie handle that owns the prompt and trajectory
+                tiers.
+            structures: Facade bundle on the same handle.
         """
 
         self.memory = memory
         self.structures = structures
 
     def register(self, name: str, *, prompt: str, when_to_update: str = "") -> PromptVersion:
-        """Register a prompt before any feedback has shaped it.
+        """Register a prompt before feedback changes it.
 
         Args:
-            name: Stable prompt name the agent reads by.
-            prompt: Prompt text as written by hand.
-            when_to_update: Condition recorded for the optimizer, describing
-                when this prompt should change. It is stored for a model to
-                read; the lamp's own acceptance rule is the rule key.
+            name: Stable prompt name. The agent reads the prompt by this name.
+            prompt: Prompt text that a person wrote.
+            when_to_update: Condition for the optimizer. It tells when this
+                prompt changes. The store keeps it for a model to read. The
+                lamp itself accepts a change by the rule key, not by this
+                condition.
 
         Returns:
-            The prompt at revision zero, which is the base text alone.
+            The prompt at revision 0, which is only the base text.
 
         Raises:
-            ValueError: If the name is already registered or the text is empty.
+            ValueError: If the name is empty or already registered, or the text
+                is empty.
         """
 
         prompt_name = required_text(name, field="name")
@@ -109,16 +115,21 @@ class PromptOptimizer:
         *,
         at: datetime,
     ) -> PromptVersion:
-        """Fold annotated exchanges into a prompt, if they change its rules.
+        """Merge annotated exchanges into a prompt, if they change its rules.
+
+        - **Record:** the optimizer stores each exchange, or reuses the record
+          with the same name.
+        - **Credit:** only the exchanges that changed the rule set get a
+          lineage edge to the new revision.
 
         Args:
             name: Registered prompt name.
-            trajectories: Past exchanges with the feedback to learn from.
-            at: Timestamp recorded on the revision, when one is written.
+            trajectories: Past exchanges and the feedback to learn from.
+            at: Timestamp for the revision, if the optimizer writes one.
 
         Returns:
-            The prompt after the optimization. Its `revision` is unchanged when
-            the feedback asked for nothing the prompt does not already say.
+            The prompt after the optimization. Its `revision` does not change
+            if the feedback asked for nothing new.
 
         Raises:
             ValueError: If the prompt is not registered.
@@ -160,13 +171,13 @@ class PromptOptimizer:
         return optimized
 
     def current(self, name: str) -> PromptVersion | None:
-        """Return the version of a prompt the agent would run with now.
+        """Return the prompt version that the agent uses now.
 
         Args:
             name: Registered prompt name.
 
         Returns:
-            The prompt, or `None` when it is not registered.
+            The prompt, or `None` if it is not registered.
         """
 
         address = _address(name)
@@ -177,13 +188,14 @@ class PromptOptimizer:
         return _version(identity, revision, sources=self._sources(revision))
 
     def history(self, name: str) -> list[PromptVersion]:
-        """Return every version a prompt has had, oldest first.
+        """Return all versions of a prompt, oldest first.
 
         Args:
             name: Registered prompt name.
 
         Returns:
-            Versions in ascending revision order, empty when unregistered.
+            Versions in ascending revision order. The list is empty if the
+            prompt is not registered.
         """
 
         address = _address(name)
@@ -196,7 +208,7 @@ class PromptOptimizer:
         ]
 
     def prompts(self) -> list[PromptVersion]:
-        """Return the current version of every registered prompt.
+        """Return the current version of each registered prompt.
 
         Returns:
             Prompts in ascending name order.
@@ -215,7 +227,7 @@ class PromptOptimizer:
             name: Trajectory name.
 
         Returns:
-            The trajectory block, or `None` when it was never recorded.
+            The trajectory block, or `None` if the optimizer never recorded it.
         """
 
         target = required_text(name, field="name")
@@ -229,7 +241,7 @@ class PromptOptimizer:
         )
 
     def _record(self, trajectory: AnnotatedTrajectory) -> MemoryBlock:
-        """Store one annotated exchange, reusing the record if it exists."""
+        """Store one annotated exchange, or return the record with the same name if it exists."""
 
         name = required_text(trajectory.name, field="name")
         existing = self.trajectory(name)
@@ -248,7 +260,7 @@ class PromptOptimizer:
         )
 
     def _sources(self, revision: RevisionItem | None) -> tuple[str, ...]:
-        """Return the names of the exchanges one version was written from."""
+        """Return the names of the exchanges that produced one version, in name order."""
 
         if revision is None:
             return ()
@@ -261,11 +273,11 @@ class PromptOptimizer:
 
 
 def _fold(rules: list[PromptRule], proposed: Sequence[PromptRule]) -> bool:
-    """Merge one exchange's rules into a prompt's rule set in place.
+    """Merge the rules of one exchange into the rule set of a prompt, in place.
 
     Returns:
-        Whether the rule set changed, which is what decides both whether a new
-        version is written and whether this exchange is credited for it.
+        `True` if the rule set changed. This value decides if the optimizer
+        writes a new version, and if it credits this exchange for the version.
     """
 
     changed = False
@@ -281,7 +293,7 @@ def _fold(rules: list[PromptRule], proposed: Sequence[PromptRule]) -> bool:
 
 
 def _rules(revision: RevisionItem | None) -> tuple[PromptRule, ...]:
-    """Return the rules carried by one prompt version."""
+    """Return the rules of one prompt version."""
 
     if revision is None or not isinstance(revision.block.value, dict):
         return ()
@@ -325,13 +337,13 @@ def _address(name: str) -> MemoryAddress:
 
 
 def _field(block: MemoryBlock, name: str) -> str:
-    """Read one required string field from a stored value."""
+    """Read one required string field from the stored value of a block."""
 
     return required_text(_payload(block).get(name), field=name)
 
 
 def _payload(block: MemoryBlock) -> dict[str, Any]:
-    """Return the dictionary value stored on a prompt block."""
+    """Return the dictionary value of a prompt block."""
 
     if not isinstance(block.value, dict):
         raise TypeError(f"Block {block.id!r} does not hold a prompt value.")

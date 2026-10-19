@@ -70,8 +70,9 @@ def main() -> None:
         current_region.id,
     }
 
-    # scan applies every supplied filter at once. An entry missing a time field
-    # a filter needs does not match, so combining bounds narrows the result.
+    # `scan` applies all the given filters together. An entry without a time
+    # field that a filter needs does not match. So more bounds give a smaller
+    # result.
     rollout = memory.put(type="fact", value="rollout window is open")
     timeline.add(
         rollout,
@@ -89,8 +90,8 @@ def main() -> None:
 
     assert {item.block.id for item in dated} == {deployed.id, rollout.id}
     assert {item.block.id for item in valid_mid_january} == {current_region.id, rollout.id}
-    # The deployment has no validity and the region fact has no event time, so
-    # only the rollout window satisfies both filters.
+    # The deployment has no validity period, and the region fact has no event
+    # time. So only the rollout window matches both filters.
     assert [item.block.id for item in both] == [rollout.id]
 
     timeline.replace(
@@ -99,7 +100,8 @@ def main() -> None:
     )
     assert timeline.valid_at(at(9)) == []
 
-    # Removing structure membership leaves the referenced block intact.
+    # A removal of structure membership does not delete or change the
+    # referenced block.
     timeline.remove(deployed)
     assert timeline.get(deployed) is None
     assert memory.get(deployed) == deployed

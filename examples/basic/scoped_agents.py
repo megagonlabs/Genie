@@ -1,8 +1,8 @@
 """Pass bounded memory handles to agents and sub-agents.
 
-Most agents should receive bounded handles created with `memory.get_handle(root=...)`.
-The example also shows `memory.get_unbounded_handle(...)` for a trusted supervisor
-handle, where unbounded access is deliberate and visible at the call site.
+- **Bounded handles:** most agents get a bounded handle from `memory.get_handle(root=...)`.
+- **Unbounded handle:** a trusted supervisor gets `memory.get_unbounded_handle(...)`.
+  The unbounded access is intentional, and the call site shows it clearly.
 
 Run from the repository root:
 
@@ -29,11 +29,11 @@ from genie import AccessDenied, InMemoryBackend, Memory, MemoryBlock, MemoryHand
 
 @dataclass
 class Agent:
-    """Tiny example agent that receives only a bounded memory handle.
+    """Small example agent that gets only a bounded memory handle.
 
     Attributes:
-        name: Human-readable agent name used in written notes.
-        memory: Bounded memory handle passed in by the application.
+        name: Human-readable agent name. `remember` puts it at the start of each note.
+        memory: Bounded memory handle that the application gives to the agent.
     """
 
     name: str
@@ -46,18 +46,18 @@ class Agent:
             text: Note text.
 
         Returns:
-            Created memory block.
+            The new memory block.
         """
 
         return self.memory.put(type="note", value=f"{self.name}: {text}")
 
 
 def main() -> None:
-    """Run a focused memory-handle walkthrough."""
+    """Run a short walkthrough of memory handles."""
 
     print("== Scoped agent handles ==")
-    # This example focuses on handle boundaries, so blocks are explicitly
-    # shared. Production apps should choose a policy that matches their users.
+    # This example shows handle boundaries, so it shares all blocks with
+    # `MemoryPolicy.public()`. In a production app, use a policy that matches the users.
     memory = Memory(
         backend=InMemoryBackend(),
         principal="system",

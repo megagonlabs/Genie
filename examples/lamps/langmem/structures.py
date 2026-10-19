@@ -1,39 +1,42 @@
-"""Genie facades wired to the LangMem lamp's five ownership tiers.
+"""Genie facades connected to the 5 ownership tiers of the LangMem lamp.
 
-LangMem stores memories in a namespaced key-value store with vector search. The
-namespace is only a name there: nothing owns it, so nothing happens to the
-memories inside it when a user goes away.
+LangMem stores memories in a namespaced key-value store with vector search.
+There, a namespace is only a name. Nothing owns it, so nothing happens to the
+memories in it when a user leaves.
 
-This lamp mirrors every namespace as an ownership path instead, which buys two
-things a plain key-value store cannot give:
+This lamp mirrors each namespace as an ownership path. This gives 2 results
+that a plain key-value store cannot give:
 
-- Prefix search becomes a Genie subtree scope rather than a filter the lamp
-  applies afterwards.
-- Deleting a namespace deletes everything that belongs to the user: the items
-  addressed inside it, their profile, and any conversation still queued for
-  them.
+- **Prefix search:** it becomes a Genie subtree scope, not a filter that the
+  lamp applies after the search.
+- **Namespace delete:** it deletes everything that belongs to the user: the
+  items at addresses in the namespace, the user profile, and each conversation
+  that is still on the queue for the user.
 
-Ownership and structure membership are separate, and that is what makes the
-second point work. A tier anchor is where a structure keeps its bindings, not
-where the blocks live. So a profile identity and a queued submission are owned
-by the user's namespace block while still being registered with the profile
-records and appended to the queue log. Retiring a user is one `delete_subtree`,
-and the bindings drop with the blocks they pointed at.
+Ownership and structure membership are separate. This makes the namespace
+delete work:
 
-The one deliberate exception is prompts. A prompt is the agent's own
-instructions rather than one user's memory, so prompt identities are owned by
-the prompt tier and outlive any user.
+- **Tier anchor:** a structure keeps its bindings at a tier anchor. The tier
+  anchor does not own the blocks.
+- **User blocks:** the namespace block of the user owns the profile identity
+  and each queued submission. The profile records still register the identity,
+  and the queue log still contains the submission.
+- **One delete:** one `delete_subtree` call retires a user. The bindings go
+  away with the blocks that they referred to.
+- **One exception, on purpose:** prompts. A prompt is the instructions of the
+  agent, not the memory of one user. So the prompt tier owns the prompt
+  identities, and they stay after the lamp retires a user.
 
-Two other wiring choices carry most of the model:
+The model also depends on 2 other design choices:
 
-- Profiles and prompts are both `VersionedRecords`, because both are single
-  documents that are revised rather than accumulated, and both must be able to
-  show what they used to say.
-- The deferred reflection queue anchors an `EventLog` and a
-  `TemporalCollection` on the same tier. The log is the order submissions
-  arrived, and the temporal entry is when each one comes due, so LangMem's
-  debounce window becomes a time query and a cancelled submission stays on the
-  log.
+- **`VersionedRecords` for profiles and prompts:** both are single documents.
+  Each write revises the document and does not add a new document. Both can
+  show their earlier text.
+- **Reflection queue:** an `EventLog` and a `TemporalCollection` have their
+  anchor on the same tier. The log keeps the arrival order of the submissions.
+  The temporal entry keeps the due time of each submission. So the LangMem
+  debounce window becomes a time query, and a cancelled submission stays on
+  the log.
 """
 
 from __future__ import annotations
@@ -69,29 +72,30 @@ class LangMemStructureStore(
     TemporalStore,
     Protocol,
 ):
-    """Backend capabilities required by the LangMem structure bundle."""
+    """Backend capabilities that the LangMem structure bundle requires."""
 
 
 @dataclass(frozen=True, slots=True)
 class LangMemStructures:
-    """The structural views this lamp composes over one memory store.
+    """The structure views that this lamp composes over one memory store.
 
     Attributes:
-        tiers: Ownership view of the five tiers below the store root.
-        items: Namespaced addresses of every stored memory.
-        profiles: One identity per profile, one revision per update. The
-            identities are owned by the namespace they belong to, not by this
-            tier.
-        prompts: One identity per prompt, one revision per optimization.
-        queue: Append-only order in which conversations were submitted. The
-            submissions are owned by the namespace they will write to, not by
-            this tier.
-        schedule: When each queued submission comes due.
-        lineage: Acyclic derivation edges from conversations to the memories
-            they wrote and from trajectories to the prompt versions they
-            produced.
+        tiers: Ownership view of the 5 tiers below the store root.
+        items: Namespaced addresses of all stored memories.
+        profiles: One identity for each profile, and one revision for each
+            update. The namespace of each identity owns it. This tier does not
+            own it.
+        prompts: One identity for each prompt, and one revision for each
+            optimization.
+        queue: Append-only order of the conversation submissions. The
+            namespace that a submission writes to owns it. This tier does not
+            own it.
+        schedule: The due time of each queued submission.
+        lineage: Acyclic derivation edges. They go from conversations to the
+            memories and profile revisions that they wrote, and from
+            trajectories to the prompt versions that they produced.
         namespaces: Block that owns the mirrored namespace paths.
-        trajectories: Block that owns annotated past exchanges.
+        trajectories: Block that owns the annotated past exchanges.
     """
 
     tiers: OwnershipTree
@@ -110,22 +114,22 @@ class LangMemStructures:
         memory: MemoryHandle,
         store: LangMemStructureStore,
     ) -> LangMemStructures:
-        """Build or reopen every structural anchor below one bounded root.
+        """Build or reopen all structure anchors below one bounded root.
 
-        Existing anchors are found by scanning the root's children, so
-        reopening a store returns the same structures instead of duplicating
-        them.
+        The method finds the anchors that exist in the children of the root.
+        So when a caller reopens a store, it gets the same structures and no
+        duplicates.
 
         Args:
-            memory: Handle rooted at the block that owns the whole store.
-            store: Backend providing acyclic-link, keyed, sequence, and
-                temporal capabilities.
+            memory: Handle whose root is the block that owns the whole store.
+            store: Backend with the acyclic-link, keyed, sequence, and temporal
+                capabilities.
 
         Returns:
             The structure bundle for that store.
 
         Raises:
-            ValueError: If the handle is unbounded.
+            ValueError: If the handle is not bounded.
         """
 
         if memory.root_id is None:
@@ -146,22 +150,22 @@ class LangMemStructures:
 
     @property
     def prompt_root(self) -> MemoryBlock:
-        """Return the block that owns prompt identities and revisions.
+        """Return the block that owns the prompt identities and revisions.
 
-        Prompts belong to the agent rather than to one user, so this tier is
-        their ownership parent and they survive any namespace being retired.
+        Prompts belong to the agent, not to one user. So this tier is their
+        ownership parent, and they stay when the lamp retires a namespace.
         """
 
         return self.prompts.collection
 
     def namespace_node(self, value: Sequence[str]) -> MemoryBlock | None:
-        """Return the block that owns one namespace, when it exists.
+        """Return the block that owns one namespace, if it exists.
 
         Args:
-            value: Namespace to look up.
+            value: Namespace to find.
 
         Returns:
-            The namespace block, or `None` when the path was never created.
+            The namespace block, or `None` if the path does not exist.
         """
 
         node = self.namespaces
@@ -173,18 +177,18 @@ class LangMemStructures:
         return node
 
     def ensure_namespace(self, value: Sequence[str]) -> MemoryBlock:
-        """Return the block owning one namespace, creating the path as needed.
+        """Return the block that owns one namespace, and create the path if necessary.
 
-        Everything that belongs to one user hangs off this block: the items
-        addressed inside the namespace, the user's profile, and the
-        conversations queued for them. That is what makes retiring a user one
-        `delete_subtree` rather than a cleanup list.
+        This block owns everything that belongs to one user: the items at
+        addresses in the namespace, the user profile, and the queued
+        conversations of the user. So one `delete_subtree` call retires a
+        user, and no cleanup list is necessary.
 
         Args:
             value: Namespace to create or reopen.
 
         Returns:
-            The block owning the last segment.
+            The block that owns the last segment.
         """
 
         node = self.namespaces
@@ -203,7 +207,7 @@ class LangMemStructures:
         return node
 
     def _segment_child(self, node: MemoryBlock, segment: str) -> MemoryBlock | None:
-        """Return the namespace child of `node` named `segment`, if any."""
+        """Return the namespace child of `node` with the name `segment`, or `None`."""
 
         return next(
             (
@@ -216,10 +220,10 @@ class LangMemStructures:
 
 
 def _anchor(tiers: OwnershipTree, name: str) -> MemoryBlock:
-    """Return the tier anchor with this name, creating it when absent.
+    """Return the tier anchor with this name, and create it if it does not exist.
 
-    Anchors are matched on metadata rather than on value so that a tier which
-    keeps state in its own value can still be found again.
+    The function matches anchors on metadata, not on value. So it can find a
+    tier again, even if the tier keeps state in its own value.
     """
 
     existing = next(

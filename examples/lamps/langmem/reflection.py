@@ -1,25 +1,27 @@
-"""Deferred memory formation, and the debounce that keeps it from thrashing.
+"""Deferred memory formation, and the debounce that stops repeated runs.
 
-LangMem can form memories on the hot path, while the agent is answering, or in
-the background afterwards. The background path is what `ReflectionExecutor`
-runs, and its interesting behavior is the delay:
+LangMem can form memories on the hot path, while the agent answers, or in the
+background after the conversation. `ReflectionExecutor` runs the background
+path. Its important behavior is the delay:
 
-- Work is submitted with an `after_seconds` window.
-- If another turn arrives on the same thread before that window closes, the
-  pending task is cancelled and rescheduled with the new messages folded in.
-- So a three-turn exchange produces one reflection over the whole exchange
-  rather than three over fragments of it.
+- **Window:** a caller submits work with an `after_seconds` window.
+- **Debounce:** if another turn arrives on the same thread before that window
+  closes, the executor cancels the pending task. Then it schedules the task
+  again, with the new messages merged in.
+- **Result:** a 3-turn exchange produces one reflection over the whole
+  exchange, not 3 reflections over parts of it.
 
-Two Genie facades anchored on the same tier carry that behavior:
+The lamp uses 2 Genie facades with their anchor on the same tier:
 
-- `EventLog` is the order submissions arrived.
-- `TemporalCollection` holds each submission's due time as its event time, so
-  "what is ready to run?" is a bounded time query and not a scan the lamp
-  writes.
-- Cancelling is dropping the temporal entry. The log entry stays, so a
-  superseded submission remains readable with the id of the one that replaced
-  it. Deferred work that never ran is usually the hardest thing to see in a
-  memory system. Here it is the same read as everything else.
+- **`EventLog`:** it keeps the arrival order of the submissions.
+- **`TemporalCollection`:** it keeps the due time of each submission as its
+  event time. So "what is ready to run?" is a bounded time query, not a scan
+  that the lamp writes.
+- **Cancel:** the queue removes the temporal entry. The log entry stays, so a
+  superseded submission stays readable, with the id of the submission that
+  replaced it. In a memory system, deferred work that never ran is usually the
+  hardest thing to see. Here, a reader finds it with the same read as all other
+  data.
 """
 
 from __future__ import annotations
@@ -67,9 +69,9 @@ class ReflectionQueue:
         """Create a queue over one bounded handle.
 
         Args:
-            memory: Bounded Genie handle owning the queue tier.
-            structures: Facade bundle built over the same handle.
-            manager: Manager run against each submission that comes due.
+            memory: Bounded Genie handle that owns the queue tier.
+            structures: Facade bundle on the same handle.
+            manager: Manager that runs each submission when it is due.
         """
 
         self.memory = memory
@@ -84,21 +86,25 @@ class ReflectionQueue:
         at: datetime,
         after_seconds: int = 0,
     ) -> Submission:
-        """Queue a conversation, superseding any pending one on its thread.
+        """Queue a conversation, and supersede the pending submission on its thread, if one exists.
+
+        The method supersedes only a pending submission with the same thread
+        name in the same namespace.
 
         Args:
-            conversation: `Exchange` and the changes proposed from it.
-            base: Resolved namespace its collections sit under.
-            at: When the conversation was handed over.
-            after_seconds: Delay before the manager may run it. Zero makes the
-                submission due immediately.
+            conversation: The exchange and its proposed changes.
+            base: Resolved namespace that contains its collections.
+            at: Time when the caller gave the conversation to the queue.
+            after_seconds: Delay before the manager can run it. With 0, the
+                submission is due immediately.
 
         Returns:
-            The queued submission, carrying anything folded in from a
-            submission it replaced.
+            The queued submission. It includes the work that the queue merged
+            from the submission that it replaced.
 
         Raises:
-            ValueError: If the delay is negative or the thread name is empty.
+            ValueError: If the delay is not an integer of 0 or more, or the
+                thread name is empty.
         """
 
         submitted_at = normalize_timestamp(at, field="at")
@@ -130,12 +136,12 @@ class ReflectionQueue:
         return _submission(entry.entry.sequence, block)
 
     def pending(self, *, base: Sequence[str] | None = None) -> list[Submission]:
-        """Return the submissions still waiting to run, earliest due first.
+        """Return the submissions that did not run yet, earliest due time first.
 
         Args:
-            base: Namespace to read within. `None` reads every namespace, which
-                is what a background runner owning the whole store wants. A
-                caller acting for one user passes that user's namespace.
+            base: Namespace to read. `None` reads all namespaces. A background
+                runner that owns the whole store uses `None`. A caller for one
+                user gives the namespace of that user.
 
         Returns:
             Pending submissions in due order.
@@ -144,11 +150,12 @@ class ReflectionQueue:
         return self._scheduled(stop=None, base=base)
 
     def due(self, now: datetime, *, base: Sequence[str] | None = None) -> list[Submission]:
-        """Return the submissions whose delay has elapsed.
+        """Return the submissions whose delay is over.
 
         Args:
-            now: Current time.
-            base: Namespace to read within, as on `pending`.
+            now: Current time. A submission that is due exactly at `now` is
+                included.
+            base: Namespace to read, as for `pending`.
 
         Returns:
             Due submissions in due order.
@@ -157,18 +164,18 @@ class ReflectionQueue:
         return self._scheduled(stop=_inclusive(normalize_timestamp(now, field="now")), base=base)
 
     def run_due(self, *, now: datetime, base: Sequence[str] | None = None) -> list[ManagerRun]:
-        """Run the manager over every submission that has come due.
+        """Run the manager over each due submission.
 
         Args:
-            now: Current time. Submissions still inside their delay window are
-                left on the queue.
-            base: Namespace to run within. `None` runs every namespace, which
-                is what a background runner owning the whole store wants. A
-                caller acting for one user passes that user's namespace, so it
-                cannot run, or see the result of, another user's submission.
+            now: Current time. Submissions that are still in their delay window
+                stay on the queue.
+            base: Namespace to run. `None` runs all namespaces. A background
+                runner that owns the whole store uses `None`. A caller for one
+                user gives the namespace of that user. Then it cannot run the
+                submission of another user, and it cannot see its result.
 
         Returns:
-            One run per processed submission, in due order.
+            One run for each processed submission, in due order.
         """
 
         moment = normalize_timestamp(now, field="now")
@@ -195,10 +202,11 @@ class ReflectionQueue:
         return runs
 
     def history(self) -> list[Submission]:
-        """Return every submission ever queued, in arrival order.
+        """Return all submissions that the queue received, in arrival order.
 
-        A cancelled submission is still here, marked `superseded` and naming
-        the submission that replaced it, because the queue log is append-only.
+        The queue log is append-only. So a cancelled submission is still in the
+        list. Its state is `superseded`, and it has the id of the submission
+        that replaced it.
 
         Returns:
             Submissions in ascending log order.
@@ -210,11 +218,12 @@ class ReflectionQueue:
         ]
 
     def _pending_for_thread(self, thread: str, *, base: Namespace) -> Submission | None:
-        """Return the submission still waiting on one thread, if any.
+        """Return the pending submission on one thread, or `None`.
 
-        A thread name is only unique inside one namespace, so the match is on
-        the pair. Without that, two users picking the same thread name would
-        cancel and absorb each other's queued work.
+        A thread name is unique only in one namespace. So the method matches
+        the pair of namespace and thread. Without this, if 2 users chose the
+        same thread name, each user would cancel the queued work of the other
+        user and merge it into their own submission.
         """
 
         return next(
@@ -223,7 +232,7 @@ class ReflectionQueue:
         )
 
     def _cancel(self, submission: Submission, *, replaced_by: str) -> None:
-        """Mark a submission superseded and take it off the schedule."""
+        """Mark a submission as `superseded`, and remove it from the schedule."""
 
         self.memory.update(
             submission.block,
@@ -233,16 +242,16 @@ class ReflectionQueue:
         self.structures.schedule.remove(submission.block)
 
     def _scheduled(self, *, stop: datetime | None, base: Sequence[str] | None = None) -> list[Submission]:
-        """Return the scheduled submissions due before `stop`, in due order.
+        """Return the scheduled submissions that are due before `stop`, in due order.
 
-        The temporal read gives the due order and the log read gives each
-        submission its sequence, so the two facades are consulted once each
-        rather than once per submission.
-
-        One queue tier holds every namespace's submissions, so `base` is
-        applied here, after the temporal read. `TemporalCollection` orders by
-        time and carries no metadata filter, so the namespace each submission
-        recorded is what narrows the result.
+        - **2 reads:** the temporal read gives the due order. The log read gives
+          the sequence of each submission. So the method reads each facade
+          once, not once for each submission.
+        - **Namespace filter:** one queue tier holds the submissions of all
+          namespaces. So the method applies `base` here, after the temporal
+          read. `TemporalCollection` orders by time and has no metadata
+          filter. The namespace that each submission recorded narrows the
+          result.
         """
 
         wanted = None if base is None else namespace(*base)
@@ -259,7 +268,7 @@ class ReflectionQueue:
         return scheduled
 
     def _namespace_of(self, submission: Submission) -> Namespace:
-        """Return the namespace a submission's collections sit under."""
+        """Return the namespace that contains the collections of a submission."""
 
         stored = _payload(submission.block).get("namespace")
         if not isinstance(stored, list):
@@ -271,12 +280,14 @@ def _fold(
     superseded: Submission | None,
     conversation: Conversation,
 ) -> tuple[tuple[Message, ...], tuple[Patch, ...], dict[str, Any]]:
-    """Fold a cancelled submission's work into the one replacing it.
+    """Merge the work of a cancelled submission into the submission that replaces it.
 
-    Messages accumulate so the manager sees the whole exchange. A proposed
-    change is replaced when the newer conversation speaks to the same address,
-    because the fresher proposal is the one worth applying, and profile fields
-    merge the same way.
+    - **Messages:** they accumulate, so the manager sees the whole exchange.
+    - **Proposed changes:** if the newer conversation has a change for the same
+      address, its change replaces the older change. The newer proposal is the
+      one to apply.
+    - **Profile fields:** they merge the same way. The newer value replaces the
+      older value.
     """
 
     if superseded is None:
@@ -309,7 +320,7 @@ def _submission(sequence: int, block: MemoryBlock) -> Submission:
 
 
 def _payload(block: MemoryBlock) -> dict[str, Any]:
-    """Return the dictionary value stored on a submission block."""
+    """Return the dictionary value of a submission block."""
 
     if block.type != SUBMISSION_TYPE or not isinstance(block.value, dict):
         raise TypeError(f"Block {block.id!r} is not a queued submission.")
@@ -317,7 +328,7 @@ def _payload(block: MemoryBlock) -> dict[str, Any]:
 
 
 def _state(value: object) -> SubmissionState:
-    """Validate and narrow a stored submission state."""
+    """Validate a stored submission state, and narrow its type."""
 
     if value not in {"pending", "superseded", "processed"}:
         raise ValueError("A submission state must be 'pending', 'superseded', or 'processed'.")
@@ -333,10 +344,12 @@ def _delay(after_seconds: object) -> timedelta:
 
 
 def _inclusive(moment: datetime) -> datetime | None:
-    """Return the exclusive bound that makes a due time at `moment` count.
+    """Return the exclusive stop bound that includes a due time at `moment`.
 
-    Temporal ranges are half-open, so a submission due exactly now needs the
-    stop bound to sit just past it.
+    Temporal ranges are half-open. So for a submission that is due exactly at
+    `moment`, the stop bound is 1 microsecond after `moment`. If that
+    calculation overflows, the function returns `None`, which means no stop
+    bound.
     """
 
     try:

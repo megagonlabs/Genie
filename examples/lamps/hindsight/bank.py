@@ -1,29 +1,30 @@
 """The Hindsight-inspired memory bank: documents in, resolved facts out.
 
-`retain` is Hindsight's write path. A caller hands the bank a source payload -
-a chat turn, a document, an agent run - and the bank:
+`retain` is the Hindsight write path. A caller gives the bank a source payload,
+for example a chat turn, a document, or an agent run. Then the bank:
 
-- keeps that payload as ground truth;
-- stores the facts extracted from it;
-- resolves the names those facts mention to canonical entities; and
-- records where every fact came from.
+- **Keeps the payload** as ground truth.
+- **Stores the facts** extracted from the payload.
+- **Resolves names:** it resolves the names that those facts mention to
+  canonical entities.
+- **Records provenance:** it records where every fact came from.
 
-Extraction itself is the one step that genuinely needs a language model
-upstream, so the lamp accepts already-extracted `FactDraft` values, the same way
-the Graphiti lamp accepts already-extracted triplets.
+Upstream, extraction is the one step that really needs a language model. So the
+lamp accepts `FactDraft` values that are already extracted. The Graphiti lamp
+does the same with triplets that are already extracted.
 
 The Genie side of that path:
 
-- Provenance is a `LineageDAG`, so "what is this belief based on?" is a walk
-  rather than a stored list.
-- Entity resolution ends in a `KeyedCollection` bind, so every surface form that
-  has ever resolved to an entity is an address pointing at that entity's block,
-  and the second lookup of a name is a keyed read.
-- Retention order is an `EventLog`, which is also the cursor consolidation reads
-  from.
-- Both of Hindsight's time axes live in one `TemporalCollection` entry per fact:
-  event time is when the bank learned it, validity is the period the fact
-  describes.
+- **Provenance is a `LineageDAG`:** so "what is this belief based on?" is a
+  walk, not a stored list.
+- **Entity resolution ends in a `KeyedCollection` bind:** every surface form
+  that resolved to an entity becomes an address of the block of that entity. So
+  the second lookup of a name is a keyed read.
+- **Retention order is an `EventLog`:** its sequence numbers are also the
+  cursor that consolidation reads from.
+- **One `TemporalCollection` entry for each fact holds both Hindsight time
+  axes:** the event time is when the bank learned the fact, and the validity is
+  the period that the fact describes.
 """
 
 from __future__ import annotations
@@ -65,9 +66,9 @@ DEFAULT_ENTITY_KIND = "concept"
 class HindsightMemoryBank:
     """One isolated bank of documents, facts, and canonical entities.
 
-    The bank owns Hindsight's taxonomy and resolution rules. Genie owns the
-    blocks those rules write, the ownership boundary that keeps one bank out of
-    another, and the structures that make the results queryable.
+    The bank owns the Hindsight taxonomy and resolution rules. Genie owns the
+    blocks that those rules write, the ownership boundary that keeps one bank
+    out of another, and the structures that make the results queryable.
     """
 
     def __init__(self, memory: MemoryHandle, *, structures: HindsightStructures) -> None:
@@ -92,23 +93,24 @@ class HindsightMemoryBank:
     ) -> RetainResult:
         """Store one source payload and the facts extracted from it.
 
-        A fact whose text is already on file is not stored twice. The new
-        document is linked to the existing fact instead, so re-attestation
-        raises the evidence behind a belief rather than the size of the bank.
+        If a valid fact with the same normalized text was on file before this
+        call, the bank does not store the draft again. The bank links the new
+        document to that stored fact instead. So a repeated fact adds evidence
+        for a belief and does not make the bank larger.
 
         Args:
             source: Where the payload came from.
-            content: Raw payload text kept as ground truth.
+            content: Raw payload text that the bank keeps as ground truth.
             retained_at: When the bank learned this payload.
-            context: Optional framing describing the situation.
-            facts: Already-extracted facts to store.
+            context: Optional text that describes the situation.
+            facts: Facts that are already extracted from the payload.
 
         Returns:
-            The stored document, one fact per draft in draft order, and the
-            subset of those facts that were already on file.
+            The stored document, one fact for each draft in draft order, and
+            the subset of those facts that were already on file.
 
         Raises:
-            ValueError: If required text is empty or a draft is malformed.
+            ValueError: If required text is empty or a draft is not valid.
         """
 
         learned_at = normalize_timestamp(retained_at, field="retained_at")
@@ -155,7 +157,7 @@ class HindsightMemoryBank:
         kind: str = DEFAULT_ENTITY_KIND,
         aliases: Sequence[str] = (),
     ) -> Entity:
-        """Declare a canonical entity and the surface forms it answers to.
+        """Declare a canonical entity and its surface forms (other written names).
 
         Args:
             name: Canonical display name.
@@ -163,10 +165,11 @@ class HindsightMemoryBank:
             aliases: Extra surface forms to bind to the same entity.
 
         Returns:
-            The canonical entity, created or extended.
+            The canonical entity, new or with the added aliases.
 
         Raises:
-            ValueError: If the name is empty.
+            ValueError: If the name is empty, or the kind of a new entity is
+                empty.
         """
 
         canonical = required_text(name, field="entity name")
@@ -176,18 +179,21 @@ class HindsightMemoryBank:
         return self._bind_aliases(entity, unique_strings(aliases, field="aliases"))
 
     def resolve_entity(self, name: str, *, kind: str = DEFAULT_ENTITY_KIND) -> Entity:
-        """Return the entity a written name refers to, resolving surface forms.
+        """Return the entity that a written name refers to, and resolve surface forms.
 
-        - A name already bound to an entity is a keyed read.
-        - An unseen name is matched against the canonical names on file. Every
-          one of its words must begin a distinct word of the canonical name, in
-          order, so `Alice` and `Alice C.` both reach `Alice Chen` while
-          `Alice Cooper` does not.
-        - An ambiguous name starts a new entity rather than guessing.
+        - **Known name:** a name that is already bound to an entity is a keyed
+          read.
+        - **New name:** the bank compares a new name with the canonical names
+          on file. A canonical name matches if each word of the new name starts
+          a different word of the canonical name, in the same order. So `Alice`
+          and `Alice C.` both match `Alice Chen`, but `Alice Cooper` does not.
+        - **1 match:** the bank binds the new name as an alias of that entity.
+        - **No match or an ambiguous name:** the bank creates a new entity and
+          does not guess.
 
         Args:
             name: Entity name as written in a fact.
-            kind: Entity kind used when a new entity is created.
+            kind: Entity kind for a new entity.
 
         Returns:
             The resolved canonical entity.
@@ -216,14 +222,14 @@ class HindsightMemoryBank:
             name: Canonical name or a known alias.
 
         Returns:
-            The entity, or `None` when the name has never resolved.
+            The entity, or `None` if the name never resolved.
         """
 
         block = self.structures.entities.get(_entity_address(name))
         return entity_from_block(block) if block is not None else None
 
     def entities(self) -> list[Entity]:
-        """Return every canonical entity, each reported once.
+        """Return every canonical entity one time.
 
         Returns:
             Entities in ascending canonical-name order.
@@ -242,13 +248,14 @@ class HindsightMemoryBank:
         """Return the valid facts that mention one entity.
 
         Args:
-            entity: Entity, or any surface form that resolves to one.
+            entity: Entity, or a surface form that is already bound to an
+                entity.
 
         Returns:
             Facts in retention order.
 
         Raises:
-            ValueError: If the name has never resolved to an entity.
+            ValueError: If the name never resolved to an entity.
         """
 
         resolved = entity if isinstance(entity, Entity) else self.entity(entity)
@@ -265,10 +272,11 @@ class HindsightMemoryBank:
         return [fact for fact in self.facts() if fact.id in reachable]
 
     def facts(self, *, include_invalidated: bool = False) -> list[MemoryFact]:
-        """Return stored facts in the order they were learned.
+        """Return the stored facts in the order that the bank learned them.
 
         Args:
-            include_invalidated: Whether soft-retired facts are included.
+            include_invalidated: If `True`, the result also includes
+                invalidated facts.
 
         Returns:
             Facts in retention order.
@@ -283,12 +291,14 @@ class HindsightMemoryBank:
     def retention(self, *, start: int | None = None, include_invalidated: bool = True) -> list[LogItem]:
         """Read the retention log, optionally from a cursor.
 
-        Consolidation uses this to find the facts it has not folded into an
-        observation yet, which is why the log entry travels with the block.
+        Consolidation uses this method to find the facts that it did not merge
+        into an observation yet. For that reason, each item holds both the log
+        entry and the block.
 
         Args:
             start: Optional inclusive log sequence to start from.
-            include_invalidated: Whether soft-retired facts are included.
+            include_invalidated: If `True`, the result also includes
+                invalidated facts.
 
         Returns:
             Log items in ascending sequence order.
@@ -306,9 +316,10 @@ class HindsightMemoryBank:
             block: Fact, block, or block id.
 
         Returns:
-            The fact, or `None` when the id is not a fact in this bank. An id
-            from outside the bank's root reads as missing rather than raising,
-            because a lookup should not leak whether another bank holds it.
+            The fact, or `None` if the id is not a fact in this bank. An id
+            from outside the root of the bank reads as not found and does not
+            raise an error. So a lookup does not show if another bank holds
+            that id.
         """
 
         try:
@@ -320,7 +331,7 @@ class HindsightMemoryBank:
         return fact_from_block(stored)
 
     def require_fact(self, block: str | MemoryBlock | MemoryFact) -> MemoryFact:
-        """Return one stored fact or raise.
+        """Return one stored fact, or raise `ValueError`.
 
         Args:
             block: Fact, block, or block id.
@@ -338,11 +349,11 @@ class HindsightMemoryBank:
         return stored
 
     def invalidate(self, block: str | MemoryBlock | MemoryFact) -> MemoryFact:
-        """Soft-retire one fact without deleting it.
+        """Mark one fact as `invalidated`, but do not delete it.
 
-        Hindsight keeps invalidated facts readable so a correction stays
-        auditable. They stop reaching recall and consolidation, but the block,
-        its provenance, and its links all remain.
+        Hindsight keeps invalidated facts readable, so a correction stays
+        auditable. Recall and consolidation do not use them. The block, its
+        provenance, and its links all stay.
 
         Args:
             block: Fact to retire.
@@ -372,14 +383,14 @@ class HindsightMemoryBank:
     ) -> MemoryLink:
         """Add one associative link between two facts.
 
-        Hindsight connects memories four ways. Entity connections are already
-        implicit in the mention edges, so this method covers the other three:
-        temporal, semantic, and causal.
+        Hindsight connects memories in 4 ways. The mention edges already hold
+        the entity connections. So this method adds the other 3: temporal,
+        semantic, and causal.
 
         Args:
-            source: Fact the directed link starts at.
-            target: Fact the directed link ends at.
-            relation: One of the lamp's associative relations.
+            source: Fact where the directed link starts.
+            target: Fact where the directed link ends.
+            relation: One of the associative relations of the lamp.
             metadata: Optional link properties.
 
         Returns:
@@ -403,7 +414,7 @@ class HindsightMemoryBank:
         start: datetime | None = None,
         stop: datetime | None = None,
     ) -> list[MemoryFact]:
-        """Return valid facts the bank learned inside a half-open range.
+        """Return the valid facts that the bank learned inside a half-open range.
 
         Args:
             start: Optional inclusive lower bound on learned time.
@@ -421,26 +432,26 @@ class HindsightMemoryBank:
         return _valid_facts(items, key=_event_time)
 
     def describing(self, interval: ValidityInterval) -> list[MemoryFact]:
-        """Return valid facts whose described period overlaps an interval.
+        """Return the valid facts whose described period overlaps an interval.
 
         Args:
-            interval: Period the fact's own period must overlap.
+            interval: Period to compare with the described period of each fact.
 
         Returns:
-            Facts in ascending described-period order.
+            Facts in ascending order of the start of their described period.
         """
 
         items = self.structures.timeline.overlapping(interval, limit=SEARCH_LIMIT)
         return _valid_facts(items, key=_validity_start)
 
     def provenance(self, block: str | MemoryBlock) -> tuple[MemoryBlock, ...]:
-        """Return the blocks one block was directly derived from.
+        """Return the blocks that one block was directly derived from.
 
         Args:
             block: Fact, observation revision, or mental-model revision.
 
         Returns:
-            Direct lineage predecessors in stable id order.
+            Direct lineage predecessors in ascending id order.
         """
 
         neighbors = self.structures.lineage.predecessors(_block_id(block))
@@ -453,7 +464,11 @@ class HindsightMemoryBank:
         document: Document,
         learned_at: datetime,
     ) -> MemoryFact:
-        """Store one extracted fact with its entities, times, and provenance."""
+        """Store one extracted fact with its entities, times, and provenance.
+
+        If a structure write fails, the method deletes the new block and raises
+        the error again.
+        """
 
         if draft.fact_type not in {"world", "experience"}:
             raise ValueError("fact_type must be 'world' or 'experience'.")
@@ -503,11 +518,11 @@ class HindsightMemoryBank:
         return fact_from_block(block)
 
     def _fact_with_text(self, text_key: str) -> MemoryFact | None:
-        """Return a valid fact already storing this normalized text.
+        """Return the earliest valid fact that already stores this normalized text.
 
-        The lookup is a metadata-filtered `MemoryHandle.search` rather than a
-        scan, so deduplication uses the same portable query layer an adapter
-        would push down to its own store.
+        The lookup is a `MemoryHandle.search` with a metadata filter, not a
+        scan. So deduplication uses the same portable query layer that an
+        adapter can run in its own store.
         """
 
         results = self.memory.search(
@@ -535,7 +550,10 @@ class HindsightMemoryBank:
         return entity_from_block(block)
 
     def _bind_aliases(self, entity: Entity, aliases: Sequence[str]) -> Entity:
-        """Bind extra surface forms to an entity and record them on it."""
+        """Bind extra surface forms to an entity and add them to its aliases.
+
+        The method skips a surface form that is already bound to any entity.
+        """
 
         added = [alias for alias in aliases if self.entity(alias) is None]
         if not added:
@@ -550,13 +568,13 @@ class HindsightMemoryBank:
 
 
 def _entity_address(name: str) -> MemoryAddress:
-    """Return the keyed address one written entity name resolves through."""
+    """Return the keyed address of one written entity name."""
 
     return MemoryAddress(ENTITY_NAMESPACE, normalize_name(name))
 
 
 def _occurred_interval(draft: FactDraft) -> ValidityInterval | None:
-    """Return the period a draft describes, or `None` for an ongoing fact."""
+    """Return the period that a draft describes, or `None` for an ongoing fact."""
 
     if draft.occurred_at is None:
         if draft.occurred_until is not None:
@@ -577,7 +595,7 @@ def _valid_facts(
     *,
     key: Callable[[TemporalItem], datetime],
 ) -> list[MemoryFact]:
-    """Decode temporal items into valid facts in a stable time order."""
+    """Decode temporal items into valid facts in a stable time order (ties by fact text)."""
 
     selected = [
         (key(item), fact)
@@ -605,7 +623,7 @@ def _validity_start(item: TemporalItem) -> datetime:
 
 
 def _subsumes(written: str, canonical: str) -> bool:
-    """Return whether a written name is an abbreviation of a canonical one."""
+    """Return `True` if a written name is an abbreviation of a canonical name."""
 
     written_words = written.split()
     canonical_words = normalize_name(canonical).split()

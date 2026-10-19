@@ -1,14 +1,17 @@
 """Audit structure membership changes through structural hook events.
 
-Structure facades report membership changes to the same registry that reports
-block writes. `before_structure_change` receives the proposed `StructureChange`
-and `after_structure_change` receives the committed one, so a trail records how
-memory was organized as well as what it stored.
-
-This example walks every `StructureKind` and `StructureAction`, shows that a
-refused membership change reports a terminal event instead of a structural one,
-and shows a composed facade reusing the events of the structures it is built
-from rather than inventing its own.
+- **One registry:** structure facades report membership changes to the same
+  registry that reports block writes.
+- **Paired callbacks:** `before_structure_change` receives the proposed
+  `StructureChange`, and `after_structure_change` receives the committed one.
+  So a trail records how the application organized memory, and also what
+  memory stored.
+- **Each kind and action:** the example uses each `StructureKind` and each
+  `StructureAction`.
+- **Refused change:** the facade refuses a rebind of an unbound address. That
+  rebind reports a terminal event, not a structural event.
+- **Composed facade:** a composed facade reuses the events of the structures
+  that it is built from. It does not define its own events.
 
 Run from the repository root:
 
@@ -52,8 +55,8 @@ from genie.structures import (
     VersionedRecords,
 )
 
-# The operations that change structure membership. Every other operation on a
-# facade is a read and reports no structural event.
+# The operations that change structure membership. All other operations, for
+# example reads and block or link writes, report no structural event.
 STRUCTURAL_OPERATIONS = frozenset(
     {
         HookOperation.KEY_BIND,
@@ -71,13 +74,16 @@ class StructureAudit(MemoryHook):
     """Record how the structures around a memory system changed.
 
     Attributes:
-        proposed: Kind, action, and whether the structural record already
-            existed when the change was proposed. A backend that allocates the
-            record itself, such as a log sequence, leaves it unset.
-        committed: Kind, action, and container of each committed change.
-        outcomes: Outcome of every structural operation that started, whether
-            it committed or was refused.
-        uncorrelated: Committed changes whose operation id was never proposed.
+        proposed: Kind, action, and a flag for each proposed change. The flag
+            is `True` if the proposed change already has its new structural
+            record (`after`). It is `False` if the backend allocates the
+            record, such as a log sequence, or if the change removes a record
+            (unbind or remove).
+        committed: Kind, action, and container id of each committed change.
+        outcomes: Operation and outcome of each structural operation that
+            started. This includes committed and refused operations.
+        uncorrelated: Operation ids of committed changes that had no proposed
+            change in the same operation.
     """
 
     def __init__(self) -> None:
@@ -104,7 +110,7 @@ class StructureAudit(MemoryHook):
         context: HookContext,
         change: StructureChange[object],
     ) -> None:
-        """Record a membership change the backend committed."""
+        """Record a membership change that the backend committed."""
 
         if context.operation_id not in self._open:
             self.uncorrelated.append(context.operation_id)
@@ -116,7 +122,7 @@ class StructureAudit(MemoryHook):
         outcome: HookOutcome,
         error: BaseException | None,
     ) -> None:
-        """Record the outcome of every structural operation that started."""
+        """Record the outcome of each structural operation that started."""
 
         if context.operation in STRUCTURAL_OPERATIONS:
             self.outcomes.append((context.operation, outcome))
@@ -129,20 +135,20 @@ def at(day: int) -> datetime:
         day: Day of the month.
 
     Returns:
-        Timezone-aware datetime for that day.
+        A timezone-aware datetime at midnight UTC on that day.
     """
 
     return datetime(2026, 1, day, tzinfo=UTC)
 
 
 def main() -> None:
-    """Audit every structural action a facade can report."""
+    """Audit each structural action that a facade can report."""
 
     print("== Structural hook events ==")
     audit = StructureAudit()
     backend = InMemoryBackend()
-    # Facades reuse the access object's registry, so a structure built on this
-    # memory reports to the audit hook without being told about it.
+    # Facades reuse the registry of the access object. So each structure on
+    # this memory reports to the audit hook without a `hooks` argument.
     memory = Memory(backend=backend, hooks=HookRegistry([audit]))
 
     catalog_root = memory.put(type="collection", value="model catalog")
@@ -157,16 +163,17 @@ def main() -> None:
     timeline = TemporalCollection(memory, backend, collection=timeline_root)
     active = MemoryAddress(("serving",), "active_model")
 
-    # Keyed membership: bind an address, move it, then release it.
+    # Keyed membership: bind an address, rebind it to another block, then
+    # unbind it.
     catalog.bind(active, baseline)
     catalog.rebind(active, tuned, expected=baseline)
     catalog.unbind(active, expected=tuned)
 
     # Log membership: the backend allocates the sequence, so the proposed
-    # change carries no record yet.
+    # change has no record yet.
     events.append(baseline)
 
-    # Temporal membership: add a validity period, correct it, then drop it.
+    # Temporal membership: add a validity period, correct it, then remove it.
     timeline.add(baseline, occurred_at=at(10), validity=ValidityInterval(at(10), at(12)))
     timeline.replace(baseline, occurred_at=at(10), validity=ValidityInterval(at(10), at(20)))
     timeline.remove(baseline)
@@ -194,14 +201,15 @@ def main() -> None:
         StructureKind.TEMPORAL_COLLECTION,
         StructureKind.TEMPORAL_COLLECTION,
     ]
-    # Every committed change was proposed first, in the same operation.
+    # Each committed change had a proposed change first, in the same operation.
     assert audit.uncorrelated == []
     assert [action for _, action, _ in audit.committed] == [
         action for _, action, _ in audit.proposed
     ]
     assert {outcome for _, outcome in audit.outcomes} == {HookOutcome.SUCCESS}
 
-    # Reads report traversal and block events, never structural ones.
+    # These reads report only block read (`get`) events. They report no
+    # structural event.
     committed_before_reads = len(audit.committed)
     catalog.items(namespace=("serving",))
     events.read(limit=10)
@@ -210,8 +218,9 @@ def main() -> None:
     assert len(audit.committed) == committed_before_reads
     print("structural changes reported by three reads: none")
 
-    # A refused membership change never reaches the backend, so it reports no
-    # structural event. Its terminal event carries the failure instead.
+    # The address is unbound. The facade refuses this rebind before it proposes
+    # the change, and the backend write does not occur. Thus the rebind reports
+    # no structural event. Its terminal event records the failure.
     structural_operations_before = len(audit.outcomes)
     try:
         catalog.rebind(active, baseline, expected=tuned)
@@ -225,9 +234,9 @@ def main() -> None:
         (HookOperation.KEY_REBIND, HookOutcome.ERROR)
     ]
 
-    # A composed facade reuses the structures it is built from. Registering a
-    # record is one key binding and each revision is one log append, anchored
-    # on the record's own identity block rather than on the collection.
+    # A composed facade reuses the structures that it is built from. The
+    # registration of a record is one key bind. Each revision is one log append
+    # on the identity block of the record, not on the collection.
     versions = VersionedRecords(
         memory,
         backend,

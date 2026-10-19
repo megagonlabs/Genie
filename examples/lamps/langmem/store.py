@@ -1,24 +1,25 @@
-"""The namespaced store LangMem's memories are addressed in.
+"""The namespaced store that holds the addresses of LangMem memories.
 
 LangMem writes through a LangGraph `BaseStore`:
 
-- An item lives at a namespace plus a key.
-- Retrieval is either an exact address lookup or a vector search below a
-  namespace prefix.
-- A metadata filter can narrow the search.
+- **Address:** an item is at a namespace plus a key.
+- **Retrieval:** an exact address read, or a vector search below a namespace
+  prefix.
+- **Filter:** a metadata filter can narrow the search.
 
-That is the whole storage contract, and `KeyedCollection` covers the addressing
-part of it directly.
+That is the full storage contract. `KeyedCollection` covers the address part of
+it directly.
 
-The part worth reading is what happens to the namespace. A namespace is a bare
-name upstream. Here each segment is also a block that owns what is addressed
-below it:
+The important part is the namespace. Upstream, a namespace is only a name.
+Here, each segment is also a block that owns the blocks at the addresses below
+it:
 
-- `search` hands Genie a subtree scope instead of filtering candidates itself.
-- `forget` retires a whole user with one call.
-- Ranking stays in this module, because Genie deliberately has no ranking. The
-  backend decides which blocks are candidates, and the application decides which
-  candidate is best.
+- **`search`:** it gives Genie a subtree scope. It does not filter the
+  candidates itself.
+- **`forget`:** one call retires a whole user.
+- **Ranking:** it stays in this module, because Genie has no ranking by design.
+  The backend selects the candidate blocks, and the application selects the
+  best candidate.
 """
 
 from __future__ import annotations
@@ -51,8 +52,9 @@ from genie.structures import MemoryAddress
 class MemoryStore:
     """Namespaced item storage with schema-checked values.
 
-    The store owns addressing, validation, and retrieval. It never decides what
-    a memory means or when one should change; a `MemoryManager` does that.
+    The store controls addresses, validation, and retrieval. It never decides
+    what a memory means or when a memory changes. A `MemoryManager` decides
+    that.
     """
 
     def __init__(
@@ -65,11 +67,11 @@ class MemoryStore:
         """Create a store over one bounded handle.
 
         Args:
-            memory: Bounded Genie handle owning every namespace and item.
-            structures: Facade bundle built over the same handle.
-            schemas: Exact namespaces mapped to the schema their values follow.
-                A namespace with no registered schema accepts any value the
-                configured Genie codec encodes.
+            memory: Bounded Genie handle that owns all namespaces and items.
+            structures: Facade bundle on the same handle.
+            schemas: Exact namespaces, each with the schema for its values. A
+                namespace without a registered schema accepts each value that
+                the configured Genie codec can encode.
         """
 
         self.memory = memory
@@ -80,21 +82,22 @@ class MemoryStore:
         """Return the schema registered for one exact namespace.
 
         Args:
-            value: Namespace to look up.
+            value: Namespace to find.
 
         Returns:
-            The registered schema, or `None` when the namespace has none.
+            The registered schema, or `None` if the namespace has no schema.
         """
 
         return self._schemas.get(namespace(*value))
 
     def insert(self, value: Sequence[str], key: str, item_value: Any) -> MemoryItem:
-        """Store a new item at an address that is currently empty.
+        """Store a new item at an empty address.
 
         Args:
-            value: Resolved namespace to store under.
-            key: Key inside that namespace.
-            item_value: Application value, checked against the namespace schema.
+            value: Resolved namespace for the item.
+            key: Key in that namespace.
+            item_value: Application value. The store checks it against the
+                namespace schema.
 
         Returns:
             The stored item.
@@ -125,17 +128,19 @@ class MemoryStore:
         return item_from_block(block)
 
     def update(self, value: Sequence[str], key: str, item_value: Any) -> MemoryItem:
-        """Replace the value at an address while keeping the item's identity.
+        """Replace the value at an address, and keep the identity of the item.
 
-        LangMem patches a memory in place so that references to it stay valid
-        and its change history is preserved. A Genie update keeps the block id
-        and raises `MemoryItem.version`, so the patch is visible without the
-        lamp keeping an audit record.
+        - **Upstream:** LangMem patches a memory in place. So the references to
+          the memory stay valid, and its change history stays.
+        - **Here:** a Genie update keeps the block id and increases
+          `MemoryItem.version`. So the patch is visible, and the lamp keeps no
+          audit record.
 
         Args:
-            value: Resolved namespace holding the item.
-            key: Key inside that namespace.
-            item_value: Replacement value, checked against the schema.
+            value: Resolved namespace that holds the item.
+            key: Key in that namespace.
+            item_value: Replacement value. The store checks it against the
+                schema.
 
         Returns:
             The updated item, with the same id as before.
@@ -158,15 +163,15 @@ class MemoryStore:
     def delete(self, value: Sequence[str], key: str) -> MemoryItem:
         """Remove one item and return its last stored state.
 
-        The keyed binding goes with the block, so an address freed this way can
-        be inserted into again.
+        The keyed binding goes away with the block. So a later insert can use
+        the freed address again.
 
         Args:
-            value: Resolved namespace holding the item.
-            key: Key inside that namespace.
+            value: Resolved namespace that holds the item.
+            key: Key in that namespace.
 
         Returns:
-            The item as it was before deletion.
+            The item before the delete.
 
         Raises:
             KeyError: If the address holds no item.
@@ -177,14 +182,14 @@ class MemoryStore:
         return existing
 
     def get(self, value: Sequence[str], key: str) -> MemoryItem | None:
-        """Look one item up by its exact address.
+        """Find one item by its exact address.
 
         Args:
             value: Resolved namespace.
-            key: Key inside that namespace.
+            key: Key in that namespace.
 
         Returns:
-            The item, or `None` when the address is empty.
+            The item, or `None` if the address is empty.
         """
 
         address = MemoryAddress(namespace(*value), required_text(key, field="key"))
@@ -192,11 +197,11 @@ class MemoryStore:
         return None if block is None else item_from_block(block)
 
     def require(self, value: Sequence[str], key: str) -> MemoryItem:
-        """Look one item up and fail when the address is empty.
+        """Find one item, and raise `KeyError` if the address is empty.
 
         Args:
             value: Resolved namespace.
-            key: Key inside that namespace.
+            key: Key in that namespace.
 
         Returns:
             The stored item.
@@ -211,7 +216,7 @@ class MemoryStore:
         return item
 
     def items(self, prefix: Sequence[str]) -> list[MemoryItem]:
-        """Return every item addressed at or below a namespace prefix.
+        """Return all items with an address at or below a namespace prefix.
 
         Args:
             prefix: Namespace prefix.
@@ -240,26 +245,30 @@ class MemoryStore:
         limit: int = 10,
         offset: int = 0,
     ) -> list[SearchHit]:
-        """Search below a namespace prefix, optionally narrowed by metadata.
+        """Search below a namespace prefix. A metadata filter can narrow the search.
 
-        - Genie selects the candidates. The namespace prefix becomes a subtree
-          scope, the item type and any metadata filter go into the query, and
-          one search runs per query term.
-        - Scoring is the lamp's, because Genie's portable text match is a
-          substring test over the whole block rather than a similarity measure.
-          A candidate only counts a term that appears in its own value, and the
-          score is the share of terms that do.
+        - **Candidates:** Genie selects them. The namespace prefix becomes a
+          subtree scope. The item type and the metadata filter, if any, go into
+          the query. One search runs for each query term.
+        - **Score:** the lamp calculates it. The portable text match of Genie is
+          a substring test over the whole block, not a similarity measure. A
+          candidate counts a term only if the term is in the value of the
+          candidate. The score is the share of terms that the value contains.
 
         Args:
-            prefix: Namespace prefix to search below.
-            query: Free text whose terms are matched against item values.
-            filters: Metadata filter passed through to Genie, such as
+            prefix: Namespace prefix for the search.
+            query: Free text. The store matches its terms against item values.
+            filters: Metadata filter that the store gives to Genie, for example
                 `{"schema": "semantic_fact"}`.
-            limit: Maximum hits to return after paging.
-            offset: Hits to skip, so a caller can page through results.
+            limit: Maximum number of hits on the page. The store caps it at
+                `SEARCH_LIMIT`.
+            offset: Number of hits to skip. A caller uses it to read the
+                results page by page.
 
         Returns:
-            Hits in descending score order, ties broken on the item address.
+            Hits in descending score order. The item address breaks ties. The
+            list is empty if the namespace does not exist or the query has no
+            alphanumeric term.
 
         Raises:
             ValueError: If the query is empty, or limit or offset is invalid.
@@ -303,40 +312,41 @@ class MemoryStore:
         return hits[skip : skip + page_size]
 
     def namespace_node(self, value: Sequence[str]) -> MemoryBlock | None:
-        """Return the block that owns one namespace, when it exists.
+        """Return the block that owns one namespace, if it exists.
 
         Args:
-            value: Namespace to look up.
+            value: Namespace to find.
 
         Returns:
-            The namespace block, or `None` when the path was never created.
+            The namespace block, or `None` if the path does not exist.
         """
 
         return self.structures.namespace_node(value)
 
     def forget(self, value: Sequence[str]) -> list[MemoryItem]:
-        """Delete a namespace and everything addressed at or below it.
+        """Delete a namespace and everything with an address at or below it.
 
-        A key-value store has no answer for "this user left"; every key has to
-        be found and removed one at a time. Because each namespace segment owns
-        what is stored below it, ownership answers it in one call: the subtree
-        goes, and the structure bindings go with the blocks they pointed at.
-
-        The subtree is everything that belongs to the user, not only their
-        items. Their profile and any conversation still queued for them are
-        owned by the same namespace block, so nothing is left behind that could
-        write to the namespace after it is retired.
+        - **Key-value store:** it has no single operation for "this user left".
+          The application finds and removes each key, one at a time.
+        - **Here:** each namespace segment owns what is below it. So one call
+          does the work. The subtree goes, and the structure bindings go with
+          the blocks that they referred to.
+        - **Whole subtree:** the subtree holds everything that belongs to the
+          user, not only the items. The same namespace block owns the user
+          profile and each conversation that is still on the queue for the
+          user. So nothing stays that can write to the namespace after the
+          lamp retires it.
 
         Args:
             value: Namespace to retire.
 
         Returns:
-            The items that were removed, in ascending address order. The
-            profile and queued submissions that went with them are not listed,
-            because they are not items.
+            The removed items, in ascending address order. The list does not
+            include the profile and the queued submissions, because they are
+            not items. The delete removed them too.
 
         Raises:
-            KeyError: If the namespace holds nothing.
+            KeyError: If the namespace block does not exist.
         """
 
         target = namespace(*value)
@@ -348,7 +358,7 @@ class MemoryStore:
         return removed
 
     def _check(self, value: Namespace, item_value: Any) -> tuple[Any, str | None]:
-        """Validate a value against its namespace schema, if one is registered."""
+        """Validate a value against its namespace schema, if the namespace has a registered schema."""
 
         schema = self._schemas.get(value)
         if schema is None:
@@ -357,7 +367,7 @@ class MemoryStore:
 
 
 def _positive(value: object, *, field: str) -> int:
-    """Return a positive integer bound, capped at the lamp's scan limit."""
+    """Return a positive integer bound, capped at `SEARCH_LIMIT`, the scan limit of the lamp."""
 
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{field} must be an integer of at least 1.")
@@ -365,7 +375,7 @@ def _positive(value: object, *, field: str) -> int:
 
 
 def _offset(value: object) -> int:
-    """Return a non-negative paging offset."""
+    """Return a page offset of 0 or more."""
 
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError("offset must be an integer of at least 0.")

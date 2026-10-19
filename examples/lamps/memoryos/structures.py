@@ -1,30 +1,32 @@
-"""Genie facades wired to the MemoryOS lamp's four tiers.
+"""Genie facades for the 4 tiers of the MemoryOS lamp.
 
-MemoryOS runs on four stores that are written to and evicted from on different
-rules:
+MemoryOS uses 4 stores. Each store has its own rules for writes and evictions:
 
-- a short-term FIFO queue;
-- a mid-term store of topic segments; and
-- one long-term store each for what the user knows and what the assistant knows.
+- **Short-term:** a first-in, first-out (FIFO) queue.
+- **Mid-term:** a store of topic segments.
+- **Long-term:** 2 stores, one for user knowledge and one for assistant
+  knowledge.
 
-The tier anchors below keep that separation, because the interesting behavior of
-a memory operating system is what happens at the boundaries between them.
+The tier anchors keep these stores separate. The important behavior of a memory
+operating system occurs at the boundaries between the tiers.
 
-Each tier gets the structure that matches how it is read:
+Each tier uses the structure that matches how the lamp reads it:
 
 | Tier | Facade | Why that one |
 | --- | --- | --- |
-| short-term | `EventLog` | The queue *is* arrival order, and overflow reads the oldest end |
-| mid-term | `OwnershipTree` | A segment owns its pages, so dropping it drops them |
+| short-term | `EventLog` | The queue is the arrival order, and overflow reads the oldest end |
+| mid-term | `OwnershipTree` | A segment owns its pages, so a delete of the segment also deletes its pages |
 | mid-term | `TemporalCollection` | Last-visit times, which the recency term reads |
-| user long-term | `VersionedRecords` | The profile keeps every version an analysis wrote |
-| user long-term | `EventLog` | A capped knowledge base, evicted oldest first |
+| user long-term | `VersionedRecords` | The profile keeps each version that an analysis wrote |
+| user long-term | `EventLog` | A knowledge base with a capacity, which evicts the oldest entry first |
 | assistant long-term | `EventLog` | The same, for what the assistant learned |
 
-Two facades cut across the tiers. A `KeyedCollection` holds the page and session
-id spaces, so `get_page_by_id` is a lookup rather than a walk over every session.
-And a `LineageDAG` on `memoryos.next_page` holds the dialogue chain, which is the
-one relationship in MemoryOS that follows the dialogue rather than the storage.
+2 facades cross the tiers:
+
+- **`KeyedCollection`:** holds the page id space and the session id space. So
+  `get_page_by_id` is one lookup and not a walk over each session.
+- **`LineageDAG` on `memoryos.next_page`:** holds the dialogue chain. This is the
+  only relationship in MemoryOS that follows the dialogue and not the storage.
 """
 
 from __future__ import annotations
@@ -47,28 +49,28 @@ from genie.structures import (
 
 
 class MemoryOSStore(AcyclicLinkStore, KeyedStore, SequenceStore, TemporalStore, Protocol):
-    """Backend capabilities required by the MemoryOS structure bundle."""
+    """Backend capabilities that the MemoryOS structure bundle requires."""
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryOSStructures:
-    """The structural views this lamp composes over one user's memory.
+    """The structure views that this lamp builds over the memory of one user.
 
     Attributes:
-        tiers: Ownership view of the four tiers below the system root.
+        tiers: Ownership view of the 4 tiers below the system root.
         queue: Short-term memory in arrival order.
-        segments: Mid-term sessions, each owning its pages.
+        segments: Mid-term sessions. Each session owns its pages.
         visits: Last-visit times for those sessions.
-        ids: Page and session id spaces in one keyed collection.
-        chain: The dialogue chain, as cycle-protected lineage edges.
-        profile: The user profile, one revision per analysis.
-        user_knowledge: The user's capped knowledge base.
-        assistant_knowledge: The assistant's capped knowledge base.
-        provenance: Edges from a promoted fact back to the pages it came from.
-        short_term_root: Block that owns the queued exchanges.
+        ids: Page id space and session id space in one keyed collection.
+        chain: The dialogue chain, as lineage edges that cannot make a cycle.
+        profile: The user profile, with 1 revision for each analysis.
+        user_knowledge: The knowledge base of the user, with a capacity.
+        assistant_knowledge: The knowledge base of the assistant, with a capacity.
+        provenance: Edges from a promoted fact to the pages that it came from.
+        short_term_root: Block that owns the exchanges in the queue.
         mid_term_root: Block that owns the sessions.
-        user_root: Block that owns the profile and the user's knowledge.
-        assistant_root: Block that owns the assistant's knowledge.
+        user_root: Block that owns the profile and the knowledge of the user.
+        assistant_root: Block that owns the knowledge of the assistant.
     """
 
     tiers: OwnershipTree
@@ -88,16 +90,17 @@ class MemoryOSStructures:
 
     @classmethod
     def create(cls, memory: MemoryHandle, store: MemoryOSStore) -> MemoryOSStructures:
-        """Build or reopen every structural anchor below one bounded root.
+        """Build or reopen each structure anchor below one bounded root.
 
-        Existing anchors are found by scanning the root's children, so
-        reopening a user's memory returns the same structures instead of
-        duplicating them.
+        The method finds the current anchors in the children of the root. So a
+        second call for the same memory returns the same structures and does
+        not make duplicates.
 
         Args:
-            memory: Handle rooted at the block that owns one user's memory.
-            store: Backend providing acyclic-link, keyed, sequence, and
-                temporal capabilities.
+            memory: Handle whose root is the block that owns the memory of one
+                user.
+            store: Backend with the acyclic-link, keyed, sequence, and temporal
+                capabilities.
 
         Returns:
             The structure bundle for that memory.
@@ -130,10 +133,10 @@ class MemoryOSStructures:
 
 
 def _anchor(tiers: OwnershipTree, name: str) -> MemoryBlock:
-    """Return the tier anchor with this name, creating it when absent.
+    """Return the tier anchor with this name, and create it if it does not exist.
 
-    Anchors are matched on metadata rather than on value so a tier that keeps
-    counters in its own value can still be found again.
+    The function matches anchors on metadata and not on value. So it can find a
+    tier again even if that tier keeps counters in its own value.
     """
 
     existing = next(

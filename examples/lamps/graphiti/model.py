@@ -1,16 +1,15 @@
 """Value types, constants, and time helpers for the Graphiti lamp.
 
-Graphiti keeps its own node and edge models in dedicated modules. This module
-plays the same role for the lamp, and holds:
-
-- the block types and relation names the example writes;
-- the timestamp helpers every layer shares; and
-- the read-only records the graph hands back: an ingested episode, an entity
-  with its current summary, one summary revision, a fact on both time axes, and
-  the outcome of writing a triplet.
-
-Nothing here touches Genie beyond reading blocks that were already stored, so
-every other module in the lamp can depend on it without a cycle.
+- **Upstream equivalent:** Graphiti keeps its node and edge models in separate
+  modules. This module does the same job for the lamp.
+- **Names:** the block types and relation names that the lamp writes.
+- **Time helpers:** the timestamp helpers that all layers of the lamp share.
+- **Records:** the read-only records that the graph returns. These are an
+  ingested episode, an entity with its current summary, one summary revision, a
+  fact on both time axes, and the result of a triplet write.
+- **No import cycle:** the module uses Genie only to read blocks that are
+  already stored. So every other module in the lamp can import it without a
+  cycle.
 """
 
 from __future__ import annotations
@@ -46,14 +45,14 @@ SEARCH_LIMIT = 1_000
 
 
 def normalize_timestamp(value: datetime, *, field: str) -> datetime:
-    """Return a timezone-aware timestamp normalized to UTC.
+    """Return a timezone-aware timestamp, converted to UTC.
 
     Args:
-        value: Timestamp supplied by application code.
-        field: Field name used in error messages.
+        value: Timestamp from the application code.
+        field: Field name for the error messages.
 
     Returns:
-        The same instant expressed in UTC.
+        The same instant in UTC.
 
     Raises:
         TypeError: If `value` is not a `datetime`.
@@ -74,7 +73,7 @@ def format_timestamp(value: datetime) -> str:
         value: Timezone-aware timestamp.
 
     Returns:
-        An ISO 8601 string ending in `Z`.
+        An ISO 8601 string that ends in `Z`.
     """
 
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
@@ -85,7 +84,7 @@ def parse_timestamp(value: str, *, field: str = "timestamp") -> datetime:
 
     Args:
         value: ISO 8601 timestamp string.
-        field: Field name used in error messages.
+        field: Field name for the error messages.
 
     Returns:
         The parsed instant in UTC.
@@ -104,15 +103,17 @@ def parse_timestamp(value: str, *, field: str = "timestamp") -> datetime:
 class Episode:
     """One ingested source record and its place on both time axes.
 
-    An episode is Graphiti's unit of ground truth: nothing extracted from it is
-    ever trusted more than the episode itself, and every fact keeps a link back
-    to the episodes that support it.
+    - **Ground truth:** in Graphiti, an episode is the unit of ground truth.
+      Nothing that the graph extracts from an episode gets more trust than the
+      episode.
+    - **Provenance:** every fact keeps a link to the episodes that support it.
 
     Attributes:
         block: Stored episode block.
-        sequence: Position in the graph's ingestion event log.
-        reference_time: When the source event happened.
-        ingested_at: When this graph processed the episode.
+        sequence: Position of the episode in the ingestion event log of the
+            graph.
+        reference_time: Time of the source event.
+        ingested_at: Time when this graph processed the episode.
     """
 
     block: MemoryBlock
@@ -146,17 +147,18 @@ class Episode:
 
     @property
     def source_description(self) -> str:
-        """Return the free-text description of where the episode came from."""
+        """Return the free-text description of the episode source."""
 
         return required_string(self.block.value, "source_description")
 
 
 @dataclass(frozen=True, slots=True)
 class Entity:
-    """One entity node together with its current summary revision.
+    """One entity node and its current summary revision.
 
     Attributes:
-        block: Stored entity block, which also anchors its summary log.
+        block: Stored entity block. It is also the anchor of the summary log of
+            the entity.
         address: Keyed address that resolves this entity by type and name.
         summary: Text of the newest summary revision.
         revision: Logical revision number of that summary.
@@ -175,7 +177,7 @@ class Entity:
 
     @property
     def name(self) -> str:
-        """Return the entity's display name."""
+        """Return the display name of the entity."""
 
         return required_string(self.block.value, "name")
 
@@ -192,8 +194,8 @@ class SummaryRevision:
 
     Attributes:
         block: Stored summary block.
-        revision: Logical revision number, starting at one.
-        recorded_at: Ingestion time the revision was written for.
+        revision: Logical revision number. The first revision is 1.
+        recorded_at: Ingestion time for which the graph wrote the revision.
     """
 
     block: MemoryBlock
@@ -209,14 +211,15 @@ class SummaryRevision:
 
 @dataclass(frozen=True, slots=True)
 class TemporalFact:
-    """A relationship fact placed on both time axes.
+    """A relationship fact on both time axes.
 
-    Valid time answers "when was this true in the world"; transaction time
-    answers "when did this graph hold it on record". Both intervals are
-    half-open, and a missing end means still open.
+    - **Valid time:** tells when the fact was true in the world.
+    - **Transaction time:** tells when this graph held the fact on record.
+    - **Half-open intervals:** each interval includes its start and does not
+      include its end. An interval with no end is still open.
 
     Attributes:
-        block: Stored fact block holding the relation and its sentence.
+        block: Stored fact block that holds the relation and its sentence.
         subject: Entity block at the source of the relationship.
         object: Entity block at the target of the relationship.
         valid: Valid-time interval, `[valid_at, invalid_at)`.
@@ -243,7 +246,7 @@ class TemporalFact:
 
     @property
     def fact(self) -> str:
-        """Return the readable sentence stored for this relationship."""
+        """Return the readable sentence that the block stores for the fact."""
 
         return required_string(self.block.value, "fact")
 
@@ -255,48 +258,52 @@ class TemporalFact:
 
     @property
     def valid_at(self) -> datetime:
-        """Return when the fact became true in the world."""
+        """Return the time when the fact became true in the world."""
 
         return self.valid.valid_at
 
     @property
     def invalid_at(self) -> datetime | None:
-        """Return when the fact stopped being true, or `None` if it still is."""
+        """Return the end of valid time, or `None` if the fact is still true."""
 
         return self.valid.invalid_at
 
     @property
     def ingested_at(self) -> datetime:
-        """Return when this graph first recorded the fact."""
+        """Return the time when this graph first recorded the fact."""
 
         return self.recorded.valid_at
 
     @property
     def expired_at(self) -> datetime | None:
-        """Return when this graph learned the fact was superseded."""
+        """Return the end of transaction time, or `None` if it is still open.
+
+        The end is the time when this graph learned that a newer fact
+        superseded this fact.
+        """
 
         return self.recorded.invalid_at
 
     def was_true_at(self, when: datetime) -> bool:
-        """Report whether the fact was true in the world at an instant.
+        """Report if the fact was true in the world at an instant.
 
         Args:
             when: Timezone-aware effective time.
 
         Returns:
-            `True` when `when` falls inside the valid-time interval.
+            `True` if `when` is inside the valid-time interval.
         """
 
         return interval_contains(self.valid, normalize_timestamp(when, field="when"))
 
     def was_known_at(self, when: datetime) -> bool:
-        """Report whether the graph held the fact on record at an instant.
+        """Report if the graph held the fact on record at an instant.
 
         Args:
             when: Timezone-aware ingestion time.
 
         Returns:
-            `True` when `when` falls inside the transaction-time interval.
+            `True` if `when` is inside the transaction-time interval.
         """
 
         return interval_contains(self.recorded, normalize_timestamp(when, field="when"))
@@ -304,13 +311,14 @@ class TemporalFact:
 
 @dataclass(frozen=True, slots=True)
 class TripletResult:
-    """Outcome of writing one subject-relation-object triplet.
+    """Result of one write of a subject-relation-object triplet.
 
     Attributes:
-        fact: The fact now on record for the triplet.
-        invalidated: Facts this write closed on both time axes.
-        created: Whether a new fact block was stored. A repeated triplet
-            merges provenance onto the existing fact instead.
+        fact: The fact that is now on record for the triplet.
+        invalidated: Facts that this write closed on both time axes.
+        created: `True` if the write stored a new fact block. For a repeated
+            triplet, the write adds provenance to the existing fact and does not
+            store a new block.
     """
 
     fact: TemporalFact
@@ -324,8 +332,11 @@ EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 def entity_address(name: str, *, entity_type: str) -> MemoryAddress:
     """Return the keyed address that identifies an entity.
 
-    Names are normalized case-insensitively inside their type, which is this
-    lamp's deterministic stand-in for embedding-based entity resolution.
+    - **Rule:** the address uses the entity type and the name. It case-folds the
+      name and removes the whitespace at the start and end, so names match
+      without case sensitivity inside their type.
+    - **Upstream difference:** this rule is the deterministic replacement in
+      this lamp for entity resolution with embeddings.
 
     Args:
         name: Display name of the entity.
@@ -347,28 +358,30 @@ def default_sentence(subject: Entity, relation: str, object: Entity) -> str:
         object: Object entity.
 
     Returns:
-        A sentence stored on the fact block as `EntityEdge.fact` would be.
+        The sentence for the fact block, in the same role as `EntityEdge.fact`
+        in Graphiti.
     """
 
     return f"{subject.name} {relation.replace('_', ' ')} {object.name}."
 
 
 def interval_contains(interval: ValidityInterval, when: datetime) -> bool:
-    """Report whether a half-open interval contains an instant.
+    """Report if a half-open interval contains an instant.
 
     Args:
         interval: Half-open validity interval.
         when: Instant to test.
 
     Returns:
-        `True` when `when` is at or after the start and before the end.
+        `True` if `when` is at or after the start and before the end. An
+        interval with no end contains every instant after its start.
     """
 
     return interval.valid_at <= when and (interval.invalid_at is None or when < interval.invalid_at)
 
 
 def entity_name(entity: MemoryBlock) -> str:
-    """Return the display name stored on an entity block.
+    """Return the display name that an entity block stores.
 
     Args:
         entity: Entity block.
@@ -381,7 +394,7 @@ def entity_name(entity: MemoryBlock) -> str:
 
 
 def required_string(mapping: Any, key: str) -> str:
-    """Read a required string field from a dictionary-like block value.
+    """Read a required string field from a dictionary block value.
 
     Args:
         mapping: Decoded block value.
@@ -391,7 +404,7 @@ def required_string(mapping: Any, key: str) -> str:
         The stored string.
 
     Raises:
-        TypeError: If the value is not a mapping or the field is not a string.
+        TypeError: If the value is not a `dict` or the field is not a string.
     """
 
     if not isinstance(mapping, dict) or not isinstance(mapping.get(key), str):
@@ -410,7 +423,7 @@ def required_metadata(block: MemoryBlock, key: str) -> str:
         The stored string.
 
     Raises:
-        TypeError: If the metadata field is missing or not a string.
+        TypeError: If the metadata field does not exist or is not a string.
     """
 
     value = block.metadata.get(key)
@@ -420,15 +433,15 @@ def required_metadata(block: MemoryBlock, key: str) -> str:
 
 
 def require_text(value: object, *, field: str) -> None:
-    """Validate that an application-supplied field holds non-empty text.
+    """Validate that a field from the application holds text that is not empty.
 
     Args:
-        value: Supplied field value.
-        field: Field name used in error messages.
+        value: Field value from the application.
+        field: Field name for the error messages.
 
     Raises:
         TypeError: If the value is not a string.
-        ValueError: If the string is empty or only whitespace.
+        ValueError: If the string is empty or contains only whitespace.
     """
 
     if not isinstance(value, str):

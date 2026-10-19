@@ -8,7 +8,7 @@ from typing import Protocol
 
 
 class ToolView(Protocol):
-    """Minimum tool-definition fields required by the renderer."""
+    """Minimum tool-definition fields that the renderer requires."""
 
     @property
     def name(self) -> str:
@@ -18,17 +18,17 @@ class ToolView(Protocol):
 
     @property
     def description(self) -> str:
-        """Return the user-facing tool description."""
+        """Return the tool description that the user sees."""
 
         ...
 
 
 class ToolCallView(Protocol):
-    """Minimum tool-call fields required by the renderer."""
+    """Minimum tool-call fields that the renderer requires."""
 
     @property
     def name(self) -> str:
-        """Return the invoked tool name."""
+        """Return the name of the called tool."""
 
         ...
 
@@ -42,15 +42,15 @@ def print_agent_demo(
     answer: str,
     calls: Sequence[ToolCallView],
 ) -> None:
-    """Print a lamp agent with a short introduction and common terminal format.
+    """Print a lamp agent demo in the common terminal format, with a short introduction.
 
     Args:
-        title: Name of the example shown to the user.
+        title: Name of the example that the output shows to the user.
         purpose: One-sentence explanation of the agent workflow.
-        structures: Genie structure facades used by the example.
-        tools: Tool definitions presented to the agent.
-        answer: Final readable answer assembled by the agent.
-        calls: Ordered, inspectable tool-call records.
+        structures: Genie structure facades that the example uses.
+        tools: Tool definitions that the agent receives.
+        answer: Final readable answer that the agent assembles.
+        calls: Tool-call records in call order, which the reader can inspect.
     """
 
     print(f"== {title} ==")

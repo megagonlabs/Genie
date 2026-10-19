@@ -1,27 +1,29 @@
-"""A tool interface and deterministic agent for the Mem0 lamp.
+"""A tool interface and a deterministic agent for the Mem0 lamp.
 
-Mem0 is used through a small set of calls, and the interesting thing about them
-is how little the caller controls.
+Agents use Mem0 through a small set of calls. The important property of these
+calls is that the caller has little control:
 
-- An agent hands over an exchange. What gets stored, replaced, or removed is
-  decided by the pipeline, and the agent finds out afterwards by reading the
-  events it returns.
-- That asymmetry is why the tools here return the decisions rather than a
-  success flag. The call log is where the agent's memory writes become
-  inspectable.
-- The user and agent identifiers are bound once, at construction, and no tool
-  argument can name another user's memories. The client below keeps one flat id
-  space, as upstream does, so the three tools that take a memory id check that
-  the id is inside the bound scope before they act. That check belongs here
-  rather than in the client, because this is the layer a model supplies
-  arguments to.
-- A run is a tool argument, because a run is one conversation and upstream
-  passes it per call. It can only narrow the bound scope, never leave it.
-- The example agent chooses its calls from explicit inputs rather than from a
-  model, which keeps the demo runnable with no API key. Extraction and the
-  add-or-replace-or-forget judgment are the two steps that genuinely need a
-  model upstream, so the agent receives candidate facts and relationships
-  already formed.
+- **The pipeline decides:** an agent gives an exchange. The pipeline decides
+  what to store, replace, or remove. The agent reads the returned events after
+  the call to find the result.
+- **Tools return decisions:** because of this asymmetry, the tools here return
+  the decisions, not a success flag. The call log shows the memory writes of
+  the agent.
+- **Bound scope:** the tool set gets the user and agent identifiers once, at
+  construction. This is the bound scope. No tool argument can name the memories
+  of a different user.
+- **Id check in the tools:** the client below keeps one flat id space, as
+  upstream does. Thus the 3 tools that take a memory id check that the id is in
+  the bound scope before they act. This check is in this layer and not in the
+  client, because a model supplies the arguments to this layer.
+- **Run as an argument:** a run is a tool argument, because a run is one
+  conversation and upstream gives it for each call. A run can only make the
+  bound scope narrower. It cannot go out of the bound scope.
+- **No model:** the example agent selects its calls from explicit inputs, not
+  from a model. Thus the demo runs with no API key. Upstream, extraction and the
+  decision to add, replace, or forget are the 2 steps that really need a model.
+  Thus the agent receives candidate facts and relationships that are already
+  formed.
 """
 
 from __future__ import annotations
@@ -50,12 +52,12 @@ from examples.lamps.mem0.model import (
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """Description of a tool presented to an agent.
+    """Description of a tool for an agent.
 
     Attributes:
-        name: Stable tool name used for calls.
+        name: Stable tool name for calls.
         description: Plain-language guidance for the agent.
-        parameters: Mapping of argument names to short type descriptions.
+        parameters: Map from argument names to short type descriptions.
     """
 
     name: str
@@ -65,10 +67,10 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class ToolCallRecord:
-    """One inspectable tool call made by the example agent.
+    """One tool call by the example agent, for later inspection.
 
     Attributes:
-        name: Invoked tool name.
+        name: Name of the called tool.
         arguments: Copy of the JSON-compatible arguments.
         result: Copy of the JSON-compatible result.
     """
@@ -79,18 +81,18 @@ class ToolCallRecord:
 
 
 class Mem0Tools:
-    """Scope-bound memory tools with JSON-compatible arguments."""
+    """Memory tools with a bound scope and JSON-compatible arguments."""
 
     def __init__(self, client: Mem0Memory, *, session: Session) -> None:
         """Bind one tool set to one user and agent.
 
         Args:
-            client: Memory client the tools call.
-            session: Scope every call is made inside, normally naming the
-                user and agent only. A `run_id` on it becomes the default run,
-                which a call may replace; the user and agent cannot be named by
-                any tool argument at all. A memory id from outside this scope is
-                refused the same way an unknown id is.
+            client: Memory client that the tools call.
+            session: Scope of all calls. Usually it names only the user and
+                the agent. A `run_id` on the session becomes the default run,
+                and a call can replace it. No tool argument can name the user
+                or the agent. The tools refuse a memory id from outside this
+                scope in the same way as an unknown id.
         """
 
         self.client = client
@@ -107,7 +109,7 @@ class Mem0Tools:
         }
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        """Invoke one named tool with JSON-compatible arguments.
+        """Call one named tool with JSON-compatible arguments.
 
         Args:
             name: Tool name.
@@ -126,14 +128,16 @@ class Mem0Tools:
         return handler(**arguments)
 
     def scope(self, *, run: str | None = None, actor: str | None = None) -> Session:
-        """Return the session one call runs in.
+        """Return the session for one call.
 
         Args:
-            run: Run to narrow to, or `None` to keep the bound run.
-            actor: Speaker to credit, or `None` to keep the bound one.
+            run: Run that makes the scope narrower, or `None` to keep the bound
+                run.
+            actor: Speaker to record as the actor, or `None` to keep the bound
+                actor.
 
         Returns:
-            A session inside the bound user and agent.
+            A session in the bound user and agent.
         """
 
         selected = optional_text(run, field="run")
@@ -145,17 +149,17 @@ class Mem0Tools:
         )
 
     def owns(self, memory_id: str) -> bool:
-        """Report whether one memory id is inside the bound scope.
+        """Return `True` if one memory id is in the bound scope.
 
-        The bound path is a prefix test, so a tool set bound to a user and an
-        agent reaches every run below them, and nothing beside them.
+        The method does a prefix test on the bound path. Thus a tool set for a
+        user and an agent reaches all runs below them, and nothing beside them.
 
         Args:
-            memory_id: Id supplied as a tool argument.
+            memory_id: Id from a tool argument.
 
         Returns:
-            `True` when a memory with that id was written inside the bound
-            scope, including one since deleted.
+            `True` if the client wrote a memory with that id in the bound scope.
+            The result is also `True` if the client deleted that memory later.
         """
 
         bound = self.session.path
@@ -163,20 +167,20 @@ class Mem0Tools:
         return owner is not None and owner[: len(bound)] == bound
 
     def _require_own(self, memory_id: str) -> str:
-        """Return the id, or refuse it exactly as an unknown id is refused.
+        """Return the id, or refuse it in the same way as an unknown id.
 
-        An id outside the bound scope and an id that was never written give the
-        same `KeyError`, so a tool set cannot be used to test which ids exist in
-        somebody else's scope.
+        An id outside the bound scope and an id with no writes cause the same
+        `KeyError`. Thus a caller cannot use a tool set to find which ids exist
+        in a different scope.
 
         Args:
-            memory_id: Id supplied as a tool argument.
+            memory_id: Id from a tool argument.
 
         Returns:
-            The id, when it is inside the bound scope.
+            The id, if it is in the bound scope.
 
         Raises:
-            KeyError: If the id is unknown or belongs to another scope.
+            KeyError: If the id is unknown or belongs to a different scope.
         """
 
         if not self.owns(memory_id):
@@ -196,7 +200,7 @@ class Mem0Tools:
         run: str | None = None,
         actor: str | None = None,
     ) -> dict[str, Any]:
-        """Implement `add_memories`, the whole two-phase write."""
+        """Implement `add_memories`, the full write with 2 phases."""
 
         result = self.client.add(
             self.scope(run=run, actor=actor),
@@ -256,7 +260,7 @@ class Mem0Tools:
         metadata: Mapping[str, Any] | None = None,
         actor: str | None = None,
     ) -> dict[str, Any]:
-        """Implement `update_memory`, the caller's own correction."""
+        """Implement `update_memory`, the correction from the caller."""
 
         change = self.client.update(
             self._require_own(memory_id),
@@ -268,7 +272,7 @@ class Mem0Tools:
         return change.as_json()
 
     def _delete_memory(self, *, memory_id: str, at: str, actor: str | None = None) -> dict[str, Any]:
-        """Implement `delete_memory`, the caller's own removal."""
+        """Implement `delete_memory`, the removal from the caller."""
 
         change = self.client.delete(
             self._require_own(memory_id),
@@ -278,10 +282,10 @@ class Mem0Tools:
         return change.as_json()
 
     def _memory_history(self, *, memory_id: str) -> dict[str, Any]:
-        """Implement `memory_history` for one memory, deleted or not.
+        """Implement `memory_history` for one memory, also if the memory is deleted.
 
-        An id from another scope reads as an id that was never written, which is
-        the same answer this tool already gives for an unknown id.
+        An id from a different scope gives the same result as an id with no
+        writes. This tool gives the same result for an unknown id.
         """
 
         if not self.owns(memory_id):
@@ -294,7 +298,7 @@ class Mem0Tools:
         }
 
     def _forget_scope(self, *, at: str, run: str | None = None) -> dict[str, Any]:
-        """Implement `forget_scope`, one subtree delete for a whole scope."""
+        """Implement `forget_scope`, one subtree delete for a full scope."""
 
         scope = self.scope(run=run)
         changes = self.client.delete_all(scope, at=parse_timestamp(at, field="at"))
@@ -303,12 +307,12 @@ class Mem0Tools:
 
 @dataclass(slots=True)
 class Mem0Agent:
-    """A deterministic agent whose only memory access is the tool set.
+    """A deterministic agent that uses memory only through the tool set.
 
     Attributes:
-        name: Agent name shown in the demo output.
-        tools: Scope-bound tool set.
-        call_log: Every call the agent made, in order.
+        name: Agent name in the demo output.
+        tools: Tool set with a bound scope.
+        call_log: All calls of the agent, in order.
     """
 
     name: str
@@ -316,16 +320,16 @@ class Mem0Agent:
     call_log: list[ToolCallRecord] = field(default_factory=list)
 
     def learn(self, exchange: Exchange, *, at: str, run: str | None = None, metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        """Hand one exchange to the pipeline and read back what it decided.
+        """Give one exchange to the pipeline and read its decisions.
 
         Args:
             exchange: Turns, candidate facts, and candidate relationships.
-            at: ISO 8601 time recorded on every write the call makes.
-            run: Run to write in, defaulting to the bound one.
+            at: ISO 8601 time that the call records on each write.
+            run: Run to write in. The default is the bound run.
             metadata: Application metadata to keep with each memory.
 
         Returns:
-            The memory events and relationship changes the call produced.
+            The memory events and relationship changes of the call.
         """
 
         return self._call(
@@ -352,15 +356,15 @@ class Mem0Agent:
         )
 
     def transcribe(self, exchange: Exchange, *, at: str, run: str | None = None) -> dict[str, Any]:
-        """Store an exchange as it was said, with no extraction at all.
+        """Store an exchange in its original words, with no extraction.
 
         Args:
-            exchange: Turns to keep verbatim.
-            at: ISO 8601 time recorded on the writes.
-            run: Run to write in, defaulting to the bound one.
+            exchange: Turns to keep in their original words.
+            at: ISO 8601 time that the call records on the writes.
+            run: Run to write in. The default is the bound run.
 
         Returns:
-            One `ADD` per kept turn.
+            One `ADD` for each turn that the extractor reads.
         """
 
         return self._call(
@@ -374,16 +378,16 @@ class Mem0Agent:
         )
 
     def summarize(self, exchange: Exchange, summary: str, *, at: str, run: str | None = None) -> dict[str, Any]:
-        """Store one procedural summary of how a task was carried out.
+        """Store one procedural summary of the steps of a task.
 
         Args:
-            exchange: Turns the summary was written from.
-            summary: The summary a model would have produced.
-            at: ISO 8601 time recorded on the write.
-            run: Run to write in, defaulting to the bound one.
+            exchange: Turns that the summary comes from.
+            summary: The summary, as a model would write it.
+            at: ISO 8601 time that the call records on the write.
+            run: Run to write in. The default is the bound run.
 
         Returns:
-            The single `ADD` the write produced.
+            The single `ADD` of the write.
         """
 
         return self._call(
@@ -398,72 +402,73 @@ class Mem0Agent:
         )
 
     def revise(self, memory_id: str, text: str, *, at: str, actor: str | None = None) -> dict[str, Any]:
-        """Correct one memory directly, without asking the pipeline.
+        """Correct one memory directly, without the pipeline.
 
         Args:
             memory_id: Memory to rewrite.
-            text: Replacement text.
-            at: ISO 8601 time recorded on the write.
-            actor: Who asked for the correction.
+            text: New text.
+            at: ISO 8601 time that the call records on the write.
+            actor: Speaker that asked for the correction.
 
         Returns:
-            The change that was applied.
+            The applied change.
         """
 
         return self._call("update_memory", {"memory_id": memory_id, "text": text, "at": at, "actor": actor})
 
     def discard(self, memory_id: str, *, at: str, actor: str | None = None) -> dict[str, Any]:
-        """Delete one memory because the caller asked for it to go.
+        """Delete one memory because the caller asks for the delete.
 
         Args:
             memory_id: Memory to delete.
-            at: ISO 8601 time recorded on the history row.
-            actor: Who asked for the deletion.
+            at: ISO 8601 time that the call records on the history row.
+            actor: Speaker that asked for the delete.
 
         Returns:
-            The change that was applied, carrying the deleted memory.
+            The applied change, with the deleted memory.
         """
 
         return self._call("delete_memory", {"memory_id": memory_id, "at": at, "actor": actor})
 
     def forget(self, *, at: str, run: str | None = None) -> dict[str, Any]:
-        """Retire one scope and everything stored below it.
+        """Retire one scope and all memories below it.
 
         Args:
-            at: ISO 8601 time recorded on every history row.
-            run: Run to retire, or `None` to retire the whole bound scope.
+            at: ISO 8601 time that the call records on each history row.
+            run: Run to retire, or `None` to retire the full bound scope.
 
         Returns:
-            The memories that were removed.
+            The scope label, and one change for each removed memory.
         """
 
         return self._call("forget_scope", {"at": at, "run": run})
 
     def inspect(self, memory_id: str) -> dict[str, Any]:
-        """Read every recorded change to one memory.
+        """Read all recorded changes to one memory.
 
         Args:
             memory_id: Memory to read the history of.
 
         Returns:
-            The events, and whether the memory itself still exists.
+            The events, and a flag that tells if the memory still exists.
         """
 
         return self._call("memory_history", {"memory_id": memory_id})
 
     def answer(self, question: str, *, query: str, memory_id: str, limit: int = 3, threshold: float = 0.0) -> str:
-        """Answer from the memories, the relationships, and one memory's past.
+        """Answer from the memories, the relationships, the procedures, and the history of one memory.
 
         Args:
-            question: User-facing question included in the report.
-            query: Retrieval text for the search.
-            memory_id: Memory whose history is shown, to make the pipeline's
-                decisions visible in the answer.
-            limit: Maximum search hits to show.
-            threshold: Minimum score a hit must reach.
+            question: Question for the user, in the report.
+            query: Search text for the retrieval.
+            memory_id: Memory whose history the answer shows. The history makes
+                the decisions of the pipeline visible in the answer.
+            limit: Maximum number of search hits, and of procedural memories,
+                to show.
+            threshold: Minimum score of a hit.
 
         Returns:
-            Readable answer assembled from tool results.
+            Readable answer from the tool results.
         """
 
         found = self._call(
@@ -486,16 +491,16 @@ class Mem0Agent:
         return "\n".join(lines)
 
     def tool_usage(self) -> dict[str, int]:
-        """Return call counts per tool in first-call order.
+        """Return the number of calls for each tool, in the order of the first call.
 
         Returns:
-            Tool names mapped to how often the agent called them.
+            Map from tool names to the number of calls by the agent.
         """
 
         return dict(Counter(record.name for record in self.call_log))
 
     def _call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Call one tool and retain an isolated trace record."""
+        """Call one tool and keep a separate trace record."""
 
         result = self.tools.call(name, {key: value for key, value in arguments.items() if value is not None})
         self.call_log.append(ToolCallRecord(name=name, arguments=deepcopy(arguments), result=deepcopy(result)))
@@ -503,7 +508,7 @@ class Mem0Agent:
 
 
 def _definitions(session: Session, client: Mem0Memory) -> tuple[ToolDefinition, ...]:
-    """Describe the tool set, including the scope every call is made inside."""
+    """Describe the tool set, with the scope of all calls."""
 
     bound = "/".join(session.path[:2])
     floor = client.updater.threshold
@@ -576,7 +581,7 @@ def _definitions(session: Session, client: Mem0Memory) -> tuple[ToolDefinition, 
 
 
 def _memory_lines(results: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Render stored memories for the agent's answer, or say there were none."""
+    """Format the stored memories for the agent answer, or return a `- none` line if there are none."""
 
     if not results:
         return ["- none"]
@@ -584,7 +589,7 @@ def _memory_lines(results: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _relation_lines(relations: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Render relationships for the agent's answer, or say there were none."""
+    """Format the relationships for the agent answer, or return a `- none` line if there are none."""
 
     if not relations:
         return ["- none"]
@@ -592,7 +597,7 @@ def _relation_lines(relations: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _history_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Render one memory's recorded changes for the agent's answer."""
+    """Format the recorded changes of one memory for the agent answer, or return a `- none` line if there are none."""
 
     if not events:
         return ["- none"]
@@ -603,12 +608,12 @@ def _history_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _score(result: Mapping[str, Any]) -> str:
-    """Render a hit's score, when the result carries one."""
+    """Format the score of a hit, if the result has a score."""
 
     return "" if "score" not in result else f", score {result['score']}"
 
 
 def _version(events: Sequence[Mapping[str, Any]]) -> int:
-    """Return how many recorded changes a memory has."""
+    """Return the number of recorded changes of a memory."""
 
     return len(events)

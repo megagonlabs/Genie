@@ -22,7 +22,7 @@ from genie import InMemoryBackend, Memory
 
 
 def main() -> None:
-    """Run a minimal CRUD walkthrough."""
+    """Run a short CRUD walkthrough."""
 
     print("== CRUD and ownership ==")
     memory = Memory(backend=InMemoryBackend(), principal="agent:demo")
@@ -54,8 +54,8 @@ def main() -> None:
     assert replaced.version == note.version + 2
     assert [block.id for block in ancestors] == [note.id, project.id]
 
-    # Parent/child relationships imply ownership, so deleting the project
-    # recursively deletes its note and checklist.
+    # A parent owns its children. So when `Memory` deletes the project, it also
+    # deletes the note and the checklist recursively.
     memory.delete(project)
     assert memory.get(project.id) is None
     assert memory.get(note.id) is None

@@ -22,7 +22,7 @@ from genie import InMemoryBackend, Memory
 
 
 def main() -> None:
-    """Run a focused link and symbolic mount walkthrough."""
+    """Run a short walkthrough of links and symbolic mounts."""
 
     print("== Links and mounts ==")
     memory = Memory(backend=InMemoryBackend())

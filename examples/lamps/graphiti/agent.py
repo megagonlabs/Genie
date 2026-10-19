@@ -1,16 +1,17 @@
 """A tool interface and deterministic agent for the Graphiti lamp.
 
-Graphiti is a library an agent calls: it ingests episodes, resolves entities,
-invalidates contradicted facts, builds communities, and answers hybrid searches.
-This module exposes that surface as named tools with JSON-compatible arguments
-and results, so an application could hand the same definitions to a
-function-calling loop without changing the graph model underneath.
-
-The agent here decides which tools to call from explicit inputs rather than from
-a model, which keeps the example runnable with no API key. Entity and fact
-extraction is the one upstream step that genuinely needs a language model, so
-the agent receives already-extracted triplets, the same shape Graphiti's own
-`add_triplet` entry point accepts.
+- **Upstream:** Graphiti is a library that an agent calls. It ingests episodes,
+  resolves entities, invalidates contradicted facts, builds communities, and
+  answers hybrid searches.
+- **Tools:** this module gives the same operations as named tools with
+  JSON-compatible arguments and results. An application can give the same
+  definitions to a function-calling loop, and the graph model does not change.
+- **No model:** the agent selects the tools from explicit inputs, not from a
+  model. So the example runs without an API key.
+- **Extraction:** entity and fact extraction is the only upstream step that
+  really needs a language model. So the agent receives triplets that are
+  already extracted. This is the same shape that the Graphiti `add_triplet`
+  entry point accepts.
 """
 
 from __future__ import annotations
@@ -28,12 +29,12 @@ from examples.lamps.graphiti.temporal_graph import TemporalKnowledgeGraph
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """Description of a tool presented to an agent.
+    """Description of a tool that an agent receives.
 
     Attributes:
-        name: Stable tool name used for calls.
-        description: Plain-language guidance for the agent.
-        parameters: Mapping of argument names to short type descriptions.
+        name: Stable tool name for calls.
+        description: Guidance in plain language for the agent.
+        parameters: Dictionary from argument names to short type descriptions.
     """
 
     name: str
@@ -51,8 +52,8 @@ class TripletCandidate:
         relation: Relation name.
         object: Object entity name.
         object_type: Object entity type.
-        valid_from: ISO 8601 time the fact became true.
-        valid_to: Optional ISO 8601 time the fact stopped being true.
+        valid_from: ISO 8601 time when the fact became true.
+        valid_to: Optional ISO 8601 time when the fact was no longer true.
         fact: Optional readable sentence for the fact.
     """
 
@@ -68,11 +69,11 @@ class TripletCandidate:
 
 @dataclass(frozen=True, slots=True)
 class SummaryUpdate:
-    """A refreshed entity summary an episode justifies.
+    """A new entity summary that an episode justifies.
 
     Attributes:
         entity: Entity name.
-        entity_type: Entity type used to resolve the name.
+        entity_type: Entity type that the tools use to resolve the name.
         summary: New summary text.
     """
 
@@ -83,17 +84,17 @@ class SummaryUpdate:
 
 @dataclass(frozen=True, slots=True)
 class Observation:
-    """One source record plus what the agent extracted from it.
+    """One source record and the data extracted from it.
 
     Attributes:
         name: Short episode name.
         content: Raw episode body.
-        reference_time: ISO 8601 time the source event happened.
-        ingested_at: ISO 8601 time the graph processes the episode.
+        reference_time: ISO 8601 time when the source event happened.
+        ingested_at: ISO 8601 time when the graph processes the episode.
         source: Episode kind: `message`, `text`, `json`, or `fact_triple`.
         source_description: Free-text description of the origin.
         triplets: Facts extracted from the episode.
-        summaries: Entity summaries the episode justifies refreshing.
+        summaries: Entity summary updates that the episode justifies.
     """
 
     name: str
@@ -108,11 +109,11 @@ class Observation:
 
 @dataclass(frozen=True, slots=True)
 class ToolCallRecord:
-    """One tool call made by the example agent.
+    """One tool call that the example agent made.
 
     Attributes:
-        name: Invoked tool name.
-        arguments: JSON-compatible arguments passed to the tool.
+        name: Name of the called tool.
+        arguments: JSON-compatible arguments that the agent gave to the tool.
         result: JSON-compatible tool result.
     """
 
@@ -122,7 +123,7 @@ class ToolCallRecord:
 
 
 class TemporalGraphTools:
-    """Expose the temporal knowledge graph as agent-callable tools."""
+    """Give the temporal knowledge graph to an agent as tools to call."""
 
     def __init__(
         self,
@@ -131,14 +132,14 @@ class TemporalGraphTools:
         communities: CommunityBuilder | None = None,
         search: GraphitiSearch | None = None,
     ) -> None:
-        """Create tools backed by one bounded temporal knowledge graph.
+        """Create tools over one bounded temporal knowledge graph.
 
         Args:
             graph: Application model that owns episode, entity, and fact logic.
-            communities: Optional community builder. Created over `graph` when
-                omitted.
-            search: Optional search facade. Created over `graph` and the
-                community builder when omitted.
+            communities: Optional community builder. If you omit it, the tools
+                create one over `graph`.
+            search: Optional search facade. If you omit it, the tools create
+                one over `graph`.
         """
 
         self._graph = graph
@@ -241,7 +242,7 @@ class TemporalGraphTools:
         }
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Invoke a tool by name with JSON-compatible arguments.
+        """Call a tool by name with JSON-compatible arguments.
 
         Args:
             name: Tool name from `definitions`.
@@ -251,7 +252,7 @@ class TemporalGraphTools:
             JSON-compatible tool result.
 
         Raises:
-            TypeError: If arguments do not match the selected tool.
+            TypeError: If the arguments do not match the selected tool.
             ValueError: If the tool name is unknown.
         """
 
@@ -472,10 +473,13 @@ class TemporalGraphTools:
 class TemporalGraphAgent:
     """Small agent that learns and answers only through graph tools.
 
-    The decision policy is deterministic so the example runs without an API
-    key. `learn` selects the write tools each observation needs; `answer`
-    selects the read tools and composes their results into a report. The agent
-    never receives the underlying `Memory`, handle, or graph object.
+    - **Deterministic:** the decision policy is deterministic, so the example
+      runs without an API key.
+    - **`learn`:** selects the write tools that each observation needs.
+    - **`answer`:** selects the read tools and puts their results together into
+      a report.
+    - **Tools only:** the agent never receives the `Memory`, the handle, or the
+      graph object.
     """
 
     def __init__(self, *, name: str, tools: TemporalGraphTools) -> None:
@@ -483,7 +487,7 @@ class TemporalGraphAgent:
 
         Args:
             name: Human-readable agent name.
-            tools: Only interface the agent receives for graph access.
+            tools: The only interface that the agent receives to use the graph.
         """
 
         self.name = name
@@ -495,9 +499,9 @@ class TemporalGraphAgent:
         """Ingest observations, then rebuild the community subgraph.
 
         Args:
-            observations: Source records and what was extracted from them.
-            communities_as_of: Effective time whose valid facts define the
-                communities built after ingestion.
+            observations: Source records and the data extracted from them.
+            communities_as_of: Effective time. After ingestion, the facts that
+                are valid at this time define the communities.
         """
 
         for observation in observations:
@@ -548,19 +552,20 @@ class TemporalGraphAgent:
         history_relation: str,
         query: str,
     ) -> str:
-        """Answer a context question using only graph read tools.
+        """Answer a context question with graph read tools only.
 
         Args:
-            question: User-facing question included in the report.
-            subject: Entity the question is about.
+            question: Question text that the report includes.
+            subject: Entity that the question is about.
             as_of: Effective time for the current-facts snapshot.
-            known_at: Earlier ingestion time used to show what the graph had on
-                record before the latest episodes arrived.
-            history_relation: Relationship whose full history is reported.
-            query: Natural-language query passed to the search recipes.
+            known_at: Earlier ingestion time. The report uses it to show what
+                the graph had on record before the latest episodes arrived.
+            history_relation: Relationship with the full history that the
+                report shows.
+            query: Natural-language query for the search recipe.
 
         Returns:
-            Readable answer assembled from tool results.
+            Readable answer made from the tool results.
         """
 
         current = self._call("snapshot", {"as_of": as_of, "entity": subject})
@@ -592,7 +597,7 @@ class TemporalGraphAgent:
         return "\n".join(lines)
 
     def tool_usage(self) -> str:
-        """Return a compact summary of tools called so far.
+        """Return a short summary of the tools that the agent called until now.
 
         Returns:
             Comma-separated `name xcount` pairs in first-call order.
@@ -602,7 +607,7 @@ class TemporalGraphAgent:
         return ", ".join(f"{name} x{count}" for name, count in counts.items())
 
     def _call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Call one tool and retain an inspectable agent trace."""
+        """Call one tool and keep a record of the call in the agent trace."""
 
         result = self._toolbox.call(name, arguments)
         self.call_log.append(
@@ -629,7 +634,7 @@ def _fact_result(fact: TemporalFact) -> dict[str, Any]:
 
 
 def _history_line(fact: dict[str, Any]) -> str:
-    """Render one historical fact returned by `get_entity_history`."""
+    """Render one historical fact that `get_entity_history` returns."""
 
     valid_to = _date(fact["valid_to"]) if fact["valid_to"] else "open"
     expired_at = _date(fact["expired_at"]) if fact["expired_at"] else "open"
@@ -647,6 +652,6 @@ def _optional_timestamp(value: Any) -> str | None:
 
 
 def _date(value: str) -> str:
-    """Render a tool timestamp as a date for the compact demo report."""
+    """Render a tool timestamp as a date for the short demo report."""
 
     return parse_timestamp(value).date().isoformat()
