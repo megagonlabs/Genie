@@ -160,9 +160,11 @@ class MemoryHandle:
                 block or string id, metadata is not a strict JSON dictionary,
                 no codec can encode the value, or a `before_put` hook sets a
                 policy that is not a `MemoryPolicy`.
-            ValueError: If `type`, `id`, or the parent id is empty, or a
-                `before_put` hook changes a field other than the value,
-                metadata, content type, or policy.
+            ValueError: If `type`, `id`, or the parent id is empty, a JSON
+                value or the metadata nests lists and dictionaries more than
+                `MAX_NESTING_DEPTH` levels deep, or a `before_put` hook changes
+                a field other than the value, metadata, content type, or
+                policy.
         """
 
         parent_id = _block_id(parent) if parent is not None else self.root_id
@@ -234,9 +236,10 @@ class MemoryHandle:
                 block.
             TypeError: If `block_id` is not a block or string id, or no codec
                 can encode the value.
-            ValueError: If `block_id` is empty, or a `before_update` hook
-                changes a field other than the value, metadata, or content
-                type.
+            ValueError: If `block_id` is empty, a JSON value nests lists and
+                dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
+                `before_update` hook changes a field other than the value,
+                metadata, or content type.
         """
 
         actual_id = _block_id(block_id)
@@ -270,9 +273,10 @@ class MemoryHandle:
             TypeError: If `block_id` is not a block or string id, `value` is
                 provided and the existing decoded value is not a dictionary,
                 or metadata is not a strict JSON dictionary.
-            ValueError: If `block_id` is empty, or a `before_update` hook
-                changes a field other than the value, metadata, or content
-                type.
+            ValueError: If `block_id` is empty, a JSON value or the metadata
+                nests lists and dictionaries more than `MAX_NESTING_DEPTH`
+                levels deep, or a `before_update` hook changes a field other
+                than the value, metadata, or content type.
         """
 
         actual_id = _block_id(block_id)
@@ -397,8 +401,10 @@ class MemoryHandle:
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON
                 dictionary.
-            ValueError: If an endpoint id or `relation` is empty, or a
-                `before_add_link` hook changes link identity or topology.
+            ValueError: If an endpoint id or `relation` is empty, metadata
+                nests lists and dictionaries more than `MAX_NESTING_DEPTH`
+                levels deep, or a `before_add_link` hook changes link identity
+                or topology.
         """
 
         source_id = _block_id(source)
@@ -431,8 +437,9 @@ class MemoryHandle:
             MemoryNotFound: If the link or a required endpoint is missing.
             TypeError: If `link` is not a `MemoryLink`, or metadata is not a
                 strict JSON dictionary.
-            ValueError: If a `before_update_link` hook changes link identity or
-                topology.
+            ValueError: If metadata nests lists and dictionaries more than
+                `MAX_NESTING_DEPTH` levels deep, or a `before_update_link` hook
+                changes link identity or topology.
         """
 
         stored = self._memory._require_stored_link(link)
@@ -472,8 +479,9 @@ class MemoryHandle:
                 dictionary.
             UnsupportedOperation: If the backend lacks atomic DAG insertion.
             ValueError: If an endpoint id or `relation` is empty, `relation`
-                is the reserved mount relation, or a `before_add_link` hook
-                changes link identity or topology.
+                is the reserved mount relation, metadata nests lists and
+                dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         source_id = _block_id(source)
@@ -559,8 +567,9 @@ class MemoryHandle:
                 endpoint.
             TypeError: If `source` or `target` is not a block or string id, or
                 metadata is not a strict JSON dictionary.
-            ValueError: If an endpoint id is empty, or a `before_add_link`
-                hook changes link identity or topology.
+            ValueError: If an endpoint id is empty, metadata nests lists and
+                dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         self._require_mounts_allowed(HookOperation.ADD_MOUNT)

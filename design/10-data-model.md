@@ -107,7 +107,8 @@ What is stored, and what each part answers:
 - **`parent_id`** is the only ownership field. It is set at creation, and no
   public `Memory` call changes it.
 - **`metadata`** is always a strict JSON dict, whatever the value codec is.
-  It is used for filters and adapter indexing.
+  It nests at most `MAX_NESTING_DEPTH` (100) levels, and the dict itself is
+  the first level. It is used for filters and adapter indexing.
 - **`policy`** is set at creation and never changes. `None` is read as
   `MemoryPolicy.owner_private()`.
 - **`created_by`** is the principal that created the block. `AccessRule` uses

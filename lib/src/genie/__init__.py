@@ -42,6 +42,7 @@ from genie.backend import (
     TraversalIndex,
 )
 from genie.codecs import (
+    MAX_NESTING_DEPTH,
     BytesCodec,
     CodecRegistry,
     DataclassCodec,
@@ -139,6 +140,7 @@ from genie.structures import (
 )
 
 __all__ = [
+    "MAX_NESTING_DEPTH",
     "AccessChecker",
     "AccessDenied",
     "AccessRule",

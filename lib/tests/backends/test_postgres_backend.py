@@ -71,6 +71,7 @@ def test_postgres_backend_implements_every_backend_protocol() -> None:
         ({"conninfo": "postgresql:///app", "schema": ""}, ValueError, "schema must not be empty"),
         ({"conninfo": "postgresql:///app", "schema": "public schema"}, ValueError, "schema must contain only letters"),
         ({"conninfo": "postgresql:///app", "schema": "1genie"}, ValueError, "schema must contain only letters"),
+        ({"conninfo": "postgresql:///app", "schema": "genie\n"}, ValueError, "schema must contain only letters"),
         ({"conninfo": "postgresql:///app", "schema": 'a"; DROP TABLE blocks; --'}, ValueError, "schema must contain only letters"),
         ({"conninfo": "postgresql:///app", "schema": "g" * 64}, ValueError, "schema must be at most 63 bytes"),
         ({"conninfo": "postgresql:///app", "timeout": True}, TypeError, "timeout must be a number"),

@@ -41,7 +41,9 @@ class MemoryCodec(Protocol):
             value: User-level value passed to `Memory.put` or `Memory.set`.
 
         Returns:
-            `True` when `encode` can handle the value.
+            `True` when `encode` can handle the value. `encode` can still raise
+            `ValueError` for a bad value of a kind this codec handles, so the
+            caller gets that error and not "no codec registered".
         """
 
         ...
@@ -114,7 +116,9 @@ class CodecRegistry:
         Raises:
             TypeError: If no matching codec is registered or a codec returns
                 something other than `EncodedValue`.
-            ValueError: If a codec returns a different content type.
+            ValueError: If a codec returns a different content type, or the
+                chosen codec rejects a bad value, such as JSON nested more than
+                `MAX_NESTING_DEPTH` levels deep.
         """
 
         if content_type is not None:

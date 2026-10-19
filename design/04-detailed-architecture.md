@@ -146,6 +146,12 @@ with self._operation(HookOperation.X) as context:   # 1 open context
 - **`JsonCodec` is the default registration** and accepts `None`, `str`,
   `bool`, `int`, finite `float`, `list`, and `dict` with string keys. It
   rejects `Enum` values so `EnumCodec` can claim them.
+- **`JsonCodec` limits nesting to `MAX_NESTING_DEPTH` (100) levels.** Its check
+  uses its own stack, so a deep value is a `ValueError`, not a
+  `RecursionError`. The limit keeps the later recursive steps (deep copies and
+  the adapters' JSON checks) far below the Python recursion limit. `can_encode`
+  stays `True` for a value that is too deep, so registry dispatch reports the
+  `ValueError` and not "no codec".
 - **Codec results are validated.** A codec that returns something other than
   an `EncodedValue`, or an `EncodedValue` with a different content type, is a
   `TypeError` or `ValueError` rather than a silently mistyped block.

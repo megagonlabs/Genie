@@ -13,6 +13,7 @@ from typing import Any, cast
 import pytest
 
 from genie import CodecRegistry, EncodedValue, JsonCodec, Memory, MemoryCodec
+from genie.codecs import MAX_NESTING_DEPTH
 from genie.codecs.stdlib import (
     BytesCodec,
     DataclassCodec,
@@ -174,6 +175,96 @@ def test_json_codec_rejects_non_json_compatible_values() -> None:
         memory.put(type="bad", value=Priority.HIGH)
     with pytest.raises(TypeError, match="payload is not JSON-compatible"):
         JsonCodec().decode(EncodedValue(JsonCodec.content_type, {1, 2, 3}))
+
+
+def _nested_lists(depth: int) -> list[Any]:
+    """Return `depth` lists, each one inside the one before it."""
+
+    root: list[Any] = []
+    current = root
+    for _ in range(depth - 1):
+        child: list[Any] = []
+        current.append(child)
+        current = child
+    return root
+
+
+def _nested_dicts(depth: int) -> dict[str, Any]:
+    """Return `depth` dictionaries, each one inside the one before it."""
+
+    root: dict[str, Any] = {}
+    current = root
+    for _ in range(depth - 1):
+        child: dict[str, Any] = {}
+        current["child"] = child
+        current = child
+    return root
+
+
+def _self_containing_list() -> list[Any]:
+    """Return a list that contains itself."""
+
+    cycle: list[Any] = []
+    cycle.append(cycle)
+    return cycle
+
+
+@pytest.mark.parametrize(
+    "value",
+    [_nested_lists(MAX_NESTING_DEPTH), _nested_dicts(MAX_NESTING_DEPTH)],
+    ids=["lists", "dicts"],
+)
+def test_json_codec_accepts_values_at_the_nesting_limit(value: Any) -> None:
+    """A value nested exactly `MAX_NESTING_DEPTH` levels deep round-trips."""
+
+    memory = Memory()
+
+    block = memory.put(type="deep", value=value)
+    retrieved = memory.get(block.id)
+
+    assert block.value == value
+    assert retrieved is not None
+    assert retrieved.value == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        _nested_lists(MAX_NESTING_DEPTH + 1),
+        _nested_dicts(MAX_NESTING_DEPTH + 1),
+        _nested_lists(5000),
+        _nested_dicts(5000),
+        _self_containing_list(),
+    ],
+    ids=["lists past the limit", "dicts past the limit", "5000 lists", "5000 dicts", "cycle"],
+)
+def test_json_codec_rejects_values_nested_past_the_limit(value: Any) -> None:
+    """Too deep nesting is a `ValueError` on every encode path, not a `RecursionError`."""
+
+    codec = JsonCodec()
+    registry = CodecRegistry([JsonCodec()])
+    memory = Memory()
+    root = memory.put(type="root", value={})
+    handle = memory.get_handle(root=root)
+    encode_paths = (
+        codec.encode,
+        registry.encode,
+        lambda item: registry.encode(item, JsonCodec.content_type),
+        lambda item: memory.put(type="deep", value=item),
+        lambda item: memory.set(root, item),
+        lambda item: memory.update(root, value={"deep": item}),
+        lambda item: handle.put(type="deep", value=item),
+    )
+
+    # `can_encode` claims the value, so the registry reports the depth and not "no codec registered".
+    assert codec.can_encode(value) is True
+    for encode in encode_paths:
+        with pytest.raises(ValueError, match=f"nest more than {MAX_NESTING_DEPTH} levels deep"):
+            encode(value)
+    with pytest.raises(TypeError, match="payload is not JSON-compatible"):
+        codec.decode(EncodedValue(JsonCodec.content_type, value))
+    assert memory.get(root.id) == root
+    assert memory.children(root) == []
 
 
 def test_memory_defaults_to_json_codec_only() -> None:
@@ -430,6 +521,30 @@ def test_dataclass_codec_omits_derived_fields_and_rejects_nonportable_nesting() 
     for value in invalid_values:
         with pytest.raises(TypeError, match="not JSON-compatible"):
             codec.encode(value)
+
+
+def test_dataclass_codec_bounds_field_nesting_like_json_codec() -> None:
+    """Each field may nest up to `MAX_NESTING_DEPTH` levels, on both encode and decode."""
+
+    codec = DataclassCodec([DataclassPreference])
+    memory = Memory(codecs=CodecRegistry([codec, JsonCodec()]))
+    at_limit = DataclassPreference("style", [], _nested_dicts(MAX_NESTING_DEPTH))
+    stored_too_deep = {
+        "type": f"{DataclassPreference.__module__}:{DataclassPreference.__qualname__}",
+        "fields": {"topic": "style", "scores": [], "metadata": _nested_dicts(MAX_NESTING_DEPTH + 1)},
+    }
+
+    block = memory.put(type="preference", value=at_limit)
+    retrieved = memory.get(block.id)
+
+    assert retrieved is not None
+    assert retrieved.value == at_limit
+    with pytest.raises(ValueError, match="Dataclass field 'metadata' nests more than"):
+        codec.encode(DataclassPreference("style", [], _nested_dicts(MAX_NESTING_DEPTH + 1)))
+    with pytest.raises(ValueError, match="Dataclass field 'metadata' nests more than"):
+        codec.encode(DataclassPreference("style", [], {"cycle": _self_containing_list()}))
+    with pytest.raises(ValueError, match=f"nest more than {MAX_NESTING_DEPTH} levels deep"):
+        codec.decode(EncodedValue(DataclassCodec.content_type, stored_too_deep))
 
 
 def test_enum_codec_round_trips_registered_enum_members() -> None:

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from genie.backend.base import MemoryBackend
 from genie.backend.in_memory import InMemoryBackend
 from genie.backend.structure_capabilities import AcyclicLinkStore
-from genie.codecs import CodecRegistry, EncodedValue, JsonCodec
+from genie.codecs import MAX_NESTING_DEPTH, CodecRegistry, EncodedValue, JsonCodec
 from genie.hooks import (
     HookContext,
     HookOperation,
@@ -159,9 +159,11 @@ class Memory:
                 is not a strict JSON dictionary, no codec can encode the value,
                 or a `before_put` hook sets a policy that is not a
                 `MemoryPolicy`.
-            ValueError: If `type`, `id`, or the parent id is empty, or a
-                `before_put` hook changes a field other than the value,
-                metadata, content type, or policy.
+            ValueError: If `type`, `id`, or the parent id is empty, a JSON
+                value or the metadata nests lists and dictionaries more than
+                `MAX_NESTING_DEPTH` levels deep, or a `before_put` hook changes
+                a field other than the value, metadata, content type, or
+                policy.
         """
 
         with self._operation(HookOperation.PUT) as context:
@@ -248,9 +250,10 @@ class Memory:
             MemoryNotFound: If the block does not exist.
             TypeError: If `block_id` is not a block or string id, or no codec
                 can encode the value.
-            ValueError: If `block_id` is empty, or a `before_update` hook
-                changes a field other than the value, metadata, or content
-                type.
+            ValueError: If `block_id` is empty, a JSON value nests lists and
+                dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
+                `before_update` hook changes a field other than the value,
+                metadata, or content type.
         """
 
         with self._operation(HookOperation.SET) as context:
@@ -298,9 +301,10 @@ class Memory:
             TypeError: If `block_id` is not a block or string id, `value` is
                 provided and the existing decoded value is not a dictionary,
                 or metadata is not a strict JSON dictionary.
-            ValueError: If `block_id` is empty, or a `before_update` hook
-                changes a field other than the value, metadata, or content
-                type.
+            ValueError: If `block_id` is empty, a JSON value or the metadata
+                nests lists and dictionaries more than `MAX_NESTING_DEPTH`
+                levels deep, or a `before_update` hook changes a field other
+                than the value, metadata, or content type.
         """
 
         with self._operation(HookOperation.UPDATE) as context:
@@ -451,8 +455,10 @@ class Memory:
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON
                 dictionary.
-            ValueError: If an endpoint id or `relation` is empty, or a
-                `before_add_link` hook changes link identity or topology.
+            ValueError: If an endpoint id or `relation` is empty, metadata
+                nests lists and dictionaries more than `MAX_NESTING_DEPTH`
+                levels deep, or a `before_add_link` hook changes link identity
+                or topology.
         """
 
         return self._add_link(
@@ -490,8 +496,9 @@ class Memory:
             MemoryNotFound: If the link or a non-mount endpoint is missing.
             TypeError: If `link` is not a `MemoryLink`, or metadata is not a
                 strict JSON dictionary.
-            ValueError: If a `before_update_link` hook changes link identity or
-                topology.
+            ValueError: If metadata nests lists and dictionaries more than
+                `MAX_NESTING_DEPTH` levels deep, or a `before_update_link` hook
+                changes link identity or topology.
         """
 
         with self._operation(HookOperation.UPDATE_LINK) as context:
@@ -553,8 +560,9 @@ class Memory:
                 dictionary.
             UnsupportedOperation: If the backend lacks atomic DAG insertion.
             ValueError: If an endpoint id or `relation` is empty, `relation`
-                is the reserved mount relation, or a `before_add_link` hook
-                changes link identity or topology.
+                is the reserved mount relation, metadata nests lists and
+                dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         if relation == LinkRelations.MOUNT:
@@ -603,8 +611,10 @@ class Memory:
                 dictionary.
             UnsupportedOperation: If `acyclic` is true and the backend lacks
                 atomic DAG insertion.
-            ValueError: If an endpoint id or `relation` is empty, or a
-                `before_add_link` hook changes link identity or topology.
+            ValueError: If an endpoint id or `relation` is empty, metadata
+                nests lists and dictionaries more than `MAX_NESTING_DEPTH`
+                levels deep, or a `before_add_link` hook changes link identity
+                or topology.
         """
 
         with self._operation(hook_operation) as context:
@@ -718,8 +728,9 @@ class Memory:
             MemoryNotFound: If either endpoint is missing.
             TypeError: If `source` or `target` is not a block or string id, or
                 metadata is not a strict JSON dictionary.
-            ValueError: If an endpoint id is empty, or a `before_add_link`
-                hook changes link identity or topology.
+            ValueError: If an endpoint id is empty, metadata nests lists and
+                dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         return self._add_link(
@@ -1501,6 +1512,8 @@ def _copy_metadata(metadata: object | None) -> dict[str, Any]:
         encoded = JsonCodec().encode(metadata)
     except TypeError as error:
         raise TypeError("metadata must contain only strict JSON data.") from error
+    except ValueError as error:
+        raise ValueError(f"metadata must not nest lists and dictionaries more than {MAX_NESTING_DEPTH} levels deep.") from error
     return encoded.data
 
 

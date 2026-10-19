@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from typing import Any, cast
 
@@ -17,6 +18,7 @@ from genie import (
     MemoryNotFound,
     MemoryPolicy,
 )
+from genie.codecs import MAX_NESTING_DEPTH
 
 
 def test_public_link_api_uses_explicit_operation_names() -> None:
@@ -103,6 +105,26 @@ def test_link_metadata_requires_a_strict_json_dictionary() -> None:
     link = memory.add_link(source, target, "related")
     with pytest.raises(TypeError, match="strict JSON"):
         memory.update_link(link, metadata={"confidence": float("inf")})
+
+
+def test_link_metadata_nested_past_the_limit_is_a_value_error() -> None:
+    """Link metadata follows the same `MAX_NESTING_DEPTH` bound as block metadata."""
+
+    memory = Memory()
+    source = memory.put(type="note", value="source")
+    target = memory.put(type="note", value="target")
+    link = memory.add_link(source, target, "related")
+    too_deep = {"path": json.loads("[" * MAX_NESTING_DEPTH + "]" * MAX_NESTING_DEPTH)}
+
+    for write in (
+        lambda: memory.add_link(source, target, "related", metadata=too_deep),
+        lambda: memory.add_acyclic_link(source, target, "derived", metadata=too_deep),
+        lambda: memory.add_mount(source, target, metadata=too_deep),
+        lambda: memory.update_link(link, metadata=too_deep),
+    ):
+        with pytest.raises(ValueError, match=f"metadata must not nest lists and dictionaries more than {MAX_NESTING_DEPTH} levels deep"):
+            write()
+    assert memory.list_links(source) == [link]
 
 
 def test_update_link_merges_canonical_metadata_and_preserves_identity() -> None:

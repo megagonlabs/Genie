@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 _SCHEMA_VERSION = 1
 _APPLICATION_ID = "genie"
 _ADVISORY_LOCK_CLASS = 0x47454E49
-_SCHEMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SCHEMA_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _MAX_IDENTIFIER_BYTES = 63
 
 _BLOCK_COLUMNS = """
@@ -2536,7 +2536,7 @@ def _validate_schema_name(value: object) -> None:
         raise TypeError("schema must be a string.")
     if not value:
         raise ValueError("schema must not be empty.")
-    if _SCHEMA_NAME_PATTERN.match(value) is None:
+    if _SCHEMA_NAME_PATTERN.fullmatch(value) is None:
         raise ValueError("schema must contain only letters, digits, and underscores, and must not start with a digit.")
     if len(value.encode("utf-8")) > _MAX_IDENTIFIER_BYTES:
         raise ValueError(f"schema must be at most {_MAX_IDENTIFIER_BYTES} bytes long.")

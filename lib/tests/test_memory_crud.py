@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 import pytest
 
 from genie import AccessDenied, AccessRule, Memory, MemoryBlock, MemoryPolicy, Operation, PolicyEngine
+from genie.codecs import MAX_NESTING_DEPTH
 from genie.memory.errors import MemoryConflict, MemoryNotFound
 
 
@@ -242,6 +244,29 @@ def test_block_metadata_requires_a_strict_json_dictionary() -> None:
     block = memory.put(type="note", value={})
     with pytest.raises(TypeError, match="dictionary"):
         memory.update(block, metadata=cast(dict[str, Any], []))
+
+
+def test_block_metadata_nested_past_the_limit_is_a_value_error() -> None:
+    """Metadata may nest up to `MAX_NESTING_DEPTH` levels, counting the metadata dictionary."""
+
+    memory = Memory()
+    root = memory.put(type="root", value={})
+    handle = memory.get_handle(root=root)
+    at_limit = {"tags": json.loads("[" * (MAX_NESTING_DEPTH - 1) + "]" * (MAX_NESTING_DEPTH - 1))}
+    too_deep = {"tags": json.loads("[" * MAX_NESTING_DEPTH + "]" * MAX_NESTING_DEPTH)}
+
+    block = memory.put(type="note", value="kept", metadata=at_limit)
+
+    assert block.metadata == at_limit
+    for write in (
+        lambda: memory.put(type="note", value="invalid", metadata=too_deep),
+        lambda: handle.put(type="note", value="invalid", metadata=too_deep),
+        lambda: memory.update(block, metadata=too_deep),
+    ):
+        with pytest.raises(ValueError, match=f"metadata must not nest lists and dictionaries more than {MAX_NESTING_DEPTH} levels deep"):
+            write()
+    assert memory.get(block.id) == block
+    assert memory.children(root) == []
 
 
 def test_returned_blocks_do_not_mutate_stored_values_or_metadata() -> None:

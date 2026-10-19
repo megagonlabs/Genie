@@ -10,12 +10,14 @@ data that is stored in `MemoryBlock.value`.
 
 - **Accepts** `None`, strings, booleans, integers, finite floats, lists, and dictionaries whose keys are strings.
 - **Rejects** `NaN` and infinity.
+- **Limits nesting** to `MAX_NESTING_DEPTH` (100) levels of lists and dictionaries. Deeper values, and values that contain themselves, raise `ValueError`.
 - **Deep-copies** on both encode and decode.
 
 ## Selection
 
 - **With a `content_type`:** the registry uses exactly that codec.
 - **Without one:** it uses the first codec whose `can_encode` accepts the value.
+- **A bad value of a known kind still selects its codec.** `JsonCodec.can_encode` returns `True` for a value that is too deep, so `encode` raises `ValueError` and the registry does not report "no codec".
 - **On decode:** the stored content type picks the codec again.
 - **Rules:** a content type must be a non-empty string, and `encode` must return an `EncodedValue` that carries the codec's own content type.
 
@@ -45,6 +47,7 @@ class PreferenceCodec:
 
 - **Choose stable content types and portable encoded data.** A backend should not need to know anything about your application to read the stored data.
 - **`JsonCodec` re-checks stored payloads while decoding,** so bad backend data fails instead of reaching application code.
+- **Genie does not limit the depth of a custom codec's `EncodedValue.data`.** Adapter JSON checks recurse once per level, so very deep data from a custom codec can raise `RecursionError` in the backend.
 
 ## Opt-in standard-library codecs
 

@@ -52,7 +52,7 @@ keys.get(MemoryAddress(("tickets",), "T-4471")).value     # {"number": "T-4471",
 | **Policy** | `MemoryPolicy`, `AccessRule`, `Principal`, `PolicyEngine`, `Operation` | Applications that share blocks |
 | **Structures** | `OwnershipTree`, `PropertyGraph`, `LineageDAG`, `KeyedCollection`, `EventLog`, `TemporalCollection`, `VersionedRecords` | Applications that organize blocks |
 | **Hooks** | `MemoryHook`, `HookRegistry`, `HookContext`, and their enums | Audit, metrics, validation |
-| **Codecs** | `MemoryCodec`, `CodecRegistry`, `EncodedValue`, `JsonCodec`, stdlib codecs | Applications with non-JSON values |
+| **Codecs** | `MemoryCodec`, `CodecRegistry`, `EncodedValue`, `JsonCodec`, `MAX_NESTING_DEPTH`, stdlib codecs | Applications with non-JSON values |
 | **Backend contracts** | `MemoryBackend` and the capability protocols | Adapter authors |
 | **Adapters** | `InMemoryBackend`, `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, `RedisBackend`, `RoutedBackend` | Application setup code |
 | **Errors** | `GenieError` family, `AccessDenied` | Every caller |
@@ -89,6 +89,10 @@ keys.get(MemoryAddress(("tickets",), "T-4471")).value     # {"number": "T-4471",
   `put`, and a non-string `relation` raise `TypeError`. An empty or
   whitespace-only string raises `ValueError`. A bad value never reaches the
   backend. The tables below do not repeat these errors.
+- **JSON values and metadata nest at most `MAX_NESTING_DEPTH` (100) levels.**
+  Each list or dictionary is one level, and the metadata dictionary is the
+  first level. Deeper data, and a list or dictionary that contains itself,
+  raises `ValueError` before the backend runs.
 
 ## `Memory`
 
@@ -143,8 +147,9 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 - **`delete` removes the whole subtree** plus every link, key binding, log
   entry, and temporal entry that names a removed block.
 - **`metadata` is always a strict JSON `dict`**, whatever codec the value uses.
-- **`ValueError` from a write** means a `before_*` hook changed a field it may
-  not change (for example the parent in `before_put`).
+- **`ValueError` from a write** means a bad argument value (for example an
+  empty id, or a value nested too deeply), or a `before_*` hook changed a
+  field it may not change (for example the parent in `before_put`).
 
 ### Ownership
 
@@ -589,6 +594,10 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
   registered codec whose `can_encode` is `True`. **Decode picks** by the stored
   `content_type` only.
 - **An unregistered content type is a `TypeError`,** on both encode and decode.
+- **`JsonCodec` limits nesting to `MAX_NESTING_DEPTH`.** `can_encode` stays
+  `True` for a value that is too deep, so `encode` raises `ValueError` and the
+  registry does not report "no codec". `DataclassCodec` applies the same limit
+  to each field.
 - **A registry passed to `Memory` replaces the default.** Include `JsonCodec()`
   in it to keep JSON values working.
 

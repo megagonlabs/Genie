@@ -8,13 +8,13 @@ import dataclasses
 import datetime as _dt
 import decimal
 import enum
-import math
 import uuid
 from collections.abc import Iterable
 from copy import deepcopy
 from typing import Any
 
 from genie.codecs.base import EncodedValue
+from genie.codecs.json import MAX_NESTING_DEPTH, _json_error
 
 
 class BytesCodec:
@@ -323,6 +323,8 @@ class DataclassCodec:
         Raises:
             TypeError: If `value` is not registered or contains a non-JSON
                 field value.
+            ValueError: If a field value nests lists and dictionaries more
+                than `MAX_NESTING_DEPTH` levels deep.
         """
 
         if isinstance(value, type) or not dataclasses.is_dataclass(value):
@@ -340,6 +342,10 @@ class DataclassCodec:
                 raise TypeError(
                     f"Dataclass field {field.name!r} is not JSON-compatible."
                 ) from exc
+            except ValueError as exc:
+                raise ValueError(
+                    f"Dataclass field {field.name!r} nests more than {MAX_NESTING_DEPTH} levels deep."
+                ) from exc
         return EncodedValue(self.content_type, {"type": key, "fields": fields})
 
     def decode(self, value: EncodedValue) -> Any:
@@ -354,6 +360,8 @@ class DataclassCodec:
         Raises:
             TypeError: If the content type, payload shape, or registered type is
                 invalid.
+            ValueError: If a stored field value nests lists and dictionaries
+                more than `MAX_NESTING_DEPTH` levels deep.
         """
 
         _require_content_type("DataclassCodec", value, self.content_type)
@@ -365,7 +373,8 @@ class DataclassCodec:
         type_ = self._types.get(type_key)
         if type_ is None:
             raise TypeError(f"Dataclass type {type_key!r} is not registered.")
-        return type_(**_copy_json_value(fields))
+        # Check each field on its own, like `encode`, so the `fields` wrapper does not count as one more level.
+        return type_(**{name: _copy_json_value(item) for name, item in fields.items()})
 
 
 class EnumCodec:
@@ -488,29 +497,33 @@ def _type_key(type_: type[Any]) -> str:
 def _copy_json_value(value: Any) -> Any:
     """Return a defensive copy of strict JSON-compatible data.
 
-    This helper intentionally mirrors `JsonCodec` compatibility rules so
-    wrapper payloads can be stored by any backend that supports JSON-shaped
-    values.
+    This helper uses the same rules as `JsonCodec`, including
+    `MAX_NESTING_DEPTH`, so wrapper payloads can be stored by any backend that
+    supports JSON-shaped values.
+
+    Raises:
+        TypeError: If the value is not JSON-compatible.
+        ValueError: If lists and dictionaries nest more than
+            `MAX_NESTING_DEPTH` levels deep.
     """
 
-    if isinstance(value, enum.Enum):
-        raise TypeError("Enum values are not JSON-compatible.")
-    if value is None or isinstance(value, (str, bool, int)):
-        return deepcopy(value)
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise TypeError("Non-finite floats are not JSON-compatible.")
-        return value
+    error = _json_error(value)
+    if error is not None:
+        raise error
+    return _copy_plain_json(value)
+
+
+def _copy_plain_json(value: Any) -> Any:
+    """Copy checked JSON data into plain lists and dictionaries.
+
+    The recursion is safe because `_json_error` already bounded the depth.
+    """
+
     if isinstance(value, list):
-        return [_copy_json_value(item) for item in value]
+        return [_copy_plain_json(item) for item in value]
     if isinstance(value, dict):
-        copied: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("Dictionary keys must be strings.")
-            copied[key] = _copy_json_value(item)
-        return copied
-    raise TypeError(f"{type(value).__name__!r} is not JSON-compatible.")
+        return {key: _copy_plain_json(item) for key, item in value.items()}
+    return deepcopy(value)
 
 
 __all__ = [
