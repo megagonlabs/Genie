@@ -1,16 +1,16 @@
-"""Latency benchmarks for Genie's raw memory operations.
+"""Latency benchmarks for the raw memory operations of Genie.
 
-The package measures what one operation costs at two layers: a raw backend
-protocol call, and the matching public `Memory` call. The gap between them is
-what Genie's own policy check, hook dispatch, codec, and block copying cost.
-
-`--workers` adds a second question on top of that one: what changes when
-several callers share one `Memory` and one backend. It reports wall-clock
-throughput next to the per-caller rate, the speedup against a single caller,
-and the races a hot block loses.
-
-Nothing here asserts. `pytest` does not collect this directory, so a normal
-test run stays fast. `lib/tests/test_benchmarks.py` keeps the harness working.
+- **Two layers:** the package measures the cost of one operation at 2 layers.
+  The first layer is a raw backend protocol call. The second layer is the
+  equivalent public `Memory` call. The gap between them is the cost of the
+  policy check, the hook dispatch, the codec, and the block copy of Genie.
+- **Concurrency:** `--workers` adds a second question. What changes when more
+  than one caller shares one `Memory` and one backend? The report gives the
+  wall-clock throughput together with the rate of each caller, the speedup
+  against a single caller, and the races that a hot block loses.
+- **No assertions:** `pytest` does not collect this directory, so a normal
+  test run stays fast. `lib/tests/test_benchmarks.py` checks that the harness
+  works.
 
 Run it from the repository root:
 

@@ -1,18 +1,19 @@
-"""Seeded corpus every benchmark variant runs against.
+"""The seeded corpus that each benchmark variant uses.
 
-The corpus is described first as plain specs and only then written to a store.
-That is what lets the backend variant and the `Memory` variant of one case see
-identical data: both write the same specs, so the gap between their timings is
-the cost of the code above the store and nothing else.
+The module first describes the corpus as plain specs. Only then does it write
+them to a store. So the backend variant and the `Memory` variant of one case
+see identical data. Both variants write the same specs, so the gap between
+their durations is only the cost of the code above the store.
 
-Shape of the corpus:
+The structure of the corpus:
 
-- **One root** with the hub block and the section chain under it.
-- **A chain of sections,** each one a child of the section before it. The chain
-  sets tree depth, so `ancestors` and `contains` have real work to do.
-- **Leaves spread round-robin over the sections,** so every section has a
-  similar number of children and `children` has real work to do.
-- **A hub block** that carries the outgoing links the `list_links` case reads.
+- **One root,** with the hub block and the section chain under it.
+- **A chain of sections.** Each section is a child of the section before it.
+  The chain sets the tree depth, so `ancestors` and `contains` do real work.
+- **Leaves, spread round-robin over the sections.** So each section has a
+  similar number of children, and `children` does real work.
+- **A hub block.** The `list_links` case adds outgoing links to it, and then
+  reads them.
 """
 
 from __future__ import annotations
@@ -26,37 +27,40 @@ from benchmarks.settings import BenchmarkSettings
 from genie import CodecRegistry, Memory, MemoryBlock, MemoryPolicy
 
 ROOT_ID = "bench_root"
-"""Id of the corpus root. Stable, so a report can be read against the data."""
+"""The id of the corpus root. It does not change, so you can compare a report
+with the data."""
 
 HUB_ID = "bench_hub"
-"""Id of the block that carries the outgoing links `list_links` reads."""
+"""The id of the block with the outgoing links that `list_links` reads."""
 
 TOPICS = ("alpha", "beta", "gamma", "delta", "epsilon")
-"""Topic words mixed into leaf values and metadata."""
+"""The topic words in the leaf values and metadata."""
 
 TEXT_NEEDLE = "gamma"
-"""Topic the text search cases look for. Matches roughly one leaf in five."""
+"""The topic that the text search cases look for. It matches approximately 1
+leaf in 5."""
 
 FILTER_FIELD = "metadata.bucket"
-"""Field the metadata filter cases match on."""
+"""The field that the metadata filter cases match."""
 
 FILTER_VALUE = 3
-"""Bucket the metadata filter cases match. Roughly one leaf in ten."""
+"""The bucket that the metadata filter cases match. Approximately 1 leaf in
+10."""
 
 BUCKETS = 10
-"""Number of metadata buckets leaves are spread across."""
+"""The number of metadata buckets for the leaves."""
 
 
 @dataclass(frozen=True, slots=True)
 class BlockSpec:
-    """One block described before it reaches a store.
+    """The description of one block before it goes to a store.
 
     Attributes:
-        id: Caller-provided block id, stable across runs.
-        type: Application-defined block type.
-        value: Decoded user-level value.
-        parent_id: Parent block id, or `None` for the root.
-        metadata: Metadata used by the filter and search cases.
+        id: The caller-provided block id. It is the same in each run.
+        type: The application-defined block type.
+        value: The decoded user-level value.
+        parent_id: The parent block id, or `None` for the root.
+        metadata: The metadata for the filter and search cases.
     """
 
     id: str
@@ -68,13 +72,13 @@ class BlockSpec:
 
 @dataclass(frozen=True, slots=True)
 class Corpus:
-    """Every block a variant writes before measuring starts.
+    """All blocks that a variant writes before the measurement starts.
 
     Attributes:
-        root: Corpus root.
-        hub: Block that carries the outgoing links `list_links` reads.
-        sections: Section chain, where `sections[0]` sits under the root.
-        leaves: Leaf blocks spread round-robin over the sections.
+        root: The corpus root.
+        hub: The block with the outgoing links that `list_links` reads.
+        sections: The section chain. `sections[0]` is under the root.
+        leaves: The leaf blocks, spread round-robin over the sections.
     """
 
     root: BlockSpec
@@ -83,7 +87,7 @@ class Corpus:
     leaves: tuple[BlockSpec, ...]
 
     def specs(self) -> Iterator[BlockSpec]:
-        """Yield every spec parents first, so a store never sees an orphan."""
+        """Yield all specs, parents first, so a store never gets an orphan."""
 
         yield self.root
         yield self.hub
@@ -92,19 +96,19 @@ class Corpus:
 
     @property
     def block_count(self) -> int:
-        """Total blocks in the corpus."""
+        """The total number of blocks in the corpus."""
 
         return 2 + len(self.sections) + len(self.leaves)
 
     @property
     def depth(self) -> int:
-        """Ownership steps from the root down to the deepest leaf."""
+        """The ownership steps from the root to the deepest leaf."""
 
         return len(self.sections) + 1
 
     @property
     def deepest_leaf_id(self) -> str:
-        """Id of a leaf under the deepest section, for the longest walk up."""
+        """The id of a leaf under the deepest section, for the longest walk up."""
 
         deepest = self.sections[-1].id
         for leaf in reversed(self.leaves):
@@ -113,13 +117,13 @@ class Corpus:
         return self.leaves[-1].id
 
     def link_target_ids(self, count: int) -> tuple[str, ...]:
-        """Return leaf ids the hub links to.
+        """Return the leaf ids that the hub links to.
 
         Args:
-            count: Number of link targets to return.
+            count: The number of link targets to return.
 
         Returns:
-            Up to `count` leaf ids, in corpus order.
+            A maximum of `count` leaf ids, in corpus order.
         """
 
         return tuple(leaf.id for leaf in self.leaves[:count])
@@ -128,14 +132,14 @@ class Corpus:
 def build(settings: BenchmarkSettings) -> Corpus:
     """Build the corpus specs for one run.
 
-    The generator is seeded, so the same settings always describe the same
-    blocks and two reports stay comparable.
+    The generator has a seed. So the same settings always describe the same
+    blocks, and you can compare 2 reports.
 
     Args:
-        settings: Run settings holding the sizes and the seed.
+        settings: The run settings with the sizes and the seed.
 
     Returns:
-        The corpus specs. Nothing is written to a store here.
+        The corpus specs. This function writes nothing to a store.
     """
 
     generator = random.Random(settings.seed)
@@ -195,20 +199,19 @@ def make_block(
     policy: MemoryPolicy,
     codecs: CodecRegistry,
 ) -> MemoryBlock:
-    """Build the encoded block a backend call would store.
+    """Build the encoded block that a backend call stores.
 
-    The block carries the same policy, owner, and encoded value that
-    `Memory.put` would attach, so the backend variant and the `Memory` variant
-    store the same state.
+    The block has the same policy, owner, and encoded value that `Memory.put`
+    adds. So the backend variant and the `Memory` variant store the same state.
 
     Args:
-        spec: Block spec to encode.
-        principal_id: Owner recorded on the block.
-        policy: Policy attached to the block.
-        codecs: Registry used to encode the value.
+        spec: The block spec to encode.
+        principal_id: The owner to record on the block.
+        policy: The policy of the block.
+        codecs: The registry that encodes the value.
 
     Returns:
-        An encoded block ready for `put_block`.
+        An encoded block, ready for `put_block`.
     """
 
     encoded = codecs.encode(spec.value)
@@ -232,14 +235,14 @@ def populate_backend(
     policy: MemoryPolicy,
     codecs: CodecRegistry,
 ) -> None:
-    """Write the corpus straight through the backend protocol.
+    """Write the corpus directly through the backend protocol.
 
     Args:
-        backend: Backend to write into.
-        corpus: Corpus specs to write.
-        principal_id: Owner recorded on every block.
-        policy: Policy attached to every block.
-        codecs: Registry used to encode values.
+        backend: The backend to write into.
+        corpus: The corpus specs to write.
+        principal_id: The owner to record on each block.
+        policy: The policy of each block.
+        codecs: The registry that encodes the values.
     """
 
     for spec in corpus.specs():
@@ -250,8 +253,8 @@ def populate_memory(memory: Memory, corpus: Corpus) -> None:
     """Write the corpus through the public `Memory` API.
 
     Args:
-        memory: Memory to write into.
-        corpus: Corpus specs to write.
+        memory: The memory to write into.
+        corpus: The corpus specs to write.
     """
 
     for spec in corpus.specs():
@@ -265,14 +268,14 @@ def populate_memory(memory: Memory, corpus: Corpus) -> None:
 
 
 def payload(index: int, *, value_size: int) -> dict[str, Any]:
-    """Build the value a write case sends.
+    """Build the value that a write case sends.
 
-    Payloads are built before measuring starts, so a timed call covers the
-    Genie operation and not payload construction.
+    The cases build the payloads before the measurement starts. So a timed call
+    measures the Genie operation, not the construction of the payload.
 
     Args:
-        index: Call index the payload belongs to.
-        value_size: Padding characters to add.
+        index: The call index of the payload.
+        value_size: The number of padding characters to add.
 
     Returns:
         A JSON-compatible value.

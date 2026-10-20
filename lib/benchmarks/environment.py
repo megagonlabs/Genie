@@ -1,12 +1,13 @@
-"""Machine and source facts recorded with every report.
+"""Machine and source facts that each report records.
 
-Latency moves with the interpreter, the operating system, the machine, and the
-code under test. A report without these facts cannot be compared with another
-one, so they are collected once per run.
-
-The thread switch interval is recorded for the same reason. It decides how
-often the interpreter can interrupt a pure-Python call, so it moves the
-conflict counts of a concurrent run more than anything else in this file.
+- **Why:** latency changes with the interpreter, the operating system, the
+  machine, and the code under test. Without these facts, you cannot compare a
+  report with a different report. So the module collects them one time for
+  each run.
+- **Thread switch interval:** the module records it for the same reason. It
+  sets how frequently the interpreter can interrupt a pure-Python call. So it
+  has a larger effect on the conflict counts of a concurrent run than all other
+  facts in this file.
 """
 
 from __future__ import annotations
@@ -19,16 +20,17 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-"""Repository root, used to read the current commit without calling git."""
+"""The repository root. The module reads the current commit from it without a
+call to git."""
 
 
 def describe() -> dict[str, Any]:
-    """Collect the facts a reader needs to compare two reports.
+    """Collect the facts that a reader needs to compare 2 reports.
 
     Returns:
-        Plain data holding the Python build, the operating system, the
-        machine, the usable CPU count, the thread switch interval, the `genie`
-        version, and the source commit when one can be read.
+        Plain data with the Python build, the operating system, the machine,
+        the usable CPU count, the thread switch interval, the `genie` version,
+        and the source commit if the function can read it.
     """
 
     return {
@@ -44,7 +46,7 @@ def describe() -> dict[str, Any]:
 
 
 def _genie_version() -> str:
-    """Return the installed `genie` version, or `"unknown"` when unreadable."""
+    """Return the installed `genie` version, or `"unknown"` if it cannot be read."""
 
     try:
         return version("genie")
@@ -55,15 +57,16 @@ def _genie_version() -> str:
 def read_commit(root: Path) -> str | None:
     """Read the checked-out commit from the git directory.
 
-    The commit is read from files rather than by running git, so the harness
-    keeps its standard-library-only rule and starts no subprocess.
+    The function reads the commit from files and does not run git. So the
+    harness keeps its rule to use only the standard library, and it starts no
+    subprocess.
 
     Args:
-        root: Repository root holding the `.git` directory.
+        root: The repository root that contains the `.git` directory.
 
     Returns:
-        The short commit hash, or `None` when it cannot be read. A packed or
-        unusual git layout is a missing answer, not an error.
+        The short commit hash, or `None` if the function cannot read it. A
+        packed or unusual git layout gives no answer. It is not an error.
     """
 
     git_directory = root / ".git"
@@ -82,7 +85,7 @@ def read_commit(root: Path) -> str | None:
 
 
 def _usable_cpu_count() -> int | None:
-    """Return the CPU count this process may actually use."""
+    """Return the number of CPUs that this process can use."""
 
     if hasattr(os, "process_cpu_count"):
         return os.process_cpu_count()
@@ -90,13 +93,13 @@ def _usable_cpu_count() -> int | None:
 
 
 def format_lines(environment: dict[str, Any]) -> list[str]:
-    """Render the environment as short report header lines.
+    """Show the environment as short header lines for the report.
 
     Args:
-        environment: Data returned by `describe`.
+        environment: The data that `describe` returns.
 
     Returns:
-        One line naming the interpreter and machine, and one naming the
+        One line with the interpreter and the machine, and one line with the
         library under test.
     """
 

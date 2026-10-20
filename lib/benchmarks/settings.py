@@ -1,12 +1,12 @@
-"""Run settings shared by every benchmark case.
+"""Run settings that all benchmark cases share.
 
-The settings decide how long a run takes and what data it runs against. Two
-reports are comparable only when their settings match, so the values are
-recorded in every report.
-
-`workload` is the one switch that changes the shape of a run rather than its
-size. It swaps the single-operation cases for the mixed read/write scenario,
-which needs more than one worker and takes its length from `blocks`.
+- **Purpose:** the settings set the duration of a run and the data that it
+  uses. You can compare 2 reports only if their settings are the same. So each
+  report records the values.
+- **`workload`:** this is the only switch that changes the structure of a run
+  and not only its size. It replaces the single-operation cases with the mixed
+  read/write scenario. That scenario needs more than one worker, and its
+  duration comes from `blocks`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,8 @@ from dataclasses import asdict, dataclass
 from typing import Any, Final
 
 LAYERS: Final = ("backend", "memory", "core")
-"""Measurable layers, from the raw store call up to the core-only helpers."""
+"""The layers that the harness can measure, from the raw store call to the
+core-only helpers."""
 
 BACKEND: Final = "backend"
 """One call on a backend capability protocol. No policy, no hooks, no codec."""
@@ -25,42 +26,45 @@ MEMORY: Final = "memory"
 """One call on the public `Memory` or `MemoryHandle` API."""
 
 CORE: Final = "core"
-"""One core-library helper on its own, with no backend behind it."""
+"""One core-library helper alone, with no backend behind it."""
 
 SINGLE_CALLER: Final = 1
-"""Worker level every run measures. It is the denominator of `speedup`."""
+"""The worker level that each run measures. It is the denominator of
+`speedup`."""
 
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkSettings:
-    """Numbers that describe one benchmark run.
+    """The numbers that describe one benchmark run.
 
     Attributes:
-        iterations: Measured calls per variant.
-        warmup: Calls made and thrown away before measuring starts.
-        blocks: Leaf blocks in the corpus each variant runs against.
-        sections: Blocks in the chain between the corpus root and its leaves.
-            The chain sets tree depth, so `ancestors` and `contains` have real
-            work to do.
-        value_size: Padding characters added to each generated value.
-        links_per_block: Outgoing links attached to the corpus hub block.
-        search_limit: Candidate budget passed to search. Backends apply it
-            before policy and scope filtering, so a search can return fewer
-            blocks than this.
-        seed: Seed for the corpus generator. The same seed always writes the
-            same blocks.
-        workers: Caller counts to measure, smallest first. Every level runs the
-            same case with that many threads sharing one `Memory` and one
-            backend. `iterations` and `warmup` are counted per worker, so a
-            variant at four workers makes four times as many calls. Level 1 is
-            always measured, because `speedup` needs a single-caller
-            denominator.
-        workload: Whether to measure the mixed read/write scenario instead of
-            the single-operation cases. It needs more than one worker, because
-            one worker cannot read and write at the same time. It also reads
-            `blocks` as the size of one full write sweep, which is what sets
-            the length of its measured window, so `iterations` does not apply
-            to it.
+        iterations: The measured calls for each variant.
+        warmup: The calls that the runner makes and discards before the
+            measurement starts.
+        blocks: The leaf blocks in the corpus of each variant.
+        sections: The blocks in the chain between the corpus root and its
+            leaves. The chain sets the tree depth, so `ancestors` and
+            `contains` do real work.
+        value_size: The padding characters that the generator adds to each
+            value.
+        links_per_block: The outgoing links on the corpus hub block.
+        search_limit: The candidate budget for search. The backend applies it
+            before the policy and scope filters. So a search can return fewer
+            blocks than this number.
+        seed: The seed for the corpus generator. The same seed always writes
+            the same blocks.
+        workers: The caller counts to measure, smallest first. Each level runs
+            the same case with that number of threads. The threads share one
+            `Memory` and one backend. `iterations` and `warmup` count for each
+            worker, so a variant with 4 workers makes 4 times as many calls.
+            The run always measures level 1, because `speedup` needs a
+            single-caller denominator.
+        workload: If `True`, the run measures the mixed read/write scenario
+            instead of the single-operation cases. The scenario needs more than
+            one worker, because one worker cannot read and write at the same
+            time. It uses `blocks` as the size of one full write sweep. This
+            sweep sets the duration of its measured window, so `iterations`
+            does not apply to it.
     """
 
     iterations: int = 100
@@ -75,19 +79,18 @@ class BenchmarkSettings:
     workload: bool = False
 
     def __post_init__(self) -> None:
-        """Reject counts that cannot describe a run, and normalize the levels.
+        """Refuse counts that cannot describe a run, and normalize the levels.
 
-        Worker levels are sorted, de-duplicated, and always include level 1, so
-        two runs that asked for the same levels in a different order report the
-        same rows.
+        The method sorts the worker levels, removes duplicates, and always adds
+        level 1. So 2 runs that ask for the same levels in a different order
+        report the same rows.
 
         Raises:
-            TypeError: If any count field is not an integer, `workers` is not a
+            TypeError: If a count field is not an integer, `workers` is not a
                 sequence of integers, or `workload` is not a boolean.
             ValueError: If a count is out of range, a worker level is below 1,
-                the corpus cannot hold the requested sections or links, or a
-                mixed run was asked for that the other settings cannot
-                describe.
+                the corpus cannot hold the requested sections or links, or the
+                other settings cannot describe the requested mixed run.
         """
 
         for name in (
@@ -128,17 +131,17 @@ class BenchmarkSettings:
             self._check_workload()
 
     def _check_workload(self) -> None:
-        """Reject a mixed run the other settings cannot describe.
+        """Refuse a mixed run that the other settings cannot describe.
 
         Raises:
             ValueError: If no worker level is above one caller, or the corpus
-                holds fewer leaves than the largest writer count, which would
-                leave a writer with no range to sweep.
+                has fewer leaves than the largest writer count. In that case, a
+                writer has no range to sweep.
         """
 
-        # Imported inside the method on purpose. The workload module reaches the
-        # case helpers, and those read these settings, so importing it at module
-        # scope would close a cycle.
+        # The import is in the method on purpose. The workload module imports
+        # the case helpers, and those helpers read these settings. An import at
+        # module scope would make an import cycle.
         from benchmarks.workload import split_roles
 
         if not self.workload_levels:
@@ -149,26 +152,27 @@ class BenchmarkSettings:
 
     @property
     def total_calls(self) -> int:
-        """Calls one worker makes, warmup included.
+        """The calls that one worker makes, with the warmup calls.
 
-        This describes a single-operation case. A mixed run counts its calls
-        from the write sweep instead, so it does not use this.
+        This value is for a single-operation case. A mixed run counts its calls
+        from the write sweep, so it does not use this value.
         """
 
         return self.warmup + self.iterations
 
     @property
     def measures_concurrency(self) -> bool:
-        """Whether any level above one caller was asked for."""
+        """`True` if the settings ask for a level above one caller."""
 
         return max(self.workers) > SINGLE_CALLER
 
     @property
     def workload_levels(self) -> tuple[int, ...]:
-        """Worker levels a mixed run measures, smallest first.
+        """The worker levels that a mixed run measures, smallest first.
 
-        Level 1 is left out. One worker cannot read and write at the same time,
-        and a mixed variant is the only kind that has no single-caller form.
+        Level 1 is not in the result. One worker cannot read and write at the
+        same time. A mixed variant is the only type of variant that has no
+        single-caller form.
         """
 
         return tuple(level for level in self.workers if level > SINGLE_CALLER)
@@ -182,13 +186,13 @@ class BenchmarkSettings:
 
 
 def _normalize_workers(workers: Any) -> tuple[int, ...]:
-    """Sort worker levels, drop duplicates, and add the single-caller level.
+    """Sort the worker levels, remove duplicates, and add the single-caller level.
 
     Args:
-        workers: Levels asked for, in any order.
+        workers: The requested levels, in any order.
 
     Returns:
-        The levels to measure, smallest first, always starting at 1.
+        The levels to measure, smallest first. The first level is always 1.
 
     Raises:
         TypeError: If `workers` is not a sequence of integers.

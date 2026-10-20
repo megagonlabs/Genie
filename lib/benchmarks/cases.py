@@ -1,28 +1,29 @@
-"""The operations the benchmarks measure.
+"""The operations that the benchmarks measure.
 
-Each case is one logical operation. A case declares the layers it can be
-measured at:
+Each case is one logical operation. A case declares the layers at which the
+harness can measure it:
 
 - **`backend`** is one call on a backend capability protocol. No policy check,
-  no hook dispatch, no codec, no block copying.
-- **`memory`** is the matching call on the public `Memory` or `MemoryHandle`
-  API, which is what an application actually pays.
-- **`core`** is one core-library helper on its own, with no store behind it.
-  These cases explain where the gap between the other two layers went.
+  no hook dispatch, no codec, and no block copy.
+- **`memory`** is the equivalent call on the public `Memory` or `MemoryHandle`
+  API. This is the cost that an application pays.
+- **`core`** is one core-library helper alone, with no store behind it. These
+  cases explain the parts of the gap between the other 2 layers.
 
-A `prepare` function builds everything a case needs and returns the one call
-the runner times. Preparation runs outside the measured region, so a timed call
-covers the operation and nothing else.
+A `prepare` function builds all that a case needs, and returns the one call
+that the runner times. Preparation runs outside the measured region. So a
+timed call measures only the operation.
 
-Two rules keep a case honest when more than one worker runs it:
+2 rules keep the result of a case correct if more than one worker runs it:
 
-- **Every worker writes its own ids.** A throwaway block, link, or subtree an
-  ordinary case creates carries the worker index, so no two workers can write
-  the same id. `_spec` and `_worker_suffix` do this for every write case.
-- **Shared setup runs once.** Preparation that changes corpus state every
-  worker reads, such as the hub links `list_links` walks, runs for worker `0`
-  only. The `contention` cases build on this: their target is created once and
-  every worker then hits it.
+- **Each worker writes its own ids.** An ordinary case creates temporary
+  blocks, links, or subtrees. Their ids contain the worker index, so no 2
+  workers can write the same id. `_spec` and `_worker_suffix` do this for each
+  write case.
+- **Shared setup runs one time.** Some preparation changes corpus state that
+  all workers read, for example the hub links that `list_links` reads. This
+  preparation runs only for worker `0`. The `contention` cases use this rule:
+  worker `0` creates their target one time, and then all workers use it.
 """
 
 from __future__ import annotations
@@ -38,45 +39,47 @@ from benchmarks.settings import BACKEND, CORE, MEMORY, BenchmarkSettings
 from genie import HookOperation, Memory, MemoryConflict, MemoryLink, MemoryQuery, Operation, Scope
 
 GROUPS = ("write", "read", "link", "search", "contention", "overhead")
-"""Case groups, following the memory lifecycle, then contention, then the core
-helpers."""
+"""The case groups. First the groups of the memory lifecycle, then contention,
+then the core helpers."""
 
 SUBTREE_CHILDREN = 8
-"""Children given to each throwaway subtree the `delete_subtree` case removes."""
+"""The children of each temporary subtree that the `delete_subtree` case
+removes."""
 
 RELATION = "bench.related"
-"""Relation used by every link case."""
+"""The relation of all link cases."""
 
 WRITTEN_TYPE = "bench.written"
-"""Block type the write cases create."""
+"""The block type that the write cases create."""
 
 HOT_BLOCK_ID = "bench_hot_block"
-"""Block every worker of a `contention` read or write case shares."""
+"""The block that all workers of a `contention` read or write case share."""
 
 HOT_PARENT_ID = "bench_hot_parent"
-"""Parent every worker of `hot_parent_put` creates its children under."""
+"""The parent under which all workers of `hot_parent_put` create their
+children."""
 
 FIRST_WORKER = 0
-"""Worker that performs setup shared by every worker of a variant."""
+"""The worker that does the setup that all workers of a variant share."""
 
 
 @dataclass(frozen=True, slots=True)
 class CaseContext:
-    """Everything a case may build on.
+    """All that a case can use.
 
-    The corpus is already written to the store when a case is prepared.
+    When the runner prepares a case, the corpus is already in the store.
 
     Attributes:
-        settings: Run settings.
-        corpus: Corpus specs the store was filled from.
-        backend: Backend under measurement.
-        memory: Memory wrapping that backend.
-        principal_id: Owner of every block in the corpus.
-        worker_index: Zero-based position of the worker this case is being
-            prepared for. Setup that every worker shares runs for
-            `FIRST_WORKER` only.
-        worker_count: Workers that will run this variant at the same time. One
-            means a single caller, which is what a default run measures.
+        settings: The run settings.
+        corpus: The corpus specs that the store got.
+        backend: The backend under measurement.
+        memory: The memory that wraps that backend.
+        principal_id: The owner of each block in the corpus.
+        worker_index: The zero-based position of the worker for this
+            preparation. Setup that all workers share runs only for
+            `FIRST_WORKER`.
+        worker_count: The workers that run this variant at the same time. One
+            means a single caller. A default run measures a single caller.
     """
 
     settings: BenchmarkSettings
@@ -89,23 +92,24 @@ class CaseContext:
 
     @property
     def is_first_worker(self) -> bool:
-        """Whether this worker performs the setup every worker shares."""
+        """`True` if this worker does the setup that all workers share."""
 
         return self.worker_index == FIRST_WORKER
 
 
 @dataclass(frozen=True, slots=True)
 class PreparedCase:
-    """One case ready to be timed.
+    """One case that the runner can time.
 
     Attributes:
-        call: Makes one call. Receives the zero-based call index, which lets a
-            case walk over its own targets instead of reusing one.
-        describe: Turns the last result into notes saying what the call did.
-        conflict_errors: Exception types this case expects to lose a race to,
-            such as `MemoryConflict` when another worker wrote the same block
-            first. They are counted as conflicts rather than errors, so they
-            never fail a run. Any other exception is still an error.
+        call: Makes one call. It gets the zero-based call index. So a case can
+            go through its own targets, and does not use one target again.
+        describe: Changes the last result into notes about what the call did.
+        conflict_errors: The exception types of the races that this case
+            expects to lose, for example `MemoryConflict` if another worker
+            wrote the same block first. The runner counts them as conflicts,
+            not as errors, so they never cause a failed run. All other
+            exceptions are errors.
     """
 
     call: Callable[[int], Any]
@@ -115,22 +119,22 @@ class PreparedCase:
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkCase:
-    """One logical operation, measurable at one or more layers.
+    """One logical operation that the harness can measure at one or more layers.
 
     Attributes:
-        name: Case name used in reports and on the command line.
-        group: Lifecycle group this case belongs to.
+        name: The case name in reports and on the command line.
+        group: The lifecycle group of this case.
         description: What the timed call does.
-        backend: Prepares the raw backend protocol call, when there is one.
-        memory: Prepares the public `Memory` call, when there is one.
-        core: Prepares the core-only helper call, when there is one.
-        needs_corpus: Whether the case needs the full corpus written first.
-            The `core` cases do not, so they skip that setup entirely.
-        concurrent_only: Whether the case is measured only in a run that asks
-            for more than one worker. The `contention` cases are, because a
-            shared target with one caller is not shared. When such a run does
-            happen they are measured at every level, level 1 included, so
-            `speedup` has a denominator.
+        backend: Prepares the raw backend protocol call, if the case has one.
+        memory: Prepares the public `Memory` call, if the case has one.
+        core: Prepares the core-only helper call, if the case has one.
+        needs_corpus: If `True`, the runner writes the full corpus first. The
+            `core` cases do not need it, so they skip all of that setup.
+        concurrent_only: If `True`, the harness measures the case only in a run
+            that asks for more than one worker. The `contention` cases have
+            this value, because a shared target with one caller is not shared.
+            In such a run, the harness measures them at each level, also at
+            level 1, so `speedup` has a denominator.
     """
 
     name: str
@@ -144,7 +148,7 @@ class BenchmarkCase:
 
     @property
     def layers(self) -> tuple[str, ...]:
-        """Layers this case can be measured at, in report order."""
+        """The layers at which the harness can measure this case, in report order."""
 
         return tuple(
             layer
@@ -156,44 +160,46 @@ class BenchmarkCase:
         """Return the prepare function for one layer.
 
         Args:
-            layer: Layer name.
+            layer: The layer name.
 
         Returns:
-            The prepare function, or `None` when this case has no such layer.
+            The prepare function, or `None` if this case does not have that
+            layer.
         """
 
         return {BACKEND: self.backend, MEMORY: self.memory, CORE: self.core}.get(layer)
 
 
 def _count(result: Any) -> Mapping[str, Any]:
-    """Note how many items a call returned."""
+    """Record the number of items that a call returned."""
 
     return {"returned": len(result)}
 
 
 def _found(result: Any) -> Mapping[str, Any]:
-    """Note whether a point read found anything."""
+    """Record if a point read found a block."""
 
     return {"found": result is not None}
 
 
 def _truth(result: Any) -> Mapping[str, Any]:
-    """Note the answer a boolean call gave."""
+    """Record the answer of a boolean call."""
 
     return {"result": bool(result)}
 
 
 def _worker_suffix(context: CaseContext) -> str:
-    """Return the id part that keeps one worker off another worker's blocks.
+    """Return the id part that keeps one worker away from the blocks of a different worker.
 
-    A single caller writes the ids it always wrote. More than one caller adds
-    the worker index, so two workers can never put the same id.
+    - **Single caller:** the ids do not change.
+    - **More than one caller:** the ids get the worker index. So 2 workers can
+      never put the same id.
 
     Args:
-        context: Case context naming the worker.
+        context: The case context that names the worker.
 
     Returns:
-        An empty string for a single caller, `"_w<index>"` otherwise.
+        An empty string for a single caller. If not, `"_w<index>"`.
     """
 
     if context.worker_count <= 1:
@@ -202,20 +208,21 @@ def _worker_suffix(context: CaseContext) -> str:
 
 
 def _read_cursor(context: CaseContext, size: int) -> int:
-    """Return the offset a worker starts its read rotation at.
+    """Return the offset where a worker starts its read rotation.
 
-    Every worker runs the same call indexes, so without an offset they would
-    read the same id at the same moment and a spread read would measure a hot
-    one instead. Spacing the workers evenly over the corpus keeps the spread
-    cases spread. The `contention` cases share a target on purpose and do not
-    use this.
+    - **Why:** all workers run the same call indexes. Without an offset, they
+      read the same id at the same time, and a spread read measures a hot read.
+    - **How:** the workers start at equal distances along the corpus. So the
+      spread cases stay spread.
+    - **Exception:** the `contention` cases share a target on purpose, and do
+      not use this offset.
 
     Args:
-        context: Case context naming the worker.
-        size: Number of ids the case rotates over.
+        context: The case context that names the worker.
+        size: The number of ids in the rotation of the case.
 
     Returns:
-        The starting offset, or `0` for a single caller.
+        The start offset, or `0` for a single caller.
     """
 
     if context.worker_count <= 1 or size <= 0:
@@ -224,7 +231,7 @@ def _read_cursor(context: CaseContext, size: int) -> int:
 
 
 def _spec(context: CaseContext, prefix: str, index: int, parent_id: str | None) -> BlockSpec:
-    """Build one throwaway block spec for a write case."""
+    """Build one temporary block spec for a write case."""
 
     return BlockSpec(
         id=f"{prefix}{_worker_suffix(context)}_{index:06d}",
@@ -236,7 +243,7 @@ def _spec(context: CaseContext, prefix: str, index: int, parent_id: str | None) 
 
 
 def _encoded(context: CaseContext, spec: BlockSpec) -> Any:
-    """Encode a spec the way `Memory` would before a backend write."""
+    """Encode a spec as `Memory` does before a backend write."""
 
     return dataset.make_block(
         spec,
@@ -247,10 +254,10 @@ def _encoded(context: CaseContext, spec: BlockSpec) -> Any:
 
 
 def _section_id(context: CaseContext, index: int) -> str:
-    """Return a section id, walking the chain so writes spread out.
+    """Return a section id. The function goes along the chain, so the writes spread.
 
-    Each worker starts at its own offset, so more than one caller spreads over
-    the chain instead of queueing on one section.
+    Each worker starts at its own offset. So more than one caller spreads over
+    the chain, and the callers do not wait in a queue on one section.
     """
 
     sections = context.corpus.sections
@@ -258,9 +265,10 @@ def _section_id(context: CaseContext, index: int) -> str:
 
 
 def _leaf_id(context: CaseContext, index: int) -> str:
-    """Return a leaf id, walking the corpus so reads spread out.
+    """Return a leaf id. The function goes through the corpus, so the reads spread.
 
-    Each worker starts at its own offset, for the same reason as `_section_id`.
+    Each worker starts at its own offset, for the same reason as in
+    `_section_id`.
     """
 
     leaves = context.corpus.leaves
@@ -320,9 +328,9 @@ def _memory_put_child(context: CaseContext) -> PreparedCase:
 
 
 def _backend_set_value(context: CaseContext) -> PreparedCase:
-    # The version chain is known in advance, because nothing else writes to this
-    # block. Building every replacement up front keeps the timed region to the
-    # single compare-and-swap call.
+    # The version chain is known before the calls, because nothing else writes
+    # to this block. The case builds all replacements first. So the timed
+    # region contains only the single compare-and-swap call.
     spec = _spec(context, "bench_set_target", 0, _section_id(context, 0))
     stored = context.backend.put_block(_encoded(context, spec))
     now = datetime.now(UTC)
@@ -539,8 +547,8 @@ def _memory_add_link(context: CaseContext) -> PreparedCase:
 
 
 def _backend_list_links(context: CaseContext) -> PreparedCase:
-    # The hub is corpus state every worker reads, so its links are written once
-    # and not once per worker.
+    # The hub is corpus state that all workers read. So the case writes its
+    # links one time, not one time for each worker.
     if context.is_first_worker:
         targets = context.corpus.link_target_ids(context.settings.links_per_block)
         for index, target_id in enumerate(targets):
@@ -559,7 +567,8 @@ def _backend_list_links(context: CaseContext) -> PreparedCase:
 
 
 def _memory_list_links(context: CaseContext) -> PreparedCase:
-    # Written once for the same reason as the backend variant above.
+    # The case writes the links one time, for the same reason as the backend
+    # variant above.
     if context.is_first_worker:
         for target_id in context.corpus.link_target_ids(context.settings.links_per_block):
             context.memory.add_link(HUB_ID, target_id, RELATION)
@@ -575,7 +584,7 @@ def _memory_list_links(context: CaseContext) -> PreparedCase:
 
 
 def _subtree_text_query(settings: BenchmarkSettings) -> MemoryQuery:
-    """Build the scoped text query both search layers run."""
+    """Build the scoped text query that both search layers run."""
 
     return MemoryQuery(
         text=dataset.TEXT_NEEDLE,
@@ -586,7 +595,7 @@ def _subtree_text_query(settings: BenchmarkSettings) -> MemoryQuery:
 
 
 def _global_filter_query(settings: BenchmarkSettings) -> MemoryQuery:
-    """Build the unscoped metadata filter query both search layers run."""
+    """Build the unscoped metadata filter query that both search layers run."""
 
     return MemoryQuery(
         filters={dataset.FILTER_FIELD: dataset.FILTER_VALUE},
@@ -596,7 +605,7 @@ def _global_filter_query(settings: BenchmarkSettings) -> MemoryQuery:
 
 
 def _search_notes(settings: BenchmarkSettings) -> Callable[[Any], Mapping[str, Any]]:
-    """Note what a search returned next to the budget it was given."""
+    """Record what a search returned, together with its budget."""
 
     def describe(result: Any) -> Mapping[str, Any]:
         return {"returned": len(result), "candidate_budget": settings.search_limit}
@@ -640,26 +649,28 @@ def _memory_search_global_filter(context: CaseContext) -> PreparedCase:
 # contention
 # --------------------------------------------------------------------------
 #
-# Every worker of these cases hits one target on purpose. They are measured
-# only in a run that asks for more than one worker, and then at every level, so
-# `speedup` has a single-caller denominator. Read each one against the spread
-# case it mirrors:
+# All workers of these cases use one target on purpose. The harness measures
+# them only in a run that asks for more than one worker. In that run, it
+# measures them at each level, so `speedup` has a single-caller denominator.
+# Compare each case with the spread case that it mirrors:
 #
-# - `hot_block_get` against `get`, which walks the corpus.
-# - `hot_parent_put` against `put_root`, which shares nothing.
-# - `hot_block_set` against `set_value`, which gives each worker its own block.
+# - `hot_block_get` with `get`, which goes through the corpus.
+# - `hot_parent_put` with `put_root`, which shares nothing.
+# - `hot_block_set` with `set_value`, which gives each worker its own block.
+# - `hot_block_merge` with `merge_value`, which gives each worker its own
+#   block.
 
 
 def _shared_spec(context: CaseContext, block_id: str, parent_id: str | None) -> BlockSpec:
-    """Build the spec of a block every worker of a case shares.
+    """Build the spec of a block that all workers of a case share.
 
-    The id is fixed rather than worker-derived, which is the whole point: every
-    worker ends up on the same block.
+    The id is fixed. It does not come from the worker index. This is the
+    purpose: all workers use the same block.
 
     Args:
-        context: Case context.
-        block_id: Id every worker will use.
-        parent_id: Parent to hang the block under.
+        context: The case context.
+        block_id: The id that all workers use.
+        parent_id: The parent of the block.
 
     Returns:
         The spec.
@@ -675,14 +686,14 @@ def _shared_spec(context: CaseContext, block_id: str, parent_id: str | None) -> 
 
 
 def _store_shared_block(context: CaseContext, block_id: str) -> None:
-    """Create the shared target once, straight through the backend."""
+    """Create the shared target one time, directly through the backend."""
 
     if context.is_first_worker:
         context.backend.put_block(_encoded(context, _shared_spec(context, block_id, ROOT_ID)))
 
 
 def _put_shared_block(context: CaseContext, block_id: str) -> None:
-    """Create the shared target once, through the public `Memory` API."""
+    """Create the shared target one time, through the public `Memory` API."""
 
     if not context.is_first_worker:
         return
@@ -950,11 +961,12 @@ CASES: tuple[BenchmarkCase, ...] = (
         needs_corpus=False,
     ),
 )
-"""Every case a default run measures, in report order."""
+"""All registered cases, in report order. A default run skips the
+`concurrent_only` cases."""
 
 
 def default_cases() -> tuple[BenchmarkCase, ...]:
-    """Return every case a default run measures."""
+    """Return all registered cases. A default run skips the `concurrent_only` cases."""
 
     return CASES
 
@@ -970,15 +982,15 @@ def select(
     """Filter cases by group, name text, layer, and worker count.
 
     Args:
-        cases: Cases to filter.
-        groups: Keep only these groups. Empty keeps every group.
-        names: Keep cases whose name contains any of these strings. Empty keeps
-            every name.
-        layers: Keep cases measurable at any of these layers. Empty keeps every
-            case.
-        concurrent: Whether the run measures more than one worker. False drops
-            the `concurrent_only` cases, because a shared target with one
-            caller is not shared.
+        cases: The cases to filter.
+        groups: Keep only these groups. If empty, keep all groups.
+        names: Keep the cases whose name contains one of these strings. If
+            empty, keep all names.
+        layers: Keep the cases that the harness can measure at one of these
+            layers. If empty, keep all cases.
+        concurrent: `True` if the run measures more than one worker. If
+            `False`, remove the `concurrent_only` cases, because a shared
+            target with one caller is not shared.
 
     Returns:
         The matching cases, in their original order.

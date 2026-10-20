@@ -1,19 +1,21 @@
-"""Turns a report into a table a person can read, or a JSON file.
+"""Changes a report into tables that a person can read, or into a JSON file.
 
-Up to three tables per section, not one wide one:
+Each section has a maximum of 3 tables, not one wide table:
 
-- **A latency table** with one row per measured variant.
-- **An overhead table** with one row per case that was measured at both
-  layers, saying what the public `Memory` call adds over the raw backend call.
-- **A concurrency table,** printed only when a run measured more than one
-  worker, with one row per worker level of each case and layer.
+- **A latency table,** with one row for each measured variant.
+- **An overhead table,** with one row for each case that has results at both
+  layers. It shows the cost that the public `Memory` call adds to the raw
+  backend call.
+- **A concurrency table,** with one row for each worker level of each case and
+  layer. The module prints it only if a run measured more than one worker.
 
-A mixed run replaces all three with **a workload table per worker level**: one
-row per stream, one total row, and two heading lines naming the split and the
-three measured windows.
+A mixed run replaces all 3 tables with **a workload table for each worker
+level**. This table has one row for each stream, one total row, and 2 heading
+lines. The heading lines give the split and the 3 measured windows.
 
-The target is a section heading rather than a repeated column, and numbers
-are right aligned so decimal points line up. Every column is always printed.
+- **Layout:** the target is a section heading, not a repeated column.
+- **Numbers:** they are right aligned, so the decimal points align.
+- **Columns:** the module always prints all columns.
 """
 
 from __future__ import annotations
@@ -26,10 +28,10 @@ from typing import Any
 from benchmarks.settings import MEMORY
 
 LATENCY_HEADERS = ("case", "layer", "p50 ms", "p95 ms", "p99 ms", "ops/s", "errors")
-"""Latency table columns, widest report first."""
+"""The latency table columns, in display order."""
 
 OVERHEAD_HEADERS = ("case", "backend p50", "memory p50", "+ms", "+%")
-"""Overhead table columns."""
+"""The overhead table columns."""
 
 CONCURRENCY_HEADERS = (
     "case",
@@ -42,8 +44,8 @@ CONCURRENCY_HEADERS = (
     "conflicts",
     "errors",
 )
-"""Concurrency table columns. `wall ops/s` is the rate every worker together
-achieved, which is not the per-caller `ops/s` of the latency table."""
+"""The concurrency table columns. `wall ops/s` is the rate of all workers
+together. It is not the `ops/s` of each caller in the latency table."""
 
 WORKLOAD_HEADERS = (
     "stream",
@@ -59,23 +61,26 @@ WORKLOAD_HEADERS = (
     "conflicts",
     "errors",
 )
-"""Workload table columns.
+"""The workload table columns.
 
-`workers` is the callers in that one stream, and the total row's `workers` is
-the variant's whole level. `alone p50` is the same stream measured with the
-other side switched off, and `+%` is what running together cost it. There is no
-absolute `+ms` column, because it is the difference of two columns already
-here.
+- **`workers`:** the callers in that one stream. In the total row, it is the
+  full level of the variant.
+- **`alone p50`:** the same stream, measured when the other stream does not
+  run.
+- **`+%`:** the increase for the stream when the 2 streams run together.
+- **No `+ms` column:** that absolute value is the difference of 2 columns
+  that the table already shows.
 """
 
 WORKLOAD_UNUSED_SETTINGS = ("iterations", "search_limit", "links_per_block")
-"""Settings a mixed run never reads.
+"""The settings that a mixed run never reads.
 
-A mixed worker stops on the write sweep or on a repeated call count, never on
-`iterations`. Neither of its streams searches or follows a link, so the search
-budget and the hub links have no effect either. They are left out of the header
-line so it cannot suggest a value that changed something, and the JSON still
-records every setting.
+- **Why:** a mixed worker stops at the end of the write sweep or at a repeated
+  call count, never at `iterations`. No stream searches or follows a link, so
+  the search budget and the hub links also have no effect.
+- **Effect:** the header line does not show these settings. So it cannot show
+  a value as if that value changed the result. The JSON file still records all
+  settings.
 """
 
 NUMERIC_HEADERS = frozenset(
@@ -98,25 +103,25 @@ NUMERIC_HEADERS = frozenset(
         "+%",
     }
 )
-"""Columns right aligned so their decimal points line up."""
+"""The columns with right alignment, so their decimal points align."""
 
 COLUMN_GAP = "  "
-"""Spacing between columns."""
+"""The space between columns."""
 
 MILLISECOND_FORMAT = ".4f"
-"""Latency precision. The core helpers are sub-microsecond, so three decimals
-of a millisecond would round them to zero."""
+"""The latency precision. The core helpers take less than one microsecond. With
+3 decimals of a millisecond, they would show as 0."""
 
 
 def write_json(report: Mapping[str, Any], path: str | Path) -> Path:
     """Write the full report as JSON.
 
     Args:
-        report: Report returned by the runner.
-        path: File to write. Parent directories are created.
+        report: The report that the runner returns.
+        path: The file to write. The function creates the parent directories.
 
     Returns:
-        The path that was written.
+        The path of the written file.
     """
 
     target = Path(path)
@@ -126,13 +131,13 @@ def write_json(report: Mapping[str, Any], path: str | Path) -> Path:
 
 
 def format_report(report: Mapping[str, Any]) -> str:
-    """Render the whole report as text.
+    """Show all of the report as text.
 
     Args:
-        report: Report returned by the runner.
+        report: The report that the runner returns.
 
     Returns:
-        The report as one string, without a trailing newline.
+        The report as one string, without a newline at the end.
     """
 
     lines = _header_lines(report)
@@ -146,7 +151,7 @@ def _header_lines(report: Mapping[str, Any]) -> list[str]:
     """Build the lines above the first section.
 
     Args:
-        report: Report returned by the runner.
+        report: The report that the runner returns.
 
     Returns:
         The header lines.
@@ -185,26 +190,31 @@ def _header_lines(report: Mapping[str, Any]) -> list[str]:
     )
     conflicts = report.get("conflicts", 0)
     if conflicts:
-        # A conflict is the answer a contention case asked for, so it is named
-        # next to the errors rather than folded into them.
+        # A conflict is the result that a contention case expects. So the line
+        # names conflicts next to the errors, and does not add them to the
+        # errors.
         run_line = f"{run_line}, {_plural(conflicts, 'conflict')}"
     lines.append(run_line)
     return lines
 
 
 def _settings_line(report: Mapping[str, Any]) -> str | None:
-    """Render the settings a reader needs to compare two reports.
+    """Show the settings that a reader needs to compare 2 reports.
 
-    A mixed run is adjusted twice, so the line describes what actually
-    happened: the settings it never reads are left out, and `workers` shows the
-    levels that were measured rather than the levels that were asked for, which
-    always include the single caller a mixed variant cannot use.
+    For a mixed run, the function makes 2 changes, so the line shows what
+    really occurred:
+
+    - **Unused settings:** the line does not show the settings that a mixed
+      run never reads.
+    - **`workers`:** the line shows the measured levels, not the requested
+      levels. The requested levels always include the single caller, and a
+      mixed variant cannot use it.
 
     Args:
-        report: Report returned by the runner.
+        report: The report that the runner returns.
 
     Returns:
-        The line, or `None` when the report carries no settings.
+        The line, or `None` if the report has no settings.
     """
 
     settings = dict(report.get("settings", {}))
@@ -218,7 +228,7 @@ def _settings_line(report: Mapping[str, Any]) -> str | None:
 
 
 def _plural(count: int, noun: str) -> str:
-    """Render a count with its noun, adding an `s` only when one is needed."""
+    """Show a count with its noun. Add an `s` only if the count is not 1."""
 
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
@@ -226,14 +236,14 @@ def _plural(count: int, noun: str) -> str:
 def _section_lines(section: Mapping[str, Any]) -> list[str]:
     """Build one section: a heading, then its tables.
 
-    A mixed section gets one workload table per worker level and none of the
-    case tables, because a mixed run measures no cases at all.
+    A mixed section gets one workload table for each worker level, and no case
+    tables, because a mixed run measures no cases.
 
     Args:
         section: One report section.
 
     Returns:
-        The section's lines.
+        The lines of the section.
     """
 
     name = section.get("name", "?")
@@ -263,7 +273,7 @@ def _section_lines(section: Mapping[str, Any]) -> list[str]:
 
 
 def _latency_rows(section: Mapping[str, Any]) -> list[dict[str, str]]:
-    """Build one row per measured variant."""
+    """Build one row for each measured variant."""
 
     rows: list[dict[str, str]] = []
     for case in section.get("cases", ()):
@@ -283,7 +293,7 @@ def _latency_rows(section: Mapping[str, Any]) -> list[dict[str, str]]:
 
 
 def _overhead_rows(section: Mapping[str, Any]) -> list[dict[str, str]]:
-    """Build one row per case measured at both layers."""
+    """Build one row for each case with results at both layers."""
 
     rows: list[dict[str, str]] = []
     for case in section.get("cases", ()):
@@ -306,16 +316,16 @@ def _overhead_rows(section: Mapping[str, Any]) -> list[dict[str, str]]:
 def _concurrency_rows(section: Mapping[str, Any]) -> list[dict[str, str]]:
     """Build the worker-level rows of one section.
 
-    Each layer opens with its single-caller row, taken from the case's
-    `variants`, so a reader can see what the extra workers changed without
-    looking at another table.
+    Each layer starts with its single-caller row, from the `variants` of the
+    case. So a reader can see the changes from the extra workers without a
+    second table.
 
     Args:
         section: One report section.
 
     Returns:
-        One row per worker level, or an empty list when the run measured a
-        single caller only.
+        One row for each worker level, or an empty list if the run measured
+        only a single caller.
     """
 
     rows: list[dict[str, str]] = []
@@ -340,17 +350,17 @@ def _concurrency_row(
     result: Mapping[str, Any],
     speedup: float | None,
 ) -> dict[str, str]:
-    """Render one worker level of one case and layer.
+    """Show one worker level of one case and layer.
 
     Args:
-        name: Case name.
-        layer: Layer the level was measured at.
-        result: Summary of that level.
-        speedup: Wall-clock throughput divided by the single caller's, or
-            `None` when there is nothing to divide by.
+        name: The case name.
+        layer: The layer of the measurement.
+        result: The summary of that level.
+        speedup: The wall-clock throughput divided by the throughput of the
+            single caller, or `None` if no divisor exists.
 
     Returns:
-        The row values keyed by column name.
+        The row values, with the column names as keys.
     """
 
     return {
@@ -367,17 +377,17 @@ def _concurrency_row(
 
 
 def _workload_heading(entry: Mapping[str, Any]) -> list[str]:
-    """Build the two lines above one mixed variant's table.
+    """Build the 2 lines above the table of one mixed variant.
 
-    The first names the split. The second names all three measured windows and
-    what the sweep cost, which is the headline a reader wants before any
-    percentile.
+    - **First line:** the split.
+    - **Second line:** all 3 measured windows and the cost of the sweep. This
+      is the main result, and a reader wants it before the percentiles.
 
     Args:
-        entry: One mixed variant from a section's `workloads`.
+        entry: One mixed variant from the `workloads` of a section.
 
     Returns:
-        The two heading lines.
+        The 2 heading lines.
     """
 
     readers = entry.get("readers", 0)
@@ -403,10 +413,10 @@ def _workload_heading(entry: Mapping[str, Any]) -> list[str]:
 
 
 def _workload_rows(entry: Mapping[str, Any]) -> list[dict[str, str]]:
-    """Build one row per stream of one mixed variant, then a total row.
+    """Build one row for each stream of one mixed variant, then a total row.
 
     Args:
-        entry: One mixed variant from a section's `workloads`.
+        entry: One mixed variant from the `workloads` of a section.
 
     Returns:
         The rows, in report order.
@@ -441,15 +451,15 @@ def _workload_rows(entry: Mapping[str, Any]) -> list[dict[str, str]]:
 def _workload_total_row(entry: Mapping[str, Any]) -> dict[str, str]:
     """Build the total row of one mixed variant.
 
-    Only the columns that add up are filled. A latency percentile of two
-    streams together would describe no real operation, so those cells stay
-    empty rather than carrying a number nobody should read.
+    The function fills only the columns that add up. A latency percentile of 2
+    streams together does not describe a real operation. So those cells show
+    `-`, and not a number without a meaning.
 
     Args:
-        entry: One mixed variant from a section's `workloads`.
+        entry: One mixed variant from the `workloads` of a section.
 
     Returns:
-        The row values keyed by column name.
+        The row values, with the column names as keys.
     """
 
     results = [stream["result"] for stream in entry.get("streams", ())]
@@ -468,20 +478,20 @@ def _workload_total_row(entry: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _window(seconds: float | None) -> str:
-    """Render one measured window in milliseconds."""
+    """Show one measured window in milliseconds."""
 
     return "-" if seconds is None else f"{seconds * 1000:.0f} ms"
 
 
 def _render_table(headers: Sequence[str], rows: Sequence[Mapping[str, str]]) -> list[str]:
-    """Render a table with every column.
+    """Show a table with all columns.
 
     Args:
-        headers: Column names in display order.
-        rows: Row values keyed by column name.
+        headers: The column names, in display order.
+        rows: The row values, with the column names as keys.
 
     Returns:
-        The rendered lines.
+        The table lines.
     """
 
     if not rows:
@@ -497,7 +507,7 @@ def _render_row(
     headers: Sequence[str],
     widths: Mapping[str, int],
 ) -> str:
-    """Render one row, names left aligned and numbers right aligned."""
+    """Show one row, with names left aligned and numbers right aligned."""
 
     cells = []
     for header in headers:
@@ -508,6 +518,6 @@ def _render_row(
 
 
 def _column_width(header: str, rows: Sequence[Mapping[str, str]]) -> int:
-    """Return the width one column needs for its header and every value."""
+    """Return the width that one column needs for its header and all of its values."""
 
     return max([len(header), *(len(row.get(header, "")) for row in rows)])

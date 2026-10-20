@@ -1,17 +1,19 @@
 """Latency statistics for one measured variant.
 
-Every number here comes from `time.perf_counter_ns` durations collected by the
-runner. Failed calls are counted but never timed, so one exception cannot be
-read as a fast call.
+- **Source:** each number comes from the `time.perf_counter_ns` durations that
+  the runner collects.
+- **Failed calls:** the runner counts them but never times them. So one
+  exception cannot look like a fast call.
 
-Two rates are reported, and they answer different questions:
+The module reports 2 rates. They answer different questions:
 
-- **`ops_per_second`** is what one caller saw, from the time its own calls
-  took. It ignores the gaps between calls and the other workers entirely.
-- **`throughput_per_second`** is what every worker together achieved, from the
-  wall time of the measured window. At one worker the two are close. At more
-  than one they separate, and that separation is the point of a concurrent
-  run.
+- **`ops_per_second`** is the rate that one caller saw, from the duration of
+  its own calls. It ignores the gaps between calls, and it ignores the other
+  workers.
+- **`throughput_per_second`** is the rate of all workers together, from the
+  wall time of the measured window. With one worker, the 2 rates are almost
+  the same. With more than one worker, they become different. This difference
+  is the purpose of a concurrent run.
 """
 
 from __future__ import annotations
@@ -22,24 +24,24 @@ from dataclasses import dataclass, field
 from typing import Any
 
 NANOSECONDS_PER_MILLISECOND = 1_000_000
-"""Divisor that turns a nanosecond duration into milliseconds."""
+"""The divisor that changes a nanosecond duration into milliseconds."""
 
 NANOSECONDS_PER_SECOND = 1_000_000_000
-"""Divisor that turns a nanosecond duration into seconds."""
+"""The divisor that changes a nanosecond duration into seconds."""
 
 
 def percentile(sorted_values: Sequence[float], fraction: float) -> float:
-    """Return a percentile using the nearest-rank method.
+    """Return a percentile with the nearest-rank method.
 
-    Nearest rank means every returned value is a real measurement and not a
-    point interpolated between two samples.
+    With the nearest-rank method, each returned value is a real measurement. It
+    is not a value interpolated between 2 samples.
 
     Args:
-        sorted_values: Values already sorted from smallest to largest.
-        fraction: Share between `0.0` and `1.0`, such as `0.95` for p95.
+        sorted_values: The values, already sorted from smallest to largest.
+        fraction: A share from `0.0` to `1.0`, for example `0.95` for p95.
 
     Returns:
-        The value at that rank, or `0.0` when there are no values.
+        The value at that rank, or `0.0` if there are no values.
 
     Raises:
         ValueError: If `fraction` is outside `0.0` to `1.0`.
@@ -56,35 +58,38 @@ def percentile(sorted_values: Sequence[float], fraction: float) -> float:
 
 @dataclass(frozen=True, slots=True)
 class Summary:
-    """What one measured variant reported.
+    """The results of one measured variant.
 
     Attributes:
-        samples: Measured calls that returned without raising.
-        errors: Measured calls that raised an unexpected exception.
-        conflicts: Measured calls that lost a documented race, such as a
-            `MemoryConflict` on a block another worker wrote first. A conflict
-            is the answer a contention case asked for, not a failure, so it is
-            counted apart from `errors` and never fails a run.
-        first_error: Type and message of the first failure, when there was one.
-        p50_ms: Median call latency in milliseconds.
-        p95_ms: 95th percentile call latency in milliseconds.
-        p99_ms: 99th percentile call latency in milliseconds.
-        min_ms: Fastest measured call in milliseconds.
-        max_ms: Slowest measured call in milliseconds.
-        mean_ms: Average measured call in milliseconds.
-        ops_per_second: Rate one caller saw, from the time its own calls took.
-            Setup and warmup are excluded.
-        throughput_per_second: Rate every worker together achieved, from the
-            wall time of the measured window. Only calls that returned are
-            counted, so a variant that conflicts often reports a lower rate
-            rather than a flattering one.
-        workers: Callers that ran this variant at the same time.
-        wall_seconds: Wall time of the measured window. Warmup and setup are
-            excluded.
-        setup_seconds: Wall time spent building the corpus and the variant's
-            own targets. Excluded from every latency number.
-        notes: What the calls actually did, such as how many children a
-            traversal returned or how many results a search returned.
+        samples: The measured calls that returned without an exception.
+        errors: The measured calls that raised an unexpected exception.
+        conflicts: The measured calls that lost a documented race, for example
+            a `MemoryConflict` on a block that another worker wrote first. A
+            conflict is the result that a contention case expects, not a
+            failure. So the summary counts it separately from `errors`, and it
+            never causes a failed run.
+        first_error: The type and message of the first failure, if a failure
+            occurred.
+        p50_ms: The median call latency in milliseconds.
+        p95_ms: The 95th percentile call latency in milliseconds.
+        p99_ms: The 99th percentile call latency in milliseconds.
+        min_ms: The fastest measured call in milliseconds.
+        max_ms: The slowest measured call in milliseconds.
+        mean_ms: The average measured call in milliseconds.
+        ops_per_second: The rate that one caller saw, from the duration of its
+            own calls. It does not include setup and warmup.
+        throughput_per_second: The rate of all workers together, from the wall
+            time of the measured window. It counts only the calls that
+            returned. So a variant with many conflicts reports a lower rate,
+            not a rate that looks better than the real rate.
+        workers: The callers that ran this variant at the same time.
+        wall_seconds: The wall time of the measured window. It does not include
+            warmup and setup.
+        setup_seconds: The wall time to build the corpus and the targets that
+            the variant prepares for itself. No latency number includes it.
+        notes: What the calls did, for example the number of children that a
+            traversal returned or the number of results that a search
+            returned.
     """
 
     samples: int = 0
@@ -138,28 +143,28 @@ def summarize(
     setup_seconds: float = 0.0,
     notes: Mapping[str, Any] | None = None,
 ) -> Summary:
-    """Turn measured durations into a summary.
+    """Change measured durations into a summary.
 
     Args:
-        durations_ns: Durations of the calls that returned, in nanoseconds.
-            At more than one worker this is every worker's durations merged
-            into one pool.
-        errors: Calls that raised an unexpected exception and were therefore
-            not timed.
-        conflicts: Calls that lost a documented race and were therefore not
-            timed. Counted apart from `errors`, because a contention case
-            expects them.
-        first_error: Type and message of the first failure.
-        workers: Callers that ran this variant at the same time.
-        wall_seconds: Wall time of the measured window, used for
-            `throughput_per_second`. Zero leaves that rate at `0.0`.
-        setup_seconds: Wall time spent preparing the variant.
-        notes: What the calls actually did.
+        durations_ns: The durations of the calls that returned, in
+            nanoseconds. With more than one worker, this is one pool of the
+            durations of all workers.
+        errors: The calls that raised an unexpected exception. The runner did
+            not time them.
+        conflicts: The calls that lost a documented race. The runner did not
+            time them. They are separate from `errors`, because a contention
+            case expects them.
+        first_error: The type and message of the first failure.
+        workers: The callers that ran this variant at the same time.
+        wall_seconds: The wall time of the measured window, for
+            `throughput_per_second`. If it is 0, that rate stays `0.0`.
+        setup_seconds: The wall time to prepare the variant.
+        notes: What the calls did.
 
     Returns:
-        A summary. Every latency field is `0.0` when no call was timed, so a
-        variant where everything failed or conflicted still reports rather than
-        crashing.
+        A summary. If the runner timed no call, each latency field is `0.0`.
+        So a variant in which all calls failed or had a conflict still gives a
+        report, and does not crash.
     """
 
     note_data = dict(notes or {})

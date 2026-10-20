@@ -1,4 +1,4 @@
-"""Command line entry point for the Genie benchmarks.
+"""The command line entry point for the Genie benchmarks.
 
 Run it from the repository root:
 
@@ -11,9 +11,12 @@ Run it from the repository root:
     python lib/benchmarks/run.py --workload --workers 4
     python lib/benchmarks/run.py --json reports/latest.json
 
-Exit status is `1` when any measured call raised, and `0` otherwise. Timing is
-never a pass or fail signal, because a shared machine is too noisy for that,
-and a conflict a `contention` case expected is not an error.
+- **Exit status `0`:** all measured calls returned.
+- **Exit status `1`:** a measured call raised an exception. The duration of a
+  call is never a pass or fail signal, because the noise on a shared machine is
+  too large. A conflict that a `contention` case expects is not an error.
+- **Exit status `2`:** a usage error, for example an unknown target or a
+  selection that matches no case.
 """
 
 from __future__ import annotations
@@ -24,12 +27,13 @@ import sys
 from pathlib import Path
 
 if __package__ in (None, ""):  # pragma: no cover - only when run as a plain script
-    # `python lib/benchmarks/run.py` puts this file's directory on the path, not
-    # its parent, so the `benchmarks` package would not be importable.
+    # `python lib/benchmarks/run.py` puts the directory of this file on the
+    # path, not its parent. Without this line, Python cannot import the
+    # `benchmarks` package.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# These imports must stay below the path line above, or running this file
-# directly cannot find the `benchmarks` package.
+# These imports stay below the path line above. If they move above it, a
+# direct run of this file cannot find the `benchmarks` package.
 from benchmarks import report, runner
 from benchmarks.cases import GROUPS, default_cases, select
 from benchmarks.progress import for_stream
@@ -38,51 +42,58 @@ from benchmarks.targets import BackendTarget, default_targets
 from benchmarks.workload import READ_PER_WRITE, split_roles
 
 EXIT_OK = 0
-"""Every measured call returned."""
+"""All measured calls returned."""
 
 EXIT_CALL_FAILED = 1
-"""At least one measured call raised."""
+"""A minimum of one measured call raised an exception."""
 
 EXIT_BAD_SELECTION = 2
-"""A target, group, or case name on the command line matched nothing."""
+"""The command line selected nothing that can run.
+
+Examples are a target, group, or case name that matches nothing, and a case
+selection that the run cannot do.
+"""
 
 NOISY_DRIVER_LOGGERS = ("neo4j.notifications",)
-"""Driver loggers that write one record per query.
+"""Driver loggers that write one record for each query.
 
-Neo4j reports a notification whenever a query names a label, property, or
-relationship type the database has not stored yet. Every query against a store
-a variant has just emptied does that, so the notification arrives on nearly
-every call. The driver logs it while it streams the result, which is inside the
-call this harness is timing, and Python's last-resort handler writes it to
-standard error, which is where the progress line lives. Left alone it both
-buries the progress line and inflates every `neo4j` number in the report.
+- **Cause:** Neo4j sends a notification each time a query names a label,
+  property, or relationship type that the database does not have yet. All
+  queries on a store that a variant just emptied do this. So almost all calls
+  get the notification.
+- **Effect on the measurement:** the driver logs the notification while it
+  streams the result. This occurs in the call that the harness times.
+- **Effect on output:** the last-resort handler of Python writes the
+  notification to standard error, which also has the progress line.
+- **Result:** without a change, the notifications hide the progress line and
+  make each `neo4j` number in the report larger.
 """
 
 CONCURRENT_ONLY_HINT = (
     "the contention cases share one target between workers, so they need more than one caller. "
     "add --workers 4, or drop --group contention"
 )
-"""Said when a contention case was asked for without a worker level above one."""
+"""The message if the run selects a contention case without a worker level above one."""
 
 WORKLOAD_SELECTION_HINT = (
     "--workload measures no cases, so --layer, --group, and --case do not apply to it. "
     "drop them, or drop --workload"
 )
-"""Said when a case selection was asked for alongside the mixed workload.
+"""The message if the run gets a case selection together with the mixed workload.
 
-Selecting cases in a run that has none cannot be honored either way, so it
-stops the run instead of being quietly dropped.
+A run with no cases cannot use a case selection. So the selection stops the
+run. The run does not ignore it without a message.
 """
 
 WORKLOAD_UNUSED_HINT = (
     "--workload takes its length from --blocks and reads neither links nor search, "
     "so --iterations, --search-limit, and --links-per-block have no effect on it"
 )
-"""Said once at the start of a mixed run.
+"""The message at the start of each mixed run.
 
-These flags stay accepted, because they carry defaults and a caller should not
-have to unset them, but a run that silently ignored a number the caller typed
-would be worse than one that says so.
+The run accepts these flags, because they have defaults, and a caller does not
+have to remove them. But a run that ignores a number from the caller without a
+message is worse than a run that tells the caller.
 """
 
 
@@ -90,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the command line parser.
 
     Returns:
-        The parser, with every flag documented in its help text.
+        The parser. Its help text documents each flag.
     """
 
     parser = argparse.ArgumentParser(
@@ -123,12 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def quiet_driver_logs() -> None:
-    """Keep per-query driver log records out of a measured run.
+    """Keep the driver log records for each query out of a measured run.
 
-    Only the loggers named in `NOISY_DRIVER_LOGGERS` are raised, and only to
-    `ERROR`, so a real driver failure still reaches the stream. Nothing else in
-    the process has its logging changed, because a benchmark run should not
-    decide how an application logs.
+    - **Scope:** the function sets only the loggers in `NOISY_DRIVER_LOGGERS`,
+      and only to `ERROR`. So a real driver failure still goes to the stream.
+    - **No other change:** the function does not change other loggers in the
+      process. A benchmark run does not decide how an application logs.
     """
 
     for name in NOISY_DRIVER_LOGGERS:
@@ -139,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run the benchmarks from command line arguments.
 
     Args:
-        argv: Arguments to parse. Defaults to `sys.argv[1:]`.
+        argv: The arguments to parse. The default is `sys.argv[1:]`.
 
     Returns:
         The process exit status.
@@ -191,8 +202,8 @@ def main(argv: list[str] | None = None) -> int:
             layers=layers,
             concurrent=True,
         )
-        # Naming the reason beats "matched nothing" when the selection was fine
-        # and only the worker level was missing.
+        # If the selection is correct and only the worker level is not there,
+        # the real reason is more useful than "matched nothing".
         message = CONCURRENT_ONLY_HINT if dropped else "no case matched the selection"
         print(message, file=sys.stderr)
         return EXIT_BAD_SELECTION
@@ -222,14 +233,16 @@ def _run_workload(
 ) -> int:
     """Measure the mixed read/write scenario and print its report.
 
-    The mixed scenario measures no cases, so a case selection cannot be
-    honored and stops the run. The size flags it never reads stay accepted,
-    but it says which ones they are rather than ignoring them quietly.
+    - **Case selection:** the mixed scenario measures no cases. So the function
+      cannot use a case selection, and the selection stops the run.
+    - **Unused size flags:** the function accepts the size flags that the
+      scenario does not read. It names these flags, and does not ignore them
+      without a message.
 
     Args:
-        arguments: Parsed command line arguments.
-        settings: Run settings, already validated with `workload` set.
-        targets: Targets to measure, after `--target` was applied.
+        arguments: The parsed command line arguments.
+        settings: The run settings, already validated, with `workload` set.
+        targets: The targets to measure, after `--target` applied.
 
     Returns:
         The process exit status.
@@ -260,11 +273,11 @@ def _workload_listing(
     targets: tuple[BackendTarget, ...],
     settings: BenchmarkSettings,
 ) -> str:
-    """Render what a mixed run would measure, without measuring it.
+    """Show what a mixed run measures, but do not measure it.
 
     Args:
-        targets: Targets the run would measure.
-        settings: Run settings with `workload` set.
+        targets: The targets that the run measures.
+        settings: The run settings, with `workload` set.
 
     Returns:
         The listing as one string.
@@ -282,8 +295,8 @@ def _workload_listing(
     lines.append("levels:")
     for level in settings.workload_levels:
         roles = split_roles(level)
-        # Named the way the report's stream column names them, so a level here
-        # and a row there read as the same thing.
+        # The names agree with the stream column of the report. So a level here
+        # and a row in the report have the same meaning.
         lines.append(f"  {level:3} workers   {roles.readers} read + {roles.writers} write")
     lines.append("")
     lines.append("passes, per level and target:")
@@ -298,7 +311,7 @@ def _listing(
     layers: tuple[str, ...],
     workers: tuple[int, ...],
 ) -> str:
-    """Render what a run would measure, without measuring it."""
+    """Show what a run measures, but do not measure it."""
 
     lines = ["targets:"]
     for target in targets:

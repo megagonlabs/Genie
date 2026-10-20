@@ -1,19 +1,22 @@
-"""Stores the benchmarks measure.
+"""The stores that the benchmarks measure.
 
-A target is one store plus the function that opens and disposes of it. Every
-measured variant gets a fresh instance, so nothing one variant writes can move
-the next variant's numbers.
+A target is one store, and the function that opens and disposes of it. Each
+measured variant gets a new instance. So the writes of one variant cannot
+change the numbers of the next variant.
 
-- **Two targets always run.** `in_memory` needs nothing and `sqlite` uses the
-  driver that ships with Python.
-- **Four server targets run when their server is reachable.** They read the
-  same `GENIE_*` variables the live adapter tests already use, so one
-  environment serves both. A target that cannot run reports a reason instead of
-  a number and is never folded into a pass.
-- **A server store is reset through the public backend protocol,** not through
-  adapter internals. Deleting every root block cascades to its subtree and to
-  the links, key bindings, sequence entries, and temporal entries the adapter
-  owns for those blocks, so one loop empties any adapter, current or new.
+- **2 targets always run.** `in_memory` needs nothing. `sqlite` uses the driver
+  that comes with Python.
+- **4 server targets run if their driver is installed and their variables are
+  set.** They read the same `GENIE_*` variables as the live adapter tests, so
+  one environment works for both. A target that cannot run reports a reason
+  and no number. The report never counts it as a pass. The module does not
+  check if the server is reachable. If the server is not reachable, the open
+  of the store fails during the run.
+- **A server store resets through the public backend protocol,** not through
+  adapter internals. A delete of each root block also deletes its subtree, and
+  the links, key bindings, sequence entries, and temporal entries that the
+  adapter owns for those blocks. So one loop empties each adapter, current or
+  new.
 """
 
 from __future__ import annotations
@@ -39,32 +42,36 @@ from genie import (
 )
 
 SQLITE_DURABILITY = "full"
-"""SQLite synchronous mode used here. The production-safe default."""
+"""The SQLite synchronous mode for this target. It is the safe default for
+production."""
 
 CLEAR_PAGE = 500
-"""Blocks looked at per pass when emptying a server store."""
+"""The blocks that one pass examines when it empties a server store."""
 
 CLEAR_PASS_LIMIT = 10_000
-"""Safety cap on reset passes, so a surprising store cannot hang a run."""
+"""The maximum number of reset passes, so an unexpected store cannot make a
+run hang."""
 
 BENCHMARK_NAMESPACE = "genie_benchmark"
-"""Default schema and database name, kept apart from the test namespace so a
-benchmark run cannot empty a store the live tests are using."""
+"""The default PostgreSQL schema and MongoDB database name. It is different
+from the test namespace, so a benchmark run cannot empty a store that the live
+tests use."""
 
 BENCHMARK_KEY_PREFIX = "genie-benchmark"
-"""Default Redis key prefix, kept apart from the test prefix for the same
-reason."""
+"""The default Redis key prefix. It is different from the test prefix for the
+same reason."""
 
 
 @dataclass(frozen=True, slots=True)
 class BackendTarget:
-    """One store the benchmarks can run against.
+    """One store that the benchmarks can use.
 
     Attributes:
-        name: Short name used in reports and on the command line.
-        storage: One-line description of what the target stores and where.
-        opener: Returns a fresh backend and the function that disposes of it.
-        skip_reason: Why the target cannot run, or `None` when it can.
+        name: The short name in reports and on the command line.
+        storage: A one-line description of what the target stores, and where.
+        opener: Returns a new backend and the function that disposes of it.
+        skip_reason: The reason that the target cannot run, or `None` if it
+            can run.
     """
 
     name: str
@@ -74,25 +81,25 @@ class BackendTarget:
 
     @property
     def available(self) -> bool:
-        """Whether the target can run in this environment."""
+        """`True` if the target can run in this environment."""
 
         return self.skip_reason is None
 
 
 def clear_store(backend: Any) -> None:
-    """Empty a store using only the public backend protocol.
+    """Empty a store with only the public backend protocol.
 
-    Deleting a root block removes the block, every descendant, and the
-    dependent state the adapter owns for them. Repeating that until a global
-    search finds nothing leaves the store empty.
+    A delete of a root block removes the block, each descendant, and the
+    dependent state that the adapter owns for them. The function repeats this
+    until a global search finds nothing. Then the store is empty.
 
     Args:
-        backend: Backend to empty.
+        backend: The backend to empty.
 
     Raises:
         RuntimeError: If the store still returns blocks after
-            `CLEAR_PASS_LIMIT` passes, which means deletion is not making
-            progress and a benchmark run would be measuring stale data.
+            `CLEAR_PASS_LIMIT` passes. This means that the deletes do not
+            progress, and a benchmark run would measure stale data.
     """
 
     for _ in range(CLEAR_PASS_LIMIT):
@@ -100,22 +107,23 @@ def clear_store(backend: Any) -> None:
         if not results:
             return
         roots = [result.block.id for result in results if result.block.parent_id is None]
-        # Every ownership chain ends at a root, so `roots` is normally not
-        # empty. Falling back to the first block keeps a partial page making
-        # progress instead of looping.
+        # Each ownership chain ends at a root, so `roots` is normally not empty.
+        # If it is empty, the loop deletes the first block. So a partial page
+        # still progresses, and the loop does not get the same page again and
+        # again.
         for block_id in roots or [results[0].block.id]:
             backend.delete_block(block_id)
     raise RuntimeError("Could not empty the benchmark store; deletion made no progress.")
 
 
 def _open_in_memory() -> tuple[Any, Callable[[], None]]:
-    """Open a fresh in-memory backend that needs no disposal."""
+    """Open a new in-memory backend. It needs no disposal."""
 
     return InMemoryBackend(), lambda: None
 
 
 def _open_sqlite() -> tuple[Any, Callable[[], None]]:
-    """Open a fresh SQLite database on a file in a throwaway directory."""
+    """Open a new SQLite database on a file in a temporary directory."""
 
     directory = tempfile.mkdtemp(prefix="genie-benchmark-")
     backend = SQLiteBackend(Path(directory) / "memory.db", durability=SQLITE_DURABILITY)
@@ -128,7 +136,7 @@ def _open_sqlite() -> tuple[Any, Callable[[], None]]:
 
 
 def _missing(*names: str) -> list[str]:
-    """Return the environment variables among `names` that are not set."""
+    """Return the environment variables in `names` that are not set."""
 
     return [name for name in names if not os.environ.get(name)]
 
@@ -140,16 +148,18 @@ def _skip_reason(
     required: Sequence[str],
     paired: Sequence[str] = (),
 ) -> str | None:
-    """Explain why a server target cannot run, or return `None` when it can.
+    """Give the reason that a server target cannot run, or `None` if it can run.
 
     Args:
-        driver: Import name of the driver package the adapter needs.
-        extra: Name of the optional dependency that installs that driver.
-        required: Environment variables that must all be set.
-        paired: Environment variables that must be set together or not at all.
+        driver: The import name of the driver package that the adapter needs.
+        extra: The name of the optional dependency that installs that driver.
+        required: The environment variables that the target needs. All of
+            them are necessary.
+        paired: The environment variables that go together. The target needs
+            all of them or none of them.
 
     Returns:
-        A reason naming exactly what is missing, or `None`.
+        A reason that names exactly what is not available, or `None`.
     """
 
     reasons = []
@@ -165,18 +175,20 @@ def _skip_reason(
 
 
 def _server_opener(build: Callable[[], Any]) -> Callable[[], tuple[Any, Callable[[], None]]]:
-    """Wrap an adapter constructor so each variant starts from an empty store.
+    """Wrap an adapter constructor, so each variant starts with an empty store.
 
-    A server cannot be thrown away between variants the way a temporary file
-    can, so the store is emptied when it is opened rather than when it is
-    closed. Doing it on open also means an interrupted run cannot leave stale
-    blocks behind for the next one.
+    - **Why:** the harness cannot discard a server between variants as it
+      discards a temporary file.
+    - **On open:** the opener empties the store. So an interrupted run cannot
+      leave stale blocks for the next run.
+    - **On close:** the disposal function empties the store again, and then
+      closes the backend.
 
     Args:
         build: Builds the adapter.
 
     Returns:
-        An opener returning the backend and its disposal function.
+        An opener that returns the backend and its disposal function.
     """
 
     def opener() -> tuple[Any, Callable[[], None]]:
@@ -199,7 +211,7 @@ def _server_opener(build: Callable[[], Any]) -> Callable[[], tuple[Any, Callable
 
 
 def _close(backend: Any) -> None:
-    """Close a backend that has a `close` method, and ignore one that does not."""
+    """Close a backend that has a `close` method. Ignore a backend that does not have one."""
 
     close = getattr(backend, "close", None)
     if callable(close):
@@ -207,7 +219,7 @@ def _close(backend: Any) -> None:
 
 
 def _neo4j_auth() -> tuple[str, str] | None:
-    """Return the Neo4j credentials when both are set."""
+    """Return the Neo4j credentials if both variables are set."""
 
     user = os.environ.get("GENIE_NEO4J_USER")
     password = os.environ.get("GENIE_NEO4J_PASSWORD")
@@ -217,7 +229,7 @@ def _neo4j_auth() -> tuple[str, str] | None:
 
 
 def _redis_auth() -> tuple[str, str] | None:
-    """Return the Redis credentials when both are set."""
+    """Return the Redis credentials if both variables are set."""
 
     user = os.environ.get("GENIE_REDIS_USER")
     password = os.environ.get("GENIE_REDIS_PASSWORD")
@@ -227,14 +239,18 @@ def _redis_auth() -> tuple[str, str] | None:
 
 
 def server_targets() -> tuple[BackendTarget, ...]:
-    """Build the four server-backed targets, available or not.
+    """Build the 4 server-backed targets, available or not available.
 
-    Each one reads the same `GENIE_*` variables the live adapter tests use. The
-    schema, database, and key prefix default to a benchmark-only namespace, so
-    running the benchmarks never empties a store the tests are using.
+    - **Variables:** each target reads the same `GENIE_*` variables as the live
+      adapter tests.
+    - **Separate namespace:** the PostgreSQL schema, the MongoDB database, and
+      the Redis key prefix have a default namespace for benchmarks only. So a
+      benchmark run does not empty those stores of the tests.
+    - **Neo4j exception:** the default Neo4j database is `neo4j`, which is
+      also the default of the live tests.
 
     Returns:
-        The four targets, each carrying a `skip_reason` when it cannot run.
+        The 4 targets. A target that cannot run has a `skip_reason`.
     """
 
     postgres_dsn = os.environ.get("GENIE_POSTGRES_DSN", "")
@@ -301,13 +317,13 @@ def server_targets() -> tuple[BackendTarget, ...]:
 
 
 def default_targets() -> tuple[BackendTarget, ...]:
-    """Return every target a run knows about, skipped ones included.
+    """Return all targets that a run knows, also the skipped targets.
 
     Returns:
-        The two local targets first, then the four server targets. A server
-        target with no reachable server carries a `skip_reason` and is reported
-        as skipped rather than left out, so a report always says what it did
-        not measure.
+        The 2 local targets first, then the 4 server targets. A server target
+        without its driver or its variables has a `skip_reason`. The report
+        shows it as skipped and does not remove it. So a report always tells
+        what it did not measure.
     """
 
     return (

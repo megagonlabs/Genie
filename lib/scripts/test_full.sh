@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 
-# Run Genie's complete test suite against disposable local PostgreSQL, Neo4j,
-# MongoDB, and Redis servers. The Redis side starts a primary and one replica that
-# follows it, so the live tests can cover the adapter's replica role check as well.
-# MongoDB starts as a single-member replica set, because every Genie write is one
-# multi-document transaction and a standalone server cannot run those.
+# Run the complete Genie test suite against disposable local PostgreSQL, Neo4j,
+# MongoDB, and Redis servers.
 #
-# `GENIE_TEST_COMMAND` chooses what runs once the servers are ready, so the same
-# container setup can serve something other than pytest. `benchmark_full.sh` uses
-# it to run the benchmarks. Extra arguments are passed on to that command.
-#
-# The command runs on the Python interpreter already on `PATH`, so activate your
-# environment first. `GENIE_TEST_PYTHON` overrides that interpreter when you would
-# rather not activate one. Output streams live, so a long run keeps reporting.
+# - Redis: the script starts a primary and one replica that follows it. So the
+#   live tests can also cover the replica role check of the adapter.
+# - MongoDB: it starts as a single-member replica set. Each Genie write is one
+#   multi-document transaction, and a standalone server cannot run those.
+# - `GENIE_TEST_COMMAND` selects the command that runs when the servers are
+#   ready. So the same container setup can run a command other than pytest.
+#   `benchmark_full.sh` uses it to run the benchmarks. The script gives extra
+#   arguments to that command.
+# - The command runs on the Python interpreter that is on `PATH`, so activate
+#   your environment first. If you do not want to activate an environment, set
+#   `GENIE_TEST_PYTHON` to a different interpreter.
+# - The output streams live, so a long run continues to report.
 
 set -euo pipefail
 
@@ -194,9 +196,9 @@ docker run --rm -d \
 GENIE_TEST_NEO4J_STARTED=true
 
 echo "Starting disposable MongoDB container..."
-# The replica set member is configured with its in-container address, so the
-# driver must not follow that topology from the host. Connecting with
-# `directConnection=true` talks straight to the published port instead.
+# The replica set member has its in-container address. If the driver on the
+# host follows that topology, it connects to the wrong address. With
+# `directConnection=true`, the driver connects directly to the published port.
 docker run --rm -d \
     --name "$GENIE_TEST_MONGODB_CONTAINER" \
     -p "127.0.0.1:${GENIE_TEST_MONGODB_HOST_PORT}:27017" \
@@ -226,9 +228,9 @@ for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_REDIS_READY_ATTEM
 done
 
 echo "Starting disposable Redis replica container..."
-# The replica reaches the primary by its address on the Docker bridge network.
-# The default bridge gives no name resolution between containers, so read the
-# address instead of using the container name.
+# The replica connects to the primary through its address on the Docker bridge
+# network. The default bridge does not resolve container names. So the script
+# reads the address, and does not use the container name.
 GENIE_TEST_REDIS_PRIMARY_ADDRESS="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$GENIE_TEST_REDIS_CONTAINER")"
 if [[ -z "$GENIE_TEST_REDIS_PRIMARY_ADDRESS" ]]; then
     echo "Could not read the network address of the primary Redis container." >&2
@@ -243,8 +245,9 @@ GENIE_TEST_REDIS_REPLICA_STARTED=true
 
 echo "Waiting for the Redis replica to follow the primary..."
 for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_REDIS_READY_ATTEMPTS; GENIE_TEST_ATTEMPT++)); do
-    # Read the reply into a variable instead of piping it into grep. A pipe
-    # that closes early can fail under `set -o pipefail` even on a match.
+    # The script reads the reply into a variable, and does not pipe it into
+    # grep. Under `set -o pipefail`, a pipe that closes early can fail, also on
+    # a match.
     GENIE_TEST_REDIS_REPLICA_INFO="$(docker exec "$GENIE_TEST_REDIS_REPLICA_CONTAINER" redis-cli INFO replication 2>/dev/null || true)"
     if [[ "$GENIE_TEST_REDIS_REPLICA_INFO" == *"role:slave"* && "$GENIE_TEST_REDIS_REPLICA_INFO" == *"master_link_status:up"* ]]; then
         break
@@ -280,8 +283,9 @@ docker exec "$GENIE_TEST_MONGODB_CONTAINER" mongosh --quiet --eval \
 
 echo "Waiting for the MongoDB primary..."
 for ((GENIE_TEST_ATTEMPT = 1; GENIE_TEST_ATTEMPT <= GENIE_TEST_MONGODB_READY_ATTEMPTS; GENIE_TEST_ATTEMPT++)); do
-    # Read the reply into a variable instead of piping it into grep. A pipe
-    # that closes early can fail under `set -o pipefail` even on a match.
+    # The script reads the reply into a variable, and does not pipe it into
+    # grep. Under `set -o pipefail`, a pipe that closes early can fail, also on
+    # a match.
     GENIE_TEST_MONGODB_HELLO="$(docker exec "$GENIE_TEST_MONGODB_CONTAINER" mongosh --quiet --eval "db.hello().isWritablePrimary" 2>/dev/null || true)"
     if [[ "$GENIE_TEST_MONGODB_HELLO" == *"true"* ]]; then
         break

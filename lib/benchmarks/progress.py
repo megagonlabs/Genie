@@ -1,18 +1,19 @@
-"""Live progress for a run in flight.
+"""Live progress for a run that is in progress.
 
-A benchmark run can spend a minute inside one case. Without output that reads
-as a hang, so the reporter shows movement: calls finished, seconds spent, and a
-rough estimate of what is left.
+A benchmark run can stay in one case for one minute. Without output, this looks
+like a hang. So the reporter shows that the run moves: the completed calls, the
+seconds used, and an approximate estimate of the time that remains.
 
-Two rules shape this module:
+2 rules control this module:
 
-- **The output style matches the stream.** A terminal gets one line rewritten
-  in place several times a second. A pipe, a file, or a CI log gets whole lines
-  written far apart, because nothing there can erase a line and frequent
-  updates would only fill the log. Decided with `stream.isatty()`.
-- **Progress never runs inside a timed call.** The runner reports a call only
-  after its duration has been read, so writing a progress line cannot inflate
-  a measurement.
+- **The output style agrees with the stream.** A terminal gets one line that
+  the reporter writes again in the same place, more than one time each second.
+  A pipe, a file, or a CI log gets full lines with long gaps between them.
+  Nothing there can erase a line, and frequent updates only make the log
+  longer. `stream.isatty()` selects the style.
+- **Progress never runs in a timed call.** The runner reports a call only after
+  it reads the duration of that call. So a progress line cannot make a
+  measurement larger.
 """
 
 from __future__ import annotations
@@ -21,20 +22,21 @@ from time import monotonic
 from typing import IO, Any
 
 PLAIN_INTERVAL_SECONDS = 5.0
-"""Seconds between whole lines written to a pipe, a file, or a log."""
+"""The seconds between full lines to a pipe, a file, or a log."""
 
 TERMINAL_INTERVAL_SECONDS = 0.2
-"""Seconds between in-place updates written to a terminal."""
+"""The seconds between updates in place on a terminal."""
 
 
 class Progress:
-    """Writes what a run is doing to a stream.
+    """Writes the current work of a run to a stream.
 
     Attributes:
-        stream: Stream progress is written to.
-        rewrite: Whether one line is rewritten in place instead of appending.
-        interval: Seconds between updates.
-        enabled: Whether anything is written at all.
+        stream: The stream that gets the progress.
+        rewrite: If `True`, the reporter writes one line again in the same
+            place. If `False`, it adds new lines.
+        interval: The seconds between updates.
+        enabled: If `False`, the reporter writes nothing.
     """
 
     def __init__(
@@ -48,11 +50,12 @@ class Progress:
         """Create a progress reporter.
 
         Args:
-            stream: Stream to write to. Standard error keeps the table and the
-                JSON file clean.
-            rewrite: Rewrite one line in place instead of appending lines.
-            interval: Seconds between updates.
-            enabled: Write nothing when false.
+            stream: The stream to write to. With standard error, the table and
+                the JSON file stay clean.
+            rewrite: If `True`, write one line again in the same place, and do
+                not add new lines.
+            interval: The seconds between updates.
+            enabled: If `False`, write nothing.
         """
 
         self.stream = stream
@@ -66,12 +69,12 @@ class Progress:
         self._line_width = 0
 
     def start_variant(self, position: int, total: int, label: str) -> None:
-        """Announce the variant about to be measured.
+        """Announce the variant that the runner measures next.
 
         Args:
-            position: One-based position of this variant in the run.
-            total: Number of variants in the run.
-            label: Target, layer, and case name.
+            position: The one-based position of this variant in the run.
+            total: The number of variants in the run.
+            label: The target, layer, and case name.
         """
 
         self._label = label
@@ -81,20 +84,22 @@ class Progress:
         self._line_width = 0
         if not self.enabled:
             return
-        # Setup writes the whole corpus before the first call is timed, and on a
-        # server target that is most of the variant's wall time. Announcing the
-        # variant now means the slowest part of a run is never silent.
+        # Setup writes all of the corpus before the runner times the first call.
+        # On a server target, setup is most of the wall time of the variant.
+        # The announcement comes now, so the slowest part of a run always has
+        # output.
         if self.rewrite:
             self._rewrite_line(f"{self._prefix}  preparing")
         else:
             self._write_line(f"{self._prefix} preparing")
 
     def call_done(self, finished: int, total: int) -> None:
-        """Report that one call finished and its duration was recorded.
+        """Report that one call is complete and the runner recorded its duration.
 
         Args:
-            finished: Calls finished so far, warmup included.
-            total: Calls this variant will make.
+            finished: The calls that are complete at this time, with the warmup
+                calls.
+            total: The calls that this variant makes.
         """
 
         if not self.enabled:
@@ -114,12 +119,12 @@ class Progress:
             self._write_line(line)
 
     def finish_variant(self, samples: int, elapsed_seconds: float, p50_ms: float) -> None:
-        """Close a variant with what it measured, so the scrollback keeps it.
+        """Close a variant with its results, so the scrollback keeps them.
 
         Args:
-            samples: Measured calls that returned.
-            elapsed_seconds: Wall time the measured loop took.
-            p50_ms: Median call latency in milliseconds.
+            samples: The measured calls that returned.
+            elapsed_seconds: The wall time of the measured loop.
+            p50_ms: The median call latency in milliseconds.
         """
 
         if not self.enabled:
@@ -130,11 +135,11 @@ class Progress:
         )
 
     def skip_target(self, name: str, reason: str) -> None:
-        """Report a target that cannot run, and why.
+        """Report a target that cannot run, and the reason.
 
         Args:
-            name: Target name.
-            reason: Why it cannot run.
+            name: The target name.
+            reason: The reason that the target cannot run.
         """
 
         if not self.enabled:
@@ -151,7 +156,7 @@ class Progress:
         self.stream.flush()
 
     def _remaining(self, finished: int, total: int, elapsed: float) -> str | None:
-        """Return a rough estimate of the time left, when one is meaningful."""
+        """Return an approximate estimate of the time that remains, if the estimate has a meaning."""
 
         if finished <= 0 or finished >= total or elapsed <= 0:
             return None
@@ -163,7 +168,7 @@ class Progress:
         return f"{seconds / 60:.0f}m"
 
     def _rewrite_line(self, line: str) -> None:
-        """Replace the current line in place, erasing whatever was longer."""
+        """Replace the current line in place, and erase the rest of a longer line."""
 
         padding = " " * max(self._line_width - len(line), 0)
         self.stream.write(f"\r{line}{padding}")
@@ -171,14 +176,14 @@ class Progress:
         self._line_width = len(line)
 
     def _write_line(self, line: str) -> None:
-        """Append one whole line."""
+        """Add one full line."""
 
         self.stream.write(f"{line}\n")
         self.stream.flush()
         self._line_width = 0
 
     def _clear_line(self) -> None:
-        """Erase an in-place line so the next output starts clean."""
+        """Erase a line in place, so the next output starts on a clean line."""
 
         if self.rewrite and self._line_width:
             self.stream.write(f"\r{' ' * self._line_width}\r")
@@ -186,15 +191,15 @@ class Progress:
 
 
 def for_stream(stream: Any, *, quiet: bool = False) -> Progress:
-    """Build the reporter that suits a stream.
+    """Build the correct reporter for a stream.
 
     Args:
-        stream: Stream progress will be written to.
-        quiet: Write nothing at all.
+        stream: The stream that gets the progress.
+        quiet: If `True`, write nothing.
 
     Returns:
-        A reporter that rewrites one line on a terminal and writes whole lines
-        far apart anywhere else.
+        A reporter. On a terminal, it writes one line again in the same place.
+        On all other streams, it writes full lines with long gaps between them.
     """
 
     terminal = False

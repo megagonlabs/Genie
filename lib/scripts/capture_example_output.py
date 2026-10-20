@@ -1,13 +1,18 @@
-"""Regenerate the captured output of every runnable example.
+"""Regenerate the captured output of each runnable example.
 
-Run from the repository root:
+Run it from the repository root:
 
     python lib/scripts/capture_example_output.py
 
-Each example runs with the interpreter that started this script, and its
-standard output is written under `examples/expected/`. `lib/tests/test_examples.py`
-compares a live run against those files, so run this whenever an example's
-output changes on purpose. Captured output that no example owns is removed.
+- **Interpreter:** each example runs with the interpreter that started this
+  script.
+- **Output:** the script writes the standard output of each example under
+  `examples/expected/`.
+- **When to run:** `lib/tests/test_examples.py` compares a live run with those
+  files. So run this script each time that the output of an example changes on
+  purpose.
+- **Unused files:** the script removes the captured output that no example
+  owns.
 """
 
 from __future__ import annotations
@@ -30,13 +35,14 @@ from examples._catalog import (
 
 
 def capture(example: str) -> tuple[bool, bool]:
-    """Run one example and write what it printed.
+    """Run one example and write its printed output.
 
     Args:
-        example: Example path relative to `examples/`.
+        example: The example path, relative to `examples/`.
 
     Returns:
-        Whether the example succeeded, and whether its captured output changed.
+        2 values: `True` if the example succeeded, and `True` if its captured
+        output changed.
     """
 
     result = subprocess.run(
@@ -59,13 +65,13 @@ def capture(example: str) -> tuple[bool, bool]:
 
 
 def remove_orphans(examples: tuple[str, ...]) -> list[Path]:
-    """Delete captured output that no example owns any more.
+    """Delete the captured output that no example owns now.
 
     Args:
-        examples: Every discovered example path relative to `examples/`.
+        examples: All discovered example paths, relative to `examples/`.
 
     Returns:
-        The files that were removed.
+        The removed files.
     """
 
     if not EXPECTED_ROOT.exists():
@@ -79,10 +85,10 @@ def remove_orphans(examples: tuple[str, ...]) -> list[Path]:
 
 
 def main() -> int:
-    """Capture every example in turn and report what changed.
+    """Capture each example, one after the other, and report the changes.
 
     Returns:
-        Process exit code. Non-zero when any example failed to run.
+        The process exit code. It is not 0 if an example failed.
     """
 
     examples = discover_examples()
