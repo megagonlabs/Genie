@@ -1,22 +1,22 @@
 # Repository Organization
 
-Where every file in the Genie repository lives, and the rule that decides where
-a new one goes.
+This note shows where each file in the Genie repository is. It also gives the
+rule that decides where a new file goes.
 
 ## Top-level layout
 
-Every file and folder in the repository, with what it holds. Tool caches, build
-output, coverage reports, and local editor or agent files are ignored by
-`.gitignore` and are not part of the layout.
+This tree shows each file and folder at the repository root, and what it holds.
+`.gitignore` ignores tool caches, build output, coverage reports, and local
+editor or agent files. They are not part of the layout.
 
 ```text
 Genie/
-├── .claudeignore       # paths Claude Code should not index (caches, builds, .git)
+├── .claudeignore       # paths that Claude Code does not index (caches, builds, .git)
 ├── .gitignore          # ignored paths: caches, coverage, reports, local agent files
-├── CONTRIBUTING.md     # setup, the checks to run, and where a new file belongs
+├── CONTRIBUTING.md     # setup, the checks to run, and where a new file goes
 ├── design/             # these design notes, numbered `NN-topic.md`
 ├── examples/           # runnable examples, lamps, and their captured output
-├── lib/                # the library itself, plus its tests, benchmarks, and scripts
+├── lib/                # the library itself, and its tests, benchmarks, and scripts
 ├── LICENSE             # license text, named by `license-files` in `pyproject.toml`
 ├── pyproject.toml      # `genie` package metadata, extras, and build settings
 ├── pytest.ini          # repo-wide pytest settings: `testpaths` and `pythonpath`
@@ -26,42 +26,43 @@ Genie/
 └── SECURITY.md         # how to report a vulnerability, and what is in scope
 ```
 
-- **Three trees carry content:** `lib/`, `examples/`, and `design/`. Everything else at the root is configuration or project text.
-- **`LICENSE` holds the BSD 3-Clause text** for the `1.0.0` release. `pyproject.toml` points at it with `license-files = ["LICENSE"]`, so the file must stay where it is.
-- **`requirements.txt` declares nothing.** It exists to answer the question it usually answers: the core has no runtime dependencies, and `pytest` and `ruff` come from the `dev` extra in `pyproject.toml`.
+- **The content is in 3 trees:** `lib/`, `examples/`, and `design/`. All other files at the root are configuration or project text.
+- **`LICENSE` holds the BSD 3-Clause text** for the `1.0.0` release. `pyproject.toml` refers to it with `license-files = ["LICENSE"]`. So the file stays at the root.
+- **`requirements.txt` declares nothing.** Its only purpose is to answer the usual question about dependencies. The core has no runtime dependencies, and `pytest` and `ruff` come from the `dev` extra in `pyproject.toml`.
 
 ## `lib/` — the library
 
 ```text
 lib/
-├── src/genie/          # the installed package; the only code that ships
+├── src/genie/          # the installed package, and the only code in the wheel
 ├── tests/              # core library tests
 ├── benchmarks/         # latency benchmark harness, standard library only
 └── scripts/            # repository-wide developer scripts
 ```
 
-- **`lib/` has no `README.md` and no config of its own.** It is a container, and its four children have separate jobs.
-- **Only `lib/src/genie/` ships.** `[tool.setuptools.packages.find] where = ["lib/src"]` in `pyproject.toml` is what makes that true. Tests, benchmarks, and scripts stay outside the package.
+- **`lib/` has no `README.md` and no config of its own.** It is only a container. Its 4 children have separate purposes.
+- **Only `lib/src/genie/` is in the package.** `[tool.setuptools.packages.find] where = ["lib/src"]` in `pyproject.toml` causes this. Tests, benchmarks, and scripts stay outside the package.
 
 ### `lib/src/genie/` — the package
 
 ```text
 lib/src/genie/
-├── __init__.py                 # public API; every public name is re-exported here
-├── py.typed                    # marks the package as typed for downstream checkers
+├── __init__.py                 # public API, with a re-export of each public name
+├── py.typed                    # marks the package as typed for type checkers in applications
 ├── memory/                     # blocks, links, handles, the Memory entry point, errors
 │   ├── memory.py               # `Memory`: policy, hooks, codecs, and operation flow
 │   ├── block.py                # `MemoryBlock` model
 │   ├── links.py                # typed relationships between blocks
 │   ├── handle.py               # `MemoryHandle`: root, principal, and capability limits
-│   └── errors.py               # exceptions raised by memory operations
-├── policy/                     # who may act on a block
-│   ├── policy.py               # declarative access rules, including `owner_private()`
+│   ├── errors.py               # exceptions that memory operations raise
+│   └── _validation.py          # internal checks for ids, block types, and relations (private)
+├── policy/                     # who can act on a block
+│   ├── policy.py               # declarative access rules, for example `owner_private()`
 │   ├── engine.py               # policy evaluation for memory operations
-│   └── principal.py            # principal identities used for decisions
+│   └── principal.py            # principal identities for access decisions
 ├── query/                      # portable search vocabulary
 │   ├── query.py                # `MemoryQuery`, shared by APIs and adapters
-│   ├── filters.py              # filter normalization and matching helpers
+│   ├── filters.py              # filter normalization and match helpers
 │   ├── result.py               # search result model
 │   └── scope.py                # supported search scopes
 ├── hooks/                      # lifecycle observation and customization
@@ -80,16 +81,16 @@ lib/src/genie/
 │   ├── temporal.py             # `TemporalCollection`
 │   ├── lineage.py              # `LineageDAG`, composed from `PropertyGraph`
 │   ├── versioned.py            # `VersionedRecords`, composed from keyed ids and a log
-│   ├── access.py               # the memory access protocols facades depend on
-│   ├── records.py              # immutable records shared by the facades
+│   ├── access.py               # the memory access protocols that facades use
+│   ├── records.py              # immutable records that the facades share
 │   ├── _hooks.py               # internal hook integration (private)
 │   └── _routing.py             # internal store resolution (private)
 └── backend/                    # storage contracts and the shipped adapters
     ├── base.py                 # `MemoryBackend`, the top-level contract
-    ├── capabilities.py         # the smaller capability protocols facades depend on
+    ├── capabilities.py         # the smaller capability protocols that facades use
     ├── structure_capabilities.py  # optional DAG, keyed, ordered, and temporal protocols
     ├── in_memory/reference.py  # `InMemoryBackend`, the reference implementation
-    ├── relational/sqlite.py    # `SQLiteBackend`, no extra package needed
+    ├── relational/sqlite.py    # `SQLiteBackend`, needs no extra package
     ├── relational/postgres.py  # `PostgresBackend`, `postgres` extra
     ├── graph/neo4j.py          # `Neo4jBackend`, `neo4j` extra
     ├── document/mongodb.py     # `MongoDBBackend`, `mongodb` extra
@@ -97,27 +98,27 @@ lib/src/genie/
     └── composite/routed.py     # `RoutedBackend`, application-defined routes
 ```
 
-- **Every subpackage has its own `README.md`,** including each storage family folder under `backend/`, and `[tool.setuptools.package-data]` ships them with the wheel, so the guide travels with the code.
-- **Adapters are grouped by storage family,** not by vendor. A new adapter joins the family it belongs to, or starts a new folder when none fits.
-- **A leading underscore means private.** `_hooks.py` and `_routing.py` are internal to `structures/` and are not re-exported.
-- **`__init__.py` is the whole public surface.** A new public name must be added to the root `__all__`, and `lib/tests/test_public_imports.py` fails when it is missing.
+- **Each subpackage has its own `README.md`.** Each storage family folder under `backend/` also has one. `[tool.setuptools.package-data]` puts these files in the wheel, so the guide stays with the code.
+- **The folders group adapters by storage family, not by vendor.** A new adapter goes into the folder of its family. If no family fits, the adapter gets a new folder.
+- **A leading underscore means private.** `_validation.py` is internal to `memory/`, and `_hooks.py` and `_routing.py` are internal to `structures/`. The package does not re-export them.
+- **`__init__.py` is the whole public surface.** The root `__all__` contains each public name. `lib/tests/test_public_imports.py` fails if a subpackage exports a name that the root `__all__` does not contain.
 
 ### `lib/tests/` — core tests
 
 ```text
 lib/tests/
-├── test_memory_crud.py         # core CRUD, versions, traversal, recursive deletion
+├── test_memory_crud.py         # core CRUD, versions, traversal, recursive delete
 ├── test_memory_handle.py       # bounded handles and restricted access
 ├── test_policy.py              # principals, roles, and block policies
 ├── test_links.py               # typed links and linked search
 ├── test_query_filters.py       # queries and portable filter behavior
 ├── test_hooks.py               # hook dispatch and customization
 ├── test_codecs.py              # codecs and the codec registry
-├── test_public_imports.py      # every public name is importable from both surfaces
-├── test_examples.py            # runs every example and diffs its output
+├── test_public_imports.py      # each public name imports from both surfaces
+├── test_examples.py            # runs each example and compares its output
 ├── test_benchmarks.py          # tests for the harness in `lib/benchmarks/`
-├── backends/                   # adapter tests plus the reusable contract tests
-│   ├── test_backend_contracts.py  # the shared suite every adapter must pass
+├── backends/                   # adapter tests and the reusable contract tests
+│   ├── test_backend_contracts.py  # the shared suite that runs against each adapter
 │   ├── test_inmemory_backend.py
 │   ├── test_sqlite_backend.py
 │   ├── test_postgres_backend.py
@@ -125,7 +126,7 @@ lib/tests/
 │   ├── test_mongodb_backend.py
 │   ├── test_redis_backend.py
 │   └── test_routed_backend.py
-└── structures/                 # one file per facade, plus cross-cutting suites
+└── structures/                 # one file for each facade, and suites that cover several facades
     ├── test_tree.py                   # `OwnershipTree`
     ├── test_graph.py                  # `PropertyGraph`
     ├── test_keyed.py                  # `KeyedCollection`
@@ -140,8 +141,8 @@ lib/tests/
     └── test_structure_concurrency.py  # atomic behavior under concurrent callers
 ```
 
-- **`test_backend_contracts.py` is the reusable suite.** A new adapter, shipped or application-owned, is expected to run it rather than write its own version.
-- **Live adapter tests skip themselves** when the optional driver is missing or the `GENIE_*` connection variables are unset. A plain `pytest` run is therefore partial, and `lib/scripts/test_full.sh` is the complete run.
+- **`test_backend_contracts.py` is the reusable suite.** A new adapter, shipped or application-owned, runs this suite. It does not write its own version of the suite.
+- **Live adapter tests skip themselves** if the optional driver is not installed or the `GENIE_*` connection variables are not set. So a plain `pytest` run is partial. `lib/scripts/test_full.sh` is the complete run.
 
 ### `lib/benchmarks/` and `lib/scripts/`
 
@@ -149,14 +150,14 @@ lib/tests/
 lib/benchmarks/
 ├── run.py              # command line entry point
 ├── runner.py           # runs the cases and returns a report
-├── cases.py            # the operations being measured
+├── cases.py            # the operations that the harness measures
 ├── workload.py         # the mixed read/write scenario and its worker roles
-├── dataset.py          # seeded corpus every variant runs against
-├── targets.py          # the stores being measured
-├── settings.py         # run settings shared by every case
+├── dataset.py          # seeded corpus for each variant
+├── targets.py          # the stores that the harness measures
+├── settings.py         # run settings that all cases share
 ├── metrics.py          # latency statistics for one variant
 ├── environment.py      # machine and source facts recorded with each report
-├── progress.py         # live progress while a run is in flight
+├── progress.py         # live progress during a run
 ├── report.py           # readable table or JSON output
 └── README.md           # how to run and read a benchmark
 
@@ -167,9 +168,9 @@ lib/scripts/
 └── ruff_report.sh              # regenerate `ruff_report.txt`
 ```
 
-- **Benchmarks stay out of `lib/tests/`** so a plain `pytest` run never times operations. Their own tests live in `lib/tests/test_benchmarks.py`.
+- **Benchmarks stay out of `lib/tests/`,** so a plain `pytest` run never times operations. Their own tests are in `lib/tests/test_benchmarks.py`.
 - **The harness uses the standard library only,** like the core package.
-- **`benchmark_full.sh` reuses `test_full.sh`.** The container setup exists once, and `GENIE_TEST_COMMAND` chooses what runs against it.
+- **`benchmark_full.sh` reuses `test_full.sh`.** The container setup is in one place only. `GENIE_TEST_COMMAND` chooses the command that runs against the containers.
 
 ## `examples/` — runnable code
 
@@ -180,58 +181,58 @@ examples/
 ├── lamps/              # 5 package-sized architectural demonstrations
 ├── expected/           # captured stdout: basic/, advanced/, lamps/
 ├── _bootstrap.py       # puts `lib/src` and the root on `sys.path` before install
-├── _catalog.py         # discovers the examples and where their output lives
-└── README.md           # reading order and how to run everything
+├── _catalog.py         # finds the examples and the location of their output
+└── README.md           # reading order and how to run all examples
 ```
 
-- **Everything runs from the repository root.** Single-file examples run as scripts (`python examples/basic/crud_blocks.py`); lamps are packages and run as modules (`python -m examples.lamps.mem0.demo`).
-- **Every example is output-tested.** `lib/tests/test_examples.py` runs each one and compares the whole standard output against `examples/expected/`. Refresh it with `lib/scripts/capture_example_output.py` when the output changes on purpose.
-- **`_catalog.py` finds the examples from the layout:** every `*.py` in `basic/` and `advanced/`, and each lamp's `demo.py`. The capture script and the test both read it, so the two cannot drift apart.
-- **A new example must also join `RUNNABLE_EXAMPLES`** in `lib/tests/test_examples.py`. That list is explicit, and a test asserts it matches what `_catalog.py` discovers.
-- **`basic/` is one idea per file,** `advanced/` combines several. Split rather than combine when an example starts covering two topics.
+- **All examples run from the repository root.** Single-file examples run as scripts (`python examples/basic/crud_blocks.py`). Lamps are packages and run as modules (`python -m examples.lamps.mem0.demo`).
+- **A test checks the output of each example.** `lib/tests/test_examples.py` runs each example and compares all of its standard output with `examples/expected/`. `lib/scripts/capture_example_output.py` refreshes the files after an intended output change.
+- **`_catalog.py` finds the examples from the layout:** each `*.py` in `basic/` and `advanced/`, and the `demo.py` of each lamp. The capture script and the test both read it. So the 2 always use the same list of examples.
+- **Each new example is also in `RUNNABLE_EXAMPLES`** in `lib/tests/test_examples.py`. That list is explicit. A test asserts that it matches the examples that `_catalog.py` finds.
+- **`basic/` has one idea in each file.** `advanced/` combines several ideas. If an example starts to cover 2 topics, the repository splits it into 2 examples and does not combine them.
 
 ### A lamp
 
 ```text
 examples/lamps/<name>/
-├── __init__.py         # the lamp's public names
+├── __init__.py         # the public names of the lamp
 ├── demo.py             # the entry point, run as a module
-├── agent.py            # the deterministic agent that drives the demo
-├── model.py            # the lamp's own value types
+├── agent.py            # the deterministic agent that runs the demo
+├── model.py            # the value types of the lamp
 ├── structures.py       # which Genie facades the lamp composes
-├── <domain>.py         # the lamp's own logic, named after its concepts
+├── <domain>.py         # the logic of the lamp, with file names from its concepts
 ├── README.md           # concept mapping to the upstream project, and its limits
-└── tests/              # that lamp's tests, kept with the lamp
+└── tests/              # the tests of that lamp, in the lamp folder
 ```
 
-- **Lamps are architectural demonstrations,** not compatibility layers and not production implementations. Each keeps the main memory idea of the project it represents, plus one typical workflow.
-- **Their tests stay with them,** under `examples/lamps/<name>/tests`, not in `lib/tests/`.
-- **Taxonomy, retrieval, and agent behavior live in the lamp,** which is exactly the point: it shows the boundary the core library holds.
+- **Lamps are architectural demonstrations.** They are not compatibility layers and not production implementations. Each lamp keeps the main memory idea of the project that it represents, and one typical workflow.
+- **The tests of a lamp stay with the lamp,** in `examples/lamps/<name>/tests` and not in `lib/tests/`.
+- **Taxonomy, retrieval, and agent behavior are in the lamp.** That is the purpose of a lamp. It shows the boundary that the core library keeps.
 
 ## `design/` — the design notes
 
-- **`design/` holds these notes,** numbered `NN-topic.md`. They cover intent, architecture, and organization, and they are written for the people building Genie and for the developers who use it.
-- **`01-overview.md` and `03-high-level-architecture.md` are the reader-facing pair.** `README.md` links to them, so keep them in sync when the public memory model, architecture, or safety boundaries change.
-- **`04-detailed-architecture.md` holds module internals,** so a change to an algorithm, a check order, or an invariant belongs there.
-- **Package `README.md` files** hold the detail for one area, and the design notes link to them instead of repeating them.
+- **`design/` holds these notes,** with names in the form `NN-topic.md`. They cover intent, architecture, and organization. They are for the people who build Genie and for the developers who use it.
+- **`01-overview.md` and `03-high-level-architecture.md` are the 2 notes for readers.** `README.md` links to them. So when the public memory model, architecture, or safety boundaries change, these 2 notes change too.
+- **`04-detailed-architecture.md` holds module internals.** So a change to an algorithm, a check order, or an invariant goes there.
+- **Package `README.md` files** hold the details for one area. The design notes link to them and do not repeat them.
 
 ## Why every config file sits at the root
 
 | File | Reason it cannot move into `lib/` |
 | --- | --- |
-| `pyproject.toml` | `readme` and `license-files` resolve next to it and cannot point outside its directory, and `pip install` from a git URL only looks at the repository root |
-| `pytest.ini` | It covers `examples/` as well as `lib/`, and sets `pythonpath` to `lib/src`, `lib`, and `.` |
-| `ruff.toml` | Ruff finds settings by walking up from each file, so a config inside `lib/` would never reach `examples/` |
+| `pyproject.toml` | `readme` and `license-files` resolve in its directory and cannot refer to a path outside it. Also, `pip install` from a git URL looks only at the repository root |
+| `pytest.ini` | It covers `examples/` and `lib/`. It sets `pythonpath` to `lib/src`, `lib`, and `.` |
+| `ruff.toml` | Ruff looks for settings in the folder of each file and then in each parent folder. So a config inside `lib/` never applies to `examples/` |
 
-- **Run everything from the repository root:** `python -m pip install -e .`, `python -m pytest`, `python -m ruff check .`.
-- **`pyproject.toml` still points at the real source** with `[tool.setuptools.packages.find] where = ["lib/src"]`, so the root config and the nested layout agree.
+- **All commands run from the repository root:** `python -m pip install -e .`, `python -m pytest`, `python -m ruff check .`.
+- **`pyproject.toml` is at the root but refers to the real source** with `[tool.setuptools.packages.find] where = ["lib/src"]`. So the root config and the nested layout agree.
 
 ## Where a new file goes
 
-| You are adding | It goes in |
+| What you add | Where it goes |
 | --- | --- |
 | Core library code | `lib/src/genie/<area>/` |
-| A public name | the area module, plus the root `__all__` in `lib/src/genie/__init__.py` |
+| A public name | the area module, and the root `__all__` in `lib/src/genie/__init__.py` |
 | A backend adapter | `lib/src/genie/backend/<family>/` |
 | A core test | `lib/tests/` |
 | An adapter or contract test | `lib/tests/backends/` |
@@ -245,8 +246,8 @@ examples/lamps/<name>/
 
 ## Related reading
 
-- [Overview](01-overview.md) — the model these directories implement
-- [CONTRIBUTING.md](../CONTRIBUTING.md) — setup, the checks to run, and the boundaries a change should respect
-- [High-level architecture](03-high-level-architecture.md) — the components these directories hold
+- [Overview](01-overview.md) — the model that these directories implement
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — setup, the checks to run, and the boundaries for a change
+- [High-level architecture](03-high-level-architecture.md) — the components that these directories hold
 - [Library](06-library.md) — how an application builds on the package in `lib/src/genie/`
 - [Examples](../examples/README.md) and [Lamps](../examples/lamps/README.md) — reading order and how to run them

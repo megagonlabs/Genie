@@ -1,25 +1,25 @@
 # High-Level Architecture
 
-The parts of Genie, what each one owns, and how one call travels through them.
-Module internals and algorithms belong in
-[Detailed architecture](04-detailed-architecture.md).
+This note describes the parts of Genie, what each part owns, and the path of one
+call through them. [Detailed architecture](04-detailed-architecture.md)
+describes module internals and algorithms.
 
 ## Shape of the system
 
 - **Genie is a library, not a service.** It has no server, no daemon, no
   background threads, and no scheduler. It runs inside the application process
   that imports it.
-- **Every public call is synchronous** and returns before the next one starts.
-  Hooks run on the calling thread too.
-- **The application owns the process and the database.** Genie holds no
-  connection pool of its own, starts nothing, and shuts nothing down.
-- **State lives in the backend.** A `Memory` object holds configuration
-  (backend, principal, policy engine, hooks, codecs, default policy,
-  attributes) and no block data, so two `Memory` objects over one backend see
-  the same blocks.
-- **The core imports nothing outside the standard library.** Third-party
-  drivers arrive only with the extra that needs them, and only inside the
-  adapter that uses them.
+- **Each public call is synchronous.** It returns before the next call starts.
+  Hooks also run on the thread of the caller.
+- **The application owns the process and the database.** Genie has no
+  connection pool of its own. It starts nothing and stops nothing.
+- **State is in the backend.** A `Memory` object holds configuration and no
+  block data. The configuration is the backend, principal, policy engine,
+  hooks, codecs, default policy, and attributes. So 2 `Memory` objects over one
+  backend see the same blocks.
+- **The core imports nothing outside the standard library.** A third-party
+  driver comes only with the extra that needs it. Only the adapter that uses
+  the driver imports it.
 
 ## Layers
 
@@ -39,42 +39,43 @@ Module internals and algorithms belong in
 
 | Layer | Owns | Required |
 | --- | --- | --- |
-| Structure facades | Reference records that arrange existing blocks into a tree, graph, key map, log, timeline, DAG, or revision chain | No |
-| `MemoryHandle` | A root block, an acting principal, and a set of `HandleCapability` limits | No |
+| Structure facades | Reference records that arrange blocks into a tree, a graph, a key map, a log, a timeline, a DAG, or a revision chain | No |
+| `MemoryHandle` | A root block, the principal that acts, and a set of `HandleCapability` limits | No |
 | `Memory` | Operation flow, policy checks, hook dispatch, codec encode and decode | Yes |
 | `MemoryBackend` | Block storage, ownership traversal, links, and search behind one protocol | Yes |
 | Stores and indexes | The actual database, file, or process memory, and any index over it | Chosen by the backend |
 
-- **Two layers are enough to run Genie:** a `Memory` object and one backend
-  object. Everything above `Memory` is optional.
+- **Genie runs with 2 layers:** a `Memory` object and one backend object. All
+  layers above `Memory` are optional.
 - **Handles and facades are views, not copies.** They read and write the same
-  blocks through the same `Memory`, so adding one never moves data.
-- **One backend object may hide several databases.** `Memory` sees a single
-  `MemoryBackend`; `RoutedBackend` is what turns that single object into
-  several stores behind application-defined routes.
-- **The layers below `Memory` never call back up.** A backend does not know
-  about handles, facades, hooks, or policies.
+  blocks through the same `Memory`. So a new handle or facade never moves data.
+- **One backend object can hide several databases.** `Memory` sees a single
+  `MemoryBackend`. `RoutedBackend` turns that single object into several stores
+  behind application-defined routes.
+- **The layers below `Memory` never call a higher layer.** A backend does not
+  know about handles, facades, hooks, or policies.
 
 ## Components
 
 | Package | Responsibility | Main public names |
 | --- | --- | --- |
 | `genie.memory` | The entry point, the stored model, and scoped access | `Memory`, `MemoryBlock`, `MemoryLink`, `MemoryHandle`, the error types |
-| `genie.policy` | Who may act on a block, and the check that decides it | `MemoryPolicy`, `AccessRule`, `Principal`, `PolicyEngine`, `Operation` |
-| `genie.query` | A portable way to describe a search and its results | `MemoryQuery`, `Scope`, `SearchResult` |
+| `genie.policy` | Who can act on a block, and the check that decides it | `MemoryPolicy`, `AccessRule`, `Principal`, `PolicyEngine`, `Operation` |
+| `genie.query` | A portable description of a search and its results | `MemoryQuery`, `Scope`, `SearchResult` |
 | `genie.hooks` | Observation and controlled customization of each operation | `MemoryHook`, `HookRegistry`, `HookContext`, the event payloads |
 | `genie.codecs` | Value translation at the storage boundary | `MemoryCodec`, `CodecRegistry`, `JsonCodec` |
-| `genie.structures` | Optional facades and the immutable records they return | `OwnershipTree`, `PropertyGraph`, `KeyedCollection`, `EventLog`, `TemporalCollection`, `LineageDAG`, `VersionedRecords` |
+| `genie.structures` | Optional facades and the immutable records that they return | `OwnershipTree`, `PropertyGraph`, `KeyedCollection`, `EventLog`, `TemporalCollection`, `LineageDAG`, `VersionedRecords` |
 | `genie.backend` | The storage contracts and the shipped adapters | `MemoryBackend`, the capability protocols, `InMemoryBackend`, `SQLiteBackend`, and the optional adapters |
 
 - **`Memory` is the only component that coordinates the others.** It is the
   single place where a policy check, a hook call, a codec call, and a backend
   call meet.
 - **`genie.codecs` depends on no other Genie package.** It is a standalone
-  translation layer, which is why an application can register its own codec
-  without touching anything else.
+  translation layer. So an application can register its own codec and change
+  nothing else.
 - **`genie.backend` never imports `genie.structures`.** Structure facades
-  depend on backend capability protocols, not the other way round.
+  depend on backend capability protocols. The backend does not depend on the
+  facades.
 
 ## Dependency direction
 
@@ -90,19 +91,21 @@ policy.principal -> policy.policy -> memory.block -> memory.links
                                          structure facades
 ```
 
-- **Dependencies point one way.** The shared model modules
-  (`policy/principal.py`, `policy/policy.py`, `memory/block.py`,
-  `memory/links.py`, `query/`) import nothing above them, so every other layer
-  can speak in those types without a cycle.
-- **Facades sit at the top.** They may import `memory`, `policy`, `query`,
-  `hooks`, and `backend`. Nothing imports them back.
-- **A facade depends on the narrowest protocol it needs,** not on `Memory`,
-  `MemoryHandle`, or a backend class. `OwnershipTree` takes `OwnershipAccess`
-  (`BlockReader` plus `TreeReader` plus `put` and `delete`), and
-  `PropertyGraph` takes `GraphAccess` (`BlockReader` plus `LinkReader` and
-  `LinkWriter`). Both `Memory` and `MemoryHandle` satisfy them.
+- **Dependencies go in one direction.** The shared model modules import
+  nothing above them. These modules are `policy/principal.py`,
+  `policy/policy.py`, `memory/block.py`, `memory/links.py`, and `query/`. So
+  all other layers can use those types without an import cycle.
+- **Facades are at the top.** They can import `memory`, `policy`, `query`,
+  `hooks`, and `backend`. None of those packages imports the facades.
+- **A facade depends on the narrowest protocol that it needs.** It does not
+  depend on `Memory`, `MemoryHandle`, or a backend class.
+  - **`OwnershipTree` takes `OwnershipAccess`.** This protocol is
+    `BlockReader` plus `TreeReader` plus `put` and `delete`.
+  - **`PropertyGraph` takes `GraphAccess`.** This protocol is `BlockReader`
+    plus `LinkReader` and `LinkWriter`.
+  - **`Memory` and `MemoryHandle` both satisfy these protocols.**
 - **`LineageDAG` and `VersionedRecords` are composed, not new storage.**
-  `LineageDAG` wraps `PropertyGraph`; `VersionedRecords` wraps
+  `LineageDAG` wraps `PropertyGraph`. `VersionedRecords` wraps
   `KeyedCollection` and `EventLog`.
 
 ## The path of one operation
@@ -111,146 +114,158 @@ policy.principal -> policy.policy -> memory.block -> memory.links
 
 A create call through a trusted `Memory` object:
 
-1. **Open the operation context.** `Memory` opens one `HookContext` carrying
-   the acting principal, the start time, and the memory's attributes.
-2. **Authorize the parent, if there is one.** The parent block is read from
-   the backend, then checked for `WRITE` and `TRAVERSE_DOWN`. A refusal is
-   reported to `on_denied` and raised as `AccessDenied`.
-3. **Encode the value.** `CodecRegistry.encode` turns the application value
+1. **Open the operation context.** `Memory` opens one `HookContext`. The
+   context holds the principal that acts, the start time, and the attributes
+   of the memory.
+2. **Authorize the parent, if there is one.** `Memory` reads the parent block
+   from the backend. Then it checks `WRITE` and `TRAVERSE_DOWN` on the parent.
+   It reports a refusal to `on_denied` and raises it as `AccessDenied`.
+3. **Encode the value.** `CodecRegistry.encode` changes the application value
    into storage data plus a content type.
-4. **Build the block.** Id, type, encoded value, parent id, metadata, policy
-   (the explicit argument or `Memory.default_policy`), and creator.
-5. **Call `before_put`.** Hooks may change the value, metadata, content type,
-   and policy. Changing any other field, such as `parent_id`, `created_by`, or
-   `version`, is rejected. So a hook cannot move the block into someone else's
-   subtree after the parent check has already passed, or change the owner
-   that `AccessRule` checks.
+4. **Build the block.** The block gets an id, a type, the encoded value, the
+   parent id, metadata, a policy, and a creator. The policy is the explicit
+   argument or `Memory.default_policy`.
+5. **Call `before_put`.** Hooks can change the value, metadata, content type,
+   and policy. A change to a different field, for example `parent_id`,
+   `created_by`, or `version`, raises `ValueError`. So a hook cannot move the
+   block into a different subtree after the parent check passes. A hook also
+   cannot change the owner that `AccessRule` checks.
 6. **Write once.** `backend.put_block` stores the block.
-7. **Call `after_put` and decode.** The stored block is reported, then decoded
-   and returned with the application value.
+7. **Call `after_put` and decode.** `Memory` reports the stored block to
+   `after_put`. Then it decodes the block and returns it with the application
+   value.
 
 ### `handle.search(...)`
 
-A search through a bounded handle shows the two checks working together:
+A search through a bounded handle shows how the 2 checks work together:
 
 1. **The handle narrows the query.** It applies its own root, its default
-   scope, and its capability limits before anything reaches `Memory`. A scope
-   the handle does not allow is refused here.
-2. **`Memory` authorizes the query root.** `SEARCH` on the root block, plus
-   `TRAVERSE_DOWN`, `TRAVERSE_UP`, or `READ` depending on the scope.
-3. **`before_search` may rewrite the query.** The rewritten query is
-   normalized and authorized again, so a hook cannot widen the root or the
-   scope. Through a handle, it also passes the handle checks from step 1
-   again, and a scope the handle does not allow is refused.
+   scope, and its capability limits before the query reaches `Memory`. The
+   handle refuses a scope that it does not permit.
+2. **`Memory` authorizes the query root.** It checks `SEARCH` on the root
+   block. It also checks `TRAVERSE_DOWN`, `TRAVERSE_UP`, or `READ`. The scope
+   decides which one.
+3. **`before_search` can rewrite the query.** `Memory` normalizes and
+   authorizes the rewritten query again. So a hook cannot widen the root or the
+   scope. Through a handle, the rewritten query also goes through the handle
+   checks from step 1 again. The handle refuses a scope that it does not
+   permit.
 4. **The backend searches** and applies `query.limit`.
-5. **`Memory` filters the results** against block policies and re-checks the
-   query scope, then decodes the surviving blocks.
-6. **`after_search` may change the list,** and the same filter runs a second
-   time over whatever the hooks returned. Verdicts are cached per block id, so
-   a block is read once for both passes.
+5. **`Memory` decodes and filters the results.** It decodes each result. Then
+   it filters the results against block policies and checks the query scope
+   again.
+6. **`after_search` can change the list.** Then the same filter runs a second
+   time over the list that the hooks returned. `Memory` keeps one verdict for
+   each block id, so it reads a block once for both passes.
 
-- **The limit is a candidate budget, not a result count.** Filtering happens
-  after the backend has already spent the limit, so a visible result page can
-  be shorter than the limit the caller asked for.
-- **A filtered read returns less, it does not refuse.** The caller learns
-  nothing about the blocks it cannot see.
-- **Which right each operation checks** is listed in
+- **The limit is a candidate budget, not a result count.** The filter runs
+  after the backend uses the limit. So a visible result page can be shorter
+  than the limit that the caller asked for.
+- **A filtered read returns less and does not refuse.** The caller learns
+  nothing about the blocks that it cannot see.
+- **The right that each operation checks** is in
   [Detailed architecture](04-detailed-architecture.md#authorization-per-operation).
 
 ## Boundaries
 
 | Boundary | Enforced by | What crosses it |
 | --- | --- | --- |
-| Public API | `genie.__init__` | Every exported name; nothing else is a supported import |
-| Access | `MemoryHandle` plus `MemoryPolicy` | Only blocks inside the handle root whose policy allows the acting principal |
+| Public API | `genie.__init__` | Each exported name. No other import is supported |
+| Access | `MemoryHandle` plus `MemoryPolicy` | Only blocks inside the handle root with a policy that permits the principal that acts |
 | Storage | `MemoryBackend` and the capability protocols | Encoded `MemoryBlock` and `MemoryLink` values, `MemoryQuery`, `SearchResult` |
-| Value | `MemoryCodec` | The application value in, storage data plus a content type out |
+| Value | `MemoryCodec` | The application value goes in. Storage data plus a content type come out |
 | Observation | `HookRegistry` | `HookContext` and typed event payloads, never raw backend objects |
 
-- **The trust boundary sits under the handle.** `Memory`, backends, the policy
+- **The trust boundary is below the handle.** `Memory`, backends, the policy
   engine, the hook registry, and the codec registry belong in trusted
-  application code. Agents get a rooted `MemoryHandle`, or a smaller tool the
-  application writes over one.
-- **Raw backend access skips everything.** Calling a backend directly bypasses
-  handles, policies, hooks, and codecs. That is expected, and it is the reason
-  the backend object stays in trusted code.
-- **Child handles only narrow.** A child cannot change principal, widen the
-  root, or restore a capability its parent disabled.
+  application code. Agents get a rooted `MemoryHandle`, or a smaller tool that
+  the application writes over a handle.
+- **Raw backend access skips all of these layers.** A direct call to a backend
+  bypasses handles, policies, hooks, and codecs. This is expected. It is the
+  reason that the backend object stays in trusted code.
+- **Child handles only narrow.** A child cannot change the principal, widen the
+  root, or restore a capability that its parent disabled.
 
 ## Extension seams
 
-| Seam | Contract | Default | Typical reason to replace it |
+| Extension point | Contract | Default | Typical reason to replace it |
 | --- | --- | --- | --- |
-| Storage | `MemoryBackend` | `InMemoryBackend` | Use a real database, or route blocks across several |
-| Access rules | `PolicyEngine` and `MemoryPolicy` | `PolicyEngine`, `owner_private()` | Express an ownership or sharing rule the built-in rules do not cover |
+| Storage | `MemoryBackend` | `InMemoryBackend` | Use a real database, or route blocks to several databases |
+| Access rules | `PolicyEngine` and `MemoryPolicy` | `PolicyEngine`, `owner_private()` | Express a rule for ownership or shared access that the built-in rules do not cover |
 | Observation | `MemoryHook` in a `HookRegistry` | Empty registry | Audit trails, metrics, validation, enrichment at `before_put` |
-| Value translation | `MemoryCodec` in a `CodecRegistry` | `JsonCodec` | Store a value type JSON cannot carry |
-| Organization | Structure facades | None | Arrange existing blocks without a new storage model |
+| Value translation | `MemoryCodec` in a `CodecRegistry` | `JsonCodec` | Store a value type that JSON cannot hold |
+| Organization | Structure facades | None | Arrange blocks without a new storage model |
 
-- **Every seam is a protocol or a small class, not a plugin system.** There is
-  no registry file, no entry point, and no discovery step. The application
-  passes the object to the `Memory` constructor.
+- **Each extension point is a protocol or a small class, not a plugin
+  system.** There is no registry file, no entry point, and no discovery step.
+  The application gives the object to the `Memory` constructor.
 - **Optional backend capabilities are separate protocols.** `AcyclicLinkStore`,
-  `KeyedStore`, `SequenceStore`, `TemporalStore`, and `TemporalIndex` sit
-  beside the core contract, so an adapter can ship without them and a facade
-  can check for the one it needs.
-- **A missing capability raises `UnsupportedOperation`,** which is also what a
-  shipped adapter raises when its driver is not installed.
+  `KeyedStore`, `SequenceStore`, `TemporalStore`, and `TemporalIndex` are next
+  to the core contract. So an adapter can ship without them, and a facade can
+  check for the capability that it needs.
+- **If a backend does not have a capability, the call raises
+  `UnsupportedOperation`.** A shipped adapter raises the same error if its
+  driver is not installed.
 
 ## How facades attach
 
-- **Facades take an access object,** either a `Memory` or a `MemoryHandle`.
-  Every block read and write still goes through it, so scope and policy checks
-  are the same as a direct call.
-- **Facades that keep records take a store as well.** `KeyedCollection`,
+- **Facades take an access object.** The access object is a `Memory` or a
+  `MemoryHandle`. Each block read and write goes through it. So the scope and
+  policy checks are the same as for a direct call.
+- **Facades that keep records also take a store.** `KeyedCollection`,
   `EventLog`, `TemporalCollection`, and `VersionedRecords` need a backend
   capability for their bindings, entries, and sequences. `OwnershipTree`,
-  `PropertyGraph`, and `LineageDAG` need no extra store because parents and
-  links already carry their state.
-- **A routing backend resolves to one route.** When the store argument is a
-  `BlockRouter`, the facade binds to the backend that owns the anchoring
-  block. A container and its subtree always share one route.
-- **Membership is not ownership.** Key bindings, log entries, temporal
-  entries, and revisions point at blocks by id and never change a stored
-  parent, so subtree search reaches a member only when the application also
-  created it under the container.
+  `PropertyGraph`, and `LineageDAG` need no extra store, because parents and
+  links hold their state.
+- **A backend that routes blocks resolves to one route.** If the store argument
+  is a `BlockRouter`, the facade binds to the backend that owns the block that
+  anchors the structure. A container and its subtree always share one route.
+- **Membership is not ownership.** Key bindings, log entries, temporal entries,
+  and revisions refer to blocks by id. They never change a stored parent. So a
+  subtree search reaches a member only if the application also created that
+  member under the container.
 
 ## Cross-cutting concerns
 
-- **Access control** is two independent checks: the handle scope and the block
-  policy. Both must allow the operation. Policies do not inherit through
-  ownership, and a policy is fixed when the block is created.
-- **Observability** runs through hooks. Every operation that starts reports
-  exactly one outcome event, and every refusal reports its subject and the
-  check that produced it, so a filtered result is auditable instead of silent.
-- **Consistency** is optimistic. Block updates carry an expected version,
-  recursive deletion sends the exact subtree snapshot it observed, and a
-  concurrent change raises `MemoryConflict` rather than committing stale work.
-- **Atomic behavior belongs to the backend.** When an operation cannot be a
-  safe portable read followed by a write, it becomes a backend capability with
-  contract and concurrency tests, not a best-effort sequence in a facade.
-- **Errors are one family.** Everything Genie raises derives from
-  `GenieError`: `MemoryNotFound`, `MemoryConflict`, `UnsupportedOperation`,
-  `HookRecursionError`, and the `BackendError` group that adapters map storage
-  failures onto.
+- **Access control** is 2 independent checks: the handle scope and the block
+  policy. The operation continues only if both checks permit it. Policies do
+  not inherit through ownership. A policy is fixed at the creation of the
+  block.
+- **Observability** goes through hooks. Each operation that starts reports
+  exactly one outcome event. Each refusal reports its subject and the check
+  that caused it. So a filtered result is auditable and not silent.
+- **Consistency** is optimistic. Block updates carry an expected version. A
+  recursive delete sends the exact subtree snapshot that it observed. A
+  concurrent change raises `MemoryConflict`, and the stale work does not
+  commit.
+- **Atomic behavior belongs to the backend.** Some operations cannot be a safe
+  portable read followed by a write. Such an operation becomes a backend
+  capability with contract and concurrency tests. It is not a best-effort
+  sequence in a facade.
+- **Genie errors are one family, except `AccessDenied`.** All other Genie
+  error types derive from `GenieError`: `MemoryNotFound`, `MemoryConflict`,
+  `UnsupportedOperation`, `HookRecursionError`, and the `BackendError` group.
+  Adapters map storage failures to the `BackendError` group. `AccessDenied`
+  derives from `PermissionError`.
 
 ## Left out on purpose
 
 - **No process of its own:** no server, no worker, no background job, no
   retry loop, no cache layer.
-- **No embeddings and no ranking policy.** Search is a backend capability, and
-  how a backend scores a match is its own decision.
+- **No embeddings and no policy to rank results.** Search is a backend
+  capability. Each backend decides how it scores a match.
 - **No admin override and no policy mutation.** Authority stays where the
   creator put it.
-- **No policy inheritance through ownership.** `write` on a block is authority
-  over the existence of what it owns, and that is the only implied power.
+- **No policy inheritance through ownership.** `write` on a block gives
+  authority over the existence of the blocks that it owns. That is the only
+  implied power.
 - **No memory taxonomy.** Block types, value shapes, retrieval strategy, and
   agent behavior stay in the application.
 
 ## Related reading
 
-- [Overview](01-overview.md) — the model and the reasoning behind it
+- [Overview](01-overview.md) — the model and the reasons for it
 - [Detailed architecture](04-detailed-architecture.md) — module internals
-- [Repository organization](07-repo-organization.md) — where each component lives
-- [Memory and handles](../lib/src/genie/memory/README.md), [Structures](../lib/src/genie/structures/README.md), [Backends](../lib/src/genie/backend/README.md) — the detail for one area
+- [Repository organization](07-repo-organization.md) — the location of each component
+- [Memory and handles](../lib/src/genie/memory/README.md), [Structures](../lib/src/genie/structures/README.md), [Backends](../lib/src/genie/backend/README.md) — the details for each area
 - [Queries](../lib/src/genie/query/README.md), [Policies](../lib/src/genie/policy/README.md), [Hooks](../lib/src/genie/hooks/README.md), [Codecs](../lib/src/genie/codecs/README.md)

@@ -1,22 +1,23 @@
 # Library
 
-How an application builds its own memory on Genie: what the library provides,
-what the application writes, and how the two meet at runtime. Signatures are in
-[API interface spec](09-api-interface-spec.md). Packages and extras are in
+This note shows how an application builds its own memory on Genie. It tells
+what the library supplies, what the application writes, and how the 2 parts work
+together at runtime. The signatures are in
+[API interface spec](09-api-interface-spec.md). The packages and extras are in
 [Software stack](05-software-stack.md).
 
 ## A worked example
 
-A billing support desk keeps its tickets and notes across restarts. The
-application wraps Genie in one small class, `DeskMemory`, and the rest of the
-service sees only tickets and notes.
+A billing support desk keeps its tickets and notes after a restart. The
+application puts all Genie calls in one small class, `DeskMemory`. The rest of
+the service sees only tickets and notes.
 
 ```python
 from genie import EventLog, KeyedCollection, Memory, MemoryAddress, MemoryBlock, SQLiteBackend
 
 
 class DeskMemory:
-    """Tickets and notes for one support desk. It stores values and decides nothing."""
+    """The tickets and notes of one support desk. The class stores values and makes no decisions."""
 
     def __init__(self, memory: Memory, desk: str) -> None:
         root = _open(memory, f"desk:{desk}", type="desk")
@@ -45,7 +46,7 @@ class DeskMemory:
 
 
 def _open(memory: Memory, block_id: str, *, type: str, parent: MemoryBlock | None = None) -> MemoryBlock:
-    """Return the block with this id, and create it on first use."""
+    """Return the block with this id. Create the block if it does not exist."""
 
     return memory.get(block_id) or memory.put(id=block_id, type=type, value=block_id, parent=parent)
 ```
@@ -66,47 +67,46 @@ with SQLiteBackend("helpdesk.db") as backend:  # a later run of the same service
         desk.set_status("T-4471", "waiting on customer")
 ```
 
-- **The second run finds the same desk.** `_open` looks up each container by a stable id (`desk:billing`, `desk:billing/tickets`, `desk:billing/notes`) and creates it only on first use. Genie has no call that lists every root, so the application keeps the ids it needs.
-- **The stable ids come from application constants.** For ids built from untrusted input, the [policy guide](../lib/src/genie/policy/README.md#security-guidance) prefers generated `mem_` ids.
-- **`DeskMemory` hides every Genie detail.** Callers pass a ticket number and get back a `dict`, a `list[str]`, or `None`. Block ids, `MemoryAddress`, and both facades stay inside the class.
-- **Ownership and membership are set separately.** `open_ticket` creates the ticket under the `tickets` container (ownership), then binds its number in `KeyedCollection` (membership). Without `parent`, a `scope="subtree"` search rooted at `desk:billing` does not reach the ticket.
-- **The class decides nothing.** Whether an open ticket now waits on the customer is the caller's decision. `set_status` only stores the answer.
-- **It runs in trusted code.** It holds a `Memory` for `service:helpdesk`. A `Memory` for `agent:triage` over the same file gets `AccessDenied` on `desk:billing`, because every block keeps the default `owner_private()` policy. An agent gets tools that call `DeskMemory`, such as `lookup_ticket(number)`, instead of the class itself.
+- **The second run finds the same desk.** `_open` gets each container by a stable id (`desk:billing`, `desk:billing/tickets`, `desk:billing/notes`). It creates a container only if the container does not exist. Genie has no call that lists all roots, so the application keeps the ids that it needs.
+- **The stable ids come from application constants.** For ids that come from untrusted input, the [policy guide](../lib/src/genie/policy/README.md#security-guidance) prefers generated `mem_` ids.
+- **`DeskMemory` hides all Genie details.** A caller gives a ticket number and gets a `dict`, a `list[str]`, or `None`. Block ids, `MemoryAddress`, and the 2 facades stay inside the class.
+- **Ownership and membership are 2 separate steps.** `open_ticket` creates the ticket under the `tickets` container (ownership). Then it binds the ticket number in `KeyedCollection` (membership). Without `parent`, a `scope="subtree"` search with its root at `desk:billing` does not find the ticket.
+- **The class makes no decisions.** The caller decides if an open ticket now waits for the customer. `set_status` only stores the answer.
+- **The class runs in trusted code.** It holds a `Memory` for `service:helpdesk`. A `Memory` for `agent:triage` on the same file gets `AccessDenied` on `desk:billing`. The cause is that each block keeps the default `owner_private()` policy. An agent does not get the class itself. It gets tools that call `DeskMemory`, for example `lookup_ticket(number)`.
 - **The application closes the backend.** The `with` block closes the SQLite connection. `Memory` holds no connection and has no `close`.
 
 ## Who owns what
 
 | Concern | Genie | Application |
 | --- | --- | --- |
-| Ids, versions, timestamps | Generates `mem_` ids, raises `version` on each write, stores UTC times | May pass its own stable `id` to `put` |
-| Block types, value shapes, relation names | Stores them as given | Chooses all of them |
-| Tree layout | Parent/child ownership, subtree scope, recursive delete | Decides which block owns which |
-| Access | Checks handle scope and `MemoryPolicy` on every call | Picks principals, writes policies, hands out handles |
-| Values | `JsonCodec` by default, plus `CodecRegistry` | Adds codecs for other value types, and decides what values mean |
-| Storage | Backend contracts and the shipped adapters | Picks the backend, runs the server, owns backups and capacity |
-| Search | `MemoryQuery`, scope rules, a portable candidate scan | Ranking, embeddings, or a dedicated `SearchIndex` |
-| Stale writes | Raises `MemoryConflict` | Decides whether to read again and retry |
-| Connections | `close()` on each backend that holds one | Opens and closes the backend |
-| Agent behavior | None | Task interpretation, planning, extraction, consolidation, ranking policy, action choice |
+| Ids, versions, timestamps | Generates `mem_` ids, increases `version` on each write, stores UTC times | Can give its own stable `id` to `put` |
+| Block types, value shapes, relation names | Stores them as the application gives them | Chooses all of them |
+| Tree layout | Parent/child ownership, subtree scope, recursive delete | Decides which block owns which block |
+| Access | Checks handle scope and `MemoryPolicy` on each call | Chooses principals, writes policies, gives handles to callers |
+| Values | `JsonCodec` by default, and `CodecRegistry` | Adds codecs for other value types, and decides what values mean |
+| Storage | Backend contracts and the shipped adapters | Chooses the backend, operates the server, owns backups and capacity |
+| Search | `MemoryQuery`, scope rules, a portable candidate scan | The rank order of results, embeddings, or a dedicated `SearchIndex` |
+| Stale writes | Raises `MemoryConflict` | Decides if it reads the block again and retries |
+| Connections | `close()` on each backend that holds a connection | Opens and closes the backend |
+| Agent behavior | None | Task interpretation, plans, extraction, consolidation, rank policy, and action choice |
 
 ## How applications are built on it
 
-The examples and lamps build in the same four layers. Only setup code is needed
-to call Genie. The other three layers are how the repository keeps Genie
-details out of agent code.
+The examples and lamps use the same 4 layers. Genie needs only the setup code.
+The repository uses the other 3 layers to keep Genie details out of agent code.
 
 | Layer | Holds | Trust | In the repository |
 | --- | --- | --- | --- |
 | Setup code | Backend, `Memory`, policy engine, hooks, codecs | Trusted | The `with SQLiteBackend(...)` block above |
-| Application memory class | Facades, container roots, stable ids, value-oriented reads and writes | Trusted | `TaskMemory` in `examples/advanced/agent_memory.py`; `MemoryStore` in the `mem0` and `langmem` lamps |
-| Tools | Named functions with JSON-compatible arguments and results | The agent boundary | `Mem0Tools` in `examples/lamps/mem0/agent.py`, and the `agent.py` of every other lamp |
+| Application memory class | Facades, container roots, stable ids, value-oriented reads and writes | Trusted | `TaskMemory` in `examples/advanced/agent_memory.py`, and `MemoryStore` in the `mem0` and `langmem` lamps |
+| Tools | Named functions with JSON-compatible arguments and results | The agent boundary | `Mem0Tools` in `examples/lamps/mem0/agent.py`, and the `agent.py` of each other lamp |
 | Agent or service | Decisions about what to store, read, and do next | Outside the boundary | `TaskAgent.choose_next_action` in `examples/advanced/agent_memory.py` |
 
-- **The memory class returns stored values and relationships.** It does not rank, merge, or choose. `TaskMemory` returns preconditions, recent experiments, and graph neighbors, and `TaskAgent` decides what to do with them.
-- **The decision logic has a named home outside it.** `MemoryStore` in the `langmem` lamp never decides when a memory changes; its `MemoryManager` does. `MemoryStore` in the `mem0` lamp never decides whether a fact adds, replaces, or removes a record; `MemoryUpdater` in its `pipeline.py` does.
-- **It takes a `Memory` or a `MemoryHandle`.** Both lamp `MemoryStore` classes take a handle rooted at one block, so the class itself cannot reach outside that subtree.
-- **It checks capabilities before it writes.** `TaskMemory.create` raises `UnsupportedOperation` when the backend is not both a `KeyedStore` and a `SequenceStore`, before it creates any container block.
-- **Tools are the agent boundary.** An agent that calls tools never holds `Memory`, a backend, or a hook registry, so it cannot skip a policy check. The lamps keep tool arguments and results JSON-compatible, so an agent backed by a model can call the same tools.
+- **The memory class returns stored values and relationships.** It does not rank, merge, or choose. `TaskMemory` returns preconditions, recent experiments, and graph neighbors. `TaskAgent` decides what to do with them.
+- **A named class outside the memory class holds the decision logic.** `MemoryStore` in the `langmem` lamp does not decide when a memory changes. Its `MemoryManager` makes that decision. `MemoryStore` in the `mem0` lamp does not decide if a fact adds, replaces, or removes a record. `MemoryUpdater` in its `pipeline.py` makes that decision.
+- **The memory class takes a `Memory` or a `MemoryHandle`.** The 2 lamp `MemoryStore` classes take a handle with its root at one block. So the class itself cannot reach blocks outside that subtree.
+- **The memory class checks capabilities before it writes.** `TaskMemory.create` raises `UnsupportedOperation` if the backend is not both a `KeyedStore` and a `SequenceStore`. It does this check before it creates a container block.
+- **Tools are the agent boundary.** An agent that calls tools never holds `Memory`, a backend, or a hook registry. So the agent cannot skip a policy check. The lamps keep tool arguments and results JSON-compatible. So an agent that uses a model can call the same tools.
 
 ## Choosing the parts
 
@@ -122,9 +122,9 @@ details out of agent code.
 | What was true on this date? | `TemporalCollection` | `TemporalStore`, optional `TemporalIndex` |
 | What did this record say before? | `VersionedRecords` | `VersionedStore` (`KeyedStore` + `SequenceStore`) |
 
-- **Any subset works over the same blocks.** `DeskMemory` uses `KeyedCollection` and `EventLog`. `TaskMemory` uses `OwnershipTree`, `KeyedCollection`, `EventLog`, and `PropertyGraph`.
-- **Every shipped adapter supports all seven facades.** A facade given a `RoutedBackend` binds to the route that owns its container block. `LineageDAG` writes through `Memory`, and `RoutedBackend` sends each acyclic link to the store that holds its links.
-- **A missing capability fails when the facade is constructed,** with `UnsupportedOperation`, not on its first write.
+- **Any subset of facades works on the same blocks.** `DeskMemory` uses `KeyedCollection` and `EventLog`. `TaskMemory` uses `OwnershipTree`, `KeyedCollection`, `EventLog`, and `PropertyGraph`.
+- **Each shipped adapter supports all 7 facades.** If a facade gets a `RoutedBackend`, the facade binds to the route that owns its container block. `LineageDAG` writes through `Memory`. `RoutedBackend` sends each acyclic link to the store that holds the links.
+- **A missing capability fails at facade construction.** The facade constructor raises `UnsupportedOperation`. The failure does not wait for the first write.
 
 ### Backend by deployment
 
@@ -132,74 +132,74 @@ details out of agent code.
 | --- | --- |
 | Tests, examples, prototypes | `InMemoryBackend` |
 | One process with a local file | `SQLiteBackend` |
-| A database server the application already runs | `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, or `RedisBackend`, each through its extra |
-| Different subtrees in different stores | `RoutedBackend` over any of the above |
+| A database server that the application already operates | `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, or `RedisBackend`, each through its extra |
+| Different subtrees in different stores | `RoutedBackend` on top of any backend above |
 
-- **Changing the backend changes setup code only.** The memory class, the tools, and the agent call the same `Memory` API.
-- **Throughput and deployment work differ by adapter.** See [Backends](../lib/src/genie/backend/README.md#small-production-deployments) for the good fit and the deployment responsibility of each.
+- **A different backend changes only the setup code.** The memory class, the tools, and the agent call the same `Memory` API.
+- **Throughput and deployment work are different for each adapter.** [Backends](../lib/src/genie/backend/README.md#small-production-deployments) gives the good use case and the deployment responsibility of each adapter.
 
 ## Extending from application code
 
-| Seam | The application writes | Passed in through |
+| Extension point | The application writes | The application gives it through |
 | --- | --- | --- |
-| Storage | A class with the `MemoryBackend` methods, plus any optional capability protocols | `Memory(backend=...)` |
-| Access rules | `MemoryPolicy` values built from `AccessRule`; custom operation names through `PolicyEngine(operations=...)` | `put(policy=...)`, `Memory(default_policy=..., policy_engine=...)`, or a `before_put` hook |
+| Storage | A class with the `MemoryBackend` methods, and any optional capability protocols | `Memory(backend=...)` |
+| Access rules | `MemoryPolicy` values made from `AccessRule`, and custom operation names through `PolicyEngine(operations=...)` | `put(policy=...)`, `Memory(default_policy=..., policy_engine=...)`, or a `before_put` hook |
 | Observation | A `MemoryHook` subclass | `Memory(hooks=[...])` or a `HookRegistry` |
 | Value types | A `MemoryCodec` | `Memory(codecs=CodecRegistry([JsonCodec(), ...]))` |
-| Structures | A class that composes existing facades | Takes a `Memory` or a `MemoryHandle` |
+| Structures | A class that composes the Genie facades | Genie does not receive the class. The class takes a `Memory` or a `MemoryHandle` |
 
-- **No plugin system.** No entry points, registry files, or discovery step. Every extension is an object the application passes to a constructor.
-- **A capability is claimed by implementing it.** The protocols are `runtime_checkable`, so a backend with the `KeyedStore` methods is a `KeyedStore`, with no base class and no registration.
-- **The contract suites do not ship.** They live in `lib/tests/backends/test_backend_contracts.py`, outside the installed package. An application-owned backend reuses them from a clone: a test class subclasses the contracts for the capabilities it claims and implements `make_backend()`.
-- **A `codecs` registry replaces the default.** Without `JsonCodec()` in it, JSON values stop encoding.
-- **A new structure composes facades** instead of adding its own storage, the way `LineageDAG` wraps `PropertyGraph` and `VersionedRecords` wraps a keyed collection and an event log.
+- **Genie has no plugin system.** It has no entry points, registry files, or discovery step. Each extension is an object that the application gives to a constructor.
+- **A backend claims a capability when it implements the methods.** The protocols are `runtime_checkable`. So a backend with the `KeyedStore` methods is a `KeyedStore`. It needs no base class and no registration.
+- **The contract suites are not in the installed package.** They are in `lib/tests/backends/test_backend_contracts.py`. An application-owned backend uses them from a clone of the repository. Its test class subclasses the contracts for the capabilities that the backend claims. The test class also implements `make_backend()`.
+- **A `codecs` registry replaces the default registry.** If the registry does not contain `JsonCodec()`, Genie cannot encode JSON values.
+- **A new structure composes facades.** It does not add its own storage. For example, `LineageDAG` wraps `PropertyGraph`, and `VersionedRecords` wraps a keyed collection and an event log.
 
 ## Runtime contract
 
-- **In-process and synchronous.** Every call runs on the calling thread, hooks included. Genie itself starts no thread, timer, or event loop.
-- **No async API.** An `asyncio` application runs Genie calls off the event loop, for example with `asyncio.to_thread`.
-- **Threads share one `Memory` and one backend.** The concurrency tests and the benchmark workers run that way. `SQLiteBackend`, `PostgresBackend`, and `Neo4jBackend` make a second writer wait. `RedisBackend` and `MongoDBBackend` retry the writer that lost instead.
-- **No global state.** Importing `genie` configures nothing, and the package reads no environment variable. Two `Memory` objects with different principals, policies, or hooks work side by side, over one backend or several.
-- **Genie reports through hooks, not logs.** The only log record comes from the `genie.hooks.registry` logger at `ERROR` level, when an observing callback of a hook with `fail_open = True` fails and the failure is contained.
-- **Connection-holding backends close explicitly.** `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, and `RedisBackend` have `close()` and work as context managers. After `close`, their calls raise `RuntimeError`. `InMemoryBackend` has nothing to close, and `RoutedBackend` leaves each routed backend to the application.
-- **Server checks run at construction.** For example, `PostgresBackend`, `MongoDBBackend`, and `RedisBackend` refuse a server that reports it does not accept writes, such as a replica. Each `verify_*` flag turns one check off, and on the server adapters `initialize_schema=False` uses an existing layout without creating it.
-- **Data is found again by id.** A generated `mem_` id is kept in the application's own configuration, or a stable id is passed to `put(id=...)`. A second `put` with the same id raises `MemoryConflict`.
-- **A search page can be short.** `MemoryQuery.limit` is a candidate budget spent before policy filtering. A caller that needs a full page asks for a larger limit and slices the result.
+- **Genie is in-process and synchronous.** Each call runs on the thread of the caller, and the hooks run there too. Genie itself starts no thread, timer, or event loop.
+- **Genie has no async API.** An `asyncio` application runs Genie calls outside the event loop, for example with `asyncio.to_thread`.
+- **Threads can share one `Memory` and one backend.** The concurrency tests and the benchmark workers use this configuration. `SQLiteBackend`, `PostgresBackend`, and `Neo4jBackend` make a second writer wait. `RedisBackend` and `MongoDBBackend` retry the writer that lost.
+- **Genie has no global state.** An import of `genie` configures nothing, and the package reads no environment variable. One process can hold 2 `Memory` objects with different principals, policies, or hooks. They work together on one backend or on several backends.
+- **Genie reports through hooks, not logs.** The `genie.hooks.registry` logger writes the only log record, at `ERROR` level. It writes it when an observer callback of a hook with `fail_open = True` fails, and the registry contains the failure.
+- **A backend that holds a connection closes explicitly.** `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, and `RedisBackend` have `close()`, and each one works as a context manager. After `close`, their calls raise `RuntimeError`. `InMemoryBackend` has nothing to close. `RoutedBackend` does not close its routed backends. The application closes each one.
+- **Server checks run at construction.** For example, `PostgresBackend`, `MongoDBBackend`, and `RedisBackend` refuse a server that reports that it does not accept writes, for example a replica. Each `verify_*` flag disables one check. On the server adapters, `initialize_schema=False` uses the layout that is already in the store and does not create it.
+- **The application finds data again by id.** The application keeps a generated `mem_` id in its own configuration, or it gives a stable id to `put(id=...)`. A second `put` with the same id raises `MemoryConflict`.
+- **A search page can be short.** `MemoryQuery.limit` is a candidate budget. Genie uses this budget before the policy filter. A caller that needs a full page asks for a larger limit and slices the result.
 
 ### Errors a caller handles
 
-- **`except GenieError` catches every Genie failure except `AccessDenied`,** which is a `PermissionError` and is caught by name.
-- **Setup errors:** `UnsupportedOperation` (a missing extra, a missing capability, or a stored schema the adapter does not accept), plus `TypeError` and `ValueError` (bad constructor arguments).
-- **Errors a running service handles:** `AccessDenied`, `MemoryNotFound`, `MemoryConflict` (a stale write that Genie never retries), `BackendBusy` (a retry may succeed), `BackendUnavailable`, `BackendReadOnly`, `BackendCapacityExceeded`, and `BackendCorruption` (a stored record that cannot be read safely).
-- **The driver error is kept** as `__cause__` on every `BackendError`.
+- **`except GenieError` catches all Genie failures except `AccessDenied`.** `AccessDenied` is a `PermissionError`, so a caller catches it by name.
+- **Setup errors:** `UnsupportedOperation` (a missing extra, a missing capability, or a stored schema that the adapter does not accept), and also `TypeError` and `ValueError` (bad constructor arguments).
+- **Errors that a service handles at runtime:** `AccessDenied`, `MemoryNotFound`, `MemoryConflict` (a stale write that Genie never retries), `BackendBusy` (a retry can succeed), `BackendUnavailable`, `BackendReadOnly`, `BackendCapacityExceeded`, and `BackendCorruption` (a stored record that the backend cannot read safely).
+- **Each `BackendError` keeps the driver error** as `__cause__`.
 - **Full table:** [API interface spec](09-api-interface-spec.md#errors).
 
 ## Public surface and stability
 
-- **The public API is the root `__all__`** in `lib/src/genie/__init__.py`. Each name also imports from its subpackage, so `from genie import KeyedCollection` and `from genie.structures import KeyedCollection` reach the same class. `lib/tests/test_public_imports.py` checks both styles.
-- **Underscore modules are private.** `genie.structures._hooks` and `genie.structures._routing` are not re-exported.
-- **Typed.** `py.typed` ships with the package, so a type checker in the application reads Genie's annotations.
-- **Version `1.0.0`.**
-- **Installed from the repository.** `pip install -e .` from a clone, or `pip install` from a git URL. Adapter drivers come from extras, such as `genie[postgres]`.
-- **The module guides ship with the code.** Every subpackage `README.md` is package data, so an installed version carries the guide that matches it.
+- **The public API is the root `__all__`** in `lib/src/genie/__init__.py`. Each name also imports from its subpackage. So `from genie import KeyedCollection` and `from genie.structures import KeyedCollection` give the same class. `lib/tests/test_public_imports.py` checks the 2 import styles.
+- **Underscore modules are private.** Genie does not re-export `genie.structures._hooks` and `genie.structures._routing`.
+- **The package is typed.** The package contains `py.typed`, so a type checker in the application reads the Genie annotations.
+- **The version is `1.0.0`.**
+- **The application installs Genie from the repository.** It uses `pip install -e .` from a clone, or `pip install` with a git URL. Adapter drivers come from extras, for example `genie[postgres]`.
+- **The module guides are part of the package.** Each subpackage `README.md` is package data. So an installed version contains the guide that matches it.
 
 ## Left out on purpose
 
 | Left out | Why |
 | --- | --- |
 | A ready-made memory class | Taxonomy, layout, and retrieval belong to the application. `DeskMemory` and `TaskMemory` are examples, not library code |
-| Agent framework integrations | The core stays independent of how agents run. Integrations belong in `examples/` and never become core dependencies |
-| A default or global `Memory` | Every `Memory` is built and passed in explicitly, so two services or two tests never share hidden state |
-| Configuration files and environment variables | Every setting is a constructor argument |
-| An async API | Every call is synchronous |
-| Automatic retries | `MemoryConflict` goes to the caller, which knows whether the work is still wanted |
-| A call that lists every root | The backend contracts have no method that lists every block |
+| Agent framework integrations | The core stays independent of how agents run. Integrations are in `examples/`, and they never become core dependencies |
+| A default or global `Memory` | The application builds each `Memory` and gives it explicitly. So 2 services or 2 tests never share hidden state |
+| Configuration files and environment variables | Each setting is a constructor argument |
+| An async API | All calls are synchronous |
+| Automatic retries | Genie gives `MemoryConflict` to the caller. The caller knows if it still needs the work |
+| A call that lists all roots | The backend contracts have no method that lists all blocks |
 
 ## Related reading
 
 - [Overview](01-overview.md) — the model and the design philosophy
-- [High-level architecture](03-high-level-architecture.md) — layers, trust boundary, and extension seams
-- [Software stack](05-software-stack.md) — Python version, extras, and driver ranges
-- [API interface spec](09-api-interface-spec.md) — every signature, return value, and error
-- [Examples](../examples/README.md) and [Lamps](../examples/lamps/README.md) — application memory classes and tools that run
+- [High-level architecture](03-high-level-architecture.md) — layers, trust boundary, and extension points
+- [Software stack](05-software-stack.md) — Python version, extras, and driver version ranges
+- [API interface spec](09-api-interface-spec.md) — all signatures, return values, and errors
+- [Examples](../examples/README.md) and [Lamps](../examples/lamps/README.md) — runnable application memory classes and tools
 - [Backends](../lib/src/genie/backend/README.md), [Policies](../lib/src/genie/policy/README.md), [Hooks](../lib/src/genie/hooks/README.md), [Codecs](../lib/src/genie/codecs/README.md)

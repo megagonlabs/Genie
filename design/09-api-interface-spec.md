@@ -1,14 +1,14 @@
 # API Interface Spec
 
-The public Python interface of Genie: every entry point, its signature, what it
-returns, and what it raises. How the calls work inside is in
-[Detailed architecture](04-detailed-architecture.md). The records they read and
-write are in [Data model](10-data-model.md).
+This note gives the public Python interface of Genie: each entry point, its
+signature, its return value, and the errors that it raises.
+[Detailed architecture](04-detailed-architecture.md) tells how the calls work
+inside. [Data model](10-data-model.md) gives the records that the calls read and
+write.
 
 ## A worked example
 
-A billing support service gives a triage agent access to one desk and nothing
-else.
+A billing support service gives a triage agent access to one desk only.
 
 ```python
 from genie import AccessDenied, InMemoryBackend, KeyedCollection, Memory, MemoryAddress, MemoryPolicy
@@ -22,7 +22,7 @@ ticket = memory.put(parent=desk, type="ticket", value={"number": "T-4471", "stat
 
 agent = memory.get_handle(root=desk)
 agent.update(ticket, value={"status": "triaged"})           # version 1 -> 2
-agent.search("T-4471", types=["ticket"])                    # subtree of the desk only
+agent.search("T-4471", types=["ticket"])                    # only the subtree of the desk
 
 try:
     agent.get(other)
@@ -38,61 +38,64 @@ keys.get(MemoryAddress(("tickets",), "T-4471")).value     # {"number": "T-4471",
 | --- | --- | --- |
 | **`memory.put(...)`** | `Memory` | a decoded `MemoryBlock` at `version` `1` |
 | **`memory.get_handle(root=desk)`** | `Memory` | a `MemoryHandle` bounded to the desk subtree |
-| **`agent.update(...)`** | `MemoryHandle` | the same block at `version` `2`, with the value merged |
-| **`agent.get(other)`** | `MemoryHandle` | `AccessDenied`, reported to `on_denied` |
-| **`keys.bind(...)`** | `KeyedCollection` | a `KeyedItem`; the ticket's `parent_id` does not change |
+| **`agent.update(...)`** | `MemoryHandle` | the same block at `version` `2`, with the merged value |
+| **`agent.get(other)`** | `MemoryHandle` | `AccessDenied`, which Genie reports to `on_denied` |
+| **`keys.bind(...)`** | `KeyedCollection` | a `KeyedItem`. The `parent_id` of the ticket does not change |
 
 ## At a glance
 
 | Surface | Main names | Used by |
 | --- | --- | --- |
-| **Memory** | `Memory`, `MemoryHandle` | Every application |
-| **Records** | `MemoryBlock`, `MemoryLink`, `LinkRelations` | Every application |
-| **Query** | `MemoryQuery`, `Scope`, `SearchResult`, `matches_filters`, `normalize_filters` | Search callers, search adapters |
+| **Memory** | `Memory`, `MemoryHandle` | All applications |
+| **Records** | `MemoryBlock`, `MemoryLink`, `LinkRelations` | All applications |
+| **Query** | `MemoryQuery`, `Scope`, `SearchResult`, `matches_filters`, `normalize_filters` | Search callers and search adapters |
 | **Policy** | `MemoryPolicy`, `AccessRule`, `Principal`, `PolicyEngine`, `Operation` | Applications that share blocks |
 | **Structures** | `OwnershipTree`, `PropertyGraph`, `LineageDAG`, `KeyedCollection`, `EventLog`, `TemporalCollection`, `VersionedRecords` | Applications that organize blocks |
-| **Hooks** | `MemoryHook`, `HookRegistry`, `HookContext`, and their enums | Audit, metrics, validation |
+| **Hooks** | `MemoryHook`, `HookRegistry`, `HookContext`, and their enums | Audit, metrics, and validation |
 | **Codecs** | `MemoryCodec`, `CodecRegistry`, `EncodedValue`, `JsonCodec`, `MAX_NESTING_DEPTH`, stdlib codecs | Applications with non-JSON values |
 | **Backend contracts** | `MemoryBackend` and the capability protocols | Adapter authors |
 | **Adapters** | `InMemoryBackend`, `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, `RedisBackend`, `RoutedBackend` | Application setup code |
-| **Errors** | `GenieError` family, `AccessDenied` | Every caller |
+| **Errors** | `GenieError` and its subclasses, `AccessDenied` | All callers |
 
 ## Conventions
 
-- **Every public name imports from `genie`** and from its subpackage
-  (`genie.memory`, `genie.structures`, `genie.backend`, and so on). Both reach
-  the same object.
-- **Every call is synchronous.** No call returns a future, and hooks run on the
-  calling thread.
-- **Block arguments accept an id or a block.** Parameters typed
-  `str | MemoryBlock` (`BlockRef` in the structures) read only the `id`.
-  Authorization always runs against the stored block, never against the object
-  passed in.
-- **Options are keyword-only.** Only the main subject of a call (a block id, a
-  value, a link, a query) is positional.
+- **Each public name is available from `genie`** and from its subpackage
+  (`genie.memory`, `genie.structures`, `genie.backend`, and the other
+  subpackages). Both import paths give the same object.
+- **Each call is synchronous.** No call returns a future. Hooks run on the
+  thread of the caller.
+- **Block arguments accept an id or a block.** For parameters of type
+  `str | MemoryBlock` (`BlockRef` in the structures), Genie reads only the `id`.
+  Authorization always uses the stored block, never the object that the caller
+  gives.
+- **Options are keyword-only.** Only the main subject of a call is positional:
+  a block id, a value, a link, or a query.
 - **Returned objects are copies.** Records are frozen dataclasses with
-  `slots=True`, and values are decoded and deep-copied, so editing a result
+  `slots=True`. Values are decoded and deep-copied, so a change to a result
   never changes stored state.
-- **A list call filters; a single-item call raises.** `children`, `ancestors`,
-  `list_links`, `search`, and structure listings drop what the principal
-  cannot read. `get`, `set`, and exact lookups raise `AccessDenied` instead.
-- **A missing block is `None` only from `get`.** `Memory.get` and the structure
-  `get` methods return `None` for an unknown key. Calls that need a block to
-  exist raise `MemoryNotFound`.
-- **Stale writes raise `MemoryConflict`.** It means "read again and retry". No
-  call retries by itself.
-- **Bad argument types raise `TypeError`; bad argument values raise
-  `ValueError`.** A stored value that no registered codec can decode is also a
-  `TypeError`.
+- **A list call filters. A single-item call raises an error.** `children`,
+  `ancestors`, `list_links`, `search`, and the list calls of the structures
+  remove the items that the principal cannot read. `get`, `set`, and exact
+  lookups raise `AccessDenied` instead.
+- **Only `get` gives `None` for a block that does not exist.** `Memory.get`
+  and the structure `get` methods return `None` for an unknown key. A call that
+  needs a block raises `MemoryNotFound` if the block does not exist.
+- **Stale writes raise `MemoryConflict`.** This error tells the caller to read
+  again and retry. No call retries automatically.
+- **A bad argument type raises `TypeError`. A bad argument value raises
+  `ValueError`.** If no registered codec can decode a stored value, Genie also
+  raises `TypeError`.
 - **Ids, block types, and relations are non-empty strings.** A block argument
-  that is neither a `MemoryBlock` nor a string, a non-string `type` or `id` in
-  `put`, and a non-string `relation` raise `TypeError`. An empty or
-  whitespace-only string raises `ValueError`. A bad value never reaches the
-  backend. The tables below do not repeat these errors.
+  that is not a `MemoryBlock` or a string raises `TypeError`. A `type` or `id`
+  in `put` that is not a string also raises `TypeError`. So does a `relation`
+  that is not a string. An empty string, or a string of only whitespace, raises
+  `ValueError`.
+  A bad value never gets to the backend. The tables below do not repeat these
+  errors.
 - **JSON values and metadata nest at most `MAX_NESTING_DEPTH` (100) levels.**
   Each list or dictionary is one level, and the metadata dictionary is the
-  first level. Deeper data, and a list or dictionary that contains itself,
-  raises `ValueError` before the backend runs.
+  first level. If data is deeper, or if a list or dictionary contains itself,
+  Genie raises `ValueError` before the backend runs.
 
 ## `Memory`
 
@@ -104,18 +107,18 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 
 | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `backend` | `MemoryBackend \| None` | `InMemoryBackend()` | Where blocks, links, and search live |
-| `principal` | `Principal \| str \| None` | `Principal("system")` | Who acts; a string becomes `Principal(id=...)` |
+| `backend` | `MemoryBackend \| None` | `InMemoryBackend()` | Stores blocks and links, and runs search |
+| `principal` | `Principal \| str \| None` | `Principal("system")` | The principal that acts. A string becomes `Principal(id=...)` |
 | `policy_engine` | `PolicyEngine \| None` | `PolicyEngine()` | Evaluates `MemoryPolicy` rules |
-| `hooks` | `list[MemoryHook] \| HookRegistry \| None` | empty `HookRegistry` | Fixed for the life of the object; its contents can change |
+| `hooks` | `list[MemoryHook] \| HookRegistry \| None` | empty `HookRegistry` | The registry stays the same for the life of the object. Its contents can change |
 | `codecs` | `CodecRegistry \| None` | `CodecRegistry([JsonCodec()])` | Encodes and decodes values |
-| `default_policy` | `MemoryPolicy \| None` | `MemoryPolicy.owner_private()` | Attached by `put` when no `policy` is given |
-| `attributes` | `Mapping[str, str] \| None` | `{}` | Copied into every `HookContext` |
+| `default_policy` | `MemoryPolicy \| None` | `MemoryPolicy.owner_private()` | `put` attaches it if the call gives no `policy` |
+| `attributes` | `Mapping[str, str] \| None` | `{}` | Genie copies them into each `HookContext` |
 
-- **Raises:** `TypeError` for a wrong-typed argument; `ValueError` for an
-  empty principal id or a repeated hook.
-- **Holds no block data.** Two `Memory` objects over one backend see the same
-  blocks.
+- **Raises:** `TypeError` for an argument of the wrong type. `ValueError` for
+  an empty principal id or a duplicate hook.
+- **`Memory` holds no block data.** 2 `Memory` objects over one backend see the
+  same blocks.
 
 ### Blocks
 
@@ -129,54 +132,58 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 | `require_access(operation, block_id)` | `None` | the named operation | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` (empty id or unknown operation) |
 
 - **`put` without `parent` creates a root block.** No parent check runs.
-- **`require_access` changes nothing.** It runs the check the named operation
-  would run and reports a refusal to `on_denied` under `access.require`.
-  Structure facades call it to require `write` on a container before changing
-  membership.
-- **`id` is optional.** Without it, Genie generates a `mem_` id. An empty
-  `id` is a `ValueError`; it does not fall back to a generated id.
-- **`set` replaces the value** and may change `content_type`. **`update`
-  merges** into a `dict` value and into metadata, and keeps `content_type`.
-  `update(value=...)` on a non-`dict` value is a `TypeError`.
-- **Both `set` and `update` raise `version` by `1`** and fail with
-  `MemoryConflict` when another writer changed the block first.
-- **Both `set` and `update` also need `read`,** because they return the
-  stored block. `write` is checked first. A write-only inbox is built with
-  `put`, which needs `write` and `traverse_down` on the container and
+- **`require_access` changes nothing.** It runs the same check as the named
+  operation. It reports a refusal to `on_denied` under `access.require`.
+  Structure facades call it to check `write` on a container before a membership
+  change.
+- **`id` is optional.** Without it, Genie generates a `mem_` id. An empty `id`
+  raises `ValueError`. Genie does not use a generated id in its place.
+- **`set` replaces the value** and can change `content_type`. **`update`
+  merges** the new data into a `dict` value and into metadata, and keeps
+  `content_type`. `update(value=...)` on a value that is not a `dict` raises
+  `TypeError`.
+- **Both `set` and `update` increase `version` by `1`.** They fail with
+  `MemoryConflict` if another writer changed the block first.
+- **Both `set` and `update` also need `read`,** because they return the stored
+  block. Genie checks `write` first. An application builds a write-only inbox
+  with `put`. `put` needs `write` and `traverse_down` on the container, and
   returns only the new block.
-- **`delete` removes the whole subtree** plus every link, key binding, log
-  entry, and temporal entry that names a removed block.
-- **`metadata` is always a strict JSON `dict`**, whatever codec the value uses.
-- **`ValueError` from a write** means a bad argument value (for example an
-  empty id, or a value nested too deeply), or a `before_*` hook changed a
-  field it may not change (for example the parent in `before_put`).
+- **`delete` removes the whole subtree.** It also removes each link, key
+  binding, log entry, and temporal entry that names a removed block.
+- **`metadata` is always a strict JSON `dict`**, independent of the codec that
+  the value uses.
+- **`ValueError` from a write** has 2 possible causes. An argument value is bad
+  (for example an empty id, or a value that nests too deeply). Or a `before_*`
+  hook changed a field that the hook cannot change (for example the parent in
+  `before_put`).
 
 ### Ownership
 
 | Method | Returns | Checked | Raises |
 | --- | --- | --- | --- |
-| `children(block_id)` | `list[MemoryBlock]` | `traverse_down` on the parent, then `read` per child | `AccessDenied`, `MemoryNotFound` |
-| `ancestors(block_id)` | `list[MemoryBlock]`, nearest parent first | `traverse_up` on the block, then `read` per ancestor | `AccessDenied`, `MemoryNotFound` |
+| `children(block_id)` | `list[MemoryBlock]` | `traverse_down` on the parent, then `read` for each child | `AccessDenied`, `MemoryNotFound` |
+| `ancestors(block_id)` | `list[MemoryBlock]`, nearest parent first | `traverse_up` on the block, then `read` for each ancestor | `AccessDenied`, `MemoryNotFound` |
 | `contains(root, block_id)` | `bool` | `traverse_down` on the root, `read` on the candidate | `AccessDenied`, `MemoryNotFound` (root) |
 
-- **No call changes `parent_id`.** A block's parent is fixed at `put`.
+- **No call changes `parent_id`.** The parent of a block is fixed at `put`.
 
 ### Links and mounts
 
 | Method | Returns | Checked | Raises |
 | --- | --- | --- | --- |
 | `add_link(source, target, relation, *, metadata=None)` | `MemoryLink` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
-| `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | same | also `MemoryConflict` (cycle), `UnsupportedOperation` (no `AcyclicLinkStore`) |
+| `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | the same as `add_link` | also `MemoryConflict` (cycle), `UnsupportedOperation` (no `AcyclicLinkStore`) |
 | `update_link(link, *, metadata)` | `MemoryLink` | `write` then `read` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
-| `list_links(block_id, *, relation=None, direction="out")` | `list[MemoryLink]` | `read` on the block and on both ends of each link | `AccessDenied`, `MemoryNotFound`, `ValueError` (direction) |
+| `list_links(block_id, *, relation=None, direction="out")` | `list[MemoryLink]` | `read` on the block and on the 2 ends of each link | `AccessDenied`, `MemoryNotFound`, `ValueError` (direction) |
 | `add_mount(source, target, *, metadata=None)` | `MemoryLink` with relation `"genie.mount"` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `list_mounts(source)` | `list[MemoryLink]` | `read` on source | `AccessDenied`, `MemoryNotFound` |
-| `discover_mounts(root, *, include_self=True)` | `list[MemoryLink]` | `search` and `traverse_down` on root, `read` per source | `AccessDenied`, `MemoryNotFound` |
-| `resolve_mount(mount)` | `MemoryBlock \| None` | `read` on source; target goes through `get` | `AccessDenied`, `MemoryNotFound` (source), `ValueError` (not a mount) |
+| `discover_mounts(root, *, include_self=True)` | `list[MemoryLink]` | `search` and `traverse_down` on root, `read` for each source | `AccessDenied`, `MemoryNotFound` |
+| `resolve_mount(mount)` | `MemoryBlock \| None` | `read` on source. The target read uses `get` | `AccessDenied`, `MemoryNotFound` (source), `ValueError` (not a mount) |
 
 - **`direction`** is `"out"`, `"in"`, or `"both"` (`LinkDirection`).
-- **`update_link` merges metadata only.** Source, target, and relation never
-  change. It returns the stored link, so it also needs `read` on the source.
+- **`update_link` merges metadata only.** The source, target, and relation
+  never change. It returns the stored link, so it also needs `read` on the
+  source.
 - **`add_acyclic_link` refuses `"genie.mount"`** with `ValueError`.
 - **Links do not imply ownership.** Recursive delete and subtree search do not
   follow them.
@@ -187,13 +194,13 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filters=None, limit=20)
 ```
 
-- **Three input forms:** a `MemoryQuery`, a text string as `query`, or keyword
-  arguments. All become one `MemoryQuery`.
-- **Returns** `list[SearchResult]` that the principal can `search` and `read`
-  and that fall inside the scope.
-- **`limit` is a candidate budget.** The backend spends it before policy
-  filtering, so the visible page can be shorter than `limit`.
-- **Raises:** `AccessDenied` (root not searchable or not traversable),
+- **3 input forms:** a `MemoryQuery`, a text string as `query`, or keyword
+  arguments. Genie changes each form into one `MemoryQuery`.
+- **Returns** `list[SearchResult]`. Each result is inside the scope, and the
+  principal can `search` and `read` it.
+- **`limit` is a candidate budget.** The backend uses it before the policy
+  filter, so the visible page can be shorter than `limit`.
+- **Raises:** `AccessDenied` (the root is not searchable or not traversable),
   `MemoryNotFound` (root), `TypeError`, `ValueError` (unknown scope, negative
   limit, or a non-global scope with no root).
 
@@ -201,45 +208,47 @@ search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filter
 
 | Method | Returns | Raises |
 | --- | --- | --- |
-| `get_handle(*, root, principal=None, default_scope=Scope.SUBTREE, allow_up=False, allow_global=False, allow_mounts=False, allow_policy_override=False)` | `MemoryHandle` bounded to `root` | `AccessDenied` (handle principal cannot `read` root), `MemoryNotFound`, `TypeError`, `ValueError` |
+| `get_handle(*, root, principal=None, default_scope=Scope.SUBTREE, allow_up=False, allow_global=False, allow_mounts=False, allow_policy_override=False)` | `MemoryHandle` bounded to `root` | `AccessDenied` (the handle principal cannot `read` the root), `MemoryNotFound`, `TypeError`, `ValueError` |
 | `get_unbounded_handle(*, principal=None, default_scope=Scope.SUBTREE, ...same flags)` | `MemoryHandle` with no root | `TypeError`, `ValueError` |
 
-- **`principal=None` keeps this memory's principal.**
-- **`default_scope` is checked against the flags.** For example
-  `default_scope="global"` without `allow_global=True` is a `ValueError`.
+- **`principal=None` keeps the principal of this memory.**
+- **Genie checks `default_scope` against the flags.** For example,
+  `default_scope="global"` without `allow_global=True` raises `ValueError`.
 - **`hooks`** is a read-only property that returns the `HookRegistry`.
 
 ## `MemoryHandle`
 
-A bounded view of one `Memory`. It has the same block, ownership, link, mount,
-and search methods, with these differences:
+A `MemoryHandle` is a bounded view of one `Memory`. It has the same block,
+ownership, link, mount, and search methods as `Memory`, with these differences:
 
 | Difference | Handle behavior |
 | --- | --- |
-| **Boundary** | Every id has to be inside the root. An unknown id is refused as "outside the handle" before any lookup, so its existence is not revealed |
-| **Optional root argument** | `children()`, `ancestors()`, and `discover_mounts()` default to the handle root. On an unbounded handle, leaving it out is `AccessDenied` |
-| **Search** | `scope=None` uses `default_scope`; `root` has to be inside the handle; the query is rebuilt so a prebuilt `MemoryQuery` cannot widen it; a query rewritten by `before_search` is checked against the handle again |
+| **Boundary** | The handle accepts only ids inside the root. It refuses an unknown id as "outside the handle" before any lookup, so it does not show if that block exists |
+| **Optional root argument** | `children()`, `ancestors()`, and `discover_mounts()` use the handle root by default. On an unbounded handle, a call without this argument raises `AccessDenied` |
+| **Search** | `scope=None` uses `default_scope`. A `root` is accepted only inside the handle. The handle builds the query again, so a prebuilt `MemoryQuery` cannot widen it. The handle checks a query that `before_search` rewrote against the handle again |
 | **Explicit policy** | `put(policy=...)` needs `allow_policy_override` |
-| **No `contains`** | Not part of the handle surface |
-| **`attributes`** | Read-only property with the hook attributes this handle reports |
+| **No `contains`** | The handle surface does not include it |
+| **`attributes`** | A read-only property with the hook attributes that this handle reports |
 
 | Flag | `HandleCapability` | What it allows |
 | --- | --- | --- |
-| rooted handle | `SUBTREE` | Nothing outside the root |
+| rooted handle | `SUBTREE` | No access outside the root |
 | `allow_up` | `ANCESTORS` | `ancestors()` and `scope="ancestors"` |
 | `allow_global` | `GLOBAL_SEARCH` | `scope="global"` |
 | `allow_mounts` | `MOUNTS` | `add_mount`, `list_mounts`, `discover_mounts`, `resolve_mount` |
 | `allow_policy_override` | `POLICY_OVERRIDE` | `put(policy=...)` |
-| unbounded handle | `ROOT_REQUIRED` | Refuses calls that need a root it cannot infer |
+| unbounded handle | `ROOT_REQUIRED` | Refuses a call that needs a root that the handle cannot infer |
 | child handle | `PRINCIPAL` | Refuses a different principal |
 
-- **`get_handle` on a handle only narrows.** The child root has to be inside
-  the parent root, every flag has to be on in the parent, and a different
-  principal raises `AccessDenied`.
-- **A handle refusal is `AccessDenied`** and is reported to `on_denied` with
-  the `HandleCapability` that refused.
-- **Direct construction** (`MemoryHandle(memory=..., root_id=..., principal=...)`)
-  is possible, but `get_handle` is the checked path.
+- **`get_handle` on a handle only narrows.** The child root is accepted only
+  inside the parent root. A flag is accepted only if it is on in the parent. A
+  request for wider access, or for a different principal, raises
+  `AccessDenied`.
+- **A handle refusal is `AccessDenied`.** Genie reports it to `on_denied` with
+  the `HandleCapability` that refused the call.
+- **Direct construction**
+  (`MemoryHandle(memory=..., root_id=..., principal=...)`) is possible.
+  `get_handle` is the path with checks.
 
 ## Records
 
@@ -249,8 +258,9 @@ and search methods, with these differences:
 | `MemoryLink` | `(source_id, target_id, relation, id=<link_...>, metadata={}, created_at)` | Only `metadata` can change |
 | `LinkRelations` | `LinkRelations.MOUNT == "genie.mount"` | The only reserved relation |
 
-- **Applications read these; they rarely build them.** `Memory` fills
-  `created_by`, the times, and `version`. Adapter authors build them directly.
+- **Applications read these records, and rarely build them.** `Memory` fills
+  `created_by`, the times, and `version`. Adapter authors build the records
+  directly.
 - **Field rules** are in [Data model](10-data-model.md#records).
 
 ## Query
@@ -261,11 +271,11 @@ and search methods, with these differences:
 MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None, limit=20)
 ```
 
-- **Frozen after `__init__`.** The scope becomes a `Scope`, `types` becomes a
-  tuple, and filters are normalized.
-- **`limit`:** `0` is allowed; a negative value is `ValueError`.
-- **`text` meaning is the backend's.** `InMemoryBackend` matches a
-  case-insensitive substring; a search adapter may rank with its own method.
+- **A `MemoryQuery` is frozen after `__init__`.** The scope becomes a `Scope`,
+  `types` becomes a tuple, and the filters are normalized.
+- **`limit`:** `0` is permitted. A negative value raises `ValueError`.
+- **The backend decides the meaning of `text`.** `InMemoryBackend` matches a
+  case-insensitive substring. A search adapter can rank with its own method.
 
 ### `Scope`
 
@@ -274,75 +284,80 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `Scope.SELF` (`"self"`) | the root block only |
 | `Scope.SUBTREE` (`"subtree"`) | the root and its descendants |
 | `Scope.ANCESTORS` (`"ancestors"`) | the root and its ancestors |
-| `Scope.LINKS` (`"links"`) | the root and blocks linked to it in either direction |
-| `Scope.GLOBAL` (`"global"`) | every block; no root needed |
+| `Scope.LINKS` (`"links"`) | the root and the blocks linked to it in the 2 directions |
+| `Scope.GLOBAL` (`"global"`) | all blocks. No root is necessary |
 
 ### Filters
 
 - **Shape:** `{field: value}` for equality, or `{field: {operator: value}}`.
-- **Field lookup:** a `metadata.` prefix reads metadata; a `MemoryBlock` field
-  name reads that field; any other name reads metadata.
-- **Operators:** `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`. Aliases
-  `==`, `=`, `!=`, `>`, `>=`, `<`, `<=`, and `in` are rewritten to them.
-- **A comparison of mismatched types is `False`,** not an error. An unknown
+- **Field lookup:** a `metadata.` prefix reads metadata. A `MemoryBlock` field
+  name reads that field. Any other name reads metadata.
+- **Operators:** `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`. Genie
+  rewrites the aliases `==`, `=`, `!=`, `>`, `>=`, `<`, `<=`, and `in` to these
+  operators.
+- **A comparison of 2 different types gives `False`,** not an error. An unknown
   operator raises `ValueError` when the query is built.
 - **`normalize_filters(filters)`** returns the canonical form.
-  **`matches_filters(block, filters)`** is the portable matcher adapters reuse.
+  **`matches_filters(block, filters)`** is the portable matcher that adapters
+  reuse.
 
 ### `SearchResult`
 
 - **Fields:** `block` (`MemoryBlock`), `score` (`float`, default `1.0`),
   `reason` (`str | None`).
-- **Score meaning is the backend's.** Genie does not compare scores across
-  backends.
+- **The backend decides the meaning of a score.** Genie does not compare
+  scores across backends.
 
 ## Policy
 
 | Name | Signature | Meaning |
 | --- | --- | --- |
-| `MemoryPolicy` | `(read, write, search, traverse_up, traverse_down, operations={})` | One `AccessRule` per built-in operation, plus named extra rules; each built-in field defaults to `AccessRule.owner()` |
-| `MemoryPolicy.owner_private()` | classmethod | Only `created_by` may do anything; the default |
-| `MemoryPolicy.public()` | classmethod | Everyone may do everything |
+| `MemoryPolicy` | `(read, write, search, traverse_up, traverse_down, operations={})` | One `AccessRule` for each built-in operation, plus named extra rules. Each built-in field has the default `AccessRule.owner()` |
+| `MemoryPolicy.owner_private()` | classmethod | Only `created_by` can do an operation. This is the default |
+| `MemoryPolicy.public()` | classmethod | All principals can do all operations |
 | `MemoryPolicy.owner_or(*, principals=None, roles=None)` | classmethod | The owner plus the listed principals and roles |
-| `AccessRule` | `(allow_all=False, principals=frozenset(), roles=frozenset(), allow_owner=False)` | One rule; `AccessRule()` denies everyone |
-| `AccessRule.allow()`, `.deny()`, `.owner()` | classmethods | Everyone, no one, the owner only |
+| `AccessRule` | `(allow_all=False, principals=frozenset(), roles=frozenset(), allow_owner=False)` | One rule. `AccessRule()` denies all principals |
+| `AccessRule.allow()`, `.deny()`, `.owner()` | classmethods | All principals, no principal, the owner only |
 | `AccessRule.only(*, principals=None, roles=None, owner=False)` | classmethod | An explicit list |
 | `AccessRule.allows(principal, *, owner_id=None)` | method | `bool` |
-| `Principal` | `(id="system", roles=frozenset(), metadata={})` | Who acts |
-| `Principal.coerce(value)` | classmethod | `Principal`, `str`, or `None` to `Principal` |
+| `Principal` | `(id="system", roles=frozenset(), metadata={})` | The identity that acts |
+| `Principal.coerce(value)` | classmethod | Changes a `Principal`, `str`, or `None` to a `Principal` |
 | `PolicyEngine` | `(*, operations=None)` | Default rules for named extra operations |
 | `PolicyEngine.allows(operation, block, principal)` | method | `bool` |
 | `PolicyEngine.require(operation, block, principal)` | method | `None`, or `AccessDenied` |
 
 - **`Operation`** values: `READ`, `WRITE`, `SEARCH`, `TRAVERSE_UP`,
   `TRAVERSE_DOWN`. An `operation` argument also accepts a string name.
-- **Defaults fail closed.** `AccessRule()` denies everyone, and
-  `MemoryPolicy()` equals `MemoryPolicy.owner_private()`. A policy that sets
-  only some fields keeps the rest owner-only.
-- **`allow_all=True` with `principals`, `roles`, or `allow_owner` is a
-  `ValueError`,** because `allow_all` would make those grants have no effect.
-- **An unknown operation name is a `ValueError`,** never a silent allow.
-- **Extra rules cannot reuse a built-in name.** That is a `ValueError` at
-  construction.
-- **A block's policy is fixed at `put`.** No call changes it.
+- **Defaults fail closed.** `AccessRule()` denies all principals, and
+  `MemoryPolicy()` equals `MemoryPolicy.owner_private()`. If a policy sets only
+  some fields, the other fields stay owner-only.
+- **`allow_all=True` with `principals`, `roles`, or `allow_owner` raises
+  `ValueError`,** because with `allow_all` those grants have no effect.
+- **An unknown operation name raises `ValueError`.** Genie never allows it
+  silently.
+- **Extra rules cannot use a built-in name.** Such a name raises `ValueError`
+  at construction.
+- **The policy of a block is fixed at `put`.** No call changes it.
 
 ## Structure facades
 
-- **Every facade takes an access object first:** a `Memory` or a
+- **Each facade takes an access object first:** a `Memory` or a
   `MemoryHandle`. Block reads and writes go through it, so handle and policy
   checks still apply.
-- **Changing membership needs `write` on the container.** `bind`, `rebind`,
-  `unbind`, `append`, `add`, `replace`, and `remove` call `require_access` on
-  the container block first. `VersionedRecords.append` checks the identity
-  block, which anchors the revision log.
-- **Facades that keep records also take a store.** It is a backend with the
-  named capability, or a `BlockRouter`, which resolves to the route that owns
-  the container block.
-- **Construction checks the capability** and raises `UnsupportedOperation`
-  when the store lacks it. It also resolves the container block through the
-  access object, so an invisible container raises `MemoryNotFound`.
-- **`hooks=None`** uses the access object's registry.
-- **Paged `limit` counts visible items,** unlike search, and defaults to `100`.
+- **A membership change needs `write` on the container.** `bind`, `rebind`,
+  `unbind`, `append`, `add`, `replace`, and `remove` first call
+  `require_access` on the container block. `VersionedRecords.append` checks the
+  identity block, which is the anchor of the revision log.
+- **Facades that keep records also take a store.** The store is a backend with
+  the named capability, or a `BlockRouter`. A `BlockRouter` resolves to the
+  route that owns the container block.
+- **Construction checks the capability.** The constructor raises
+  `UnsupportedOperation` if the store does not have the capability. It also
+  resolves the container block through the access object. So a container that
+  the caller cannot see raises `MemoryNotFound`.
+- **`hooks=None`** uses the registry of the access object.
+- **A paged `limit` counts visible items,** unlike search. The default is
+  `100`. `EventLog.tail` uses `20`.
 
 | Facade | Constructor | Store capability |
 | --- | --- | --- |
@@ -351,7 +366,7 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `LineageDAG` | `(access, *, relation)` | `AcyclicLinkStore`, through the access object |
 | `KeyedCollection` | `(access, store, *, collection, hooks=None)` | `KeyedStore` |
 | `EventLog` | `(access, store, *, log, hooks=None)` | `SequenceStore` |
-| `TemporalCollection` | `(access, store, *, collection, index=None, hooks=None)` | `TemporalStore`, optional `TemporalIndex` |
+| `TemporalCollection` | `(access, store, *, collection, index=None, hooks=None)` | `TemporalStore`, and optionally `TemporalIndex` |
 | `VersionedRecords` | `(access, store, *, collection, hooks=None)` | `VersionedStore` (`KeyedStore` + `SequenceStore`) |
 
 ### `OwnershipTree`
@@ -359,15 +374,15 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | Method | Returns |
 | --- | --- |
 | `root` (property) | `MemoryBlock` |
-| `create_child(*, type, value, parent=None, metadata=None, policy=None, content_type=None, id=None)` | `MemoryBlock`; `parent=None` means the tree root |
+| `create_child(*, type, value, parent=None, metadata=None, policy=None, content_type=None, id=None)` | `MemoryBlock`. `parent=None` means the tree root |
 | `children(block=None)` | `list[MemoryBlock]` |
-| `parent(block)` | `MemoryBlock \| None`; `None` at the tree root |
+| `parent(block)` | `MemoryBlock \| None`. `None` at the tree root |
 | `ancestors(block, *, include_self=False)` | `list[MemoryBlock]`, never above the tree root |
 | `descendants(block=None, *, include_self=False)` | `list[MemoryBlock]`, depth-first pre-order |
 | `contains(block)` | `bool` |
 | `delete_subtree(block)` | `None` |
 
-- **A block outside the tree is `AccessDenied`.**
+- **A block outside the tree raises `AccessDenied`.**
 
 ### `PropertyGraph` and `LineageDAG`
 
@@ -382,19 +397,19 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 
 | `LineageDAG` method | Returns |
 | --- | --- |
-| `add(predecessor, successor, *, metadata=None)` | `MemoryLink`; `MemoryConflict` on a cycle |
-| `update_edge(edge, *, metadata)` | `MemoryLink`; `MemoryConflict` for another relation's edge |
+| `add(predecessor, successor, *, metadata=None)` | `MemoryLink`. `MemoryConflict` for a cycle |
+| `update_edge(edge, *, metadata)` | `MemoryLink`. `MemoryConflict` for an edge of a different relation |
 | `edges(block, *, direction="out")` | `list[MemoryLink]` |
 | `predecessors(block)`, `successors(block)` | `list[GraphNeighbor]` |
 | `walk_predecessors(block, *, max_depth=6, limit=100)`, `walk_successors(...)` | `list[GraphPath]` |
 | `shortest_path(predecessor, successor, *, max_depth=6)` | `GraphPath \| None` |
 
-- **`LineageDAG` works on one relation.** An empty relation or
-  `"genie.mount"` is a `ValueError`.
-- **Relation names are shared across the whole backend.** Protection starts
-  with the first acyclic insert and then covers every block with that
+- **`LineageDAG` works on one relation.** An empty relation or `"genie.mount"`
+  raises `ValueError`.
+- **Relation names are shared across the whole backend.** The protection starts
+  with the first acyclic insert. After that, it covers each block with that
   relation, across handles and tenants. Applications prefix lineage relations,
-  such as `"billing.derived_from"`, to avoid accidental clashes.
+  for example `"billing.derived_from"`, to prevent accidental name clashes.
 - **`GraphNeighbor`:** `block`, `link`, `direction` (`"out"` or `"in"`).
   **`GraphPath`:** `block_ids`, `links`.
 
@@ -404,15 +419,15 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | --- | --- | --- |
 | `collection` (property) | `MemoryBlock` | |
 | `bind(address, block)` | `KeyedItem` | `MemoryConflict` (address in use), `MemoryNotFound` |
-| `rebind(address, block, *, expected)` | `KeyedItem` | `MemoryConflict` (missing, or not `expected`) |
+| `rebind(address, block, *, expected)` | `KeyedItem` | `MemoryConflict` (no binding, or not `expected`) |
 | `unbind(address, *, expected)` | `None` | `MemoryConflict` |
-| `get(address)` | `MemoryBlock \| None` | `MemoryNotFound` (dangling binding) |
+| `get(address)` | `MemoryBlock \| None` | `MemoryNotFound` (the binding refers to a block that does not exist) |
 | `get_item(address)` | `KeyedItem \| None` | `MemoryNotFound` |
-| `items(*, namespace=None, recursive=False, limit=100)` | `list[KeyedItem]`, ascending address | `TypeError`, `ValueError` |
+| `items(*, namespace=None, recursive=False, limit=100)` | `list[KeyedItem]`, in ascending address order | `TypeError`, `ValueError` |
 
 - **`MemoryAddress(namespace, key)`:** `namespace` is a tuple of non-empty
-  strings (`()` is the root), `key` is a non-empty string.
-- **`rebind` and `unbind` are compare-and-swap** on `expected`.
+  strings (`()` is the root). `key` is a non-empty string.
+- **`rebind` and `unbind` are compare-and-swap operations** on `expected`.
 
 ### `EventLog`
 
@@ -424,7 +439,8 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `read(*, start=None, stop=None, reverse=False, limit=100)` | `list[LogItem]`, half-open `[start, stop)` |
 | `tail(*, limit=20)` | `list[LogItem]`, newest items in oldest-first order |
 
-- **Sequences start at `0` and are never reused.** A deleted block leaves a gap.
+- **Sequences start at `0`, and Genie never reuses them.** A deleted block
+  leaves a gap.
 
 ### `TemporalCollection`
 
@@ -433,35 +449,36 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `collection` (property) | `MemoryBlock` | |
 | `add(block, *, occurred_at=None, validity=None)` | `TemporalItem` | `MemoryConflict` (already a member) |
 | `replace(block, *, occurred_at=None, validity=None)` | `TemporalItem` | `MemoryConflict` (not a member) |
-| `remove(block)` | `None`; the block stays | `MemoryConflict` (not a member) |
-| `get(block)` | `TemporalItem \| None` | `MemoryNotFound` (dangling entry) |
+| `remove(block)` | `None`. The block stays | `MemoryConflict` (not a member) |
+| `get(block)` | `TemporalItem \| None` | `MemoryNotFound` (the entry refers to a block that does not exist) |
 | `events(*, start=None, stop=None, limit=100)` | `list[TemporalItem]` with `occurred_at` in `[start, stop)` | `TypeError`, `ValueError` (naive time) |
 | `valid_at(when, *, limit=100)` | `list[TemporalItem]` | `TypeError`, `ValueError` |
 | `overlapping(interval, *, limit=100)` | `list[TemporalItem]` | `TypeError`, `ValueError` |
-| `scan(*, occurred_start=None, occurred_stop=None, valid_at=None, overlaps=None, limit=100)` | `list[TemporalItem]` matching every given filter | |
+| `scan(*, occurred_start=None, occurred_stop=None, valid_at=None, overlaps=None, limit=100)` | `list[TemporalItem]` that match all given filters | |
 
-- **`ValidityInterval(valid_at, invalid_at=None)`** is half-open;
-  `invalid_at=None` means open-ended.
-- **All times are timezone-aware** and normalized to UTC. A naive `datetime` is
-  a `ValueError`.
-- **`index`** is used when given; without it the facade scans and matches.
+- **`ValidityInterval(valid_at, invalid_at=None)`** is half-open.
+  `invalid_at=None` means that the interval has no end.
+- **All times are timezone-aware,** and Genie normalizes them to UTC. A naive
+  `datetime` raises `ValueError`.
+- **`index`:** the facade uses it if the caller gives it. Without it, the
+  facade scans the entries and matches them itself.
 
 ### `VersionedRecords`
 
 | Method | Returns |
 | --- | --- |
 | `collection` (property) | `MemoryBlock` |
-| `register(address, identity)` | `KeyedItem`; `MemoryConflict` if already registered |
+| `register(address, identity)` | `KeyedItem`. `MemoryConflict` if the address is already registered |
 | `identity(address)` | `MemoryBlock \| None` |
 | `identities(*, namespace=None, recursive=False, limit=100)` | `list[KeyedItem]` |
-| `append(address, block)` | `RevisionItem`; `MemoryNotFound` if no identity |
+| `append(address, block)` | `RevisionItem`. `MemoryNotFound` if no identity exists |
 | `current(address)` | `RevisionItem \| None` |
 | `revision(address, revision)` | `RevisionItem \| None` |
 | `history(address, *, start=1, stop=None, reverse=False, limit=100)` | `list[RevisionItem]`, half-open |
 
-- **Revisions start at `1`.** `revision < 1` is a `ValueError`.
-- **Each revision is its own block.** `append` does not change the block it
-  points at.
+- **Revisions start at `1`.** `revision < 1` raises `ValueError`.
+- **Each revision is its own block.** `append` does not change the block that
+  the revision refers to.
 
 ### Read results
 
@@ -474,8 +491,8 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 
 ### Access protocols
 
-- **Facades declare the narrow access they need,** as `runtime_checkable`
-  protocols. A custom access object only has to implement those methods.
+- **Facades declare the narrow access that they need,** as `runtime_checkable`
+  protocols. A custom access object needs only those methods.
 
 | Protocol | Methods |
 | --- | --- |
@@ -491,15 +508,16 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `GraphAccess` | `BlockReader` + `LinkReader` + `LinkWriter` |
 | `LineageAccess` | `GraphAccess` + `AcyclicLinkWriter` |
 | `KeyedAccess`, `SequenceAccess`, `TemporalAccess`, `VersionedAccess` | `BlockReader` + `AccessChecker` |
-| `MemoryAccess` | all of the above; `Memory` and `MemoryHandle` satisfy it |
+| `MemoryAccess` | all of the above. `Memory` and `MemoryHandle` satisfy it |
 
 ## Hooks
 
 ### `MemoryHook`
 
-- **A base class with no-op callbacks.** A hook overrides only what it needs.
-- **`fail_open: bool = False`.** When `True`, a failure in an observing
-  callback is logged and dropped.
+- **`MemoryHook` is a base class with no-op callbacks.** A hook overrides only
+  the callbacks that it needs.
+- **`fail_open: bool = False`.** If `True`, Genie logs and drops a failure in an
+  observing callback.
 
 | Callback | Kind | Returns |
 | --- | --- | --- |
@@ -512,35 +530,35 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `before_add_link(context, link)` | mutating | `MemoryLink` |
 | `before_update_link(context, current, proposed)` | mutating | `MemoryLink` |
 | `before_structure_change(context, change)` | mutating | `None` |
-| `before_delete(context, block)` | mutating | `None`; once per block in the subtree |
+| `before_delete(context, block)` | mutating | `None`. Once for each block in the subtree |
 | `after_put(context, block)` | observing | `None` |
 | `after_update(context, previous, stored)` | observing | `None` |
-| `after_get(context, block)` | observing | `None`; `block` may be `None` |
+| `after_get(context, block)` | observing | `None`. `block` can be `None` |
 | `after_traverse(context, traversal)` | observing | `None` |
 | `after_add_link(context, link)` | observing | `None` |
 | `after_update_link(context, previous, stored)` | observing | `None` |
 | `after_structure_change(context, change)` | observing | `None` |
-| `after_delete(context, block)` | observing | `None`; once per removed block |
+| `after_delete(context, block)` | observing | `None`. Once for each removed block |
 | `on_denied(context, operation, subject_id, reason)` | observing | `None` |
 | `on_suppressed(context, suppression)` | observing | `None` |
-| `on_operation_end(context, outcome, error)` | observing | `None`; exactly once per started operation |
+| `on_operation_end(context, outcome, error)` | observing | `None`. Exactly once for each operation that starts |
 
-- **Mutating callbacks stop at the first failure** and the error leaves the
-  operation. `fail_open` does not apply to them.
-- **Observing callbacks all run,** then the first failure is raised (or
-  attached as a note when the operation already failed).
-- **What a `before_*` hook returns is validated.** A change to a protected
-  field is a `ValueError`; a wrong return type is a `TypeError`.
-- **`after_delete` fans out from one call to many.** `Memory.delete` calls
-  `HookRegistry.after_delete(context, *blocks)` once with every removed block.
-  The registry then calls each hook's `after_delete(context, block)` once per
-  block, and raises failures only after every block has reached every hook.
+- **Mutating callbacks stop at the first failure,** and the operation raises
+  that error. `fail_open` does not apply to them.
+- **All observing callbacks run.** Then Genie raises the first failure. If the
+  operation already failed, Genie attaches that failure as a note.
+- **Genie validates the return value of a `before_*` hook.** A change to a
+  protected field raises `ValueError`. A wrong return type raises `TypeError`.
+- **One `after_delete` call becomes many calls.** `Memory.delete` calls
+  `HookRegistry.after_delete(context, *blocks)` once with all removed blocks.
+  The registry then calls `after_delete(context, block)` on each hook once for
+  each block. It raises failures only after all hooks received all blocks.
 
 ### `HookRegistry`
 
 | Member | Returns | Raises |
 | --- | --- | --- |
-| `HookRegistry(hooks=None, *, max_depth=16)` | registry | `TypeError`, `ValueError` (repeat hook, negative depth) |
+| `HookRegistry(hooks=None, *, max_depth=16)` | registry | `TypeError`, `ValueError` (duplicate hook, negative depth) |
 | `hooks`, `mandatory` (properties) | `tuple` of hooks, in dispatch order | |
 | `register(hook, *, mandatory=False)` | `None` | `TypeError`, `ValueError` (already registered) |
 | `unregister(hook)` | `None` | `ValueError` (not registered, or mandatory) |
@@ -548,18 +566,19 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `suppress(*hooks, principal_id=None, attributes=None)` | context manager of `HookContext` | `HookRecursionError`, `TypeError`, `ValueError`, or the first `on_suppressed` failure |
 | `operation(operation, *, principal_id=None, attributes=None)` | context manager of `HookContext` | `HookRecursionError`, `TypeError`, `ValueError` |
 
-- **`scope` groups operations** under one parent context and dispatches
-  nothing itself.
-- **`suppress()` with no hooks silences the whole registry;** with hooks it
-  silences only those. Mandatory hooks are never silenced.
-- **`operation` is for code that extends Genie,** such as a custom facade. The
-  dispatch methods (`before_put`, `after_put`, and so on) are for the same use.
+- **`scope` groups operations** under one parent context. It dispatches no
+  event itself.
+- **`suppress()` with no hooks silences the whole registry.** With hooks, it
+  silences only those hooks. Genie never silences mandatory hooks.
+- **`operation` is for code that extends Genie,** for example a custom facade.
+  The dispatch methods (`before_put`, `after_put`, and the others) are for the
+  same use.
 
 ### Context and event types
 
 | Type | Fields or values |
 | --- | --- |
-| `HookContext` | `operation_id`, `parent_operation_id`, `operation`, `origin`, `depth`, `principal_id`, `attributes`, `started_at`, `scope_name`; `is_scope` property |
+| `HookContext` | `operation_id`, `parent_operation_id`, `operation`, `origin`, `depth`, `principal_id`, `attributes`, `started_at`, `scope_name`, and the `is_scope` property |
 | `HookOperation` | `put`, `get`, `set`, `update`, `delete`, `search`, `children`, `ancestors`, `contains`, `link.add`, `link.add_acyclic`, `link.update`, `link.list`, `mount.add`, `mount.list`, `mount.discover`, `mount.resolve`, `handle.create`, `access.require`, `key.bind`, `key.rebind`, `key.unbind`, `log.append`, `temporal.add`, `temporal.replace`, `temporal.remove`, `hooks.suppress`, `scope` |
 | `HookOrigin` | `"caller"`, `"hook"` |
 | `HookOutcome` | `SUCCESS`, `DENIED`, `ERROR` |
@@ -569,10 +588,10 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `StructureKind` | `KEYED_COLLECTION`, `EVENT_LOG`, `TEMPORAL_COLLECTION` |
 | `StructureAction` | `BIND`, `REBIND`, `UNBIND`, `APPEND`, `ADD`, `REPLACE`, `REMOVE` |
 | `Suppression` | `scope` (`SuppressionScope.SELECTED` or `REGISTRY`), `hooks`, `mandatory` |
-| `HandleCapability` | see [`MemoryHandle`](#memoryhandle) |
+| `HandleCapability` | refer to [`MemoryHandle`](#memoryhandle) |
 
-- **`freeze_attributes(attributes)`** validates a `str` to `str` mapping and
-  returns a read-only copy.
+- **`freeze_attributes(attributes)`** validates a mapping from `str` to `str`,
+  and returns a read-only copy.
 
 ## Codecs
 
@@ -589,22 +608,24 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `DataclassCodec` | `(types=())` | `application/vnd.genie.dataclass+json` |
 | `EnumCodec` | `(types=())` | `application/vnd.genie.enum+json` |
 
-- **Only `JsonCodec` is registered by default.** The others are opt-in.
-- **Encode picks a codec** by explicit `content_type`, or else the first
-  registered codec whose `can_encode` is `True`. **Decode picks** by the stored
-  `content_type` only.
-- **An unregistered content type is a `TypeError`,** on both encode and decode.
-- **`JsonCodec` limits nesting to `MAX_NESTING_DEPTH`.** `can_encode` stays
-  `True` for a value that is too deep, so `encode` raises `ValueError` and the
-  registry does not report "no codec". `DataclassCodec` applies the same limit
-  to each field.
-- **A registry passed to `Memory` replaces the default.** Include `JsonCodec()`
-  in it to keep JSON values working.
+- **The default registry holds only `JsonCodec`.** The other codecs are opt-in.
+- **Encode selects a codec** by the explicit `content_type`. If no
+  `content_type` is given, encode selects the first registered codec whose
+  `can_encode` is `True`. **Decode selects** by the stored `content_type`
+  only.
+- **An unregistered content type raises `TypeError`,** on encode and on decode.
+- **`JsonCodec` limits the nesting depth to `MAX_NESTING_DEPTH`.** `can_encode`
+  stays `True` for a value that is too deep. So `encode` raises `ValueError`,
+  and the registry does not report "no codec". `DataclassCodec` applies the
+  same limit to each field.
+- **A registry that the application gives to `Memory` replaces the default.**
+  If that registry does not include `JsonCodec()`, Genie cannot encode or
+  decode JSON values.
 
 ## Backend contracts
 
-Adapter authors implement these. Application code rarely calls them, and a
-direct call skips handles, policies, hooks, and codecs.
+Adapter authors implement these protocols. Application code rarely calls them.
+A direct call skips handles, policies, hooks, and codecs.
 
 | Protocol | Methods |
 | --- | --- |
@@ -621,18 +642,21 @@ direct call skips handles, policies, hooks, and codecs.
 | `VersionedStore` | `KeyedStore` + `SequenceStore` |
 | `BlockRouter` | `backend_for_block(block_id)` |
 
-- **Every protocol is `runtime_checkable`.** Genie checks capabilities with
-  `isinstance`, so an adapter claims a capability by implementing its methods.
-- **Only `MemoryBackend` is required** by `Memory`. The rest are optional, and
-  a facade that needs one raises `UnsupportedOperation` without it.
-- **Conditional and uniqueness checks happen inside one store call:**
+- **Each protocol is `runtime_checkable`.** Genie checks capabilities with
+  `isinstance`. So an adapter claims a capability when it implements the
+  methods of that capability.
+- **`Memory` needs only `MemoryBackend`.** The other protocols are optional. A
+  facade that needs one of them raises `UnsupportedOperation` if the store does
+  not have it.
+- **Conditional and uniqueness checks occur inside one store call:**
   `expected_version`, `expected_versions`, `expected_block_id`, address
   uniqueness, cycle checks, sequence allocation, and temporal membership. A
-  failed check is `MemoryConflict`.
+  failed check raises `MemoryConflict`.
 - **`delete_block` cascades** to links, key bindings, log entries, and temporal
   entries in the same atomic step.
-- **The shared contract tests** in `lib/tests/backends/test_backend_contracts.py`
-  define the expected behavior. See [Testing strategy](11-testing-strategy.md).
+- **The shared contract tests** in
+  `lib/tests/backends/test_backend_contracts.py` define the expected behavior.
+  Refer to [Testing strategy](11-testing-strategy.md).
 
 ## Adapters
 
@@ -647,59 +671,61 @@ direct call skips handles, policies, hooks, and codecs.
 | `RoutedBackend` | `(routes, *, route_selector=None, default_route=None, traversal_index=None, search_index=None, link_store=None)` | none |
 | `InMemoryLinkStore` | `()` | none |
 
-- **Every storage adapter implements every optional capability:**
+- **Each storage adapter implements all optional capabilities:**
   `AcyclicLinkStore`, `KeyedStore`, `SequenceStore`, `TemporalStore`, and
   `TemporalIndex`. `RoutedBackend` implements `BlockRouter` and
-  `AcyclicLinkStore`, and sends each acyclic link to the store that holds its
-  links; `InMemoryLinkStore` is a standalone `LinkStore`.
-- **A missing driver raises `UnsupportedOperation`** at construction, naming
-  the extra to install (for example `genie[postgres]`).
-- **`verify_*` flags** turn off a construction-time server check.
-  **`initialize_schema=False`** uses an existing layout without creating it.
-- **`RoutedBackend`:** `routes` maps a `RouteKey` (`str`) to a backend;
+  `AcyclicLinkStore`. It sends each acyclic link to the store that holds its
+  links. `InMemoryLinkStore` is a standalone `LinkStore`.
+- **If a driver is not installed, the constructor raises
+  `UnsupportedOperation`.** The error names the extra to install (for example
+  `genie[postgres]`).
+- **Each `verify_*` flag controls one server check at construction.** `False`
+  disables that check. **`initialize_schema=False`** uses the current layout and
+  does not create it.
+- **`RoutedBackend`:** `routes` maps a `RouteKey` (`str`) to a backend.
   `route_selector` is a `RouteSelector`, a callable from `MemoryBlock` to
   `RouteKey | None`. Extra members: `routes`, `register_route(route, backend,
   *, replace=False, make_default=False)`, `backend_for_block(block_id)`,
   `route_for_block(block_id)`. `RouteInfo(block_id, route)` is its catalog
   record.
-- **Adapter options, schema, and atomicity notes** are in each adapter's
-  README under `lib/src/genie/backend/`.
+- **Adapter options, schema, and atomicity notes** are in the README of each
+  adapter under `lib/src/genie/backend/`.
 
 ## Errors
 
 | Error | Base | Raised when |
 | --- | --- | --- |
-| `GenieError` | `Exception` | Base of every Genie error except `AccessDenied` |
-| `AccessDenied` | `PermissionError` | A policy or handle boundary refuses the call |
-| `MemoryNotFound` | `GenieError` | A block, link, or root the call needs does not exist, or a structure record points at a missing block |
+| `GenieError` | `Exception` | Base class of all Genie errors except `AccessDenied` |
+| `AccessDenied` | `PermissionError` | A policy or a handle boundary refuses the call |
+| `MemoryNotFound` | `GenieError` | A block, link, or root that the call needs does not exist, or a structure record refers to a block that does not exist |
 | `MemoryConflict` | `GenieError` | A version, snapshot, key, cycle, or membership check fails |
-| `UnsupportedOperation` | `GenieError` | A backend lacks a capability, or an adapter driver is missing |
-| `HookRecursionError` | `GenieError` | Hook-started operations nest deeper than `max_depth` |
-| `BackendError` | `GenieError` | Base of the adapter failures below |
-| `BackendBusy` | `BackendError` | The store is locked or overloaded; a retry may succeed |
+| `UnsupportedOperation` | `GenieError` | A backend does not have a capability, or an adapter driver is not installed |
+| `HookRecursionError` | `GenieError` | Operations that hooks start nest deeper than `max_depth` |
+| `BackendError` | `GenieError` | Base class of the adapter failures below |
+| `BackendBusy` | `BackendError` | The store is locked or overloaded. A retry can succeed |
 | `BackendUnavailable` | `BackendError` | The store cannot be reached |
 | `BackendReadOnly` | `BackendError` | The store refuses writes, for example a replica |
-| `BackendCapacityExceeded` | `BackendError` | The store is out of space or memory |
-| `BackendCorruption` | `BackendError` | Stored data or layout cannot be read safely |
+| `BackendCapacityExceeded` | `BackendError` | The store has no more space or memory |
+| `BackendCorruption` | `BackendError` | Genie cannot read the stored data or layout safely |
 
 - **`AccessDenied` is a `PermissionError`,** so `except GenieError` does not
-  catch it. Catch it by name.
-- **Adapters keep the driver error as `__cause__`** on every `BackendError`.
+  catch it. A caller catches it by its name.
+- **Adapters keep the driver error as `__cause__`** on each `BackendError`.
 
 ## Left out on purpose
 
-- **No async API.** Every call is synchronous.
+- **No async API.** Each call is synchronous.
 - **No batch or transaction API.** Each public call is one backend write.
-- **No reparenting and no policy change.** `parent_id` and `policy` are fixed
-  at `put`.
-- **No server, CLI, or network protocol.** Genie is a library imported by the
-  application.
-- **No block types, relation names, or value meanings** beyond
+- **No reparent operation and no policy change.** `parent_id` and `policy` are
+  fixed at `put`.
+- **No server, CLI, or network protocol.** Genie is a library that the
+  application imports.
+- **No block types, relation names, or value meanings** other than
   `"genie.mount"`.
 
 ## Related reading
 
-- [High-level architecture](03-high-level-architecture.md) — components and extension seams
+- [High-level architecture](03-high-level-architecture.md) — components and extension points
 - [Detailed architecture](04-detailed-architecture.md) — check order, hook dispatch, and search pipeline
 - [Data model](10-data-model.md) — record fields and integrity rules
 - [Testing strategy](11-testing-strategy.md) — contract suites
