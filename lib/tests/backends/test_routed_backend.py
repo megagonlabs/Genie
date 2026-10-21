@@ -488,6 +488,26 @@ def test_routed_backend_supports_cross_route_links_with_shared_link_store() -> N
     assert memory.list_links(source) == []
 
 
+def test_routed_backend_links_search_with_shared_link_store_includes_the_root() -> None:
+    """With a shared link store, a `links` search finds the root, also when the root has no links."""
+
+    backend = RoutedBackend(
+        {"a": InMemoryBackend(), "b": InMemoryBackend()},
+        route_selector=route_by_metadata,
+        default_route="a",
+        link_store=InMemoryLinkStore(),
+    )
+    memory = Memory(backend=backend)
+    root = memory.put(type="note", value="root needle", metadata={"route": "a"})
+    target = memory.put(type="note", value="target needle", metadata={"route": "b"})
+
+    assert [result.block.id for result in memory.search("needle", root=root, scope="links")] == [root.id]
+
+    memory.add_link(root, target, "references")
+
+    assert {result.block.id for result in memory.search("needle", root=root, scope="links")} == {root.id, target.id}
+
+
 def test_routed_backend_updates_route_local_links() -> None:
     """For a route-local link, `RoutedBackend` sends the metadata update to the backend that owns the link."""
 

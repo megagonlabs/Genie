@@ -1982,7 +1982,7 @@ class SQLiteBackend:
                 f"""
                 SELECT {_BLOCK_COLUMNS}
                 FROM blocks
-                WHERE id IN (
+                WHERE id = ? OR id IN (
                     SELECT source_id
                     FROM links
                     WHERE source_id = ? OR target_id = ?
@@ -1993,7 +1993,7 @@ class SQLiteBackend:
                 )
                 ORDER BY storage_order
                 """,
-                (query.root_id, query.root_id, query.root_id, query.root_id),
+                (query.root_id, query.root_id, query.root_id, query.root_id, query.root_id),
             ).fetchall()
         return connection.execute(f"SELECT {_BLOCK_COLUMNS} FROM blocks ORDER BY storage_order").fetchall()
 

@@ -1046,8 +1046,8 @@ class InMemoryBackend:
         if query.scope == Scope.ANCESTORS:
             return [self._blocks[query.root_id], *self.ancestors(query.root_id)]
         if query.scope == Scope.LINKS:
-            block_ids: list[str] = []
-            seen: set[str] = set()
+            block_ids = [query.root_id]
+            seen = {query.root_id}
             for link in self.list_links(query.root_id, direction="both"):
                 for block_id in (link.source_id, link.target_id):
                     if block_id not in seen:

@@ -2243,13 +2243,11 @@ class MongoDBBackend:
             root = self._find_block(session, query.root_id)
             return ([root] if root is not None else []) + self._ancestor_documents(session, query.root_id)
         if query.scope == Scope.LINKS:
-            connected: set[str] = set()
+            connected = {query.root_id}
             selector = {"$or": [{"source_id": query.root_id}, {"target_id": query.root_id}]}
             for document in self._links.find(selector, {"source_id": 1, "target_id": 1}, session=session):
                 connected.add(str(document["source_id"]))
                 connected.add(str(document["target_id"]))
-            if not connected:
-                return []
             documents: list[Mapping[str, Any]] = []
             for chunk in _chunked(sorted(connected), _QUERY_CHUNK):
                 documents.extend(self._blocks.find({"_id": {"$in": chunk}}, session=session))

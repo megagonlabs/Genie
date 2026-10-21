@@ -468,12 +468,14 @@ class Memory:
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON
                 dictionary.
-            ValueError: If an endpoint id or `relation` is empty, metadata
-                nests lists and dictionaries more than `MAX_NESTING_DEPTH`
-                levels deep, or a `before_add_link` hook changes link identity
-                or topology.
+            ValueError: If an endpoint id or `relation` is empty, `relation`
+                is the reserved mount relation, metadata nests lists and
+                dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
+        if relation == LinkRelations.MOUNT:
+            raise ValueError("Use add_mount to create a link with the reserved mount relation.")
         return self._add_link(
             source,
             target,

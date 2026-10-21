@@ -2097,7 +2097,7 @@ class PostgresBackend:
                 f"""
                 SELECT {_BLOCK_COLUMNS}
                 FROM {self._blocks}
-                WHERE id IN (
+                WHERE id = %s OR id IN (
                     SELECT source_id
                     FROM {self._links}
                     WHERE source_id = %s OR target_id = %s
@@ -2108,7 +2108,7 @@ class PostgresBackend:
                 )
                 ORDER BY storage_order
                 """,
-                (query.root_id, query.root_id, query.root_id, query.root_id),
+                (query.root_id, query.root_id, query.root_id, query.root_id, query.root_id),
             ).fetchall()
         return self._all_block_rows(connection)
 

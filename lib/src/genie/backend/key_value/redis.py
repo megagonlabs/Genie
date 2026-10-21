@@ -2660,16 +2660,12 @@ class RedisBackend:
         return [_block_from_document(record) for record in (document, *self._ancestor_documents(client, block_id))]
 
     def _linked_blocks(self, client: Any, block_id: str) -> list[MemoryBlock]:
-        """Return the blocks that a link connects to one block, in creation order.
-
-        The start block is in the result when at least one link reaches it,
-        because it is an endpoint of its own links.
-        """
+        """Return one block and the blocks that a link connects to it, in creation order."""
 
         if self._block_document(client, block_id) is None:
             return []
-        endpoint_ids: list[str] = []
-        seen: set[str] = set()
+        endpoint_ids = [block_id]
+        seen = {block_id}
         for _, source_id, target_id, _ in self._connected_link_members(client, block_id, "both"):
             for endpoint_id in (source_id, target_id):
                 if endpoint_id not in seen:

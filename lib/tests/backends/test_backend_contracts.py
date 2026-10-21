@@ -20,8 +20,10 @@ from genie import (
     MemoryBlock,
     MemoryConflict,
     MemoryLink,
+    MemoryQuery,
     RouteCatalog,
     RouteInfo,
+    Scope,
     SequenceStore,
     SQLiteBackend,
     TemporalIndex,
@@ -1076,6 +1078,31 @@ class LinkStoreContract(StructureBackendContract):
         assert backend.list_links(target.id, direction="both") == [kept]
         store.delete_links_for_block("mem_missing")
         assert backend.list_links(other.id, direction="out") == [kept]
+
+    def test_link_store_links_scope_search_contract(self) -> None:
+        """A `Scope.LINKS` search finds the root, with or without links, and each block that a link of any relation connects to it."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, LinkStore)
+        root, target, source, mounted, other = self.put_blocks(
+            backend,
+            "mem_root",
+            "mem_target",
+            "mem_source",
+            "mem_mounted",
+            "mem_other",
+        )
+        query = MemoryQuery(root_id=root.id, scope=Scope.LINKS)
+
+        assert [result.block.id for result in backend.search(query)] == [root.id]
+
+        backend.add_link(MemoryLink(root.id, target.id, "cites"))
+        backend.add_link(MemoryLink(source.id, root.id, "cites"))
+        backend.add_link(MemoryLink(root.id, mounted.id, LinkRelations.MOUNT))
+        backend.add_link(MemoryLink(other.id, target.id, "cites"))
+
+        assert {result.block.id for result in backend.search(query)} == {root.id, target.id, source.id, mounted.id}
+        assert backend.search(MemoryQuery(root_id="mem_missing", scope=Scope.LINKS)) == []
 
     def test_link_store_round_trip_keeps_key_order(self) -> None:
         """Dict keys in link metadata come back in write order, after an add and after an update."""

@@ -1868,7 +1868,7 @@ class Neo4jBackend:
                 """
                 MATCH (l:GenieLink)
                 WHERE l.source_id = $root_id OR l.target_id = $root_id
-                WITH collect(l.source_id) + collect(l.target_id) AS ids
+                WITH [$root_id] + collect(l.source_id) + collect(l.target_id) AS ids
                 MATCH (b:GenieBlock) WHERE b.id IN ids
                 OPTIONAL MATCH (parent:GenieBlock)-[:GENIE_OWNS]->(b)
                 RETURN properties(b) AS block, parent.id AS parent_id

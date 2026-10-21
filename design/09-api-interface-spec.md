@@ -184,7 +184,9 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 - **`update_link` merges metadata only.** The source, target, and relation
   never change. It returns the stored link, so it also needs `read` on the
   source.
-- **`add_acyclic_link` refuses `"genie.mount"`** with `ValueError`.
+- **Only `add_mount` creates `"genie.mount"` links.** `add_link` and
+  `add_acyclic_link` refuse that relation with `ValueError`. So a handle
+  without `allow_mounts` cannot create a mount.
 - **Links do not imply ownership.** Recursive delete and subtree search do not
   follow them.
 
@@ -288,7 +290,7 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `Scope.SELF` (`"self"`) | the root block only |
 | `Scope.SUBTREE` (`"subtree"`) | the root and its descendants |
 | `Scope.ANCESTORS` (`"ancestors"`) | the root and its ancestors |
-| `Scope.LINKS` (`"links"`) | the root and the blocks linked to it in the 2 directions |
+| `Scope.LINKS` (`"links"`) | the root and the blocks linked to it in the 2 directions. A mount target is linked, but its subtree is not |
 | `Scope.GLOBAL` (`"global"`) | all blocks. No root is necessary |
 
 ### Filters

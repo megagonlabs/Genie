@@ -71,6 +71,7 @@ mount = memory.add_mount(local_root, remote_root)
 target = memory.resolve_mount(mount)
 ```
 
+- **Only `add_mount` creates one.** `add_link` and `add_acyclic_link` raise `ValueError` for the `genie.mount` relation.
 - **Not followed** by subtree traversal, subtree search, or delete.
 - **`links` search:** a `links` search counts a mount as a link. So it finds the mount target itself, but not the blocks below the target.
 - **Discovery** finds mount links, but it does not go into their targets.

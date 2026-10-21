@@ -412,10 +412,10 @@ class MemoryHandle:
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON
                 dictionary.
-            ValueError: If an endpoint id or `relation` is empty, metadata
-                nests lists and dictionaries more than `MAX_NESTING_DEPTH`
-                levels deep, or a `before_add_link` hook changes link identity
-                or topology.
+            ValueError: If an endpoint id or `relation` is empty, `relation`
+                is the reserved mount relation, metadata nests lists and
+                dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
+                `before_add_link` hook changes link identity or topology.
         """
 
         source_id = _block_id(source)

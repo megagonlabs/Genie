@@ -31,7 +31,7 @@ results = memory.search(
 | `self` | Root only |
 | `subtree` | Root and descendants |
 | `ancestors` | Root and ancestors |
-| `links` | Blocks linked to the root, and the root itself if it has a link |
+| `links` | The root and the blocks linked to it, in either direction. A mount target is in scope, but its subtree is not |
 | `global` | All blocks that the backend can see |
 
 - **Each `Scope` except `global` needs a `root`** when you search through `Memory`. Without one, `Memory.search` raises `ValueError`.

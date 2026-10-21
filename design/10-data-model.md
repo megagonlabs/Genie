@@ -173,7 +173,7 @@ The table shows the stored records and the question that each record answers:
 | --- | --- | --- | --- | --- |
 | **Ownership** | `MemoryBlock.parent_id` | follows it | follows it | no inheritance |
 | **Link** | `MemoryLink` | only through `Scope.LINKS` or graph facades | not followed | no inheritance |
-| **Mount** | `MemoryLink` with `"genie.mount"` | not followed | not followed | no inheritance |
+| **Mount** | `MemoryLink` with `"genie.mount"` | `Scope.LINKS` finds the target, not its subtree | not followed | no inheritance |
 | **Membership** | `KeyBinding`, `LogEntry`, `TemporalEntry` | not followed | not followed | no inheritance |
 
 - **Ownership makes a forest.** Each block has 1 parent or no parent. A block

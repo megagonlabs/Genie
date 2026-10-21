@@ -428,6 +428,20 @@ def test_scope_mounts_require_explicit_mount_access() -> None:
         plain_scope.resolve_mount(mount)
 
 
+def test_scope_add_link_cannot_create_a_mount() -> None:
+    """A handle without mount access cannot create a mount through `add_link`."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    plain_scope = memory.get_handle(root=root)
+    child = plain_scope.put(type="note", value="child")
+
+    with pytest.raises(ValueError, match="reserved mount relation"):
+        plain_scope.add_link(root, child, LinkRelations.MOUNT)
+
+    assert memory.list_mounts(root) == []
+
+
 def test_scope_discover_mounts_requires_mount_access_and_stays_in_scope() -> None:
     """A scoped `discover_mounts` call needs explicit mount access and cannot scan outside the handle root."""
 
@@ -509,7 +523,7 @@ def test_child_handles_cannot_add_mount_access() -> None:
 
 
 def test_reserved_mount_relation_is_rejected_by_non_mount_operations() -> None:
-    """The acyclic link API rejects the reserved mount relation, and `resolve_mount` rejects an ordinary link."""
+    """The plain and acyclic link APIs reject the reserved mount relation, and `resolve_mount` rejects an ordinary link."""
 
     memory = Memory()
     source = memory.put(type="node", value="source")
@@ -517,9 +531,12 @@ def test_reserved_mount_relation_is_rejected_by_non_mount_operations() -> None:
     ordinary = memory.add_link(source, target, "related")
 
     with pytest.raises(ValueError, match="reserved mount relation"):
+        memory.add_link(source, target, LinkRelations.MOUNT)
+    with pytest.raises(ValueError, match="reserved mount relation"):
         memory.add_acyclic_link(source, target, LinkRelations.MOUNT)
     with pytest.raises(ValueError, match="Expected mount relation"):
         memory.resolve_mount(ordinary)
+    assert memory.list_mounts(source) == []
 
 
 def test_update_link_rejects_a_dangling_non_mount_target() -> None:

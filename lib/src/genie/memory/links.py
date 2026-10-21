@@ -18,7 +18,8 @@ class LinkRelations:
         MOUNT: Symbolic mount relation. A mount link points from a source
             block to another memory root. It does not imply parent and child
             ownership, subtree membership, ownership for recursive delete, or
-            access inheritance.
+            access inheritance. Only `add_mount` creates it. `add_link` and
+            `add_acyclic_link` raise `ValueError` for it.
     """
 
     MOUNT = "genie.mount"

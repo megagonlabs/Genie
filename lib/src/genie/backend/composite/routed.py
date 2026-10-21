@@ -710,7 +710,7 @@ class RoutedBackend:
 
         - **Shared index:** with a shared search index, it answers all searches.
         - **`links` scope:** with a shared link store, the composite matches
-          the blocks that the root links to.
+          the root and the blocks that a link connects to it.
         - **Other scoped searches:** the route of the root answers.
         - **Global search:** each route returns up to `limit` results. The
           composite merges them by score and keeps the first `limit`.
@@ -924,13 +924,13 @@ class RoutedBackend:
         return found[0]
 
     def _search_linked_blocks(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search the blocks that the shared link store connects to a root."""
+        """Search a root and the blocks that the shared link store connects to it."""
 
         root_id = query.root_id
         if root_id is None:
             return []
-        linked_ids: list[str] = []
-        seen: set[str] = set()
+        linked_ids = [root_id]
+        seen = {root_id}
         for link in self.list_links(root_id, direction="both"):
             for block_id in (link.source_id, link.target_id):
                 if block_id not in seen:
