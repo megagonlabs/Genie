@@ -2596,7 +2596,7 @@ def _dump_json(value: Any, *, field_name: str) -> str:
         field_name: Field name for the error message.
 
     Returns:
-        Compact, key-sorted JSON text.
+        Compact JSON text that keeps the dict key order.
 
     Raises:
         TypeError: If the value is not strict JSON data.
@@ -2604,7 +2604,7 @@ def _dump_json(value: Any, *, field_name: str) -> str:
 
     if not _is_strict_json(value):
         raise TypeError(f"MongoDBBackend {field_name} must be strict JSON data.")
-    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
 
 
 def _load_json(value: object) -> Any:

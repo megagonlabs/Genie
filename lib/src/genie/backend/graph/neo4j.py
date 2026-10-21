@@ -2141,11 +2141,11 @@ def _decode_rule(payload: Mapping[str, Any]) -> AccessRule:
 
 
 def _dump_json(value: Any, *, field_name: str) -> str:
-    """Serialize strict JSON data to a compact string with sorted keys."""
+    """Serialize strict JSON data to a compact string that keeps the dict key order."""
 
     if not _is_strict_json(value):
         raise TypeError(f"Neo4jBackend {field_name} must be strict JSON data.")
-    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
 
 
 def _load_json(value: object) -> Any:

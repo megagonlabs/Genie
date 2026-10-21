@@ -37,7 +37,7 @@ place where a test checks it.
 | **Atomic operations are atomic.** Only one of many concurrent writers can claim a key, append a position, or close a cycle | The `*_is_atomic` contract tests, `test_structure_concurrency.py` |
 | **Recursive delete is all or nothing.** If another writer changes the subtree, the delete does not remove only a part of it | `BlockStoreContract`, adapter tests |
 | **One block id has one route.** `RoutedBackend` instances that share a `route_catalog` cannot store one id in 2 routes, and a stale route cache does not hide a block | `RouteCatalogContract`, `test_routed_backend.py` |
-| **Stored values survive a round trip.** Values and metadata come back unchanged. The adapter reports corrupt stored rows and does not guess their content | Adapter tests, `test_codecs.py` |
+| **Stored values survive a round trip.** Values and metadata come back unchanged, with dict keys in the order of the write. The adapter reports corrupt stored rows and does not guess their content | `BlockStoreContract`, `LinkStoreContract`, adapter tests, `test_codecs.py` |
 | **A driver that is not installed gives a clear error.** The adapter raises `UnsupportedOperation`, and the message names the extra | Adapter tests, offline |
 | **Examples stay correct.** The printed output agrees with `examples/expected/` | `test_examples.py` |
 

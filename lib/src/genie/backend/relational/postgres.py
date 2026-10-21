@@ -2483,7 +2483,6 @@ def _dump_json(value: Any, *, field_name: str) -> str:
         allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
-        sort_keys=True,
     )
 
 

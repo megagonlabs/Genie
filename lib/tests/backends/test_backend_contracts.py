@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Barrier
 from typing import cast
@@ -106,6 +107,20 @@ class StructureBackendContract:
             write(block_id)
 
 
+def _key_order(value: object) -> object:
+    """Return a copy of a JSON value with each dict changed to a list of its items.
+
+    - **Order-sensitive:** 2 dicts with the same items compare equal in any key
+      order. The item lists compare equal only when the keys are in the same order.
+    """
+
+    if isinstance(value, dict):
+        return [(key, _key_order(item)) for key, item in value.items()]
+    if isinstance(value, list):
+        return [_key_order(item) for item in value]
+    return value
+
+
 class BlockStoreContract(StructureBackendContract):
     """Contract tests for conditional writes and deletes of core blocks."""
 
@@ -171,6 +186,28 @@ class BlockStoreContract(StructureBackendContract):
         assert backend.get_block("mem_orphan") is None
         assert backend.get_block("mem_missing") is None
         backend.delete_block("mem_missing")
+
+    def test_block_round_trip_keeps_key_order(self) -> None:
+        """Dict keys in a block value and metadata come back in write order, after a put and after an update."""
+
+        backend = self.make_backend()
+        value = {"zeta": 1, "alpha": {"yak": 1, "bee": 2}, "items": [{"z": 1, "a": 2}]}
+        metadata = {"z": 1, "a": {"y": 1, "b": 2}}
+        backend.put_block(MemoryBlock(id="mem_form", type="form", value=value, metadata=metadata))
+
+        stored = backend.get_block("mem_form")
+        assert stored is not None
+        assert _key_order(stored.value) == _key_order(value)
+        assert _key_order(stored.metadata) == _key_order(metadata)
+
+        value = {"omega": {"zed": 1, "ant": 2}, "beta": 1}
+        metadata = {"y": [{"q": 1, "c": 2}], "b": 1}
+        backend.update_block(stored.with_updates(value=value, metadata=metadata))
+
+        stored = backend.get_block("mem_form")
+        assert stored is not None
+        assert _key_order(stored.value) == _key_order(value)
+        assert _key_order(stored.metadata) == _key_order(metadata)
 
     def test_conditional_subtree_delete_contract(self) -> None:
         """`delete_block` rejects an incomplete or stale subtree snapshot and deletes no block."""
@@ -1039,6 +1076,24 @@ class LinkStoreContract(StructureBackendContract):
         assert backend.list_links(target.id, direction="both") == [kept]
         store.delete_links_for_block("mem_missing")
         assert backend.list_links(other.id, direction="out") == [kept]
+
+    def test_link_store_round_trip_keeps_key_order(self) -> None:
+        """Dict keys in link metadata come back in write order, after an add and after an update."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, LinkStore)
+        source, target = self.put_blocks(backend, "mem_source", "mem_target")
+        metadata = {"zeta": 1, "alpha": {"yak": 1, "bee": 2}}
+        backend.add_link(MemoryLink(source.id, target.id, "cites", metadata=metadata))
+
+        [stored] = backend.list_links(source.id)
+        assert _key_order(stored.metadata) == _key_order(metadata)
+
+        metadata = {"omega": [{"zed": 1, "ant": 2}], "beta": 1}
+        backend.update_link(replace(stored, metadata=metadata))
+
+        [stored] = backend.list_links(source.id)
+        assert _key_order(stored.metadata) == _key_order(metadata)
 
 
 class AcyclicLinkStoreContract(StructureBackendContract):

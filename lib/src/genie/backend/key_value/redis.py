@@ -3208,7 +3208,7 @@ def _dump_json(value: Any, *, field_name: str) -> str:
     """Encode a strict JSON value, with no silent type change."""
 
     _require_strict_json(value, field_name=field_name)
-    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
 
 
 def _load_document(payload: object, *, name: str) -> dict[str, Any]:
