@@ -21,6 +21,9 @@ read, it changes that data back into the values.
 - **Without one:** the registry uses the first codec, in registration order, whose `can_encode` accepts the value. A replacement codec keeps the position of the codec that it replaces.
 - **A bad value of a known kind still selects its codec.** `JsonCodec.can_encode` returns `True` for a value that is too deep. So `encode` raises `ValueError`, and the registry does not report "no codec".
 - **On decode:** the stored content type selects the codec again.
+- **Each `Memory` has its own registry.** Two `Memory` objects over one backend can have different codecs.
+- **`search` decodes only visible results.** It decodes a result only after the policy and scope filters keep it. So a hidden block with an unknown content type does not change the results.
+- **`delete` decodes the whole subtree.** The delete hooks get decoded blocks. So a missing codec raises `TypeError`, and the backend deletes nothing.
 - **Rules:** a content type is a non-empty string. `encode` returns an `EncodedValue` with the content type of its own codec. If a codec breaks a rule, the registry raises `TypeError` or `ValueError`.
 
 ```python

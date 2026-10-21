@@ -128,7 +128,7 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 | `get(block_id)` | `MemoryBlock \| None` | `read` | `AccessDenied`, `TypeError` (bad id or no codec), `ValueError` (empty id) |
 | `set(block_id, value, *, content_type=None)` | `MemoryBlock` | `write`, then `read` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `update(block_id, *, value=None, metadata=None)` | `MemoryBlock` | `write`, then `read` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
-| `delete(block_id)` | `None` | `write` on the target only | `AccessDenied`, `MemoryConflict`, `MemoryNotFound` |
+| `delete(block_id)` | `None` | `write` on the target only | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError` (no codec for a block in the subtree) |
 | `require_access(operation, block_id)` | `None` | the named operation | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` (empty id or unknown operation) |
 
 - **`put` without `parent` creates a root block.** No parent check runs.
@@ -200,9 +200,13 @@ search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filter
   principal can `search` and `read` it.
 - **`limit` is a candidate budget.** The backend uses it before the policy
   filter, so the visible page can be shorter than `limit`.
+- **Genie filters before it decodes.** It decodes only the results that the
+  policy and scope filters keep. So a hidden block with a content type that
+  this `Memory` cannot decode does not change the results.
 - **Raises:** `AccessDenied` (the root is not searchable or not traversable),
-  `MemoryNotFound` (root), `TypeError`, `ValueError` (unknown scope, negative
-  limit, or a non-global scope with no root).
+  `MemoryNotFound` (root), `TypeError` (bad argument, or no codec for a visible
+  result), `ValueError` (unknown scope, negative limit, or a non-global scope
+  with no root).
 
 ### Handles
 
@@ -553,6 +557,10 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
   `HookRegistry.after_delete(context, *blocks)` once with all removed blocks.
   The registry then calls `after_delete(context, block)` on each hook once for
   each block. It raises failures only after all hooks received all blocks.
+- **Delete hooks get decoded blocks.** So the `Memory` that deletes needs a
+  codec for each block in the subtree, also for the blocks that the principal
+  cannot read. If a codec is missing, `delete` raises `TypeError` before any
+  hook runs, and the backend deletes nothing.
 
 ### `HookRegistry`
 

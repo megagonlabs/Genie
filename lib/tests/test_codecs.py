@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 
-from genie import CodecRegistry, EncodedValue, JsonCodec, Memory, MemoryCodec
+from genie import CodecRegistry, EncodedValue, HookContext, JsonCodec, Memory, MemoryBlock, MemoryCodec, MemoryHook, MemoryPolicy
 from genie.codecs import MAX_NESTING_DEPTH
 from genie.codecs.stdlib import (
     BytesCodec,
@@ -296,6 +296,70 @@ def test_bytes_codec_round_trips_base64_payloads() -> None:
     assert isinstance(raw.value, str)
     assert retrieved is not None
     assert retrieved.value == payload
+
+
+@pytest.mark.parametrize("through_handle", [False, True], ids=["memory", "handle"])
+def test_hidden_block_with_another_codec_does_not_break_search(through_handle: bool) -> None:
+    """A hidden block with a codec that the reader does not have does not change the search results of the reader."""
+
+    writer = Memory(principal="svc", codecs=CodecRegistry([JsonCodec(), BytesCodec()]))
+    root = writer.put(type="folder", value="folder", policy=MemoryPolicy.public())
+    writer.put(parent=root, type="note", value="visible note", policy=MemoryPolicy.public())
+    hidden = writer.put(parent=root, type="note", value=b"attachment")
+    reader = Memory(backend=writer.backend, principal="agent")
+
+    if through_handle:
+        results = reader.get_handle(root=root).search("note")
+    else:
+        results = reader.search("note", root=root, scope="subtree")
+
+    assert hidden.id in [result.block.id for result in writer.search("note", root=root, scope="subtree")]
+    assert [result.block.value for result in results] == ["visible note"]
+
+
+def test_visible_block_with_another_codec_still_raises_in_search() -> None:
+    """A visible search result that the reader cannot decode raises `TypeError`, as `get` does."""
+
+    writer = Memory(principal="svc", codecs=CodecRegistry([JsonCodec(), BytesCodec()]))
+    root = writer.put(type="folder", value="folder", policy=MemoryPolicy.public())
+    writer.put(parent=root, type="note", value=b"attachment", policy=MemoryPolicy.public())
+    reader = Memory(backend=writer.backend, principal="agent")
+
+    with pytest.raises(TypeError, match="No Genie codec registered"):
+        reader.search("note", root=root, scope="subtree")
+
+
+def test_delete_with_a_descendant_without_a_codec_raises_and_deletes_nothing() -> None:
+    """`delete` decodes the whole subtree for its hooks. A missing codec raises `TypeError` before any hook runs."""
+
+    class DeleteRecorder(MemoryHook):
+        """Hook that records the ids that the delete hooks get."""
+
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        def before_delete(self, context: HookContext, block: MemoryBlock) -> None:
+            """Record a block before the delete."""
+
+            self.seen.append(block.id)
+
+        def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
+            """Record a deleted block."""
+
+            self.seen.append(block.id)
+
+    writer = Memory(principal="svc", codecs=CodecRegistry([JsonCodec(), BytesCodec()]))
+    root = writer.put(type="folder", value="folder", policy=MemoryPolicy.public())
+    hidden = writer.put(parent=root, type="note", value=b"attachment")
+    hook = DeleteRecorder()
+    deleter = Memory(backend=writer.backend, principal="agent", hooks=[hook])
+
+    with pytest.raises(TypeError, match="No Genie codec registered"):
+        deleter.delete(root)
+
+    assert hook.seen == []
+    assert writer.get(root.id) is not None
+    assert writer.get(hidden.id) is not None
 
 
 def test_stdlib_codecs_reject_malformed_encoded_payloads() -> None:

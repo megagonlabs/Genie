@@ -740,8 +740,9 @@ class MemoryHandle:
                 query to do so, or an unbounded handle cannot infer a
                 non-global search root.
             MemoryNotFound: If the query root does not exist.
-            TypeError: If `root` is not a block or string id, or the text,
-                types, filters, or limit arguments have the wrong type.
+            TypeError: If `root` is not a block or string id, the text, types,
+                filters, or limit arguments have the wrong type, or no
+                registered codec can decode a visible result.
             ValueError: If the scope is not valid, the root id is empty, the
                 limit is negative, a filter uses an unknown operator, or a
                 `before_search` hook returns a non-global query with no root.

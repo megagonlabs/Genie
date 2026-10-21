@@ -374,6 +374,7 @@ class AuditHook(MemoryHook):
 ### Recursive deletion
 
 - **`before_delete` runs for each block in the observed snapshot.** This includes descendants whose own policies Genie never checked.
+- **Each block gets to the hooks decoded.** So the `Memory` that deletes needs a codec for each block in the subtree. If a codec is missing, `delete` raises `TypeError` before any hook runs, and the backend deletes nothing.
 - **A concurrent change raises `MemoryConflict`.** Before hooks can already have run, but after hooks run only when the delete succeeds.
 - **Each deleted block gets to each hook before any failure surfaces.** So a delete of 5 blocks with a sink that fails on the third block still records 5 deletions.
 - **Cascade cleanup in the backend** of links and structural references sends no separate structural events. The block delete itself stands for that cleanup.

@@ -348,6 +348,10 @@ class Memory:
           the whole branch.
         - **To outlive the parent:** a descendant stays outside the subtree,
           with a link or a mount instead of ownership.
+        - **Codecs:** the delete hooks get decoded blocks. So this `Memory`
+          needs a codec for each block in the subtree, also for the blocks
+          that the principal cannot read. If a codec is missing, no hook runs
+          and the backend deletes nothing.
 
         Args:
             block_id: Block or block id to delete.
@@ -356,7 +360,8 @@ class Memory:
             AccessDenied: If the target block denies write access.
             MemoryConflict: If the checked subtree changes before commit.
             MemoryNotFound: If the block does not exist.
-            TypeError: If `block_id` is not a block or string id.
+            TypeError: If `block_id` is not a block or string id, or no
+                registered codec can decode a block in the subtree.
             ValueError: If `block_id` is empty.
         """
 
@@ -920,14 +925,16 @@ class Memory:
                 the result itself.
 
         Returns:
-            Search results with decoded blocks.
+            Search results with decoded blocks. Genie decodes a result only
+            after the policy and scope filters keep it.
 
         Raises:
             AccessDenied: If the principal cannot search or traverse from the
                 query root.
             MemoryNotFound: If the query root does not exist.
             TypeError: If the text, root, types, filters, or limit arguments
-                have the wrong type.
+                have the wrong type, or no registered codec can decode a
+                visible result.
             ValueError: If the scope is invalid, the limit is negative, the
                 root id is empty, a non-global scope has no root, or a filter
                 uses an unknown operator.
@@ -996,18 +1003,15 @@ class Memory:
                 boundary(context, memory_query)
             self._authorize_query(context, memory_query)
             raw_results = self.backend.search(memory_query)
-            decoded_results = [
-                replace(result, block=self._decode_block(result.block))
-                for result in raw_results
-            ]
             # One visibility verdict for each block id for the whole call. Both
             # filter passes share it, so each block is read only once.
             verdicts: dict[str, bool] = {}
-            visible_results = self._filter_visible_results(
-                memory_query,
-                decoded_results,
-                verdicts,
-            )
+            # Filter before decode. So a hidden block with a codec that this
+            # `Memory` does not have cannot make the search fail.
+            visible_results = [
+                replace(result, block=self._decode_block(result.block))
+                for result in self._filter_visible_results(memory_query, raw_results, verdicts)
+            ]
             hooked_results = self.hooks.after_search(
                 context,
                 memory_query,
