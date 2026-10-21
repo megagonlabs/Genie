@@ -30,7 +30,9 @@ command-line program and extra Python packages are not necessary.
 - **Recursive delete** checks one exact snapshot of the subtree and deletes leaves first.
 - **Construction** checks the Genie application identity and the exact schema, and runs ordered atomic migrations. It rejects an incompatible database, and the tables, the data, and the application id of that database do not change. But the constructor switches a file database to WAL mode before this check, so a rejected file stays in WAL mode.
 - **Adoption:** a database with application id 0 and the exact current schema passes the check. The constructor then sets the Genie application id on it.
-- **Tables** hold blocks, links, keys, logs, and temporal entries. Values and metadata are strict JSON. Constraints and transactions keep the structure correct.
+- **Tables** hold blocks, links, keys, logs, temporal entries, and route catalog entries. Values and metadata are strict JSON. Constraints and transactions keep the structure correct.
+- **Route catalog entries** are in `route_entries`, one row for each block id, with the block id as the primary key. `RoutedBackend` uses them through `route_catalog`. A claim is one insert in a `BEGIN IMMEDIATE` transaction, and the primary key rejects a second claim for the same block id with `MemoryConflict`.
+- **`route_entries` has no foreign key to `blocks`.** An entry is stored before its block, and it can name a block in another database. So block writes and deletes do not change the entries. `release_routes` removes them.
 - **Operational failures** use `BackendError`. `BackendBusy` and `BackendUnavailable` are retryable. Read-only, capacity, and corruption errors have their own types. The SQLite error stays available as `__cause__`.
 
 ## `PostgresBackend`
@@ -56,7 +58,7 @@ proves that the server is reachable, and there is no separate connectivity flag.
 ### Layout
 
 - **One PostgreSQL schema holds all tables,** and its default name is `"genie"`. Several Genie datasets can share one database with different schema names, as `RedisBackend` does with `key_prefix`.
-- **Table names match `SQLiteBackend`:** `blocks`, `links`, `acyclic_relations`, `key_bindings`, `log_counters`, `log_entries`, and `temporal_entries`, plus `schema_info` for the schema record.
+- **Table names match `SQLiteBackend`:** `blocks`, `links`, `acyclic_relations`, `key_bindings`, `log_counters`, `log_entries`, `temporal_entries`, and `route_entries`, plus `schema_info` for the schema record.
 - **The `schema` argument has only ASCII letters, digits, and underscores.** It does not start with a digit, and it has at most 63 bytes. The reason is that the name goes into SQL as a quoted identifier, because PostgreSQL does not accept a parameter where a table name goes.
 
 ### Behavior
@@ -65,6 +67,7 @@ proves that the server is reachable, and there is no separate connectivity flag.
 - **Reads run in a repeatable-read, read-only transaction.** So a read with several statements sees one consistent snapshot, and it cannot fail with a serialization error.
 - **Block updates use a version compare-and-swap.**
 - **Recursive delete** checks one exact subtree snapshot. Then it deletes the subtree in one statement, and cascading foreign keys remove the links, key bindings, log entries, and temporal entries that belong to it.
+- **Route catalog entries** in `route_entries` have the same layout as in `SQLiteBackend`, and no foreign key to `blocks`. So a recursive delete does not remove them. A claim is one insert under the advisory lock, and the primary key rejects a second claim for the same block id with `MemoryConflict`, also from another instance or process.
 - **`timeout` sets `lock_timeout`.** So a write that waits too long for another writer fails with `BackendBusy` and does not hang. `timeout=0` waits with no limit, because PostgreSQL turns `lock_timeout` off at 0.
 - **`durability="normal"` sets `synchronous_commit` to `off`.** This gives more write throughput, but the most recent commits can be lost after a crash. `SQLiteBackend` offers the same trade.
 - **Sequence numbers come from a counter row,** not from a PostgreSQL sequence. A sequence is not transactional, so it skips a number when an append rolls back. The counter row does not skip numbers.

@@ -7,7 +7,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
-from threading import Condition, Event, RLock
+from threading import Barrier, Condition, Event, RLock
 from time import monotonic, sleep
 from types import SimpleNamespace
 from typing import Any, Literal, Self, cast
@@ -31,6 +31,8 @@ from genie import (
     MemoryPolicy,
     MemoryQuery,
     RedisBackend,
+    RouteCatalog,
+    RouteInfo,
     Scope,
     SequenceStore,
     TemporalIndex,
@@ -44,6 +46,7 @@ from tests.backends.test_backend_contracts import (
     BlockStoreContract,
     KeyedStoreContract,
     LinkStoreContract,
+    RouteCatalogContract,
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
@@ -94,6 +97,7 @@ def test_redis_backend_implements_every_backend_protocol() -> None:
     assert isinstance(backend, SequenceStore)
     assert isinstance(backend, TemporalStore)
     assert isinstance(backend, TemporalIndex)
+    assert isinstance(backend, RouteCatalog)
 
 
 @pytest.mark.parametrize(
@@ -257,6 +261,26 @@ def test_redis_document_decoders_translate_malformed_shapes() -> None:
     document["metadata"] = []
     with pytest.raises(BackendCorruption, match="memory block is invalid"):
         redis_module._block_from_document(document)
+
+
+def test_redis_route_entry_decoder_rejects_an_empty_route() -> None:
+    """A stored route catalog entry whose route is empty or only whitespace raises `BackendCorruption`."""
+
+    assert redis_module._route_entry_from_field("block", "us") == RouteInfo("block", "us")
+    with pytest.raises(BackendCorruption, match="route catalog entry is invalid"):
+        redis_module._route_entry_from_field("block", " ")
+
+
+def test_redis_release_routes_sends_no_command_for_an_empty_sequence() -> None:
+    """An empty `release_routes` call needs no commit, so it does not replace the mutation guard."""
+
+    class UnusedClient:
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"release_routes([]) used the client method {name!r}.")
+
+    backend = _detached_backend(UnusedClient())
+
+    backend.release_routes([])
 
 
 @pytest.mark.parametrize(
@@ -2167,7 +2191,7 @@ def test_redis_initialization_reads_the_schema_record_and_namespace_keys_togethe
 
     backend._initialize_schema()
 
-    assert client.trips[0] == ["hgetall", "exists", "exists", "exists"]
+    assert client.trips[0] == ["hgetall", "exists", "exists", "exists", "exists"]
     assert client.store[schema_key] == competing
     assert client.store[guard_key] != "competing"
 
@@ -2419,6 +2443,7 @@ class TestRedisStructureBackendContracts(
     TemporalIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
+    RouteCatalogContract,
 ):
     """Run every reusable capability contract against a live Redis server.
 
@@ -2726,6 +2751,7 @@ def test_live_redis_backend_reports_corrupt_persisted_record_types() -> None:
             client.hset(f"{backend.key_prefix}:keys:{container.id}", "{}", target.id)
             client.zadd(f"{backend.key_prefix}:log:{container.id}", {'["one","target"]': log_entry.sequence + 1})
             client.hset(f"{backend.key_prefix}:temporal:{container.id}", target.id, '{"occurred_at":"invalid"}')
+            client.hset(f"{backend.key_prefix}:routes", corrupt.id, " ")
 
         backend._direct(corrupt_records)
 
@@ -2739,6 +2765,8 @@ def test_live_redis_backend_reports_corrupt_persisted_record_types() -> None:
             backend.list_log_entries(container.id)
         with pytest.raises(BackendCorruption, match="timestamp is invalid"):
             backend.get_temporal_entry(container.id, target.id)
+        with pytest.raises(BackendCorruption, match="route catalog entry is invalid"):
+            backend.get_route(corrupt.id)
         _clear_live_data(backend)
 
 
@@ -2950,6 +2978,41 @@ def test_live_redis_backend_leaves_no_orphan_keys_after_deletion() -> None:
         backend.delete_block(neighbor.id)
         assert _orphan_keys(backend) == []
         _clear_live_data(backend)
+
+
+@pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)
+def test_live_redis_route_catalog_claims_are_atomic_across_instances() -> None:
+    """Of 12 concurrent claims for one block id from 2 backend instances, only one succeeds, and both instances read its entry."""
+
+    left = _live_backend()
+    _clear_live_data(left)
+    right = _live_backend(initialize_schema=False)
+    entries = [RouteInfo("shared", f"route-{index:02d}") for index in range(12)]
+    barrier = Barrier(len(entries))
+
+    def claim(index: int) -> bool:
+        backend = left if index % 2 == 0 else right
+        barrier.wait()
+        try:
+            backend.claim_route(entries[index])
+        except MemoryConflict:
+            return False
+        return True
+
+    try:
+        with ThreadPoolExecutor(max_workers=len(entries)) as executor:
+            outcomes = list(executor.map(claim, range(len(entries))))
+
+        assert outcomes.count(True) == 1
+        winner = entries[outcomes.index(True)]
+        assert left.get_route("shared") == winner
+        assert right.get_route("shared") == winner
+        right.release_routes(["shared"])
+        assert left.get_route("shared") is None
+    finally:
+        _clear_live_data(left)
+        left.close()
+        right.close()
 
 
 @pytest.mark.skipif(not (_LIVE_URL and _LIVE_CLIENT_AVAILABLE), reason=_LIVE_REASON)

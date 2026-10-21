@@ -7,7 +7,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from threading import Event, RLock
+from threading import Barrier, Event, RLock
 from typing import Any
 
 import pytest
@@ -29,6 +29,8 @@ from genie import (
     MemoryPolicy,
     MemoryQuery,
     PostgresBackend,
+    RouteCatalog,
+    RouteInfo,
     Scope,
     SequenceStore,
     TemporalIndex,
@@ -42,6 +44,7 @@ from tests.backends.test_backend_contracts import (
     BlockStoreContract,
     KeyedStoreContract,
     LinkStoreContract,
+    RouteCatalogContract,
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
@@ -58,6 +61,7 @@ def test_postgres_backend_implements_every_backend_protocol() -> None:
     assert isinstance(backend, AcyclicLinkStore)
     assert isinstance(backend, KeyedStore)
     assert isinstance(backend, SequenceStore)
+    assert isinstance(backend, RouteCatalog)
     assert isinstance(backend, TemporalStore)
     assert isinstance(backend, TemporalIndex)
 
@@ -434,10 +438,12 @@ def _live_backend(*, initialize_schema: bool = True) -> PostgresBackend:
 
 def _clear_live_data(backend: PostgresBackend) -> None:
     # A delete of every root block cascades to the whole dataset. No block owns
-    # the acyclic protections, so this function clears them separately.
+    # the acyclic protections or the route catalog entries, so this function
+    # clears them separately.
     with backend._write_transaction() as connection:
         connection.execute(f"DELETE FROM {backend._blocks}")
         connection.execute(f"DELETE FROM {backend._acyclic_relations}")
+        connection.execute(f"DELETE FROM {backend._route_entries}")
 
 
 @pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
@@ -450,6 +456,7 @@ class TestPostgresStructureBackendContracts(
     TemporalIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
+    RouteCatalogContract,
 ):
     """Run every reusable capability contract against a live PostgreSQL server."""
 
@@ -509,6 +516,39 @@ def test_live_postgres_backend_persists_and_coordinates_instances() -> None:
                 )
             )
         assert sorted(outcomes) == [False, True]
+    finally:
+        _clear_live_data(left)
+        left.close()
+        right.close()
+
+
+@pytest.mark.skipif(not (_LIVE_DSN and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_postgres_route_claims_from_two_instances_keep_one_route() -> None:
+    """Of concurrent claims for one block id from 2 instances, only one succeeds, and the other instance reads its entry."""
+
+    left = _live_backend()
+    right = _live_backend(initialize_schema=False)
+    _clear_live_data(left)
+    try:
+        entries = [RouteInfo("shared", f"route_{index:02d}") for index in range(12)]
+        barrier = Barrier(len(entries))
+
+        def claim(index: int) -> bool:
+            backend = left if index % 2 == 0 else right
+            barrier.wait()
+            try:
+                backend.claim_route(entries[index])
+            except MemoryConflict:
+                return False
+            return True
+
+        with ThreadPoolExecutor(max_workers=len(entries)) as executor:
+            outcomes = list(executor.map(claim, range(len(entries))))
+
+        assert outcomes.count(True) == 1
+        winner = entries[outcomes.index(True)]
+        assert left.get_route("shared") == winner
+        assert right.get_route("shared") == winner
     finally:
         _clear_live_data(left)
         left.close()

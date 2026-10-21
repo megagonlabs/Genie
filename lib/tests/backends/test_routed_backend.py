@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from threading import Barrier
@@ -25,7 +26,9 @@ from genie import (
     MemoryLink,
     MemoryPolicy,
     MemoryQuery,
+    RouteCatalog,
     RoutedBackend,
+    RouteInfo,
     SearchResult,
     SQLiteBackend,
 )
@@ -38,7 +41,7 @@ from genie.backend.structure_capabilities import (
     TemporalStore,
 )
 from genie.memory.block import MemoryBlock
-from genie.memory.errors import MemoryConflict, MemoryNotFound, UnsupportedOperation
+from genie.memory.errors import BackendCorruption, BackendUnavailable, MemoryConflict, MemoryNotFound, UnsupportedOperation
 from genie.structures import EventLog, KeyedCollection, LineageDAG, MemoryAddress
 from tests.backends.test_backend_contracts import (
     AcyclicLinkStoreContract,
@@ -701,7 +704,11 @@ def test_routed_acyclic_links_refuse_a_shared_store_without_the_capability() -> 
 
 
 def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
-    """`RoutedBackend` rejects an empty route table, an unknown route name, and a block id that another route already owns."""
+    """`RoutedBackend` rejects an empty route table, an unknown route name, and a block id that another route already owns.
+
+    An unknown route from the route selector raises `UnsupportedOperation`,
+    the same error as an unknown route in a route catalog.
+    """
 
     with pytest.raises(ValueError, match="requires at least one route"):
         RoutedBackend({})
@@ -716,8 +723,9 @@ def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
     memory = Memory(backend=backend)
     memory.put(id="same-id", type="note", value="first", metadata={"route": "a"})
 
-    with pytest.raises(MemoryConflict):
+    with pytest.raises(UnsupportedOperation, match="route 'missing', which this RoutedBackend does not have") as raised:
         memory.put(id="bad-route", type="note", value="bad", metadata={"route": "missing"})
+    assert not isinstance(raised.value, MemoryConflict)
     with pytest.raises(MemoryConflict):
         memory.put(id="same-id", type="note", value="second", metadata={"route": "b"})
 
@@ -741,16 +749,32 @@ def test_routed_backend_missing_read_paths_are_empty_and_mutations_are_safe_noop
 
 
 def test_routed_backend_detects_ambiguous_preexisting_ownership() -> None:
-    """If a block id exists in more than one route, `route_for_block` raises `MemoryConflict` and does not choose a route at random."""
+    """If a block id exists in more than one route, each lookup raises `BackendCorruption` and does not choose a route at random.
+
+    The error is not a `MemoryConflict`, because a retry with fresh state
+    cannot repair stored data that breaks the one-route rule.
+    """
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
-    route_a.put_block(MemoryBlock(id="duplicate", type="note", value="a"))
-    route_b.put_block(MemoryBlock(id="duplicate", type="note", value="b"))
+    route_a.put_block(MemoryBlock(id="duplicate", type="note", value="a", created_by="system"))
+    route_b.put_block(MemoryBlock(id="duplicate", type="note", value="b", created_by="system"))
     backend = RoutedBackend({"a": route_a, "b": route_b}, default_route="a")
+    memory = Memory(backend=backend)
 
-    with pytest.raises(MemoryConflict, match="exists in multiple routes"):
+    with pytest.raises(BackendCorruption, match=r"exists in multiple routes: \['a', 'b'\]") as raised:
         backend.route_for_block("duplicate")
+    assert not isinstance(raised.value, MemoryConflict)
+    with pytest.raises(BackendCorruption):
+        backend.get_block("duplicate")
+    with pytest.raises(BackendCorruption):
+        memory.get("duplicate")
+    with pytest.raises(BackendCorruption):
+        memory.put(id="duplicate", type="note", value="c")
+    with pytest.raises(BackendCorruption):
+        backend.delete_block("duplicate")
+    assert route_a.get_block("duplicate") is not None
+    assert route_b.get_block("duplicate") is not None
     with pytest.raises(MemoryConflict, match="does not exist"):
         backend.update_block(
             MemoryBlock(id="missing", type="note", value="missing", version=2)
@@ -798,7 +822,7 @@ def test_shared_link_search_applies_type_and_filter_constraints() -> None:
 
 
 def test_routed_backend_discovers_preexisting_route_blocks() -> None:
-    """The catalog can discover blocks that already exist inside a route."""
+    """The route cache can discover blocks that already exist inside a route."""
 
     route_a = InMemoryBackend()
     route_b = InMemoryBackend()
@@ -815,8 +839,8 @@ def test_routed_backend_discovers_preexisting_route_blocks() -> None:
     assert backend.route_for_block(existing.id) == "b"
 
 
-def test_routed_backend_delete_cleans_catalog_and_shared_links() -> None:
-    """A recursive delete removes the catalog entries and the shared links of the root and its descendants."""
+def test_routed_backend_delete_cleans_route_cache_and_shared_links() -> None:
+    """A recursive delete removes the route cache entries and the shared links of the root and its descendants."""
 
     link_store = RecordingLinkStore()
     backend = RoutedBackend(
@@ -1072,10 +1096,10 @@ def test_routes_mapping_is_read_only() -> None:
     assert sorted(backend.routes) == ["a", "c"]
 
 
-def test_route_replacement_probes_the_backend_when_the_catalog_is_cold(tmp_path: Any) -> None:
+def test_route_replacement_probes_the_backend_when_the_route_cache_is_cold(tmp_path: Any) -> None:
     """`register_route` does not replace a route that still holds blocks, even in a newly opened composite.
 
-    The catalog fills only on demand, so a new composite has no catalog
+    The route cache fills only on demand, so a new composite has no cache
     entries, and the replacement check asks the route backend directly.
     """
 
@@ -1104,6 +1128,330 @@ def test_route_replacement_allows_a_genuinely_empty_route(tmp_path: Any) -> None
     assert backend.routes["a"] is replacement
 
 
+class RejectingBackend(InMemoryBackend):
+    """Route backend that refuses each new block, as a route does for a value it cannot store."""
+
+    def put_block(self, block: MemoryBlock) -> MemoryBlock:
+        """Refuse the block and store nothing."""
+
+        raise ValueError("This route refuses the block.")
+
+
+class LostReplyBackend(InMemoryBackend):
+    """Route backend that stores each new block and then loses the reply, as after a dropped connection."""
+
+    def put_block(self, block: MemoryBlock) -> MemoryBlock:
+        """Store the block, then raise as if the commit reply did not arrive."""
+
+        super().put_block(block)
+        raise BackendUnavailable("The reply of the commit did not arrive.")
+
+
+class FailingReleaseCatalog(InMemoryBackend):
+    """Route catalog that records claims but cannot remove them."""
+
+    def release_routes(self, block_ids: Sequence[str]) -> None:
+        """Fail as if the catalog store is not available."""
+
+        raise BackendUnavailable("The route catalog is not available.")
+
+
+def open_routed(
+    us: MemoryBackend,
+    eu: MemoryBackend,
+    *,
+    route_catalog: RouteCatalog | None = None,
+) -> RoutedBackend:
+    """Return a composite over the routes `us` and `eu`, as one worker process opens it."""
+
+    return RoutedBackend(
+        {"us": us, "eu": eu},
+        route_selector=route_by_metadata,
+        default_route="us",
+        route_catalog=route_catalog,
+    )
+
+
+def test_a_stale_route_cache_entry_does_not_hide_a_moved_block() -> None:
+    """A composite checks a cached route before it uses it, so it finds a block that another instance stored again in another route.
+
+    Without a route catalog. `second` deletes `customer-7` and stores the id
+    again in route `eu`, while `first` still has route `us` in its route cache.
+    """
+
+    us = InMemoryBackend()
+    eu = InMemoryBackend()
+    first = Memory(backend=open_routed(us, eu))
+    second = Memory(backend=open_routed(us, eu))
+    first.put(id="customer-7", type="record", value="first")
+    assert first.get("customer-7") is not None
+    second.delete("customer-7")
+    second.put(id="customer-7", type="record", value="second", metadata={"route": "eu"})
+
+    moved = first.get("customer-7")
+    assert moved is not None
+    assert moved.value == "second"
+    with pytest.raises(MemoryConflict, match="already exists"):
+        first.put(id="customer-7", type="record", value="third")
+    assert us.get_block("customer-7") is None
+    first.delete("customer-7")
+    assert eu.get_block("customer-7") is None
+
+
+def test_routed_backends_that_share_a_route_catalog_store_one_id_in_one_route() -> None:
+    """Of 8 composite instances that put one id at the same time, each into a route of its own choice, only one stores it."""
+
+    us = InMemoryBackend()
+    eu = InMemoryBackend()
+    route_catalog = InMemoryBackend()
+    backends = [open_routed(us, eu, route_catalog=route_catalog) for _ in range(8)]
+    candidates = [
+        MemoryBlock(id="shared", type="note", value=index, metadata={"route": "us" if index % 2 else "eu"})
+        for index in range(len(backends))
+    ]
+    barrier = Barrier(len(backends))
+
+    def put(backend: RoutedBackend, block: MemoryBlock) -> bool:
+        barrier.wait()
+        try:
+            backend.put_block(block)
+        except MemoryConflict:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=len(backends)) as executor:
+        outcomes = list(executor.map(put, backends, candidates))
+
+    assert outcomes.count(True) == 1
+    holders = [name for name, route in (("us", us), ("eu", eu)) if route.get_block("shared") is not None]
+    assert holders == [cast(str, candidates[outcomes.index(True)].metadata["route"])]
+    assert route_catalog.get_route("shared") == RouteInfo("shared", holders[0])
+
+
+def test_routed_backends_over_sqlite_files_keep_ids_unique_with_a_route_catalog(tmp_path: Any) -> None:
+    """Composites with their own SQLite connections to the same route and catalog files keep each id in one route.
+
+    Each composite stands for one worker process. The test covers both
+    failures of GENIE-17: 2 concurrent puts of one id into different routes,
+    and a put from an instance whose route cache is stale.
+    """
+
+    opened: list[SQLiteBackend] = []
+
+    def open_worker() -> RoutedBackend:
+        us, eu, route_catalog = (SQLiteBackend(tmp_path / name) for name in ("us.db", "eu.db", "routes.db"))
+        opened.extend((us, eu, route_catalog))
+        return open_routed(us, eu, route_catalog=route_catalog)
+
+    try:
+        workers = [open_worker() for _ in range(2)]
+        barrier = Barrier(len(workers))
+
+        def put(backend: RoutedBackend, route: str) -> bool:
+            barrier.wait()
+            try:
+                backend.put_block(MemoryBlock(id="raced", type="note", value=route, metadata={"route": route}))
+            except MemoryConflict:
+                return False
+            return True
+
+        with ThreadPoolExecutor(max_workers=len(workers)) as executor:
+            outcomes = list(executor.map(put, workers, ["us", "eu"]))
+        assert outcomes.count(True) == 1
+
+        first = Memory(backend=workers[0])
+        second = Memory(backend=workers[1])
+        first.put(id="customer-7", type="record", value="first")
+        assert first.get("customer-7") is not None
+        second.delete("customer-7")
+        second.put(id="customer-7", type="record", value="second", metadata={"route": "eu"})
+        with pytest.raises(MemoryConflict):
+            first.put(id="customer-7", type="record", value="third")
+
+        fresh_backend = open_worker()
+        stored = Memory(backend=fresh_backend).get("customer-7")
+        assert stored is not None
+        assert stored.value == "second"
+        assert fresh_backend.get_block("raced") is not None
+    finally:
+        for backend in opened:
+            backend.close()
+
+
+def test_route_catalog_entries_follow_puts_and_deletes() -> None:
+    """A put claims an entry for the block and for each child, and a recursive delete releases all of them, so the ids can move to another route."""
+
+    us = InMemoryBackend()
+    eu = InMemoryBackend()
+    route_catalog = InMemoryBackend()
+    memory = Memory(backend=open_routed(us, eu, route_catalog=route_catalog))
+    root = memory.put(id="project", type="project", value="root", metadata={"route": "eu"})
+    child = memory.put(id="task", parent=root, type="task", value="child")
+
+    assert route_catalog.get_route(root.id) == RouteInfo(root.id, "eu")
+    assert route_catalog.get_route(child.id) == RouteInfo(child.id, "eu")
+
+    memory.delete(root)
+
+    assert route_catalog.get_route(root.id) is None
+    assert route_catalog.get_route(child.id) is None
+    other = Memory(backend=open_routed(us, eu, route_catalog=route_catalog))
+    other.put(id="project", type="project", value="moved")
+    assert route_catalog.get_route("project") == RouteInfo("project", "us")
+    assert us.get_block("project") is not None
+
+
+def test_a_failed_route_write_releases_its_claim() -> None:
+    """If the selected route refuses the block, the composite releases the claim, so a later put of the id can succeed."""
+
+    route_catalog = InMemoryBackend()
+    backend = open_routed(RejectingBackend(), InMemoryBackend(), route_catalog=route_catalog)
+
+    with pytest.raises(ValueError, match="refuses"):
+        backend.put_block(MemoryBlock(id="refused", type="note", value="us"))
+
+    assert route_catalog.get_route("refused") is None
+    backend.put_block(MemoryBlock(id="refused", type="note", value="eu", metadata={"route": "eu"}))
+    assert route_catalog.get_route("refused") == RouteInfo("refused", "eu")
+
+
+def test_a_claim_stays_when_the_failed_write_reached_the_route() -> None:
+    """A write that stored the block but lost its reply keeps the claim, so the id cannot get a second route."""
+
+    us = LostReplyBackend()
+    route_catalog = InMemoryBackend()
+    backend = open_routed(us, InMemoryBackend(), route_catalog=route_catalog)
+
+    with pytest.raises(BackendUnavailable):
+        backend.put_block(MemoryBlock(id="landed", type="note", value="us"))
+
+    assert route_catalog.get_route("landed") == RouteInfo("landed", "us")
+    assert backend.get_block("landed") is not None
+    with pytest.raises(MemoryConflict):
+        backend.put_block(MemoryBlock(id="landed", type="note", value="eu", metadata={"route": "eu"}))
+
+
+def test_a_catalog_entry_with_no_block_holds_the_id_until_it_is_released() -> None:
+    """A claim that a failure left behind reads as no block, refuses a new put of the id, and `release_routes` clears it."""
+
+    route_catalog = InMemoryBackend()
+    route_catalog.claim_route(RouteInfo("orphan", "eu"))
+    backend = open_routed(InMemoryBackend(), InMemoryBackend(), route_catalog=route_catalog)
+
+    assert backend.get_block("orphan") is None
+    assert backend.route_for_block("orphan") is None
+    with pytest.raises(MemoryConflict, match="route catalog entry"):
+        backend.put_block(MemoryBlock(id="orphan", type="note", value="us"))
+
+    route_catalog.release_routes(["orphan"])
+    backend.put_block(MemoryBlock(id="orphan", type="note", value="us"))
+    assert backend.route_for_block("orphan") == "us"
+
+
+def test_route_catalog_still_finds_blocks_stored_without_it() -> None:
+    """A block that a route already held before the catalog was in use is still found, and its id cannot go to a second route."""
+
+    eu = InMemoryBackend()
+    eu.put_block(MemoryBlock(id="existing", type="note", value="eu"))
+    route_catalog = InMemoryBackend()
+    backend = open_routed(InMemoryBackend(), eu, route_catalog=route_catalog)
+
+    assert backend.route_for_block("existing") == "eu"
+    with pytest.raises(MemoryConflict, match="already exists"):
+        backend.put_block(MemoryBlock(id="existing", type="note", value="us"))
+    assert route_catalog.get_route("existing") is None
+
+
+def test_route_catalog_entry_for_an_unconfigured_route_raises() -> None:
+    """An entry that names a route this composite does not have raises `UnsupportedOperation`, and does not read as a missing block.
+
+    Another instance registered route `apac` and stored the block there. This
+    instance reads the block after it registers the same route.
+    """
+
+    apac = InMemoryBackend()
+    stored = apac.put_block(MemoryBlock(id="elsewhere", type="note", value="apac", created_by="system"))
+    route_catalog = InMemoryBackend()
+    route_catalog.claim_route(RouteInfo(stored.id, "apac"))
+    backend = open_routed(InMemoryBackend(), InMemoryBackend(), route_catalog=route_catalog)
+    memory = Memory(backend=backend)
+
+    with pytest.raises(UnsupportedOperation, match="route 'apac', which this RoutedBackend does not have") as raised:
+        backend.get_block(stored.id)
+    assert not isinstance(raised.value, MemoryConflict)
+    with pytest.raises(UnsupportedOperation):
+        memory.get(stored.id)
+    with pytest.raises(UnsupportedOperation):
+        memory.put(id=stored.id, type="note", value="us")
+
+    backend.register_route("apac", apac)
+
+    assert backend.get_block(stored.id) == stored
+    assert backend.route_for_block(stored.id) == "apac"
+
+
+def test_a_put_to_an_unconfigured_route_raises_before_it_claims_the_id() -> None:
+    """A put that the route selector sends to an unknown route raises `UnsupportedOperation`, and leaves no catalog entry.
+
+    The put succeeds after the instance registers the route.
+    """
+
+    route_catalog = InMemoryBackend()
+    backend = open_routed(InMemoryBackend(), InMemoryBackend(), route_catalog=route_catalog)
+    block = MemoryBlock(id="tenant-note", type="note", value="apac", metadata={"route": "apac"})
+
+    with pytest.raises(UnsupportedOperation, match="route 'apac', which this RoutedBackend does not have"):
+        backend.put_block(block)
+    assert route_catalog.get_route(block.id) is None
+
+    backend.register_route("apac", InMemoryBackend())
+    backend.put_block(block)
+    assert route_catalog.get_route(block.id) == RouteInfo(block.id, "apac")
+
+
+def test_a_route_backend_can_hold_the_route_catalog() -> None:
+    """Route entries do not share the id space of blocks, so one route backend can store blocks and the catalog together."""
+
+    us = InMemoryBackend()
+    eu = InMemoryBackend()
+    memory = Memory(backend=open_routed(us, eu, route_catalog=us))
+    local = memory.put(id="local", type="note", value="us")
+    remote = memory.put(id="remote", type="note", value="eu", metadata={"route": "eu"})
+
+    assert us.get_route(local.id) == RouteInfo(local.id, "us")
+    assert us.get_route(remote.id) == RouteInfo(remote.id, "eu")
+    assert us.get_block(remote.id) is None
+    assert memory.get(remote.id) == remote
+    memory.delete(remote)
+    assert us.get_route(remote.id) is None
+
+
+def test_routed_backend_rejects_a_route_catalog_without_the_capability() -> None:
+    """A `route_catalog` that does not implement `RouteCatalog` raises `TypeError` at construction."""
+
+    with pytest.raises(TypeError, match="RouteCatalog"):
+        open_routed(InMemoryBackend(), InMemoryBackend(), route_catalog=cast(RouteCatalog, CoreOnlyBackend()))
+
+
+def test_a_failed_catalog_release_does_not_undo_a_committed_delete(caplog: pytest.LogCaptureFixture) -> None:
+    """If the catalog cannot release the entries, the delete still succeeds, a warning is logged, and the entries stay."""
+
+    route_catalog = FailingReleaseCatalog()
+    memory = Memory(backend=open_routed(InMemoryBackend(), InMemoryBackend(), route_catalog=route_catalog))
+    root = memory.put(id="root", type="project", value="root")
+    memory.put(id="leaf", parent=root, type="task", value="leaf")
+
+    with caplog.at_level("WARNING", logger="genie.backend.composite.routed"):
+        memory.delete(root)
+
+    assert memory.get(root.id) is None
+    assert route_catalog.get_route("root") == RouteInfo("root", "us")
+    assert route_catalog.get_route("leaf") == RouteInfo("leaf", "us")
+    assert any("stay" in record.getMessage() for record in caplog.records)
+    with pytest.raises(MemoryConflict, match="route catalog entry"):
+        memory.put(id="root", type="project", value="again")
+
+
 class TestRoutedStructureBackendContracts(LinkStoreContract, AcyclicLinkStoreContract):
     """Run the link contracts against a composite with route-local links."""
 
@@ -1111,3 +1459,16 @@ class TestRoutedStructureBackendContracts(LinkStoreContract, AcyclicLinkStoreCon
         """Return a composite with two routes, where new root blocks go to route `a`."""
 
         return RoutedBackend({"a": InMemoryBackend(), "b": InMemoryBackend()}, default_route="a")
+
+
+class TestRoutedStructureBackendContractsWithRouteCatalog(TestRoutedStructureBackendContracts):
+    """Run the link contracts against a composite that claims each block id in a shared route catalog."""
+
+    def make_backend(self) -> RoutedBackend:
+        """Return a composite with two routes and an in-memory route catalog, where new root blocks go to route `a`."""
+
+        return RoutedBackend(
+            {"a": InMemoryBackend(), "b": InMemoryBackend()},
+            default_route="a",
+            route_catalog=InMemoryBackend(),
+        )

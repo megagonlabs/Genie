@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import math
 from collections import defaultdict, deque
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from threading import Condition, RLock
@@ -41,6 +41,7 @@ from genie.query.result import SearchResult
 from genie.query.scope import Scope
 
 if TYPE_CHECKING:
+    from genie.backend.composite.routed import RouteInfo
     from genie.structures.records import (
         KeyBinding,
         LogEntry,
@@ -68,6 +69,7 @@ _CONSTRAINTS: dict[str, tuple[str, str]] = {
     "genie_log_counter_id_unique": ("GenieLogCounter", "log_id"),
     "genie_log_entry_identity_unique": ("GenieLogEntry", "identity"),
     "genie_temporal_identity_unique": ("GenieTemporalEntry", "identity"),
+    "genie_route_entry_block_id_unique": ("GenieRouteEntry", "block_id"),
 }
 
 _INDEXES: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -1285,6 +1287,77 @@ class Neo4jBackend:
         self._write(operation)
 
     # ------------------------------------------------------------------
+    # Route catalog
+
+    def claim_route(self, entry: RouteInfo) -> RouteInfo:
+        """Store a route catalog entry only when its block id has no entry.
+
+        Args:
+            entry: Block id and owning route to record.
+
+        Returns:
+            Stored entry.
+
+        Raises:
+            MemoryConflict: If the block id already has an entry.
+            BackendError: If the Neo4j write fails.
+        """
+
+        def operation(tx: Any) -> RouteInfo:
+            if _single(tx, "MATCH (n:GenieRouteEntry {block_id: $block_id}) RETURN n.block_id AS block_id", block_id=entry.block_id) is not None:
+                raise MemoryConflict(f"Block id {entry.block_id!r} already has a route catalog entry.")
+            _consume(
+                tx,
+                "CREATE (n:GenieRouteEntry {block_id: $block_id, route: $route})",
+                block_id=entry.block_id,
+                route=entry.route,
+            )
+            return entry
+
+        return self._write(operation)
+
+    def get_route(self, block_id: str) -> RouteInfo | None:
+        """Return the route catalog entry of a block id.
+
+        Args:
+            block_id: Memory block id.
+
+        Returns:
+            Stored entry, or `None` when the block id has no entry.
+
+        Raises:
+            BackendError: If the Neo4j read fails.
+        """
+
+        return self._read(
+            lambda tx: (
+                _route_entry_from_record(record)
+                if (record := _single(tx, "MATCH (n:GenieRouteEntry {block_id: $block_id}) RETURN properties(n) AS entry", block_id=block_id)) is not None
+                else None
+            )
+        )
+
+    def release_routes(self, block_ids: Sequence[str]) -> None:
+        """Remove the route catalog entries of block ids, in one transaction.
+
+        Args:
+            block_ids: Block ids whose entries to remove. An id with no entry
+                is ignored.
+
+        Raises:
+            BackendError: If the Neo4j write fails.
+        """
+
+        ids = list(block_ids)
+        self._write(
+            lambda tx: _consume(
+                tx,
+                "UNWIND $ids AS block_id MATCH (n:GenieRouteEntry {block_id: block_id}) DELETE n",
+                ids=ids,
+            )
+        )
+
+    # ------------------------------------------------------------------
     # Portable search
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
@@ -1949,6 +2022,18 @@ def _binding_from_record(record: Mapping[str, Any]) -> KeyBinding:
         raise
     except (KeyError, TypeError, ValueError) as error:
         raise BackendCorruption("Stored Neo4j key binding is invalid.") from error
+
+
+def _route_entry_from_record(record: Mapping[str, Any]) -> RouteInfo:
+    """Rebuild a route catalog entry from one stored Neo4j record."""
+
+    from genie.backend.composite.routed import RouteInfo
+
+    try:
+        data = record["entry"]
+        return RouteInfo(block_id=data["block_id"], route=data["route"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise BackendCorruption("Stored Neo4j route catalog entry is invalid.") from error
 
 
 def _log_entry_from_record(record: Mapping[str, Any]) -> LogEntry:

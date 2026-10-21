@@ -6,7 +6,7 @@ import importlib.util
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from threading import Event
+from threading import Barrier, Event
 from time import sleep
 from typing import Any, Literal
 
@@ -29,6 +29,8 @@ from genie import (
     MemoryPolicy,
     MemoryQuery,
     MongoDBBackend,
+    RouteCatalog,
+    RouteInfo,
     Scope,
     SequenceStore,
     TemporalIndex,
@@ -42,6 +44,7 @@ from tests.backends.test_backend_contracts import (
     BlockStoreContract,
     KeyedStoreContract,
     LinkStoreContract,
+    RouteCatalogContract,
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
@@ -60,6 +63,7 @@ def test_mongodb_backend_implements_every_backend_protocol() -> None:
     assert isinstance(backend, SequenceStore)
     assert isinstance(backend, TemporalStore)
     assert isinstance(backend, TemporalIndex)
+    assert isinstance(backend, RouteCatalog)
 
 
 @pytest.mark.parametrize(
@@ -185,6 +189,17 @@ def test_mongodb_link_and_temporal_documents_round_trip() -> None:
     assert mongodb_module._temporal_from_document(mongodb_module._temporal_document(entry)) == entry
 
 
+def test_mongodb_route_entry_documents_round_trip() -> None:
+    """A route catalog entry uses its block id as `_id`, and it does not change after a round trip."""
+
+    entry = RouteInfo("mem_block", "eu")
+
+    document = mongodb_module._route_entry_document(entry)
+
+    assert document == {"_id": "mem_block", "route": "eu"}
+    assert mongodb_module._route_entry_from_document(document) == entry
+
+
 def test_mongodb_rejects_values_that_are_not_strict_json() -> None:
     """The backend raises `TypeError` for a value that cannot make a JSON round trip, before it writes the value."""
 
@@ -203,6 +218,12 @@ def test_mongodb_reports_corrupt_stored_documents() -> None:
         mongodb_module._decode_datetime("not a timestamp")
     with pytest.raises(BackendCorruption, match="timestamps must be timezone-aware"):
         mongodb_module._decode_datetime("2024-01-01T00:00:00")
+    with pytest.raises(BackendCorruption, match="route catalog entry is invalid"):
+        mongodb_module._route_entry_from_document({"_id": "mem_block"})
+    with pytest.raises(BackendCorruption, match="route catalog entry is invalid"):
+        mongodb_module._route_entry_from_document({"_id": 7, "route": "eu"})
+    with pytest.raises(BackendCorruption, match="route catalog entry is invalid"):
+        mongodb_module._route_entry_from_document({"_id": "mem_block", "route": " "})
 
 
 def test_mongodb_identities_separate_neighbouring_records() -> None:
@@ -242,6 +263,9 @@ _BINDING = KeyBinding(collection_id="mem_keys", address=MemoryAddress((), "key")
         ("list_links", (_OPERATOR,), {}),
         ("list_links", ("mem_block",), {"relation": _OPERATOR}),
         ("delete_links_for_block", (_OPERATOR,), {}),
+        ("get_route", (_OPERATOR,), {}),
+        ("release_routes", ([_OPERATOR],), {}),
+        ("release_routes", (["mem_block", _OPERATOR],), {}),
     ],
 )
 def test_mongodb_rejects_non_string_ids_before_querying(
@@ -587,6 +611,7 @@ def _clear_live_data(backend: MongoDBBackend) -> None:
         backend._log_counters,
         backend._log_entries,
         backend._temporal_entries,
+        backend._route_entries,
         backend._counters,
     ):
         collection.delete_many({})
@@ -602,6 +627,7 @@ class TestMongoDBStructureBackendContracts(
     TemporalIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
+    RouteCatalogContract,
 ):
     """Run every reusable capability contract against a live MongoDB deployment."""
 
@@ -733,6 +759,38 @@ def test_live_mongodb_backend_persists_and_coordinates_instances() -> None:
                 )
             )
         assert sorted(outcomes) == [False, True]
+    finally:
+        _clear_live_data(left)
+        left.close()
+        right.close()
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_mongodb_instances_claim_one_route_for_each_block_id() -> None:
+    """Of 2 instances that claim one block id at the same time, each for its own route, only one succeeds, and both read its entry."""
+
+    left = _live_backend()
+    _clear_live_data(left)
+    right = _live_backend(initialize_schema=False)
+    entries = [(left, RouteInfo("mem_shared", "us")), (right, RouteInfo("mem_shared", "eu"))]
+    barrier = Barrier(len(entries))
+
+    def claim(backend: MongoDBBackend, entry: RouteInfo) -> bool:
+        barrier.wait()
+        try:
+            backend.claim_route(entry)
+        except MemoryConflict:
+            return False
+        return True
+
+    try:
+        with ThreadPoolExecutor(max_workers=len(entries)) as executor:
+            outcomes = list(executor.map(lambda item: claim(*item), entries))
+
+        assert outcomes.count(True) == 1
+        winner = entries[outcomes.index(True)][1]
+        assert left.get_route(winner.block_id) == winner
+        assert right.get_route(winner.block_id) == winner
     finally:
         _clear_live_data(left)
         left.close()

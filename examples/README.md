@@ -26,7 +26,8 @@ All examples run from the repository root.
 13. **[`basic/stdlib_codecs.py`](basic/stdlib_codecs.py)** — opt-in standard-library codecs and raw payloads.
 14. **[`basic/routed_backend.py`](basic/routed_backend.py)** — route blocks to different stores.
 15. **[`basic/sqlite_persistence.py`](basic/sqlite_persistence.py)** — write persistent blocks and links to SQLite, close the backend, and read them through a new backend.
-16. **[`basic/heterogeneous_backend.py`](basic/heterogeneous_backend.py)** — build one backend from SQL blocks, a graph topology index, and a vector search index.
+16. **[`basic/routed_catalog.py`](basic/routed_catalog.py)** — share one route catalog between workers, so each block id keeps one route.
+17. **[`basic/heterogeneous_backend.py`](basic/heterogeneous_backend.py)** — build one backend from SQL blocks, a graph topology index, and a vector search index.
 
 **[`basic/basic_usage.py`](basic/basic_usage.py)** combines handles, ownership,
 search, links, policies, hooks, dataclass codecs, and standard-library codecs

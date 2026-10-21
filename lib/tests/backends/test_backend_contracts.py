@@ -19,6 +19,8 @@ from genie import (
     MemoryBlock,
     MemoryConflict,
     MemoryLink,
+    RouteCatalog,
+    RouteInfo,
     SequenceStore,
     SQLiteBackend,
     TemporalIndex,
@@ -1121,6 +1123,86 @@ class AcyclicLinkStoreContract(StructureBackendContract):
             )
 
 
+class RouteCatalogContract(StructureBackendContract):
+    """Reusable contract tests for backends that implement `RouteCatalog`."""
+
+    def test_route_catalog_contract(self) -> None:
+        """`RouteCatalog` keeps one entry for each block id, rejects a second claim, and ignores the release of an id with no entry."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, RouteCatalog)
+        catalog = cast(RouteCatalog, backend)
+        entry = RouteInfo("mem_block", "us")
+        other = RouteInfo("mem_other", "eu")
+
+        assert catalog.get_route(entry.block_id) is None
+        assert catalog.claim_route(entry) == entry
+        assert catalog.get_route(entry.block_id) == entry
+        with pytest.raises(MemoryConflict):
+            catalog.claim_route(RouteInfo(entry.block_id, "eu"))
+        with pytest.raises(MemoryConflict):
+            catalog.claim_route(entry)
+        assert catalog.get_route(entry.block_id) == entry
+
+        catalog.claim_route(other)
+        catalog.release_routes([entry.block_id, "mem_never_claimed"])
+        assert catalog.get_route(entry.block_id) is None
+        assert catalog.get_route(other.block_id) == other
+        moved = RouteInfo(entry.block_id, "eu")
+        assert catalog.claim_route(moved) == moved
+        assert catalog.get_route(entry.block_id) == moved
+        catalog.release_routes([])
+        catalog.release_routes([entry.block_id, other.block_id])
+        assert catalog.get_route(entry.block_id) is None
+        assert catalog.get_route(other.block_id) is None
+
+    def test_route_catalog_claim_is_atomic(self) -> None:
+        """Of 12 concurrent claims for one block id, each with its own route, only one succeeds, and its route is stored."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, RouteCatalog)
+        catalog = cast(RouteCatalog, backend)
+        entries = [RouteInfo("mem_shared", f"route_{index:02d}") for index in range(12)]
+        barrier = Barrier(len(entries))
+
+        def claim(entry: RouteInfo) -> bool:
+            barrier.wait()
+            try:
+                catalog.claim_route(entry)
+            except MemoryConflict:
+                return False
+            return True
+
+        with ThreadPoolExecutor(max_workers=len(entries)) as executor:
+            outcomes = list(executor.map(claim, entries))
+
+        assert outcomes.count(True) == 1
+        assert catalog.get_route("mem_shared") == entries[outcomes.index(True)]
+
+    def test_route_catalog_entries_are_separate_from_blocks(self) -> None:
+        """An entry can use the id of a stored block or of no block, and block writes and deletes leave the entries unchanged."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, RouteCatalog)
+        catalog = cast(RouteCatalog, backend)
+        block = self.put_blocks(backend, "mem_block")[0]
+        stored_entry = RouteInfo(block.id, "us")
+        pending_entry = RouteInfo("mem_pending", "eu")
+
+        catalog.claim_route(stored_entry)
+        catalog.claim_route(pending_entry)
+        assert backend.get_block(block.id) == block
+        assert backend.get_block(pending_entry.block_id) is None
+
+        pending_block = backend.put_block(MemoryBlock(id=pending_entry.block_id, type="test", value="pending"))
+        backend.delete_block(block.id)
+        assert catalog.get_route(stored_entry.block_id) == stored_entry
+        assert catalog.get_route(pending_entry.block_id) == pending_entry
+
+        catalog.release_routes([stored_entry.block_id, pending_entry.block_id])
+        assert backend.get_block(pending_entry.block_id) == pending_block
+
+
 class TestInMemoryStructureBackendContracts(
     BlockStoreContract,
     TraversalIndexContract,
@@ -1130,6 +1212,7 @@ class TestInMemoryStructureBackendContracts(
     TemporalIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
+    RouteCatalogContract,
 ):
     """Run every contract in this module against `InMemoryBackend`, the reference backend."""
 
@@ -1148,6 +1231,7 @@ class TestSQLiteStructureBackendContracts(
     TemporalIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
+    RouteCatalogContract,
 ):
     """Run every contract in this module against `SQLiteBackend`."""
 

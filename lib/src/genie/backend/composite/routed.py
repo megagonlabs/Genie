@@ -5,22 +5,26 @@
 - **One owner:** each memory block has exactly one owning route.
 - **Local or shared:** search, traversal, and link interfaces can be local to
   a route, or a caller can give shared indexes and stores.
+- **Shared route catalog:** an optional `RouteCatalog` keeps one route for
+  each block id across all composite instances over the same routes.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import logging
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import RLock
 from types import MappingProxyType
-from typing import Literal, overload
+from typing import Literal, Protocol, overload, runtime_checkable
 
 from genie.backend.base import MemoryBackend
 from genie.backend.capabilities import LinkStore, SearchIndex, TraversalIndex
 from genie.backend.structure_capabilities import AcyclicLinkStore
+from genie.memory._validation import require_non_empty_str
 from genie.memory.block import MemoryBlock
-from genie.memory.errors import MemoryConflict, UnsupportedOperation
+from genie.memory.errors import BackendCorruption, MemoryConflict, UnsupportedOperation
 from genie.memory.links import MemoryLink
 from genie.query.filters import matches_filters
 from genie.query.query import MemoryQuery
@@ -30,6 +34,8 @@ from genie.query.scope import Scope
 RouteKey = str
 RouteSelector = Callable[[MemoryBlock], RouteKey | None]
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class RouteInfo:
@@ -38,10 +44,73 @@ class RouteInfo:
     Attributes:
         block_id: Memory block id.
         route: Route key for the backend that owns the block.
+
+    Raises:
+        TypeError: If `block_id` or `route` is not a string.
+        ValueError: If `block_id` or `route` is empty or only whitespace.
     """
 
     block_id: str
     route: RouteKey
+
+    def __post_init__(self) -> None:
+        """Check the block id and the route key."""
+
+        require_non_empty_str(self.block_id, field_name="block_id")
+        require_non_empty_str(self.route, field_name="route")
+
+
+@runtime_checkable
+class RouteCatalog(Protocol):
+    """Shared record of the route that owns each block id.
+
+    - **Use:** `RoutedBackend` takes one as `route_catalog`. All composite
+      instances over the same routes share it, for example one instance in
+      each worker process. So one block id can have only one route.
+    - **Atomic claim:** the contract requires that `claim_route` checks for an
+      entry and stores the new entry in one atomic step. Of concurrent claims
+      for one block id, only one succeeds.
+    - **Separate from blocks:** entries are not memory blocks, and block
+      writes and deletes do not change them. So one backend can hold the
+      catalog and also be a route.
+    """
+
+    def claim_route(self, entry: RouteInfo) -> RouteInfo:
+        """Store an entry only when its block id has no entry.
+
+        Args:
+            entry: Block id and owning route to record.
+
+        Returns:
+            Stored entry.
+
+        Raises:
+            MemoryConflict: If the block id already has an entry.
+        """
+
+        ...
+
+    def get_route(self, block_id: str) -> RouteInfo | None:
+        """Return the entry of a block id.
+
+        Args:
+            block_id: Memory block id.
+
+        Returns:
+            Stored entry, or `None` when the block id has no entry.
+        """
+
+        ...
+
+    def release_routes(self, block_ids: Sequence[str]) -> None:
+        """Remove the entries of block ids.
+
+        Args:
+            block_ids: Block ids whose entries to remove. An id with no entry
+                is ignored.
+        """
+
+        ...
 
 
 class InMemoryLinkStore:
@@ -171,6 +240,18 @@ class RoutedBackend:
       structure capability protocols in `genie.backend.structure_capabilities`.
     - **`BlockRouter`:** it implements `BlockRouter`. So as the store of a
       structure facade, it resolves to the route that holds the records.
+    - **Route cache:** each instance caches the route of each block id that it
+      finds. A cached route counts only while that route still holds the
+      block, because another instance can delete the block and store the id
+      again in a different route.
+    - **Unique ids across routes:** without a `route_catalog`, the check that
+      an id is not in another route and the write are 2 steps. Only the lock
+      of this instance protects them. So ids stay unique across routes only
+      for writers that share one instance. Several instances over the same
+      routes, for example one in each worker process, share a `RouteCatalog`.
+    - **An id in 2 routes:** each call that looks up such an id raises
+      `BackendCorruption`. The stored data breaks the one-route rule, so a
+      retry cannot help. The composite does not choose one of the copies.
     """
 
     def __init__(
@@ -182,6 +263,7 @@ class RoutedBackend:
         traversal_index: TraversalIndex | None = None,
         search_index: SearchIndex | None = None,
         link_store: LinkStore | None = None,
+        route_catalog: RouteCatalog | None = None,
     ) -> None:
         """Create a routed backend.
 
@@ -191,7 +273,8 @@ class RoutedBackend:
                 `None`. Then a root block uses `default_route`, and a child uses
                 the route of its parent. For a child, a selected route that
                 is not the parent route raises `MemoryConflict`. For a root
-                block, a route that is not configured raises `MemoryConflict`.
+                block, a route that this instance does not have raises
+                `UnsupportedOperation`.
             default_route: Route for a new root block when there is no selector,
                 or the selector returns `None`. Defaults to the first route.
             traversal_index: Optional shared traversal index. Without one, the
@@ -201,21 +284,30 @@ class RoutedBackend:
                 needed.
             link_store: Optional shared link store. Without one, links stay in
                 their route, and cross-route links are rejected.
+            route_catalog: Optional shared catalog of the owning route of each
+                block id. Each instance over the same routes uses the same
+                catalog. Then a new block id gets its route in one atomic
+                claim, so 2 instances cannot store one id in 2 routes. A
+                route backend can also hold the catalog.
 
         Raises:
+            TypeError: If `route_catalog` does not implement `RouteCatalog`.
             ValueError: If no routes are configured, or the default route is
                 not one of them.
         """
 
         if not routes:
             raise ValueError("RoutedBackend requires at least one route.")
+        if route_catalog is not None and not isinstance(route_catalog, RouteCatalog):
+            raise TypeError("route_catalog must implement RouteCatalog.")
         self._routes: dict[RouteKey, MemoryBackend] = dict(routes)
         self.route_selector = route_selector
         self.default_route = default_route or next(iter(self._routes))
         self.traversal_index = traversal_index
         self.search_index = search_index
         self.link_store = link_store
-        self._catalog: dict[str, RouteKey] = {}
+        self.route_catalog = route_catalog
+        self._route_cache: dict[str, RouteKey] = {}
         self._lock = RLock()
         if self.default_route not in self._routes:
             raise ValueError(f"Default route {self.default_route!r} is not configured.")
@@ -279,6 +371,18 @@ class RoutedBackend:
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
         """Store a new block in its owning route.
 
+        With a `route_catalog`, the steps are:
+
+        - **Claim:** the catalog records the selected route for the id, in one
+          atomic step. A second claim for the id fails, also from another
+          instance.
+        - **Write:** the selected route stores the block.
+        - **Release on failure:** if the write fails and the route does not
+          hold the block, the claim is released. A claim stays when the route
+          holds the block or when the check fails, because a backend error can
+          hide a write that committed. Such a claim makes later puts of the id
+          fail, but it never lets the id get a second route.
+
         Args:
             block: Encoded block to store.
 
@@ -286,16 +390,26 @@ class RoutedBackend:
             Stored block.
 
         Raises:
-            MemoryConflict: If the id already exists, the route is invalid, or
-                the selected route conflicts with the parent route.
+            BackendCorruption: If the id is already in more than one route.
+            MemoryConflict: If the id already exists or has a catalog entry,
+                or the selected route conflicts with the parent route.
+            UnsupportedOperation: If the route selector or the route catalog
+                names a route that this instance does not have.
         """
 
         with self._lock:
-            if self.get_block(block.id) is not None:
+            if self._locate(block.id) is not None:
                 raise MemoryConflict(f"Memory block {block.id!r} already exists.")
             route = self._route_for_new_block(block)
-            stored = self._routes[route].put_block(block)
-            self._catalog[stored.id] = route
+            if self.route_catalog is not None:
+                self.route_catalog.claim_route(RouteInfo(block.id, route))
+            try:
+                stored = self._routes[route].put_block(block)
+            except Exception:
+                if self.route_catalog is not None:
+                    self._release_failed_claim(block.id, route)
+                raise
+            self._route_cache[stored.id] = route
             return stored
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
@@ -306,10 +420,15 @@ class RoutedBackend:
 
         Returns:
             Stored block, or `None` when no route contains the id.
+
+        Raises:
+            BackendCorruption: If the id is in more than one route.
+            UnsupportedOperation: If the route catalog names a route that this
+                instance does not have.
         """
 
-        backend = self.backend_for_block(block_id)
-        return None if backend is None else backend.get_block(block_id)
+        found = self._locate(block_id)
+        return None if found is None else found[1]
 
     def update_block(
         self,
@@ -346,7 +465,7 @@ class RoutedBackend:
                 block,
                 expected_version=expected_version,
             )
-            self._catalog[stored.id] = route
+            self._route_cache[stored.id] = route
             return stored
 
     def delete_block(
@@ -357,9 +476,15 @@ class RoutedBackend:
     ) -> None:
         """Delete a block from its owning route and remove catalog state.
 
-        The backend removes the catalog entries and the shared link-store
-        links of the block and of each descendant that the owning route deleted
-        with it.
+        - **Cleanup:** the backend removes the cached routes and the shared
+          link-store links of the block and of each descendant that the owning
+          route deleted with it.
+        - **Route catalog:** after the delete commits, the `route_catalog`
+          releases the entries of the deleted blocks. With `expected_versions`,
+          those are exactly the snapshot ids. If the release fails, the delete
+          still succeeds, and a warning goes to the logger of this module. The
+          entries stay until `release_routes` removes them, so until then a
+          put of those ids raises `MemoryConflict`.
 
         Args:
             block_id: Memory block id. An unknown id is ignored.
@@ -382,9 +507,12 @@ class RoutedBackend:
                 expected_versions=expected_versions,
             )
             for block in descendants:
-                self._catalog.pop(block.id, None)
+                self._route_cache.pop(block.id, None)
                 if self.link_store is not None:
                     self.link_store.delete_links_for_block(block.id)
+            if self.route_catalog is not None:
+                deleted_ids = list(expected_versions) if expected_versions is not None else [block.id for block in descendants]
+                self._release_deleted_claims(deleted_ids)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
         """Return the direct children of a block id.
@@ -649,12 +777,13 @@ class RoutedBackend:
     def _route_holds_blocks(self, route: RouteKey) -> bool:
         """Return whether the backend of a route still holds a block.
 
-        - **Catalog first:** a route that the catalog already knows counts as
-          populated, with no probe.
+        - **Cache first:** a route that the route cache already knows counts as
+          populated, with no probe. A stale cache entry can only make the
+          answer `True`, which refuses the replacement.
         - **Backend probe:** otherwise the method asks the backend directly. The
-          catalog is a cache that fills lazily when blocks are routed. So a
-          composite opened over a store that already has data starts with an
-          empty catalog.
+          route cache fills lazily when blocks are routed. So a composite
+          opened over a store that already has data starts with an empty
+          cache.
         - **Probe form:** the probe is a bounded global search, which each
           `MemoryBackend` supports. A backend whose search index is stale or
           managed from outside can still report too few blocks.
@@ -665,15 +794,89 @@ class RoutedBackend:
             route: Route key to examine.
 
         Returns:
-            `True` when the catalog knows the route or the probe finds a block.
+            `True` when the route cache knows the route or the probe finds a
+            block.
         """
 
-        if route in self._catalog.values():
+        if route in self._route_cache.values():
             return True
         try:
             return bool(self._routes[route].search(MemoryQuery(scope=Scope.GLOBAL, limit=1)))
         except UnsupportedOperation:
             return False
+
+    def _locate(self, block_id: str) -> tuple[RouteKey, MemoryBlock] | None:
+        """Return the owning route of a block id, together with the stored block.
+
+        - **Cache:** a cached route counts only while it still holds the block.
+          A stale entry is removed, and the lookup continues.
+        - **Route catalog:** with a `route_catalog`, its entry decides the
+          route. An entry whose route does not hold the block counts as no
+          block. That is a claim of a write in progress, or a claim that a
+          failure left behind.
+        - **Unknown route:** a catalog entry can name a route that this
+          instance does not have, for example after another instance called
+          `register_route`. The lookup raises an error, and it does not report
+          a missing block.
+        - **Discovery:** an id with no catalog entry is looked up in each
+          route. This finds blocks that were stored without the catalog.
+
+        Raises:
+            BackendCorruption: If discovery finds the id in more than one
+                route.
+            UnsupportedOperation: If the route catalog names a route that this
+                instance does not have.
+        """
+
+        with self._lock:
+            route = self._route_cache.get(block_id)
+            if route is not None:
+                block = self._routes[route].get_block(block_id)
+                if block is not None:
+                    return route, block
+                del self._route_cache[block_id]
+
+            if self.route_catalog is not None:
+                entry = self.route_catalog.get_route(block_id)
+                if entry is not None:
+                    if entry.route not in self._routes:
+                        raise UnsupportedOperation(
+                            f"Memory block {block_id!r} belongs to route {entry.route!r}, which this RoutedBackend does not have. "
+                            "Register that route with register_route."
+                        )
+                    block = self._routes[entry.route].get_block(block_id)
+                    if block is None:
+                        return None
+                    self._route_cache[block_id] = entry.route
+                    return entry.route, block
+
+            found = [(route_key, block) for route_key, backend in self._routes.items() if (block := backend.get_block(block_id)) is not None]
+            if not found:
+                return None
+            if len(found) > 1:
+                raise BackendCorruption(f"Memory block {block_id!r} exists in multiple routes: {sorted(route_key for route_key, _ in found)!r}.")
+            route, block = found[0]
+            self._route_cache[block_id] = route
+            return route, block
+
+    def _release_failed_claim(self, block_id: str, route: RouteKey) -> None:
+        """Release the catalog claim of a failed write, unless the route holds the block."""
+
+        assert self.route_catalog is not None
+        try:
+            if self._routes[route].get_block(block_id) is None:
+                self.route_catalog.release_routes([block_id])
+        except Exception:
+            _LOGGER.warning("The route catalog entry of block %r stays after a failed write.", block_id, exc_info=True)
+
+    def _release_deleted_claims(self, block_ids: Sequence[str]) -> None:
+        """Release the catalog entries of deleted blocks, and log a failure instead of raising it."""
+
+        assert self.route_catalog is not None
+        try:
+            self.route_catalog.release_routes(block_ids)
+        except Exception:
+            _LOGGER.warning("The route catalog entries of deleted blocks %r stay.", list(block_ids), exc_info=True)
 
     def _route_for_new_block(self, block: MemoryBlock) -> RouteKey:
         """Choose and check the owning route for a new block."""
@@ -686,7 +889,7 @@ class RoutedBackend:
             return parent_route
         route = selected or self.default_route
         if route not in self._routes:
-            raise MemoryConflict(f"Route {route!r} is not configured.")
+            raise UnsupportedOperation(f"The route selector chose route {route!r}, which this RoutedBackend does not have. Register that route with register_route.")
         return route
 
     @overload
@@ -711,22 +914,14 @@ class RoutedBackend:
         *,
         missing_ok: bool = False,
     ) -> RouteKey | None:
-        """Find the route that owns an existing block, and record it in the catalog."""
+        """Find the route that owns an existing block, and record it in the cache."""
 
-        with self._lock:
-            route = self._catalog.get(block_id)
-            if route is not None:
-                return route
-
-            discovered: list[RouteKey] = [route_key for route_key, backend in self._routes.items() if backend.get_block(block_id) is not None]
-            if not discovered:
-                if missing_ok:
-                    return None
-                raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
-            if len(discovered) > 1:
-                raise MemoryConflict(f"Memory block {block_id!r} exists in multiple routes.")
-            self._catalog[block_id] = discovered[0]
-            return discovered[0]
+        found = self._locate(block_id)
+        if found is None:
+            if missing_ok:
+                return None
+            raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
+        return found[0]
 
     def _search_linked_blocks(self, query: MemoryQuery) -> list[SearchResult]:
         """Search the blocks that the shared link store connects to a root."""

@@ -525,10 +525,21 @@ same tasks:
 
 ### `RoutedBackend`
 
-- **`RoutedBackend` owns no records.** It keeps a catalog that maps each block
-  id to a route. It sends each call to the route that owns the block.
+- **`RoutedBackend` owns no records.** It sends each call to the route that
+  owns the block.
+- **Each instance has a route cache.** It maps each block id that the instance
+  found to a route. A cached route counts only while that route still holds
+  the block, because another instance can delete the block and store the id
+  again in another route.
+- **A shared `RouteCatalog` keeps one route for each id across instances.**
+  Without one, a put checks that no route holds the id and then writes, and
+  only the lock of the instance protects these 2 steps. With a
+  `route_catalog`, a put claims the route of the new id in one atomic step,
+  and then writes. A delete releases the entries after the route commits.
 - **One route for each block, and one route for each subtree.** This lets a
-  facade resolve a container to one adapter.
+  facade resolve a container to one adapter. An id that the composite finds
+  in 2 routes raises `BackendCorruption`, because a retry cannot repair that
+  stored state.
 - **Links and search can be route-local or shared.** A shared link store does
   not validate endpoints, so `RoutedBackend` checks them before the write.
 - **Acyclic links use the same store as the other links.** `RoutedBackend`
@@ -550,6 +561,7 @@ same tasks:
 | 2 writers append to one log | `SequenceStore.append_log_entry` allocates the sequence |
 | 2 edges close a cycle | `AcyclicLinkStore.add_acyclic_link` checks and inserts in one step |
 | Duplicate temporal membership | `TemporalStore.add_temporal_entry` |
+| 2 composite instances store one id in 2 routes | `RouteCatalog.claim_route` in the shared `route_catalog` of `RoutedBackend` |
 
 - **`MemoryConflict` means "try again with fresh state".** It is not a bug
   report. It is the refusal that stops stale work.
@@ -563,7 +575,10 @@ same tasks:
 ## Invariants a change must keep
 
 - **One backend write for each public operation,** so no compensation step is
-  necessary.
+  necessary. `RoutedBackend` with a `route_catalog` is the one composite that
+  writes 2 stores for a put: the claim, then the block. If the block write
+  fails and the route does not hold the block, it releases the claim. A claim
+  that stays without a block only refuses later puts of that id.
 - **Authorization uses the stored state,** never an object from the caller.
 - **Each refusal goes to `on_denied`.** Each started operation closes with
   exactly one terminal event.

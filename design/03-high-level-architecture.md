@@ -200,8 +200,8 @@ A search through a bounded handle shows how the 2 checks work together:
   system.** There is no registry file, no entry point, and no discovery step.
   The application gives the object to the `Memory` constructor.
 - **Optional backend capabilities are separate protocols.** `AcyclicLinkStore`,
-  `KeyedStore`, `SequenceStore`, `TemporalStore`, and `TemporalIndex` are next
-  to the core contract. So an adapter can ship without them, and a facade can
+  `KeyedStore`, `SequenceStore`, `TemporalStore`, `TemporalIndex`, and
+  `RouteCatalog` are next to the core contract. So an adapter can ship without them, and a facade can
   check for the capability that it needs.
 - **If a backend does not have a capability, the call raises
   `UnsupportedOperation`.** A shipped adapter raises the same error if its

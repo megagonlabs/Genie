@@ -1,8 +1,8 @@
 # MongoDB backend
 
 `MongoDBBackend` is a persistent document adapter. It uses the official
-`pymongo` driver directly. It implements the core backend contract and all
-optional structure capabilities.
+`pymongo` driver directly. It implements the core backend contract, all
+optional structure capabilities, and `RouteCatalog`.
 
 ```bash
 pip install "genie[mongodb]"
@@ -51,8 +51,10 @@ names, as `PostgresBackend` does with a schema.
 | `log_counters` | Next sequence for one log | Log id |
 | `log_entries` | One ordered log entry | Log id and sequence |
 | `temporal_entries` | One temporal collection entry | Collection id and block id |
+| `route_entries` | Owning route of one block id, for `RoutedBackend` | Block id |
 
 - **The record collections have the same names as the tables in `SQLiteBackend` and `PostgresBackend`.** `schema_info` matches only `PostgresBackend`, and `guard` and `counters` have no table in either. Each field uses the same portable encoding as those two and `Neo4jBackend`, so one record is easy to recognize from each side. `RedisBackend` is different: it keeps one JSON document for each block, with a nested value.
+- **`route_entries` has no reference to `blocks`.** An entry can name a block id that this database does not hold, and a block write or delete does not change an entry. So one database can hold the route catalog of a `RoutedBackend` and also be one of its routes.
 - **A composite `_id` is a JSON array of its parts.** So 2 different sets of fields cannot give the same `_id`. Genie names each index that it creates, so index names stay the same on all server versions.
 - **The constructor checks the `database` argument before the driver connects,** against the rules of MongoDB: at most 63 bytes, and none of `` / \ . " $ * < > : | ? ``, a space, or a NUL character.
 
@@ -69,6 +71,7 @@ names, as `PostgresBackend` does with a schema.
 - **Each write runs inside one transaction,** and the transaction first increments the shared guard document. 2 writers cannot hold that document at the same time. So a compound "read, check, then write" step is atomic against all other Genie writers. This is the serialized-writer model that `SQLiteBackend` gets from `BEGIN IMMEDIATE` and `PostgresBackend` gets from an advisory lock.
 - **The loser retries and does not block.** MongoDB gives a transaction no lock to wait on. So the writer that loses the guard is aborted with a write conflict and starts again. `max_retry_time` limits how long that can continue before the backend raises `BackendBusy`. With `max_retry_time=0`, the first conflict raises `BackendBusy`.
 - **Same atomic behavior as `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, and `RedisBackend`:** compare-and-swap updates, conditional subtree delete, unique key bindings, monotonic sequences, and DAG inserts with a cycle check.
+- **`claim_route` stores an entry only when its block id has none,** in one write transaction. So of concurrent claims for one block id, from one instance or from several, one succeeds and each other claim raises `MemoryConflict`.
 - **A delete of a block removes the whole subtree,** with its links, key bindings, log entries, and temporal entries, in the same transaction. MongoDB has no cascading reference, so the adapter deletes those records itself.
 - **Sequence numbers come from a counter document.** An aborted transaction rolls the counter back with all other changes that it made. So an aborted append leaves no gap. A delete of a member block still removes its entry, and the log does not use that number again.
 - **Long id lists are split into chunks of 500** before they go into a `$in` filter, because one command document cannot be larger than 16 MB.
@@ -80,7 +83,7 @@ names, as `PostgresBackend` does with a schema.
 | Fits in one command | Nothing extra, because MongoDB applies one command atomically | No |
 | Needs several commands | One transaction, so each command reads the same snapshot | Yes, for the commit |
 
-- **Single-command reads:** `get_block`, `children`, `list_links`, `get_key`, `list_keys`, `get_log_entry`, `list_log_entries`, `get_temporal_entry`, `list_temporal_entries`, and `query_temporal_entries`.
+- **Single-command reads:** `get_block`, `children`, `list_links`, `get_key`, `list_keys`, `get_log_entry`, `list_log_entries`, `get_temporal_entry`, `list_temporal_entries`, `query_temporal_entries`, and `get_route`.
 - **Snapshot reads:** `ancestors`, `descendants`, `contains`, and `search`. Each one walks the ownership tree or joins links, so it cannot see half of a write.
 - **`contains` walks up from the candidate.** So it reads one document for each level, not the whole subtree.
 - **`descendants` reads one ownership level at a time,** in chunks of 500 ids. Then it walks the result depth-first, with each level of children in storage order. This gives the same order as the recursive query in `SQLiteBackend` and `PostgresBackend`.
@@ -103,8 +106,9 @@ names, as `PostgresBackend` does with a schema.
 retry can repeat work.**
 
 - **Why:** when the connection dies during the commit, nobody knows whether the server applied it. MongoDB labels that `UnknownTransactionCommitResult`, and the adapter retries the commit. If the retry reports a transient failure, the whole transaction runs again.
-- **Most repeats raise `MemoryConflict`,** because the write first checks for its own result: a block id, a link id, a key address, or a temporal entry that already exists, and each `expected_version`, `expected_versions`, or `expected_block_id` write whose expected value has moved. The write did land, but the caller gets a conflict.
-- **Some repeats end at the same state:** `update_block` without a version, `rebind_key` to the same target, and each cleanup that follows a deleted block.
+- **Most repeats raise `MemoryConflict`,** because the write first checks for its own result: a block id, a link id, a key address, a temporal entry, or a route catalog entry that already exists, and each `expected_version`, `expected_versions`, or `expected_block_id` write whose expected value has moved. The write did land, but the caller gets a conflict.
+- **A repeated `claim_route` keeps its entry.** The caller gets `MemoryConflict`, so `RoutedBackend.put_block` stores no block. The block id then has an entry and no block, and each later put of that id raises `MemoryConflict`. `release_routes` removes the entry.
+- **Some repeats end at the same state:** `update_block` without a version, `rebind_key` to the same target, `release_routes`, and each cleanup that follows a deleted block.
 - **`append_log_entry` is the exception.** It allocates the next sequence with no uniqueness key. So a repeat appends the same block a second time at a new sequence, and the caller gets the second entry. `Neo4jBackend` and `RedisBackend` have the same limit for the same reason. An application that needs exactly-once appends puts its own token in the block and skips a duplicate on read.
 - **After `max_retry_time`,** an unknown commit result gets to the caller as `BackendUnavailable`, and a repeated conflict gets to it as `BackendBusy`. Both are retryable.
 

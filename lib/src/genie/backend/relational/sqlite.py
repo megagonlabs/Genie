@@ -6,7 +6,7 @@ import json
 import math
 import sqlite3
 from collections import defaultdict, deque
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +34,7 @@ from genie.query.result import SearchResult
 from genie.query.scope import Scope
 
 if TYPE_CHECKING:
+    from genie.backend.composite.routed import RouteInfo
     from genie.structures.records import (
         KeyBinding,
         LogEntry,
@@ -84,6 +85,7 @@ _EXPECTED_TABLE_COLUMNS = {
     ),
     "log_counters": ("log_id", "next_sequence"),
     "log_entries": ("log_id", "sequence", "block_id"),
+    "route_entries": ("block_id", "route"),
     "temporal_entries": (
         "collection_id",
         "block_id",
@@ -1186,6 +1188,60 @@ class SQLiteBackend:
             ).fetchall()
             return [_temporal_from_row(row) for row in rows]
 
+    def claim_route(self, entry: RouteInfo) -> RouteInfo:
+        """Store a route catalog entry only when its block id has no entry.
+
+        Args:
+            entry: Block id and owning route to record.
+
+        Returns:
+            Stored entry.
+
+        Raises:
+            MemoryConflict: If the block id already has an entry.
+        """
+
+        with self._write_transaction() as connection:
+            try:
+                connection.execute(
+                    "INSERT INTO route_entries (block_id, route) VALUES (?, ?)",
+                    (entry.block_id, entry.route),
+                )
+            except sqlite3.IntegrityError as error:
+                raise MemoryConflict(f"Block id {entry.block_id!r} already has a route catalog entry.") from error
+            return entry
+
+    def get_route(self, block_id: str) -> RouteInfo | None:
+        """Return the route catalog entry of a block id.
+
+        Args:
+            block_id: Memory block id.
+
+        Returns:
+            Stored entry, or `None` when the block id has no entry.
+        """
+
+        with self._read_connection() as connection:
+            row = connection.execute(
+                "SELECT block_id, route FROM route_entries WHERE block_id = ?",
+                (block_id,),
+            ).fetchone()
+            return _route_entry_from_row(row) if row is not None else None
+
+    def release_routes(self, block_ids: Sequence[str]) -> None:
+        """Remove the route catalog entries of block ids, in one transaction.
+
+        Args:
+            block_ids: Block ids whose entries to remove. An id with no entry
+                is ignored.
+        """
+
+        with self._write_transaction() as connection:
+            connection.executemany(
+                "DELETE FROM route_entries WHERE block_id = ?",
+                [(block_id,) for block_id in block_ids],
+            )
+
     def add_link(self, link: MemoryLink) -> MemoryLink:
         """Store a typed link between existing blocks.
 
@@ -1554,6 +1610,12 @@ class SQLiteBackend:
             """,
             "CREATE INDEX IF NOT EXISTS temporal_occurred_idx ON temporal_entries(collection_id, occurred_at, block_id)",
             "CREATE INDEX IF NOT EXISTS temporal_validity_idx ON temporal_entries(collection_id, valid_at, invalid_at, block_id)",
+            """
+            CREATE TABLE IF NOT EXISTS route_entries (
+                block_id TEXT PRIMARY KEY,
+                route TEXT NOT NULL
+            )
+            """,
         )
         migrations = {1: statements}
         if legacy_schema:
@@ -2051,6 +2113,17 @@ def _binding_from_row(row: sqlite3.Row) -> KeyBinding:
         raise
     except (KeyError, TypeError, ValueError) as error:
         raise BackendCorruption("Stored SQLite key binding is invalid.") from error
+
+
+def _route_entry_from_row(row: sqlite3.Row) -> RouteInfo:
+    """Reconstruct a route catalog entry from one SQLite row."""
+
+    from genie.backend.composite.routed import RouteInfo
+
+    try:
+        return RouteInfo(block_id=row["block_id"], route=row["route"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise BackendCorruption("Stored SQLite route catalog entry is invalid.") from error
 
 
 def _log_entry_from_row(row: sqlite3.Row) -> LogEntry:

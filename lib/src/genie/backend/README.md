@@ -102,7 +102,7 @@ lib/src/genie/backend/
 
 The shipped server-backed and file-backed adapters suit small, controlled
 production deployments. Each one gives you atomic writes, conflict handling,
-schema checks, and all the optional structure capabilities.
+schema checks, all the optional structure capabilities, and `RouteCatalog`.
 
 | Backend | Good fit | Deployment responsibility |
 | --- | --- | --- |
@@ -133,6 +133,16 @@ schema checks, and all the optional structure capabilities.
 - **`VersionedRecords`** combines `KeyedStore` and `SequenceStore`, and it adds no new backend method.
 - **An implementation that is split internally** coordinates cleanup and transactions, so that no structure record points at nothing.
 
+## Route catalog capability
+
+| Capability | Required behavior |
+| --- | --- |
+| `RouteCatalog` | Claim one route for a block id in one atomic step, and reject a second claim |
+
+- **Used by `RoutedBackend`,** through its `route_catalog` argument. Each composite instance over the same routes shares one catalog, so one block id cannot get 2 routes. Refer to [Composite](composite/README.md).
+- **Entries are `RouteInfo` records, not blocks.** Block writes and deletes do not change them, so the backend of a route can also hold the catalog.
+- **Not part of `MemoryBackend`.** An adapter implements it only if it can claim atomically.
+
 ## Adapter checklist
 
 A production adapter does these things:
@@ -141,7 +151,7 @@ A production adapter does these things:
 - **Rejects non-string ids** with `TypeError` when the query language of the store reads another type as an operator. `Memory` and the record types already refuse them, but a caller can call an adapter directly. `MongoDBBackend` does this.
 - **Keeps ownership correct,** and cleans up dependent state on delete.
 - **Returns copies,** not internal objects, and pages results in a stable order.
-- **Enforces atomically:** block versions, subtree snapshots, keyed updates, sequences, and DAG inserts.
+- **Enforces atomically:** block versions, subtree snapshots, keyed updates, sequences, DAG inserts, and route catalog claims.
 - **Documents what a retried commit repeats,** if it retries at all.
 - **Maps operational failures** to `BackendError`.
 - **Returns normalized `SearchResult` values.**

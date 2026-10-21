@@ -77,6 +77,7 @@ from genie.query.result import SearchResult
 from genie.query.scope import Scope
 
 if TYPE_CHECKING:
+    from genie.backend.composite.routed import RouteInfo
     from genie.structures.records import (
         KeyBinding,
         LogEntry,
@@ -1399,6 +1400,61 @@ class RedisBackend:
         return self._snapshot(operation)
 
     # ------------------------------------------------------------------
+    # Route catalog
+
+    def claim_route(self, entry: RouteInfo) -> RouteInfo:
+        """Store a route catalog entry only when its block id has no entry.
+
+        Args:
+            entry: Block id and owning route to record.
+
+        Returns:
+            Stored entry.
+
+        Raises:
+            MemoryConflict: If the block id already has an entry.
+        """
+
+        def operation(transaction: _RedisTransaction) -> RouteInfo:
+            if transaction.client.hexists(self._routes_key(), entry.block_id):
+                raise MemoryConflict(f"Block id {entry.block_id!r} already has a route catalog entry.")
+            transaction.stage(lambda pipeline: pipeline.hset(self._routes_key(), entry.block_id, entry.route))
+            return entry
+
+        return self._transact(operation)
+
+    def get_route(self, block_id: str) -> RouteInfo | None:
+        """Return the route catalog entry of a block id.
+
+        Args:
+            block_id: Memory block id.
+
+        Returns:
+            Stored entry, or `None` when the block id has no entry.
+        """
+
+        def operation(client: Any) -> RouteInfo | None:
+            route = client.hget(self._routes_key(), block_id)
+            return None if route is None else _route_entry_from_field(block_id, route)
+
+        return self._direct(operation)
+
+    def release_routes(self, block_ids: Sequence[str]) -> None:
+        """Remove the route catalog entries of block ids, in one commit.
+
+        An empty sequence sends no command.
+
+        Args:
+            block_ids: Block ids whose entries to remove. An id with no entry
+                is ignored.
+        """
+
+        fields = list(block_ids)
+        if not fields:
+            return
+        self._transact(lambda transaction: self._stage_hdel(transaction, self._routes_key(), fields))
+
+    # ------------------------------------------------------------------
     # Typed property graph and lineage DAG
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
@@ -1681,6 +1737,11 @@ class RedisBackend:
         """Return the set of temporal collections that contain one block."""
 
         return f"{self.key_prefix}:temporalmember:{block_id}"
+
+    def _routes_key(self) -> str:
+        """Return the hash of route catalog entries, from block id to route."""
+
+        return f"{self.key_prefix}:routes"
 
     # ------------------------------------------------------------------
     # Client, schema, and transaction helpers
@@ -2334,6 +2395,7 @@ class RedisBackend:
                 pipeline.exists(self._blocks_key())
                 pipeline.exists(self._guard_key())
                 pipeline.exists(self._acyclic_key())
+                pipeline.exists(self._routes_key())
 
             record, *replies = self._batch(client, plan)
             return _decode_schema_record(record), any(bool(reply) for reply in replies)
@@ -2943,6 +3005,17 @@ def _binding_from_field(collection_id: str, field: object, block_id: object) -> 
         return KeyBinding(collection_id=collection_id, address=address, block_id=str(block_id))
     except (TypeError, ValueError) as error:
         raise BackendCorruption("Stored Redis key binding is invalid.") from error
+
+
+def _route_entry_from_field(block_id: str, route: object) -> RouteInfo:
+    """Rebuild a route catalog entry from one stored hash field and value."""
+
+    from genie.backend.composite.routed import RouteInfo
+
+    try:
+        return RouteInfo(block_id=block_id, route=str(route))
+    except (TypeError, ValueError) as error:
+        raise BackendCorruption("Stored Redis route catalog entry is invalid.") from error
 
 
 def _encode_address(address: MemoryAddress) -> str:

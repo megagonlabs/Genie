@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import RLock
@@ -24,6 +24,7 @@ from genie.query.result import SearchResult
 from genie.query.scope import Scope
 
 if TYPE_CHECKING:
+    from genie.backend.composite.routed import RouteInfo
     from genie.structures.records import (
         KeyBinding,
         LogEntry,
@@ -50,6 +51,7 @@ class InMemoryBackend:
         self._log_entries: dict[str, dict[int, LogEntry]] = defaultdict(dict)
         self._next_log_sequence: dict[str, int] = {}
         self._temporal_entries: dict[tuple[str, str], TemporalEntry] = {}
+        self._route_entries: dict[str, RouteInfo] = {}
         self._structure_lock = RLock()
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
@@ -752,6 +754,50 @@ class InMemoryBackend:
                 key=lambda entry: entry.block_id,
             )
             return entries[:limit]
+
+    def claim_route(self, entry: RouteInfo) -> RouteInfo:
+        """Store a route catalog entry only when its block id has no entry.
+
+        Args:
+            entry: Block id and owning route to record.
+
+        Returns:
+            Stored entry.
+
+        Raises:
+            MemoryConflict: If the block id already has an entry.
+        """
+
+        with self._structure_lock:
+            if entry.block_id in self._route_entries:
+                raise MemoryConflict(f"Block id {entry.block_id!r} already has a route catalog entry.")
+            self._route_entries[entry.block_id] = entry
+            return entry
+
+    def get_route(self, block_id: str) -> RouteInfo | None:
+        """Return the route catalog entry of a block id.
+
+        Args:
+            block_id: Memory block id.
+
+        Returns:
+            Stored entry, or `None` when the block id has no entry.
+        """
+
+        with self._structure_lock:
+            return self._route_entries.get(block_id)
+
+    def release_routes(self, block_ids: Sequence[str]) -> None:
+        """Remove the route catalog entries of block ids.
+
+        Args:
+            block_ids: Block ids whose entries to remove. An id with no entry
+                is ignored.
+        """
+
+        with self._structure_lock:
+            for block_id in block_ids:
+                self._route_entries.pop(block_id, None)
 
     def _require_structure_blocks(
         self,

@@ -36,6 +36,7 @@ place where a test checks it.
 | **A write does not lose changes silently.** A stale `expected_version` raises `MemoryConflict` | `BlockStoreContract`, `test_sqlite_backend.py` |
 | **Atomic operations are atomic.** Only one of many concurrent writers can claim a key, append a position, or close a cycle | The `*_is_atomic` contract tests, `test_structure_concurrency.py` |
 | **Recursive delete is all or nothing.** If another writer changes the subtree, the delete does not remove only a part of it | `BlockStoreContract`, adapter tests |
+| **One block id has one route.** `RoutedBackend` instances that share a `route_catalog` cannot store one id in 2 routes, and a stale route cache does not hide a block | `RouteCatalogContract`, `test_routed_backend.py` |
 | **Stored values survive a round trip.** Values and metadata come back unchanged. The adapter reports corrupt stored rows and does not guess their content | Adapter tests, `test_codecs.py` |
 | **A driver that is not installed gives a clear error.** The adapter raises `UnsupportedOperation`, and the message names the extra | Adapter tests, offline |
 | **Examples stay correct.** The printed output agrees with `examples/expected/` | `test_examples.py` |
@@ -45,15 +46,16 @@ place where a test checks it.
 - **One suite for each capability protocol.** `test_backend_contracts.py`
   defines `BlockStoreContract`, `TraversalIndexContract`, `KeyedStoreContract`,
   `SequenceStoreContract`, `TemporalStoreContract`, `TemporalIndexContract`,
-  `LinkStoreContract`, and `AcyclicLinkStoreContract`.
+  `LinkStoreContract`, `AcyclicLinkStoreContract`, and `RouteCatalogContract`.
 - **An adapter selects its suites through a subclass.** A test class inherits
   the contracts for the capabilities that the adapter claims. The class
   implements `make_backend()`. It does not copy the tests.
 - **The suites do not test an adapter for a capability that it does not
   claim.** The suites follow the capability protocols, so they do not expect
   each adapter to implement all protocols. `RoutedBackend` routes links, so it
-  runs `LinkStoreContract` and `AcyclicLinkStoreContract`. A separate test
-  checks that it claims no record-store capability of its own.
+  runs `LinkStoreContract` and `AcyclicLinkStoreContract`, with and without a
+  `route_catalog`. A separate test checks that it claims no record-store
+  capability of its own.
 - **The contracts check relationships, not strategy.** `TraversalIndexContract`
   compares `children` and `descendants` as sets, because the backend defines
   their order. It checks order only for `ancestors`, because there the protocol
@@ -84,6 +86,9 @@ place where a test checks it.
 - **`test_structure_concurrency.py` holds the races that cross facades.** An
   example is a `PropertyGraph` edge and a `LineageDAG` edge that close a cycle
   on one relation if both succeed.
+- **`test_routed_backend.py` holds the races between composite instances.**
+  Several `RoutedBackend` instances that share a `route_catalog` put one id at
+  the same time, each into a different route, and exactly one stores it.
 - **Each adapter tests its own races across separate connections or
   processes,** for example `test_sqlite_backend_coordinates_separate_connections`
   and `test_live_postgres_backend_persists_and_coordinates_instances`.

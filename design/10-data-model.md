@@ -241,6 +241,10 @@ The table shows the stored records and the question that each record answers:
 - **One logical backend can use several databases.** `RoutedBackend` keeps each
   block and its subtree on one route. As an option, it can also use shared
   link, traversal, and search components.
+- **A shared `RouteCatalog` keeps one route for each id.** Without one, each
+  `RoutedBackend` instance checks for an existing id and then writes. So ids
+  stay unique across routes only for writers that share one instance. With a
+  `route_catalog`, a put claims the route of a new id in one atomic step.
 
 ## Left out on purpose
 

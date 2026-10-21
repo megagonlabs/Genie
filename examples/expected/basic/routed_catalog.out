@@ -1,0 +1,5 @@
+== Shared route catalog ==
+first worker stores customer-7 in: us
+first worker now finds customer-7 in: eu
+first worker put of customer-7 in us: refused, the id already has a route
+new worker reads customer-7 from: eu

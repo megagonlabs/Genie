@@ -77,6 +77,7 @@ from genie.query.result import SearchResult
 from genie.query.scope import Scope
 
 if TYPE_CHECKING:
+    from genie.backend.composite.routed import RouteInfo
     from genie.structures.records import (
         KeyBinding,
         LogEntry,
@@ -121,6 +122,7 @@ _KEY_BINDINGS = "key_bindings"
 _LOG_COUNTERS = "log_counters"
 _LOG_ENTRIES = "log_entries"
 _TEMPORAL_ENTRIES = "temporal_entries"
+_ROUTE_ENTRIES = "route_entries"
 
 class _IndexSpec:
     """One MongoDB index owned by Genie.
@@ -181,6 +183,7 @@ _SCHEMA_COLLECTIONS: dict[str, tuple[_IndexSpec, ...]] = {
         _IndexSpec("temporal_occurred_idx", (("collection_id", _ASCENDING), ("occurred_at", _ASCENDING), ("block_id", _ASCENDING))),
         _IndexSpec("temporal_validity_idx", (("collection_id", _ASCENDING), ("valid_at", _ASCENDING), ("invalid_at", _ASCENDING), ("block_id", _ASCENDING))),
     ),
+    _ROUTE_ENTRIES: (),
 }
 
 # Server error codes that mean the same thing on all MongoDB deployments.
@@ -364,6 +367,7 @@ class MongoDBBackend:
             self._log_counters = self._database_handle[_LOG_COUNTERS]
             self._log_entries = self._database_handle[_LOG_ENTRIES]
             self._temporal_entries = self._database_handle[_TEMPORAL_ENTRIES]
+            self._route_entries = self._database_handle[_ROUTE_ENTRIES]
             if verify_server_role or verify_transaction_support:
                 description = self._read_server_description()
                 if verify_server_role:
@@ -1262,6 +1266,71 @@ class MongoDBBackend:
             return [_temporal_from_document(document) for document in cursor]
 
         return self._read_one(operation)
+
+    # ------------------------------------------------------------------
+    # Route catalog
+
+    def claim_route(self, entry: RouteInfo) -> RouteInfo:
+        """Store a route catalog entry only when its block id has no entry.
+
+        Args:
+            entry: Block id and owning route to record.
+
+        Returns:
+            Stored entry.
+
+        Raises:
+            MemoryConflict: If the block id already has an entry.
+        """
+
+        document = _route_entry_document(entry)
+
+        def operation(session: Any) -> RouteInfo:
+            if self._route_entries.find_one({"_id": document["_id"]}, session=session) is not None:
+                raise MemoryConflict(f"Block id {entry.block_id!r} already has a route catalog entry.")
+            try:
+                self._route_entries.insert_one(document, session=session)
+            except self._errors.DuplicateKeyError as error:
+                raise MemoryConflict(f"Block id {entry.block_id!r} already has a route catalog entry.") from error
+            return entry
+
+        return self._write(operation)
+
+    def get_route(self, block_id: str) -> RouteInfo | None:
+        """Return the route catalog entry of a block id.
+
+        Args:
+            block_id: Memory block id.
+
+        Returns:
+            Stored entry, or `None` when the block id has no entry.
+        """
+
+        _validate_id(block_id, name="block_id")
+
+        def operation(session: Any) -> RouteInfo | None:
+            document = self._route_entries.find_one({"_id": block_id}, session=session)
+            return _route_entry_from_document(document) if document is not None else None
+
+        return self._read_one(operation)
+
+    def release_routes(self, block_ids: Sequence[str]) -> None:
+        """Remove the route catalog entries of block ids, in one transaction.
+
+        Args:
+            block_ids: Block ids whose entries to remove. An id with no entry
+                is ignored.
+        """
+
+        ids = list(block_ids)
+        for block_id in ids:
+            _validate_id(block_id, name="block_id")
+
+        def operation(session: Any) -> None:
+            for chunk in _chunked(ids, _QUERY_CHUNK):
+                self._route_entries.delete_many({"_id": {"$in": chunk}}, session=session)
+
+        self._write(operation)
 
     # ------------------------------------------------------------------
     # Typed links and lineage DAG
@@ -2368,6 +2437,33 @@ def _binding_from_document(document: Mapping[str, Any]) -> KeyBinding:
         raise
     except (KeyError, TypeError, ValueError) as error:
         raise BackendCorruption("Stored MongoDB key binding is invalid.") from error
+
+
+def _route_entry_document(entry: RouteInfo) -> dict[str, Any]:
+    """Serialize a route catalog entry into its stored MongoDB document."""
+
+    return {"_id": entry.block_id, "route": entry.route}
+
+
+def _route_entry_from_document(document: Mapping[str, Any]) -> RouteInfo:
+    """Rebuild a route catalog entry from one stored MongoDB document.
+
+    Args:
+        document: Stored route catalog entry document.
+
+    Returns:
+        Rebuilt entry.
+
+    Raises:
+        BackendCorruption: If the stored document cannot be read.
+    """
+
+    from genie.backend.composite.routed import RouteInfo
+
+    try:
+        return RouteInfo(block_id=document["_id"], route=document["route"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise BackendCorruption("Stored MongoDB route catalog entry is invalid.") from error
 
 
 def _log_entry_from_document(document: Mapping[str, Any]) -> LogEntry:

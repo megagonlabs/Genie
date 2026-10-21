@@ -20,9 +20,12 @@ A **route** is one named backend in that mapping, such as `us` or `eu`.
 
 - **One route per block.** A tree never spans two routes.
 - **A child is always stored in the route of its parent,** and a block cannot move to a new parent in another route. Both attempts raise `MemoryConflict`.
+- **A route that the instance does not have raises `UnsupportedOperation`.** This applies to a route that the route selector chooses for a new root block, and to a route that the route catalog names for an id. The call succeeds after `register_route` adds that route. A put to an unknown route claims nothing in the route catalog.
 - **That rule makes route-local subtree traversal and delete exact.**
+- **An id in 2 routes raises `BackendCorruption`** on each lookup, also on `get`. The stored data breaks the one-route rule, so the error is not a `MemoryConflict`, and a retry cannot help. The composite does not choose one of the copies. The application removes the wrong copy through the backend of its route.
 - **Routes can be registered later.** This suits applications that find tenants or mounts at runtime.
-- **`routes` is a read-only live view.** A route replacement goes only through `register_route`. It refuses to replace a route whose backend still holds blocks. The check uses the internal catalog, and it also asks the backend directly, because the catalog fills lazily. The catalog is empty when a composite opens over a store that already holds data. If the backend search raises `UnsupportedOperation`, the route counts as empty.
+- **Each instance has a route cache.** It records the route of each block id that the instance finds. A cached route counts only while that route still holds the block, because another instance can delete the block and store the id again in a different route. So each routed call that uses the cache reads the block once in the cached route.
+- **`routes` is a read-only live view.** A route replacement goes only through `register_route`. It refuses to replace a route whose backend still holds blocks. The check uses the route cache, and it also asks the backend directly, because the cache fills lazily. The cache is empty when a composite opens over a store that already holds data. If the backend search raises `UnsupportedOperation`, the route counts as empty.
 
 ```python
 owner = backend.backend_for_block(block.id)
@@ -31,6 +34,32 @@ owner = backend.backend_for_block(block.id)
 - **`backend_for_block` returns the adapter that owns a block,** and each route-local operation goes through it.
 - **A container's subtree is covered too,** because a tree never spans routes.
 - **An unknown id returns `None`.**
+
+## Route catalog
+
+- **Without a route catalog, ids stay unique across routes only inside one instance.** A put checks that no route holds the id, and then it writes to the selected route. Only the lock of the instance protects these 2 steps. So 2 instances over the same routes, for example one in each worker process, can store one id in 2 routes. After that, each lookup of the id raises `BackendCorruption`.
+- **`route_catalog` gives each id one route across all instances.** Give each instance the same `RouteCatalog`. A put claims the selected route for the new id in one atomic step, and then it writes the block. A second claim for the id raises `MemoryConflict`, also from another instance or process.
+- **Adapters that implement `RouteCatalog`:** `InMemoryBackend`, `SQLiteBackend`, `PostgresBackend`, `MongoDBBackend`, `RedisBackend`, and `Neo4jBackend`. `InMemoryBackend` serves only one process. Several processes use a database that all of them reach.
+- **A route can hold the catalog.** Catalog entries are not blocks, so they do not share the id space of the blocks. `route_catalog` can be one of the routes or a separate database.
+
+```python
+from genie import RoutedBackend, SQLiteBackend
+
+
+backend = RoutedBackend(
+    {"us": SQLiteBackend("us.db"), "eu": SQLiteBackend("eu.db")},
+    default_route="us",
+    route_catalog=SQLiteBackend("routes.db"),
+)
+```
+
+- **Lookup order.** The route cache comes first. Then the catalog entry decides the route. An id with no entry is looked up in each route, which finds blocks that were stored before the catalog was in use.
+- **An entry that names a route the instance does not have** raises `UnsupportedOperation`. It does not read as a missing block. This occurs, for example, when another instance added the route with `register_route`. The read succeeds after this instance registers the same route.
+- **A failed write releases its claim** if the route does not hold the block. The claim stays if the route holds the block, or if that check fails, because a backend error can hide a write that committed.
+- **A delete releases the entries** of all deleted blocks after the route commits the delete. If the release fails, the delete still succeeds, and a warning goes to the `genie.backend.composite.routed` logger.
+- **An entry with no block** reads as no block, and a put of its id raises `MemoryConflict`. A crash between the claim and the write, or a failed release, leaves such an entry. It never lets an id get a second route. `route_catalog.release_routes([block_id])` removes it when no write of that id is in progress.
+- **All instances use the same catalog.** An instance without it, or with a different catalog, does not claim ids, so its writes do not get the guarantee.
+- **Cost.** A put does one atomic claim in the catalog. A lookup that misses the route cache reads the catalog entry before it reads the route.
 
 ## Shared components
 

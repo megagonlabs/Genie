@@ -1,8 +1,8 @@
 # Redis backend
 
 `RedisBackend` is a persistent key-value adapter on the official `redis` Python
-client, with no other layer. It implements the core backend contract and all
-optional structure capabilities.
+client, with no other layer. It implements the core backend contract, all
+optional structure capabilities, and `RouteCatalog`.
 
 ```bash
 pip install "genie[redis]"
@@ -40,6 +40,7 @@ datasets can share one Redis database, with a different prefix for each one.
 | `genie:temporal:<collection>` | hash | Temporal entries by block id |
 | `genie:temporalindex:<collection>` | sorted set | Block-id order for stable pages |
 | `genie:keyowner:<id>`, `genie:logmember:<id>`, `genie:temporalmember:<id>` | set | Reverse indexes for the cleanup of a deleted block |
+| `genie:routes` | hash | `RouteCatalog` entries, from block id to route key |
 
 ## Writes
 
@@ -49,6 +50,8 @@ datasets can share one Redis database, with a different prefix for each one.
 - **Each commit writes a new token** into `genie:mutations`. So a retry can tell whether its own earlier commit landed.
 - **A block delete removes the whole subtree,** together with its links, key bindings, log entries, and temporal entries, in the same commit. Reverse indexes make that cleanup exact, with no full scan.
 - **Link cleanup reads only the endpoint index,** never the link documents. So a link document that is already gone cannot leave its index entries behind.
+- **Route catalog entries are separate from blocks.** `claim_route`, `get_route`, and `release_routes` use only `genie:routes`, and a block write or delete does not change that hash. So one namespace can hold the catalog of a `RoutedBackend` and also be one of its routes.
+- **A claim is one commit.** It checks the field and writes it under the mutation guard. So of concurrent claims for one block id, also from other backend instances, only one succeeds. `release_routes` removes all given ids in one commit, and an empty list sends no command.
 
 ## Reads
 
@@ -105,8 +108,9 @@ A value of `0` turns off either setting.
 
 - **Why:** when the connection closes during `EXEC`, the client cannot know whether the server applied the transaction. So it reports a watch conflict in both cases.
 - **The guard token helps first.** Each commit writes a new token into the mutation guard. The next attempt returns its earlier result when the guard still holds that token. The token proves the commit only while no other client has committed since, because the next commit replaces it. Under concurrent writes, the operation runs again.
-- **Most repeats raise `MemoryConflict`,** because the write first checks for its own result: a block id, a link id, a key address, or a temporal entry that already exists, a temporal entry that is already removed, and each `expected_version`, `expected_versions`, or `expected_block_id` write whose expected value has moved. The write did land, but the caller gets a conflict.
-- **Some repeats end at the same state:** `update_block` without a version, `rebind_key` to the same target, `replace_temporal_entry`, `update_link`, and each cleanup after a deleted block.
+- **Most repeats raise `MemoryConflict`,** because the write first checks for its own result: a block id, a link id, a key address, a route catalog entry, or a temporal entry that already exists, a temporal entry that is already removed, and each `expected_version`, `expected_versions`, or `expected_block_id` write whose expected value has moved. The write did land, but the caller gets a conflict.
+- **A repeated `claim_route` keeps its entry.** The caller gets `MemoryConflict`, and the entry stays until `release_routes` removes it. Through `RoutedBackend`, that put fails, and later puts of the id also raise `MemoryConflict` until the release.
+- **Some repeats end at the same state:** `update_block` without a version, `rebind_key` to the same target, `replace_temporal_entry`, `update_link`, `release_routes`, and each cleanup after a deleted block.
 - **`append_log_entry` is the exception.** It allocates the next sequence with no uniqueness key. So a repeat appends the same block a second time at a new sequence, and the caller gets the second entry. `Neo4jBackend` and `MongoDBBackend` have the same limit for the same reason. For exactly-once appends, an application keeps its own token in the block and skips a duplicate on read.
 
 ### Script duration is the cost to watch

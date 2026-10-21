@@ -20,6 +20,7 @@ service.
 | `custom_codecs.py` | `MemoryCodec`, `CodecRegistry`, `EncodedValue` | A custom codec, registration order, stored payloads and content types, late registration |
 | `stdlib_codecs.py` | Standard-library codecs | Explicit registration of bytes, datetime, decimal, UUID, dataclass, and enum codecs |
 | `routed_backend.py` | `RoutedBackend`, `InMemoryLinkStore` | Route selection and route inheritance, search across stores, resolution of a pending mount |
+| `routed_catalog.py` | `RoutedBackend`, `RouteCatalog`, `SQLiteBackend` | One route for each id across workers that share a route catalog, a block that another worker moved to another route |
 | `sqlite_persistence.py` | `SQLiteBackend` | Blocks and links that stay available across backend instances |
 | `heterogeneous_backend.py` | `RoutedBackend`, `SQLiteBackend`, `TraversalIndex`/`SearchIndex`/`LinkStore` | One backend made from SQL blocks, a graph topology index, and a vector search index. Query scope resolution inside a search index. A hook that keeps derived indexes current |
 | `basic_usage.py` | Core components together | Application-owned memory and bounded agent tools that work together |

@@ -641,6 +641,7 @@ A direct call skips handles, policies, hooks, and codecs.
 | `TemporalIndex` | `query_temporal_entries(collection_id, *, occurred_only, occurred_start, occurred_stop, valid_at, overlaps, after_block_id, limit)` |
 | `VersionedStore` | `KeyedStore` + `SequenceStore` |
 | `BlockRouter` | `backend_for_block(block_id)` |
+| `RouteCatalog` | `claim_route(entry)`, `get_route(block_id)`, `release_routes(block_ids)` |
 
 - **Each protocol is `runtime_checkable`.** Genie checks capabilities with
   `isinstance`. So an adapter claims a capability when it implements the
@@ -650,8 +651,8 @@ A direct call skips handles, policies, hooks, and codecs.
   not have it.
 - **Conditional and uniqueness checks occur inside one store call:**
   `expected_version`, `expected_versions`, `expected_block_id`, address
-  uniqueness, cycle checks, sequence allocation, and temporal membership. A
-  failed check raises `MemoryConflict`.
+  uniqueness, cycle checks, sequence allocation, temporal membership, and
+  route catalog claims. A failed check raises `MemoryConflict`.
 - **`delete_block` cascades** to links, key bindings, log entries, and temporal
   entries in the same atomic step.
 - **The shared contract tests** in
@@ -668,14 +669,15 @@ A direct call skips handles, policies, hooks, and codecs.
 | `Neo4jBackend` | `(uri, *, auth=None, database="neo4j", connection_timeout=30.0, max_transaction_retry_time=30.0, encrypted=None, verify_connectivity=True, initialize_schema=True)` | `neo4j` |
 | `MongoDBBackend` | `(uri, *, auth=None, database="genie", connect_timeout=30.0, socket_timeout=30.0, max_retry_time=30.0, durability="full", verify_server_role=True, verify_transaction_support=True, initialize_schema=True)` | `mongodb` |
 | `RedisBackend` | `(url, *, auth=None, key_prefix="genie", connect_timeout=10.0, socket_timeout=30.0, max_retry_time=30.0, health_check_interval=30.0, transport_retries=3, verify_connectivity=True, verify_server_role=True, verify_eviction_policy=True, initialize_schema=True)` | `redis` |
-| `RoutedBackend` | `(routes, *, route_selector=None, default_route=None, traversal_index=None, search_index=None, link_store=None)` | none |
+| `RoutedBackend` | `(routes, *, route_selector=None, default_route=None, traversal_index=None, search_index=None, link_store=None, route_catalog=None)` | none |
 | `InMemoryLinkStore` | `()` | none |
 
 - **Each storage adapter implements all optional capabilities:**
-  `AcyclicLinkStore`, `KeyedStore`, `SequenceStore`, `TemporalStore`, and
-  `TemporalIndex`. `RoutedBackend` implements `BlockRouter` and
-  `AcyclicLinkStore`. It sends each acyclic link to the store that holds its
-  links. `InMemoryLinkStore` is a standalone `LinkStore`.
+  `AcyclicLinkStore`, `KeyedStore`, `SequenceStore`, `TemporalStore`,
+  `TemporalIndex`, and `RouteCatalog`. `RoutedBackend` implements
+  `BlockRouter` and `AcyclicLinkStore`. It sends each acyclic link to the
+  store that holds its links. `InMemoryLinkStore` is a standalone
+  `LinkStore`.
 - **If a driver is not installed, the constructor raises
   `UnsupportedOperation`.** The error names the extra to install (for example
   `genie[postgres]`).
@@ -686,8 +688,12 @@ A direct call skips handles, policies, hooks, and codecs.
   `route_selector` is a `RouteSelector`, a callable from `MemoryBlock` to
   `RouteKey | None`. Extra members: `routes`, `register_route(route, backend,
   *, replace=False, make_default=False)`, `backend_for_block(block_id)`,
-  `route_for_block(block_id)`. `RouteInfo(block_id, route)` is its catalog
-  record.
+  `route_for_block(block_id)`. `RouteInfo(block_id, route)` is the entry of a
+  `RouteCatalog`.
+- **`route_catalog`:** a `RouteCatalog` that all `RoutedBackend` instances over
+  the same routes share. A put claims the route of a new id in it, in one
+  atomic step, so 2 instances cannot store one id in 2 routes. Without one,
+  ids stay unique across routes only for writers that share one instance.
 - **Adapter options, schema, and atomicity notes** are in the README of each
   adapter under `lib/src/genie/backend/`.
 
@@ -699,7 +705,7 @@ A direct call skips handles, policies, hooks, and codecs.
 | `AccessDenied` | `PermissionError` | A policy or a handle boundary refuses the call |
 | `MemoryNotFound` | `GenieError` | A block, link, or root that the call needs does not exist, or a structure record refers to a block that does not exist |
 | `MemoryConflict` | `GenieError` | A version, snapshot, key, cycle, or membership check fails |
-| `UnsupportedOperation` | `GenieError` | A backend does not have a capability, or an adapter driver is not installed |
+| `UnsupportedOperation` | `GenieError` | A backend does not have a capability, an adapter driver is not installed, or a `RoutedBackend` does not have the route that its route selector or its `route_catalog` names for a block |
 | `HookRecursionError` | `GenieError` | Operations that hooks start nest deeper than `max_depth` |
 | `BackendError` | `GenieError` | Base class of the adapter failures below |
 | `BackendBusy` | `BackendError` | The store is locked or overloaded. A retry can succeed |

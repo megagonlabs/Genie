@@ -4,6 +4,7 @@ from genie.backend.base import BlockRouter, MemoryBackend
 from genie.backend.capabilities import BlockStore, LinkStore, SearchIndex, TraversalIndex
 from genie.backend.composite import (
     InMemoryLinkStore,
+    RouteCatalog,
     RoutedBackend,
     RouteInfo,
     RouteKey,
@@ -35,6 +36,7 @@ __all__ = [
     "Neo4jBackend",
     "PostgresBackend",
     "RedisBackend",
+    "RouteCatalog",
     "RouteInfo",
     "RouteKey",
     "RouteSelector",

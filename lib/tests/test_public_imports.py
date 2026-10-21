@@ -47,11 +47,13 @@ def test_layered_import_styles_work_for_common_types() -> None:
         Neo4jBackend,
         PolicyEngine,
         RedisBackend,
+        RouteCatalog,
         SequenceStore,
         SQLiteBackend,
         TemporalIndex,
         TemporalStore,
     )
+    from genie.backend.composite import RouteCatalog as CompositeRouteCatalog
     from genie.backend.composite import RoutedBackend as CompositeRoutedBackend
     from genie.backend.document import MongoDBBackend as DocumentMongoDBBackend
     from genie.backend.graph import Neo4jBackend as GraphNeo4jBackend
@@ -101,6 +103,7 @@ def test_layered_import_styles_work_for_common_types() -> None:
     assert MongoDBBackend is DocumentMongoDBBackend
     assert RedisBackend is KeyValueRedisBackend
     assert CompositeRoutedBackend is not None
+    assert RouteCatalog is CompositeRouteCatalog
     assert GroupedInMemoryBackend is not None
     assert RelationalSQLiteBackend is SQLiteBackend
     assert TemporalIndex is not None

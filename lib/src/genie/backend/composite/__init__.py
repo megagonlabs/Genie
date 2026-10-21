@@ -2,6 +2,7 @@
 
 from genie.backend.composite.routed import (
     InMemoryLinkStore,
+    RouteCatalog,
     RoutedBackend,
     RouteInfo,
     RouteKey,
@@ -10,6 +11,7 @@ from genie.backend.composite.routed import (
 
 __all__ = [
     "InMemoryLinkStore",
+    "RouteCatalog",
     "RouteInfo",
     "RouteKey",
     "RouteSelector",

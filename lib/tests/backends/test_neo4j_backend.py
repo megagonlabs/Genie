@@ -8,7 +8,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
-from threading import Condition, Event, RLock
+from threading import Barrier, Condition, Event, RLock
 from typing import Any, Literal, Self, cast
 
 import pytest
@@ -30,6 +30,8 @@ from genie import (
     MemoryPolicy,
     MemoryQuery,
     Neo4jBackend,
+    RouteCatalog,
+    RouteInfo,
     Scope,
     SequenceStore,
     TemporalIndex,
@@ -43,6 +45,7 @@ from tests.backends.test_backend_contracts import (
     BlockStoreContract,
     KeyedStoreContract,
     LinkStoreContract,
+    RouteCatalogContract,
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
@@ -61,6 +64,7 @@ def test_neo4j_backend_implements_every_backend_protocol() -> None:
     assert isinstance(backend, SequenceStore)
     assert isinstance(backend, TemporalStore)
     assert isinstance(backend, TemporalIndex)
+    assert isinstance(backend, RouteCatalog)
 
 
 @pytest.mark.parametrize(
@@ -186,6 +190,8 @@ def test_neo4j_serialization_rejects_invalid_versions_times_and_namespaces() -> 
         (neo4j_module._binding_from_record, {"binding": {}}, "key binding"),
         (neo4j_module._log_entry_from_record, {"entry": {}}, "log entry"),
         (neo4j_module._temporal_from_record, {"entry": {}}, "temporal entry"),
+        (neo4j_module._route_entry_from_record, {"entry": {}}, "route catalog entry"),
+        (neo4j_module._route_entry_from_record, {"entry": {"block_id": "block", "route": 1}}, "route catalog entry"),
     ],
 )
 def test_neo4j_record_decoders_translate_malformed_shapes(
@@ -567,6 +573,7 @@ class TestNeo4jStructureBackendContracts(
     TemporalIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
+    RouteCatalogContract,
 ):
     """Run every reusable capability contract against a live Neo4j database."""
 
@@ -626,6 +633,40 @@ def test_live_neo4j_backend_persists_and_coordinates_instances() -> None:
                 )
             )
         assert outcomes.count(True) == 1
+    finally:
+        _clear_live_data(left)
+        left.close()
+        right.close()
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_route_catalog_claims_one_route_across_instances() -> None:
+    """Of 2 instances that claim one block id at the same time, each with its own route, only one succeeds."""
+
+    left = _live_backend()
+    _clear_live_data(left)
+    right = _live_backend(initialize_schema=False)
+    barrier = Barrier(2)
+
+    def claim(backend: Neo4jBackend, entry: RouteInfo) -> bool:
+        barrier.wait()
+        try:
+            backend.claim_route(entry)
+        except MemoryConflict:
+            return False
+        return True
+
+    try:
+        entries = [RouteInfo("shared", "us"), RouteInfo("shared", "eu")]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(claim, [left, right], entries))
+
+        assert outcomes.count(True) == 1
+        winner = entries[outcomes.index(True)]
+        assert left.get_route("shared") == winner
+        assert right.get_route("shared") == winner
+        right.release_routes(["shared"])
+        assert left.get_route("shared") is None
     finally:
         _clear_live_data(left)
         left.close()
@@ -713,7 +754,7 @@ def test_live_neo4j_backend_searches_every_scope_and_filters_candidates() -> Non
 
 @pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
 def test_live_neo4j_backend_reports_corrupt_persisted_record_types() -> None:
-    """Malformed Neo4j properties raise `BackendCorruption` for blocks, links, keys, log entries, and temporal entries."""
+    """Malformed Neo4j properties raise `BackendCorruption` for blocks, links, keys, log entries, temporal entries, and route catalog entries."""
 
     with _live_backend() as backend:
         _clear_live_data(backend)
@@ -731,11 +772,19 @@ def test_live_neo4j_backend_reports_corrupt_persisted_record_types() -> None:
                 occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
         )
+        backend.claim_route(RouteInfo(target.id, "us"))
         backend._raw_write(
             lambda tx: neo4j_module._consume(
                 tx,
                 "MATCH (b:GenieBlock {id: $id}) SET b.created_at = 1",
                 id=corrupt.id,
+            )
+        )
+        backend._raw_write(
+            lambda tx: neo4j_module._consume(
+                tx,
+                "MATCH (n:GenieRouteEntry {block_id: $id}) SET n.route = 1",
+                id=target.id,
             )
         )
         backend._raw_write(
@@ -783,6 +832,8 @@ def test_live_neo4j_backend_reports_corrupt_persisted_record_types() -> None:
             backend.list_log_entries(container.id)
         with pytest.raises(BackendCorruption, match="timestamp"):
             backend.get_temporal_entry(container.id, target.id)
+        with pytest.raises(BackendCorruption, match="route catalog entry"):
+            backend.get_route(target.id)
         _clear_live_data(backend)
 
 

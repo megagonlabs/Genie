@@ -29,6 +29,7 @@ RUNNABLE_EXAMPLES = [
     "basic/acyclic_links.py",
     "basic/mounted_handles.py",
     "basic/routed_backend.py",
+    "basic/routed_catalog.py",
     "basic/policies.py",
     "basic/hook_audit.py",
     "basic/write_hooks.py",
