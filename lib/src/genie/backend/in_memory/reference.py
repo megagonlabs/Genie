@@ -1,8 +1,9 @@
 """In-memory reference backend.
 
-The backend is intentionally small and dependency-free. It is useful for tests,
-examples, and local prototypes, and also acts as executable documentation for
-the backend interfaces.
+- **Small on purpose:** the backend has no third-party dependencies.
+- **Use:** tests, examples, and local prototypes.
+- **Reference:** it is also executable documentation for the backend
+  interfaces.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 
 
 class InMemoryBackend:
-    """Single-process backend implementing all Genie backend interfaces."""
+    """Single-process backend that implements all Genie backend interfaces."""
 
     def __init__(self) -> None:
         """Create an empty in-memory backend."""
@@ -76,13 +77,13 @@ class InMemoryBackend:
             return block
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        """Fetch a block by id.
+        """Get a block by id.
 
         Args:
             block_id: Memory block id.
 
         Returns:
-            Defensive copy of the block, or `None` when missing.
+            Defensive copy of the block, or `None` when it does not exist.
         """
 
         with self._structure_lock:
@@ -95,18 +96,19 @@ class InMemoryBackend:
         *,
         expected_version: int | None = None,
     ) -> MemoryBlock:
-        """Replace an existing encoded block, optionally by version.
+        """Replace an existing encoded block, with an optional version check.
 
         Args:
             block: Replacement block.
-            expected_version: Required current version for compare-and-swap.
+            expected_version: Expected current version for compare-and-swap.
 
         Returns:
             Stored replacement block.
 
         Raises:
-            MemoryConflict: If the block is missing, its version changed, the
-                parent is missing, or the change would create a parent cycle.
+            MemoryConflict: If the block does not exist, its version changed,
+                the replacement version is not `expected_version + 1`, the
+                parent does not exist, or the change makes a parent cycle.
         """
 
         with self._structure_lock:
@@ -126,15 +128,17 @@ class InMemoryBackend:
         *,
         expected_versions: Mapping[str, int] | None = None,
     ) -> None:
-        """Delete a block and descendants, optionally from an exact snapshot.
+        """Delete a block and its descendants, with an optional exact snapshot.
 
         Args:
-            block_id: Block id to delete. Missing ids are ignored.
-            expected_versions: Exact subtree id-to-version snapshot required
-                for the deletion.
+            block_id: Block id to delete. An unknown id is ignored, unless
+                `expected_versions` is not empty.
+            expected_versions: Exact subtree id-to-version snapshot for the
+                delete.
 
         Raises:
-            MemoryConflict: If the supplied subtree snapshot is stale.
+            MemoryConflict: If the given subtree snapshot is stale. For an
+                unknown id, a snapshot that is not empty is stale.
         """
 
         with self._structure_lock:
@@ -145,7 +149,7 @@ class InMemoryBackend:
             self._delete_block_unchecked(block_id)
 
     def _delete_block_unchecked(self, block_id: str) -> None:
-        """Delete one subtree while the structure lock is held."""
+        """Delete one subtree while this method holds the structure lock."""
 
         block = self._blocks.get(block_id)
         if block is None:
@@ -162,7 +166,7 @@ class InMemoryBackend:
         self.delete_temporal_entries_for_block(block_id)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
-        """Return direct child blocks for a parent id.
+        """Return the direct child blocks of a parent id.
 
         Args:
             block_id: Parent block id.
@@ -175,10 +179,10 @@ class InMemoryBackend:
             return [_copy_block(self._blocks[child_id]) for child_id in self._children.get(block_id, ())]
 
     def ancestors(self, block_id: str) -> list[MemoryBlock]:
-        """Return ancestors from nearest parent upward.
+        """Return the ancestors, from the nearest parent upward.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
 
         Returns:
             Defensive copies of ancestor blocks.
@@ -200,7 +204,7 @@ class InMemoryBackend:
 
         Args:
             block_id: Root block id.
-            include_self: Whether to include `block_id` in the result.
+            include_self: If `True`, the result includes `block_id`.
 
         Returns:
             Defensive copies of descendant blocks.
@@ -215,22 +219,24 @@ class InMemoryBackend:
             return blocks
 
     def contains(self, root_id: str, block_id: str) -> bool:
-        """Return whether `block_id` is in `root_id`'s subtree.
+        """Return whether `block_id` is in the subtree of `root_id`.
 
-        The check walks up from the candidate, which reads one block per level
-        instead of materializing the whole subtree. `MongoDBBackend` and
-        `RedisBackend` answer the question the same way, and the SQL adapters
-        stop their recursive query at the first hit. The cost is therefore
-        proportional to tree depth rather than to subtree size, which matters
-        because `Memory` calls this once per search result and `MemoryHandle`
-        calls it on every bounded read.
+        - **Walk up:** the check walks up from the candidate. It reads one block
+          for each level, and it does not build the whole subtree. So the cost
+          grows with the tree depth, not with the subtree size.
+        - **Other adapters:** `MongoDBBackend` and `RedisBackend` also walk up.
+          `SQLiteBackend` and `PostgresBackend` walk down from the root in one
+          recursive query, and they stop at the first hit.
+        - **Why it matters:** `Memory` calls this once for each result of a
+          `subtree` or `ancestors` search, and `MemoryHandle` calls it on each
+          bounded read.
 
         Args:
             root_id: Potential subtree root id.
             block_id: Candidate block id.
 
         Returns:
-            `True` when `block_id` is equal to or below `root_id`.
+            `True` when `block_id` is `root_id` or is below it.
         """
 
         with self._structure_lock:
@@ -244,16 +250,17 @@ class InMemoryBackend:
                 if block.parent_id == root_id:
                     return True
                 if block.parent_id in seen:
-                    # Unreachable while the no-cycle invariant holds, which
-                    # `_move_parent` enforces using this very method. The guard
-                    # keeps a damaged index from looping forever.
+                    # This line does not run while the no-cycle invariant
+                    # holds. `_move_parent` enforces that invariant with this
+                    # same method. The guard stops a damaged index from an
+                    # infinite loop.
                     return False
                 seen.add(block.parent_id)
                 block = self._blocks.get(block.parent_id)
             return False
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
-        """Atomically bind an unused collection address to a block.
+        """Bind an unused collection address to a block, in one atomic step.
 
         Args:
             binding: Key binding to create.
@@ -262,8 +269,8 @@ class InMemoryBackend:
             Stored binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                address is already bound.
+            MemoryConflict: If the collection or the block does not exist, or
+                the address is already bound.
         """
 
         with self._structure_lock:
@@ -284,19 +291,20 @@ class InMemoryBackend:
         *,
         expected_block_id: str,
     ) -> KeyBinding:
-        """Atomically replace a key binding with compare-and-swap semantics.
+        """Replace a key binding in one atomic compare-and-swap step.
 
         Args:
             binding: Replacement binding. Its collection id and address select
                 the existing binding to replace.
-            expected_block_id: Block id the binding must currently point to.
+            expected_block_id: Block id that the binding points to now.
 
         Returns:
             Stored replacement binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, the address
-                is unbound, or it no longer points to `expected_block_id`.
+            MemoryConflict: If the collection or the block does not exist, the
+                address is not bound, or it no longer points to
+                `expected_block_id`.
         """
 
         with self._structure_lock:
@@ -343,11 +351,12 @@ class InMemoryBackend:
 
         Args:
             collection_id: Id of the collection to list.
-            namespace: Optional exact namespace filter. With `recursive=True`
-                it is treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below `namespace`.
-            after: Optional exclusive start address used to page through
-                results in address order.
+            namespace: Optional exact namespace filter. With `recursive=True`,
+                it is a namespace prefix.
+            recursive: If `True`, the result also includes the nested
+                namespaces below `namespace`.
+            after: Optional exclusive start address, for pages in address
+                order.
             limit: Maximum number of bindings to return.
 
         Returns:
@@ -389,15 +398,15 @@ class InMemoryBackend:
         *,
         expected_block_id: str,
     ) -> None:
-        """Atomically remove a key binding when its block id still matches.
+        """Remove a key binding in one atomic step, if its block id still matches.
 
         Args:
             collection_id: Id of the collection that owns the key space.
             address: Exact namespace and key to remove.
-            expected_block_id: Block id the binding must currently point to.
+            expected_block_id: Block id that the binding points to now.
 
         Raises:
-            MemoryConflict: If the address is unbound or it no longer points
+            MemoryConflict: If the address is not bound, or it no longer points
                 to `expected_block_id`.
         """
 
@@ -409,7 +418,7 @@ class InMemoryBackend:
             self._key_bindings.pop(slot)
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
-        """Remove bindings owned by or pointing to one deleted block.
+        """Remove the bindings that one deleted block owns, or that point to it.
 
         Args:
             block_id: Id of the deleted block. Bindings whose collection id or
@@ -422,17 +431,17 @@ class InMemoryBackend:
                     self._key_bindings.pop(slot, None)
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:
-        """Atomically append a block reference with a unique sequence number.
+        """Append a block reference with a unique sequence number, in one atomic step.
 
         Args:
             log_id: Id of the ordered log to append to.
             block_id: Id of the memory block to place at the new position.
 
         Returns:
-            Stored entry carrying the allocated sequence number.
+            Stored entry with the allocated sequence number.
 
         Raises:
-            MemoryConflict: If the log or referenced block does not exist.
+            MemoryConflict: If the log or the referenced block does not exist.
         """
 
         from genie.structures.records import LogEntry
@@ -454,10 +463,10 @@ class InMemoryBackend:
 
         Args:
             log_id: Id of the ordered log.
-            sequence: Exact position within the log.
+            sequence: Exact position in the log.
 
         Returns:
-            Stored entry, or `None` when the position holds no entry.
+            Stored entry, or `None` when the position has no entry.
 
         Raises:
             TypeError: If `sequence` is not an integer.
@@ -483,7 +492,7 @@ class InMemoryBackend:
             log_id: Id of the ordered log.
             start: Optional inclusive lower sequence bound.
             stop: Optional exclusive upper sequence bound.
-            reverse: Whether to return entries in descending sequence order.
+            reverse: If `True`, the entries come in descending sequence order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -516,11 +525,12 @@ class InMemoryBackend:
             return entries[:limit]
 
     def delete_log_entries_for_block(self, block_id: str) -> None:
-        """Remove an owned log or entries pointing to one deleted block.
+        """Remove the log that one deleted block owns, and the entries that point to it.
 
         Args:
-            block_id: Id of the deleted block. A log owned by this id is
-                dropped, along with entries pointing to it in any other log.
+            block_id: Id of the deleted block. The backend drops the log that
+                this id owns, with its sequence counter. It also drops the
+                entries that point to this id in all other logs.
         """
 
         with self._structure_lock:
@@ -534,7 +544,7 @@ class InMemoryBackend:
                     self._log_entries.pop(log_id, None)
 
     def add_temporal_entry(self, entry: TemporalEntry) -> TemporalEntry:
-        """Atomically add unique temporal membership for one block.
+        """Add unique temporal membership for one block, in one atomic step.
 
         Args:
             entry: Collection id, block id, and event time or validity period
@@ -544,8 +554,8 @@ class InMemoryBackend:
             Stored entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection already contains the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection already contains the block.
         """
 
         with self._structure_lock:
@@ -561,7 +571,7 @@ class InMemoryBackend:
             return entry
 
     def replace_temporal_entry(self, entry: TemporalEntry) -> TemporalEntry:
-        """Atomically replace temporal membership for one existing block.
+        """Replace temporal membership for one existing block, in one atomic step.
 
         Args:
             entry: Replacement entry. Its collection id and block id select
@@ -571,8 +581,8 @@ class InMemoryBackend:
             Stored replacement entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection does not contain the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection does not contain the block.
         """
 
         with self._structure_lock:
@@ -617,8 +627,8 @@ class InMemoryBackend:
 
         Args:
             collection_id: Id of the temporal collection.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -638,7 +648,7 @@ class InMemoryBackend:
             return entries[:limit]
 
     def remove_temporal_entry(self, collection_id: str, block_id: str) -> None:
-        """Atomically remove one temporal membership entry.
+        """Remove one temporal membership entry, in one atomic step.
 
         Args:
             collection_id: Id of the temporal collection.
@@ -655,7 +665,7 @@ class InMemoryBackend:
             self._temporal_entries.pop(slot)
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
-        """Remove collections owned by and entries pointing to a deleted block.
+        """Remove the collections that a deleted block owns, and the entries that point to it.
 
         Args:
             block_id: Id of the deleted block. Entries whose collection id or
@@ -679,20 +689,19 @@ class InMemoryBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one indexed-contract page matching temporal filters.
+        """Return one page of the `TemporalIndex` contract that matches the temporal filters.
 
         Args:
             collection_id: Id of the temporal collection.
-            occurred_only: Whether to keep only entries that carry an event
-                time.
+            occurred_only: If `True`, only entries with an event time stay.
             occurred_start: Optional inclusive lower bound on event time.
             occurred_stop: Optional exclusive upper bound on event time.
-            valid_at: Optional instant that an entry's validity period must
-                contain.
-            overlaps: Optional validity period an entry's own period must
-                overlap.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            valid_at: Optional instant that the validity period of an entry
+                contains.
+            overlaps: Optional validity period that the period of an entry
+                overlaps.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -751,7 +760,7 @@ class InMemoryBackend:
         block_id: str,
         container_name: str,
     ) -> None:
-        """Require a structure container and referenced block to exist."""
+        """Raise `MemoryConflict` if a structure container or the referenced block does not exist."""
 
         if container_id not in self._blocks:
             raise MemoryConflict(f"{container_name} block {container_id!r} does not exist.")
@@ -768,8 +777,8 @@ class InMemoryBackend:
             Defensive copy of the stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists or either endpoint
-                does not exist.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, or an earlier `add_acyclic_link` protects the relation.
         """
 
         with self._structure_lock:
@@ -779,23 +788,24 @@ class InMemoryBackend:
             return self._store_new_link(link)
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Atomically add a link when its relation remains acyclic.
+        """Add a link in one atomic step, if its relation stays acyclic.
 
-        Existing links with the same relation are adopted on the first call
-        only when they already form a DAG. The relation is then protected from
-        ordinary link insertion.
+        - **Adoption:** on the first call, the backend adopts the current links
+          with the same relation only when they already form a DAG.
+        - **Protection:** after that, ordinary link inserts cannot use the
+          relation. The protection stays for the life of the backend.
 
         Args:
-            link: Link to store. Its relation identifies the protected graph
-                the cycle check applies to.
+            link: Link to store. Its relation identifies the protected graph of
+                the cycle check.
 
         Returns:
             Defensive copy of the stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, the relation already contains a cycle, or the new
-                link would create one.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, the relation already contains a cycle, or the new link
+                makes one.
         """
 
         with self._structure_lock:
@@ -812,7 +822,7 @@ class InMemoryBackend:
             return self._store_new_link(link)
 
     def _validate_new_link(self, link: MemoryLink) -> None:
-        """Validate identity and endpoints before storing a link."""
+        """Check the link id and the endpoints before the backend stores a link."""
 
         if link.id in self._links:
             raise MemoryConflict(f"Memory link {link.id!r} already exists.")
@@ -822,7 +832,7 @@ class InMemoryBackend:
             raise MemoryConflict(f"Target memory block {link.target_id!r} does not exist.")
 
     def _store_new_link(self, link: MemoryLink) -> MemoryLink:
-        """Store a validated link while the structure lock is held."""
+        """Store a checked link while this method holds the structure lock."""
 
         stored = _copy_link(link)
         self._links[stored.id] = stored
@@ -877,13 +887,13 @@ class InMemoryBackend:
         """Replace the metadata of an existing typed link.
 
         Args:
-            link: Link containing the replacement metadata.
+            link: Link with the replacement metadata.
 
         Returns:
             Defensive copy of the stored replacement link.
 
         Raises:
-            MemoryConflict: If the link is missing or any field other than
+            MemoryConflict: If the link does not exist, or a field other than
                 metadata changed.
         """
 
@@ -907,7 +917,7 @@ class InMemoryBackend:
         """List links connected to a block.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
@@ -915,7 +925,7 @@ class InMemoryBackend:
             Defensive copies of matching links.
 
         Raises:
-            ValueError: If `direction` is invalid.
+            ValueError: If `direction` is not valid.
         """
 
         if direction not in {"out", "in", "both"}:
@@ -937,7 +947,7 @@ class InMemoryBackend:
         """Delete incoming and outgoing links for a block.
 
         Args:
-            block_id: Block id whose connected links should be removed.
+            block_id: Block id whose connected links to remove.
         """
 
         with self._structure_lock:
@@ -946,7 +956,7 @@ class InMemoryBackend:
                     self._links.pop(link_id, None)
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search blocks using portable text and metadata matching.
+        """Search blocks with portable text and metadata matching.
 
         Args:
             query: Normalized memory query.
@@ -977,7 +987,7 @@ class InMemoryBackend:
             return results[: query.limit]
 
     def _scope_candidates(self, query: MemoryQuery) -> list[MemoryBlock]:
-        """Return candidate blocks before text/type/filter matching."""
+        """Return the candidate blocks before the text, type, and filter matching."""
 
         if query.scope == Scope.GLOBAL or query.root_id is None:
             return list(self._blocks.values())
@@ -1001,7 +1011,7 @@ class InMemoryBackend:
         return list(self._blocks.values())
 
     def _move_parent(self, previous: MemoryBlock, updated: MemoryBlock) -> None:
-        """Update parent indexes while rejecting invalid parent changes."""
+        """Update the parent indexes, and reject a parent change that is not valid."""
 
         if updated.parent_id is not None and updated.parent_id not in self._blocks:
             raise MemoryConflict(f"Parent memory block {updated.parent_id!r} does not exist.")
@@ -1016,7 +1026,7 @@ class InMemoryBackend:
 
 
 def _copy_block(block: MemoryBlock) -> MemoryBlock:
-    """Return a block copy with isolated mutable payloads."""
+    """Return a block copy whose mutable payloads are separate copies."""
 
     return block.with_updates(
         value=deepcopy(block.value),
@@ -1025,7 +1035,7 @@ def _copy_block(block: MemoryBlock) -> MemoryBlock:
 
 
 def _copy_link(link: MemoryLink) -> MemoryLink:
-    """Return a link copy with isolated mutable metadata."""
+    """Return a link copy whose mutable metadata is a separate copy."""
 
     return MemoryLink(
         id=link.id,
@@ -1048,7 +1058,7 @@ def _validate_expected_version(
     replacement: MemoryBlock,
     expected_version: int | None,
 ) -> None:
-    """Validate one optional compare-and-swap block replacement."""
+    """Check one optional compare-and-swap block replacement."""
 
     if expected_version is None:
         return
@@ -1073,7 +1083,7 @@ def _namespace_matches(
     *,
     recursive: bool,
 ) -> bool:
-    """Return whether a namespace satisfies an exact or prefix selection."""
+    """Return whether a namespace matches an exact selection or a prefix selection."""
 
     if selected is None:
         return True
@@ -1083,7 +1093,7 @@ def _namespace_matches(
 
 
 def _validate_sequence(value: object, *, name: str) -> None:
-    """Require a non-negative integer sequence value."""
+    """Raise an error if a sequence value is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -1092,7 +1102,7 @@ def _validate_sequence(value: object, *, name: str) -> None:
 
 
 def _validate_limit(value: object) -> None:
-    """Require a non-negative integer page limit."""
+    """Raise an error if a page limit is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("limit must be an integer.")
@@ -1109,7 +1119,7 @@ def _temporal_matches(
     valid_at: datetime | None,
     overlaps: ValidityInterval | None,
 ) -> bool:
-    """Return whether an entry satisfies all temporal index filters."""
+    """Return whether an entry matches all temporal index filters."""
 
     occurred_at = entry.occurred_at
     if occurred_only and occurred_at is None:
@@ -1135,7 +1145,7 @@ def _temporal_matches(
 
 
 def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
-    """Validate and normalize an optional aware datetime to UTC."""
+    """Check an optional timezone-aware datetime, and return it in UTC."""
 
     if value is None:
         return None

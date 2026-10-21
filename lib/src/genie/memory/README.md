@@ -1,12 +1,12 @@
 # Memory
 
-`genie.memory` defines Genie's data model and its public access objects. The
-model does not depend on any storage engine. Your application decides what the
-stored values mean.
+`genie.memory` defines the data model of Genie and its public access objects.
+The model does not depend on a storage engine. Your application decides what
+the stored values mean.
 
 ## Blocks, ownership, and links
 
-**`MemoryBlock`** is the smallest value you can address on its own. Fields:
+**`MemoryBlock`** is the smallest value that you can address on its own. Fields:
 stable `id`, application-defined `type` and `value`, optional `parent_id`,
 `metadata`, `content_type`, `policy`, the creator in `created_by`, the
 `created_at` and `updated_at` timestamps, and a `version`.
@@ -19,8 +19,8 @@ note = memory.put(
 )
 ```
 
-- **Make a value its own block** when it needs its own identity, policy, provenance (a record of where it came from), lifecycle, search behavior, or relationships.
-- **Parent/child means ownership.** A child has exactly one parent, and the tree controls subtree scope, traversal, and recursive deletion.
+- **A value gets its own block** when it needs its own identity, policy, provenance (a record of where it came from), lifecycle, search behavior, or relationships.
+- **Parent and child means ownership.** A child has exactly one parent. The tree controls subtree scope, traversal, and recursive delete.
 - **`MemoryLink` means relationship.** It is directed and typed, and it does not imply ownership.
 
 ```python
@@ -28,17 +28,17 @@ edge = memory.add_link(requirement, proposal, "supports")
 edge = memory.update_link(edge, metadata={"confidence": 0.9})
 ```
 
-- **`update_link` merges metadata** and keeps the id, endpoints, relation, and creation time.
-- **Pick by intent:** ownership for containment and lifecycle; links for references, provenance, and relationships that cut across the tree.
-- **Relation names are shared across the whole backend.** One name means the same relation for every block, tenant, and handle. Add your own prefix, such as `"billing.derived_from"`, when two parts of an application could pick the same name.
+- **`update_link` merges metadata.** It keeps the id, endpoints, relation, and creation time.
+- **Choice by intent:** ownership for containment and lifecycle. Links for references, provenance, and relationships across the tree.
+- **The whole backend shares relation names.** One name means the same relation for all blocks, tenants, and handles. A prefix of your own, such as `"billing.derived_from"`, keeps the names apart when 2 parts of an application can choose the same name.
 
 ## Trusted and restricted access
 
-**`Memory`** is the trusted interface. Keep it inside trusted application code.
+**`Memory`** is the trusted interface. It belongs inside trusted application code.
 
-- **Holds:** one backend, `Principal`, `PolicyEngine`, `default_policy`, `CodecRegistry`, `HookRegistry`, and the `attributes` it reports to hooks.
+- **Holds:** one backend, `Principal`, `PolicyEngine`, `default_policy`, `CodecRegistry`, `HookRegistry`, and the `attributes` that it reports to hooks.
 - **Offers:** block CRUD, traversal, links, mounts, search, access checks, and handle creation.
-- **`hooks` is read-only.** You change which hooks run by editing that registry, not by replacing it, so nobody can detach a mandatory hook. See [hooks](../hooks/README.md#the-registry).
+- **`hooks` is read-only.** To change which hooks run, you edit that registry. You cannot replace it, so nobody can detach a mandatory hook. See [hooks](../hooks/README.md#the-registry).
 
 ```python
 from genie import InMemoryBackend, Memory
@@ -55,45 +55,46 @@ planner = memory.get_handle(root=root, principal="agent:planner")
 task_agent = planner.get_handle(root=task)
 ```
 
-- **Bounded handle:** has a `root`, and reaches that root and the blocks below it, and nothing else.
+- **Bounded handle:** has a `root`. By default, it reaches only that root and the blocks below it. `allow_up` adds ancestors, `allow_global` adds global search, and `allow_mounts` adds mounts.
 - **Unbounded handle:** has no `root`. Only `Memory.get_unbounded_handle(...)` creates one.
-- **A child handle narrows only.** It cannot change its principal, move its root outside the parent, turn on access that the parent turned off, or skip policies.
-- **Scope and policy are checked separately.** A block must be inside the handle's allowed scope, and the block's `MemoryPolicy` must also allow the operation.
-- **Every handle has its own `id`,** and reports its root and its enabled capabilities to hooks through `attributes`. So when several handles share one principal, an audit trail still shows which sandbox did the work. See [hooks](../hooks/README.md#scopes-and-attributes).
+- **A child handle can only narrow access.** It cannot change its principal, move its root outside the parent, turn on access that the parent turned off, or skip policies.
+- **Scope and policy are separate checks.** A block is inside the allowed scope of the handle, and the `MemoryPolicy` of the block also allows the operation. Both checks run.
+- **Each handle has its own `id`.** It reports its root and its enabled capabilities to hooks through `attributes`. So when several handles share one principal, an audit trail still shows which sandbox did the work. See [hooks](../hooks/README.md#scopes-and-attributes).
 
 ## Mounts
 
-A `genie.mount` link points at another root without making it a child:
+A `genie.mount` link points at another root, and the root does not become a
+child:
 
 ```python
 mount = memory.add_mount(local_root, remote_root)
 target = memory.resolve_mount(mount)
 ```
 
-- **Not followed** by subtree traversal, search, or deletion.
-- **Discovery** finds mount links but does not enter their targets.
+- **Not followed** by subtree traversal, subtree search, or delete.
+- **`links` search:** a `links` search counts a mount as a link. So it finds the mount target itself, but not the blocks below the target.
+- **Discovery** finds mount links, but it does not go into their targets.
 - **Handle access** needs `allow_mounts=True`.
 
 ## Safety rules
 
-- **Default policy** is `MemoryPolicy.owner_private()`, so only the creator can `read`, `write`, `search`, `traverse_up`, and `traverse_down` a new block.
-- **Recursive deletion** needs `write` on the target block only.
-- **Changing a block in place** with `set` or `update` needs `read` and `write`, because both return the stored block. `update_link` needs `read` on the source for the same reason.
+- **Default policy** is `MemoryPolicy.owner_private()`. So only the creator can `read`, `write`, `search`, `traverse_up`, and `traverse_down` a new block.
+- **Recursive delete** needs `write` on the target block only.
+- **A change of a block in place** with `set` or `update` needs `read` and `write`, because both return the stored block. `update_link` needs `read` on the source for the same reason.
 - **Structure membership** changes need `write` on the container block. Facades check it with `require_access`, which runs one policy check and changes nothing.
-- **Stale writes fail.** A block update fails on a stale `version`, and a deletion fails if the subtree changed. Both raise `MemoryConflict`.
-- **Links hide** when an endpoint does not allow `read`.
+- **Stale writes fail.** A block update fails on a stale `version`, and a delete fails if the subtree changed. Both raise `MemoryConflict`.
+- **Links are hidden** when an endpoint does not allow `read`.
 - **A bounded handle** rejects references outside its scope.
-- **Choosing a policy** from a handle needs `allow_policy_override=True`.
-- **Ids, block types, and relations** must be non-empty strings. A wrong type raises `TypeError` and an empty string raises `ValueError`. A bad value never reaches the backend.
-- **Metadata** on blocks and links must be strict JSON dictionaries.
+- **A policy choice** from a handle needs `allow_policy_override=True`.
+- **Ids, block types, and relations** are non-empty strings. A wrong type raises `TypeError`, and an empty string or a string with only whitespace raises `ValueError`. A bad value never gets to the backend.
+- **Metadata** on blocks and links is a strict JSON dictionary. Other metadata raises `TypeError`.
 - **JSON values and metadata nest at most `MAX_NESTING_DEPTH` (100) levels.** Deeper data raises `ValueError` before the backend runs.
-- **Returned JSON values and metadata are defensive copies.** You get a copy, so changing what you received does not change what is stored.
+- **Returned JSON values and metadata are defensive copies.** You get a copy, so a change to what you got does not change what is stored.
 - **Hooks cannot widen** a parent or search scope that was already authorized.
-- **Nested hook operations** are allowed. Callbacks that are already running are skipped on reentry, and nesting has a limit.
+- **Nested hook operations** are allowed. The registry skips a callback that is already active when it starts again, and the depth of nested operations has a limit.
 
-Genie gives you access-control building blocks, not a Python sandbox. Give
-untrusted agents bounded tools or facades. Never give them raw backends or
-registries.
+Genie gives you parts for access control, not a Python sandbox. Untrusted
+agents get bounded tools or facades. They never get raw backends or registries.
 
 Related: [Structures](../structures/README.md), [Queries](../query/README.md),
 [Policies](../policy/README.md), [Backends](../backend/README.md),

@@ -1,4 +1,4 @@
-"""Backend protocols and reference implementations."""
+"""Backend protocols and the shipped backend implementations."""
 
 from genie.backend.base import BlockRouter, MemoryBackend
 from genie.backend.capabilities import BlockStore, LinkStore, SearchIndex, TraversalIndex

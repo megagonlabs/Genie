@@ -1,38 +1,45 @@
-"""Persistent Redis backend implementing every Genie storage capability.
+"""Persistent Redis backend that implements all Genie storage capabilities.
 
 Storage layout:
-    Redis is a key-value store with server-side data structures. This adapter
-    keeps one JSON document per block and per link in a plain Redis string, and
-    keeps its own ordering, ownership, and reverse indexes in sorted sets,
-    hashes, and sets. No Redis module such as RedisJSON is required.
+    - **Documents:** Redis is a key-value store with data structures on the
+      server. This adapter keeps one JSON document for each block and for each
+      link in a plain Redis string.
+    - **Indexes:** it keeps its own order, ownership, and reverse indexes in
+      sorted sets, hashes, and sets.
+    - **No modules:** it needs no Redis module, such as RedisJSON.
 
 Writes:
-    Every write runs as one optimistic read-modify-write attempt. The read
-    phase records the value of a shared mutation guard. The commit phase
-    re-checks that guard under `WATCH` before it applies the staged writes in
-    one `MULTI`/`EXEC` block. Every commit replaces the guard with a fresh
-    token, so an attempt that read an older value is retried instead of
-    committing on stale reads. This gives the same serialized-writer behavior
-    as `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, and
-    `MongoDBBackend`, and it makes compound checks and writes atomic across
-    backend instances.
+    - **One attempt:** each write runs as one optimistic read-modify-write
+      attempt.
+    - **Read phase:** it records the value of a shared mutation guard.
+    - **Commit phase:** it checks that guard again under `WATCH`, then it
+      applies the staged writes in one `MULTI`/`EXEC` block.
+    - **New token:** each commit replaces the guard with a new token. So the
+      backend retries an attempt that read an older value, and that attempt
+      does not commit on stale reads.
+    - **Result:** this gives the same serialized-writer behavior as
+      `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, and `MongoDBBackend`.
+      Compound checks and writes are atomic across backend instances.
 
 Reads:
-    Multi-command reads need the opposite guarantee: one consistent view. Redis
-    has no multi-key snapshot, so commands sent one after another can straddle
-    a write. A read scoped to one block - its parent chain, its children, its
-    subtree, or one `limit` page of a collection - therefore runs as one
-    read-only Lua script through `EVAL_RO`. Redis runs a script from start to
-    finish before it serves another client, so those reads never see half of a
-    write and never retry. Reads that scan the dataset stay on the client side
-    and keep the mutation-guard retry, because a long script would block every
-    other client on a single-threaded server.
+    - **One consistent view:** a read with several commands needs one
+      consistent view. Redis has no multi-key snapshot, so commands that run
+      one after another can straddle a write.
+    - **Scripted reads:** so a read scoped to one block (its parent chain, its
+      children, its subtree, or one `limit` page of a collection) runs as one
+      read-only Lua script through `EVAL_RO`, when the server supports it.
+      Redis runs a script from start to finish before it serves another client.
+      So those reads never see half of a write, and they never retry.
+    - **Scans:** reads that scan the dataset stay on the client side and keep
+      the mutation-guard retry. A long script would block all other clients on
+      a single-threaded server.
 
 Search:
-    Search follows the same split. A search narrowed to one block, to its
-    subtree, or to its parent chain reads through the block-scoped path. A
-    global search, and a search over the links of one block, keep the mutation
-    guard, because neither has a bound on how much it reads.
+    - **Same split:** a search narrowed to one block, to its subtree, or to its
+      parent chain uses the block-scoped path.
+    - **Guarded searches:** a global search and a search over the links of one
+      block keep the mutation guard, because neither has a limit on how much it
+      reads.
 """
 
 from __future__ import annotations
@@ -87,17 +94,17 @@ _READ_CHUNK = 1000
 _TEMPORAL_SCAN_PAGE = 500
 _FIRST_BACKOFF_SECONDS = 0.001
 _MAX_BACKOFF_SECONDS = 0.05
-# Error codes a server sends only in cluster mode. `RedisBackend` opens a
-# standalone client, so any of them means the URL points at a Redis Cluster,
-# which this adapter does not support.
+# Error codes that a server sends only in cluster mode. `RedisBackend` opens a
+# standalone client. So each of them means that the URL points at a Redis
+# Cluster, which this adapter does not support.
 _CLUSTER_REPLY_CODES = frozenset({"ASK", "CROSSSLOT", "MOVED"})
 
 # Read-only Lua script behind `contains`.
-# - `KEYS[1]` is declared so the call names a key it reads.
-# - Every key is built from the prefix in `ARGV[1]`, so that layout must stay in
-#   step with `RedisBackend._block_key`.
-# - `ARGV[2]` is the subtree root id, `ARGV[3]` the candidate block id.
-# - The walk mirrors `RedisBackend._contains`, including its guard against a
+# - `KEYS[1]` is declared, so that the call names a key that it reads.
+# - The script builds each key from the prefix in `ARGV[1]`. Keep that layout
+#   the same as `RedisBackend._block_key`.
+# - `ARGV[2]` is the subtree root id, and `ARGV[3]` is the candidate block id.
+# - The walk is the same as `RedisBackend._contains`, also its guard against a
 #   cycle in stored parent ids.
 _CONTAINS_SCRIPT = """
 local prefix = ARGV[1]
@@ -132,15 +139,14 @@ while true do
 end
 """
 
-# Read-only Lua script behind `ancestors` and behind an `ANCESTORS` scoped
-# search.
-# - `ARGV[1]` is the key prefix, `ARGV[2]` the block to start from.
-# - The reply is the stored document of that block followed by the document of
-#   each ancestor, nearest parent first. It is empty when the starting block is
-#   gone.
-# - One script serves both reads: `ancestors` drops the first document and the
+# Read-only Lua script behind `ancestors` and behind a search with the
+# `ANCESTORS` scope.
+# - `ARGV[1]` is the key prefix, and `ARGV[2]` is the start block.
+# - The reply is the stored document of that block, then the document of each
+#   ancestor, nearest parent first. It is empty when the start block is gone.
+# - One script serves both reads: `ancestors` drops the first document, and the
 #   scoped search keeps it.
-# - The walk mirrors `RedisBackend._ancestor_documents`, including its guard
+# - The walk is the same as `RedisBackend._ancestor_documents`, also its guard
 #   against a cycle in stored parent ids and its stop at a parent id that no
 #   longer resolves.
 _ANCESTORS_SCRIPT = """
@@ -170,11 +176,11 @@ return documents
 """
 
 # Read-only Lua script behind `children`.
-# - `ARGV[1]` is the key prefix, `ARGV[2]` the parent block.
+# - `ARGV[1]` is the key prefix, and `ARGV[2]` is the parent block.
 # - The reply is the stored document of each direct child, in the creation order
-#   the child sorted set keeps.
-# - A child id whose document is gone is skipped instead of returned as a hole,
-#   like `RedisBackend._block_documents`.
+#   that the child sorted set keeps.
+# - The script skips a child id whose document is gone, and it does not return a
+#   hole. `RedisBackend._block_documents` does the same.
 _CHILDREN_SCRIPT = """
 local prefix = ARGV[1]
 local block_id = ARGV[2]
@@ -190,21 +196,21 @@ return documents
 """
 
 # Read-only Lua script behind `list_links`.
-# - `ARGV[1]` is the key prefix, `ARGV[2]` the block to inspect, and `ARGV[3]` is
-#   `"out"`, `"in"`, or `"both"`.
+# - `ARGV[1]` is the key prefix, `ARGV[2]` is the block to examine, and `ARGV[3]`
+#   is `"out"`, `"in"`, or `"both"`.
 # - `ARGV[4]` is `"1"` when the relation filter applies and `"0"` when it does
-#   not, and `ARGV[5]` carries that relation. The filter needs its own flag
-#   because an empty string is a valid relation.
+#   not, and `ARGV[5]` holds that relation. The filter has its own flag, so the
+#   script uses no special relation value to mean "no filter".
 # - An endpoint sorted set stores the member that `_identity(link_id, source_id,
-#   target_id, relation)` builds, so the script reads the relation from the
-#   member and fetches only the documents it will return.
-# - The reply is the stored document of each matching link in creation order.
-# - For `"both"` the script merges the two endpoint sets on the member, then
-#   orders them by the stored `storage_order` score, which is what
+#   target_id, relation)` builds. So the script reads the relation from the
+#   member, and it gets only the documents that it returns.
+# - The reply is the stored document of each matching link, in creation order.
+# - For `"both"`, the script merges the 2 endpoint sets on the member. Then it
+#   orders them by the stored `storage_order` score, as
 #   `RedisBackend._connected_link_members` does on the client. That score is a
-#   strictly increasing counter, so two different links never tie.
-# - A link whose document is gone is skipped, matching
-#   `RedisBackend._link_documents`.
+#   strictly increasing counter, so 2 different links never tie.
+# - The script skips a link whose document is gone, as
+#   `RedisBackend._link_documents` does.
 _LIST_LINKS_SCRIPT = """
 local prefix = ARGV[1]
 local block_id = ARGV[2]
@@ -248,18 +254,19 @@ return documents
 
 # Read-only Lua script behind `list_temporal_entries` and behind the first page
 # of `query_temporal_entries`.
-# - `ARGV[1]` is the key prefix, `ARGV[2]` the collection, `ARGV[3]` the lex
-#   range start that `_temporal_lex_start` built, and `ARGV[4]` the page limit.
-# - The reply has two parts: how many block ids the page scanned, and a flat
-#   list of block id and stored payload, one pair per entry, so the caller can
+# - `ARGV[1]` is the key prefix, `ARGV[2]` is the collection, `ARGV[3]` is the
+#   lex range start that `_temporal_lex_start` built, and `ARGV[4]` is the page
+#   limit.
+# - The reply has 2 parts: how many block ids the page scanned, and a flat list
+#   of block id and stored payload, one pair for each entry. So the caller can
 #   rebuild entries that carry their own block id.
-# - An id whose payload is gone is skipped, matching
-#   `RedisBackend._temporal_entries`. That is why the scanned count is reported
-#   on its own: it is the only value that tells the caller whether the page
-#   reached the end of the collection.
-# - The page is read one field at a time instead of with `HMGET`, because
-#   `limit` comes from the caller and `unpack` on a very large page would
-#   overflow the Lua stack.
+# - The script skips an id whose payload is gone, as
+#   `RedisBackend._temporal_entries` does. That is why the reply has the scanned
+#   count on its own: it is the only value that tells the caller whether the
+#   page got to the end of the collection.
+# - The script reads the page one field at a time, not with `HMGET`. `limit`
+#   comes from the caller, and `unpack` on a very large page would overflow the
+#   Lua stack.
 _LIST_TEMPORAL_ENTRIES_SCRIPT = """
 local prefix = ARGV[1]
 local collection_id = ARGV[2]
@@ -278,18 +285,18 @@ return {#block_ids, entries}
 """
 
 # Read-only Lua script behind `descendants`.
-# - `ARGV[1]` is the key prefix, `ARGV[2]` the subtree root.
-# - The reply has two flat lists: the parent and child of every ownership edge
-#   the walk followed, and the id and stored document of every block it could
-#   read. The caller turns the edges back into depth-first creation order, so
-#   that ordering lives only in `_depth_first_ids`.
-# - The walk mirrors `RedisBackend._descendant_documents`. Child ids come from
-#   the child sorted sets, which stay the authority on child order.
-# - A child whose document is gone is still followed, so a hole in the middle of
-#   a subtree does not hide the blocks below it. A visited set stops a cycle in
-#   stored parent ids.
-# - This is the one scripted read whose work follows the size of the subtree
-#   rather than one block, so it is also the one that can hold the server for a
+# - `ARGV[1]` is the key prefix, and `ARGV[2]` is the subtree root.
+# - The reply has 2 flat lists: the parent and child of each ownership edge that
+#   the walk followed, and the id and stored document of each block that it
+#   could read. The caller turns the edges back into depth-first creation
+#   order, so that order rule is only in `_depth_first_ids`.
+# - The walk is the same as `RedisBackend._descendant_documents`. Child ids come
+#   from the child sorted sets, which stay the authority on child order.
+# - The walk still follows a child whose document is gone, so a hole in the
+#   middle of a subtree does not hide the blocks below it. A visited set stops a
+#   cycle in stored parent ids.
+# - This is the one scripted read whose work follows the size of the subtree,
+#   not of one block. So it is also the one that can hold the server for a
 #   noticeable time.
 _DESCENDANTS_SCRIPT = """
 local prefix = ARGV[1]
@@ -328,14 +335,14 @@ end
 return {edges, documents}
 """
 
-# Read-only Lua scripts by name, with the digest each call sends first. Three
-# rules apply to every script added here.
-# - Build key names exactly like the matching `_*_key` helper.
+# Read-only Lua scripts by name, with the digest that each call sends first.
+# 3 rules apply to each script here:
+# - Build key names exactly as the matching `_*_key` helper does.
 # - Read only keys that start with the prefix in `ARGV[1]`, so one script never
-#   reaches outside the Genie key namespace.
-# - Never put a `nil` or a `false` inside a table you return. The reply
-#   conversion stops the list at the first one, which would silently drop the
-#   rest of a page.
+#   gets outside the Genie key namespace.
+# - Never put a `nil` or a `false` inside a table that you return. The reply
+#   conversion stops the list at the first `nil`, which silently drops the rest
+#   of a page, and it turns a `false` into a null reply.
 _LUA_SCRIPTS: dict[str, str] = {
     "ancestors": _ANCESTORS_SCRIPT,
     "children": _CHILDREN_SCRIPT,
@@ -348,76 +355,80 @@ _LUA_DIGESTS: dict[str, str] = {name: hashlib.sha1(body.encode("utf-8")).hexdige
 
 
 class RedisBackend:
-    """Persistent backend backed by the official `redis` Python client.
+    """Persistent backend on the official `redis` Python client.
 
-    The `redis` package is an optional dependency. Install it with
-    `pip install 'genie[redis]'` before constructing this backend.
+    - **Optional dependency:** the `redis` package is optional.
+      `pip install 'genie[redis]'` installs it. Without it, construction raises
+      `UnsupportedOperation`.
 
     Capabilities:
-        - Implements the required `MemoryBackend` behavior and every optional
-          structure capability.
-        - Owns the client it creates, so it can require decoded string replies.
-          `close()` releases that client after active operations finish.
+        - Implements the required `MemoryBackend` behavior and all optional
+          structure capabilities.
+        - Owns the client that it creates, so it can require decoded string
+          replies. `close()` releases that client after the active operations
+          finish.
 
     Reads:
-        - A read scoped to one block - its parent chain, its children, its
-          subtree, or one `limit` page of a collection - runs as one read-only
-          Lua script when the server supports `EVAL_RO`, so a write that lands
+        - A read scoped to one block (its parent chain, its children, its
+          subtree, or one `limit` page of a collection) runs as one read-only
+          Lua script when the server supports `EVAL_RO`. So a write that lands
           beside it cannot tear its view.
         - A server without that support, and a deployment that blocks
           scripting, fall back to the mutation-guard retry.
 
     Key namespace:
-        - Every Genie key starts with `key_prefix`, so several Genie datasets
-          can share one Redis database.
-        - Write through the backend. Writing to these keys directly can skip
-          the reference, temporal, and cycle checks, and it does not touch the
-          mutation guard that protects concurrent Genie writes.
+        - Each Genie key starts with `key_prefix`, so several Genie datasets can
+          share one Redis database.
+        - Only the backend writes these keys safely. A direct write to these
+          keys can skip the reference, temporal, and cycle checks, and it does
+          not touch the mutation guard that protects concurrent Genie writes.
 
     Server requirements:
-        - No eviction. Genie keys carry no expiry, so construction refuses a
+        - **No eviction:** Genie keys have no expiry. So construction refuses a
           server that has a memory limit together with an `allkeys-*` value for
-          `maxmemory-policy`. Redis evicts one key at a time while one block
-          spans a stored document plus several index entries. Use `noeviction`,
-          or pass `verify_eviction_policy=False` to accept the risk.
-        - Point `url` at the primary. Construction refuses a connection that
-          lands on a replica, because a replica refuses every write and its
-          reads can lag the primary by any amount with no signal. A primary
-          that has replicas passes. Pass `verify_server_role=False` to open a
-          backend against a replica on purpose.
-        - Redis Cluster is not a supported target. The backend opens a
-          standalone client, which does not follow the `MOVED` and `ASK`
-          replies a cluster node sends for a key it does not hold. A cluster
-          reply is reported as `UnsupportedOperation`, because retrying it
-          cannot help.
+          `maxmemory-policy`. Redis evicts one key at a time, while one block
+          spans a stored document plus several index entries. `noeviction` is
+          safe, and `verify_eviction_policy=False` accepts the risk.
+        - **Primary only:** construction refuses a connection that lands on a
+          replica, because a replica refuses all writes, and its reads can lag
+          the primary by any amount with no signal. A primary that has replicas
+          passes. `verify_server_role=False` opens a backend against a replica
+          on purpose.
+        - **No Redis Cluster:** Redis Cluster is not a supported target. The
+          backend opens a standalone client, which does not follow the `MOVED`
+          and `ASK` replies that a cluster node sends for a key that it does
+          not hold. A cluster reply is reported as `UnsupportedOperation`,
+          because a retry cannot help.
 
     Connection health:
-        - Connections are pooled, so one can go stale while it sits idle: a
-          server idle timeout, a load balancer, a restart, or a failover closes
-          it without telling the client.
-        - `health_check_interval` makes the client check an idle connection
-          with a `PING` before it reuses it. `transport_retries` lets a dropped
-          connection reconnect instead of reaching the caller as
-          `BackendUnavailable`. Both are separate from `max_retry_time`, which
-          covers optimistic conflicts only.
-        - A retry never sends the same write command twice. Every Genie write
-          runs inside `WATCH`/`MULTI`/`EXEC`, where the client reports a
-          dropped connection as a watch conflict, and the backend answers that
-          with a fresh attempt that re-reads current state.
-        - A connection that dies after `EXEC` ran but before its reply arrived
-          leaves that outcome unknown, so the fresh attempt can repeat an
-          operation with nothing to compare against, such as
-          `append_log_entry`.
+        - **Stale connections:** the client keeps a pool of connections, so one
+          can go stale while it is idle. A server idle timeout, a load
+          balancer, a restart, or a failover closes it with no signal to the
+          client.
+        - **Two settings:** `health_check_interval` makes the client check an
+          idle connection with a `PING` before it uses it again.
+          `transport_retries` lets a dropped connection reconnect, so the drop
+          does not get to the caller as `BackendUnavailable`. Both are separate
+          from `max_retry_time`, which covers only optimistic conflicts.
+        - **No repeated write command:** a retry never sends the same write
+          command twice. Each Genie write runs inside `WATCH`/`MULTI`/`EXEC`.
+          There, the client reports a dropped connection as a watch conflict,
+          and the backend answers with a new attempt that reads the current
+          state again.
+        - **Unknown outcome:** if a connection closes after `EXEC` ran but
+          before its reply came back, the outcome is unknown. So the new
+          attempt can repeat an operation that has nothing to compare against,
+          such as `append_log_entry`.
 
     Attributes:
-        url: Redis URL this backend connected to.
-        key_prefix: Key namespace that holds every Genie key.
-        connect_timeout: Seconds allowed while establishing a connection.
-        socket_timeout: Seconds allowed while waiting for one command reply.
-        max_retry_time: Maximum seconds spent retrying an attempt that lost an
-            optimistic conflict before `BackendBusy` is raised.
-        health_check_interval: Seconds a pooled connection may sit idle before
-            the client checks it with a `PING`.
+        url: Redis URL of this backend.
+        key_prefix: Key namespace that holds all Genie keys.
+        connect_timeout: Seconds allowed to open a connection.
+        socket_timeout: Seconds allowed to wait for one command reply.
+        max_retry_time: Maximum seconds of retries for an attempt that lost an
+            optimistic conflict, before the backend raises `BackendBusy`.
+        health_check_interval: Seconds that a pooled connection can be idle
+            before the client checks it with a `PING`.
         transport_retries: Number of retries allowed after the connection to
             Redis drops.
     """
@@ -438,55 +449,61 @@ class RedisBackend:
         verify_eviction_policy: bool = True,
         initialize_schema: bool = True,
     ) -> None:
-        """Open a client and initialize or validate the Genie key namespace.
+        """Open a client, and initialize or validate the Genie key namespace.
 
         Args:
-            url: Redis URL, such as `"redis://localhost:6379/0"`. Use the
-                `rediss://` scheme for TLS.
-            auth: Optional `(username, password)` pair that overrides any
-                credentials in `url`.
-            key_prefix: Key namespace that holds every Genie key. Several
-                Genie datasets can share one Redis database by using a
-                different prefix for each one.
-            connect_timeout: Seconds allowed while establishing a connection.
-                `0` disables the timeout.
-            socket_timeout: Seconds allowed while waiting for one command
-                reply. `0` disables the timeout.
-            max_retry_time: Maximum seconds spent retrying an attempt that
-                lost an optimistic conflict before `BackendBusy` is raised.
-            health_check_interval: Seconds a pooled connection may sit idle
-                before the client checks it with a `PING` and reconnects when
-                the check fails. `0` disables the check.
+            url: Redis URL, such as `"redis://localhost:6379/0"`. The
+                `rediss://` scheme gives TLS.
+            auth: Optional `(username, password)` pair. It applies when `url`
+                has no credentials. The `redis` client gives credentials in
+                `url` priority over this pair.
+            key_prefix: Key namespace that holds all Genie keys. Several Genie
+                datasets can share one Redis database, with a different prefix
+                for each one.
+            connect_timeout: Seconds allowed to open a connection. `0` turns
+                off the timeout.
+            socket_timeout: Seconds allowed to wait for one command reply. `0`
+                turns off the timeout.
+            max_retry_time: Maximum seconds of retries for an attempt that lost
+                an optimistic conflict, before the backend raises
+                `BackendBusy`.
+            health_check_interval: Seconds that a pooled connection can be idle
+                before the client checks it with a `PING`. If the check fails,
+                the client reconnects. `0` turns off the check.
             transport_retries: Number of retries allowed after the connection
-                to Redis drops. `0` disables transport retry, so a dropped
-                connection reaches the caller as `BackendUnavailable`. A
-                command that timed out is not retried, because the server may
-                still be running it. Opening a connection is retried, so a
-                server that answers nothing can hold a call for
-                `connect_timeout` times `transport_retries` plus one.
+                to Redis drops. `0` turns off transport retry, so a dropped
+                connection gets to the caller as `BackendUnavailable`. A
+                command that timed out is not retried, because the server can
+                still run it. The client retries a connection open. So a server
+                that answers nothing can hold a call for `connect_timeout`
+                times `transport_retries` plus one.
             verify_connectivity: Whether to ping the server during
                 construction.
             verify_server_role: Whether to refuse a connection that lands on a
-                replica. The check reads `INFO replication` and fails only when
-                the server reports a replica role, so a primary that has
-                replicas passes. Set this to `False` to open a backend against
-                a replica, which refuses every write and can serve stale reads.
-            verify_eviction_policy: Whether to refuse a server that may evict
-                Genie keys. The check reads `INFO memory` and fails only when
-                the server reports a memory limit together with an `allkeys-*`
-                eviction policy. Set this to `False` to accept the risk of
-                losing keys.
-            initialize_schema: Whether to create the missing Genie schema
-                record. Set this to `False` for runtime identities that may
-                use existing data but may not create it.
+                replica. The check reads `INFO replication`, and it fails only
+                when the server reports a replica role. So a primary that has
+                replicas passes. `False` opens a backend against a replica,
+                which refuses all writes and can serve stale reads.
+            verify_eviction_policy: Whether to refuse a server that can evict
+                Genie keys. The check reads `INFO memory`, and it fails only
+                when the server reports a memory limit together with an
+                `allkeys-*` eviction policy. `False` accepts the risk of lost
+                keys.
+            initialize_schema: Whether to create the Genie schema record when
+                it is missing. `False` suits runtime identities that can use
+                existing data but cannot create it.
 
         Raises:
             TypeError: If an argument has the wrong type.
-            ValueError: If `url`, `key_prefix`, or a timeout is invalid.
-            UnsupportedOperation: If the client is unavailable, the connection
-                lands on a replica or on a Redis Cluster node that does not
-                hold the Genie keys, the server may evict Genie keys, or the
-                stored schema record is incompatible.
+            ValueError: If `url`, `key_prefix`, or a timeout is not valid, or
+                `transport_retries` is negative. A `key_prefix` with
+                whitespace is not valid.
+            UnsupportedOperation: If the client is not available, the
+                connection lands on a replica or on a Redis Cluster node that
+                does not hold the Genie keys, the server can evict Genie keys,
+                or the stored schema record is incompatible. Also if the schema
+                record is missing with `initialize_schema=False`, or the
+                namespace holds Genie keys with no schema record.
             BackendError: If Redis cannot be reached, configured, or
                 initialized.
         """
@@ -541,9 +558,9 @@ class RedisBackend:
             self._client = client
             if verify_connectivity:
                 client.ping()
-            # The role check runs first. A replica that also evicts would
-            # otherwise be reported as an eviction problem, which points the
-            # caller at a setting on a server it should not be talking to.
+            # The role check runs first. If not, a replica that also evicts
+            # would be reported as an eviction problem. That points the caller
+            # at a setting on a server that it is not supposed to use.
             if verify_server_role:
                 self._verify_server_role()
             if verify_eviction_policy:
@@ -582,24 +599,24 @@ class RedisBackend:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Close the owned client when leaving a context manager.
+        """Close the owned client when the context manager exits.
 
         Args:
-            exc_type: Type of the exception leaving the block, if any.
-            exc: Exception instance leaving the block, if any.
-            traceback: Traceback of the exception leaving the block, if any.
+            exc_type: Type of the exception that leaves the block, if any.
+            exc: Exception instance that leaves the block, if any.
+            traceback: Traceback of the exception that leaves the block, if any.
         """
 
         self.close()
 
     def close(self) -> None:
-        """Wait for active operations and close the owned client safely.
+        """Wait for the active operations, then close the owned client safely.
 
-        Calling `close` more than once is safe. Operations after closing raise
+        More than one `close` call is safe. Operations after `close` raise
         `RuntimeError`.
 
         Raises:
-            BackendError: If the client fails while disconnecting.
+            BackendError: If the client fails when it disconnects.
         """
 
         with self._lifecycle:
@@ -625,7 +642,7 @@ class RedisBackend:
     # Core block storage and ownership traversal
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Persist a new encoded memory block.
+        """Store a new encoded memory block.
 
         Args:
             block: Encoded block to store.
@@ -634,9 +651,10 @@ class RedisBackend:
             Stored block.
 
         Raises:
-            MemoryConflict: If the id already exists or the parent is missing
-                or self-referential.
+            MemoryConflict: If the id already exists, or the parent does not
+                exist or is the block itself.
             TypeError: If the encoded value or metadata is not strict JSON.
+            ValueError: If the block version is less than one.
             BackendError: If the Redis write fails.
         """
 
@@ -657,7 +675,7 @@ class RedisBackend:
         return self._transact(operation)
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        """Fetch a block by id.
+        """Get a block by id.
 
         Args:
             block_id: Memory block id.
@@ -677,20 +695,24 @@ class RedisBackend:
         *,
         expected_version: int | None = None,
     ) -> MemoryBlock:
-        """Replace an existing block, optionally using compare-and-swap.
+        """Replace an existing block, optionally with compare-and-swap.
 
         Args:
             block: Encoded replacement block.
-            expected_version: Required current version. When supplied, the
-                replacement must have version `expected_version + 1`.
+            expected_version: Required current version. With a value, the
+                replacement has version `expected_version + 1`, or the call
+                raises `MemoryConflict`.
 
         Returns:
             Stored replacement block.
 
         Raises:
-            MemoryConflict: If the block is missing, its version changed, or
-                the new parent is missing or would create an ownership cycle.
+            MemoryConflict: If the block does not exist, its version changed,
+                the replacement does not raise the version by exactly one, or
+                the new parent does not exist, is the block itself, or makes an
+                ownership cycle.
             TypeError: If the encoded value or metadata is not strict JSON.
+            ValueError: If the block version is less than one.
             BackendError: If the Redis write fails.
         """
 
@@ -727,9 +749,10 @@ class RedisBackend:
         """Delete a subtree, optionally from an exact version snapshot.
 
         Args:
-            block_id: Root block id to delete. Missing ids are ignored.
-            expected_versions: Exact subtree id-to-version snapshot required
-                for the deletion.
+            block_id: Root block id to delete. If it does not exist, the call
+                does nothing, unless `expected_versions` names blocks.
+            expected_versions: Exact snapshot of the subtree, from block id to
+                version, that the delete requires.
 
         Raises:
             MemoryConflict: If `expected_versions` no longer describes the
@@ -784,15 +807,15 @@ class RedisBackend:
         """Return ancestors from the nearest parent upward.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
 
         Returns:
-            Ancestor blocks in nearest-parent-first order.
+            Ancestor blocks, nearest parent first.
         """
 
         if self._readonly_scripts:
-            # The shared script returns the starting block first, and that block
-            # is not one of its own ancestors.
+            # The shared script returns the start block first, and that block is
+            # not one of its own ancestors.
             return self._script_ancestors(block_id)[1:]
         return self._snapshot(lambda client: [_block_from_document(document) for document in self._ancestor_documents(client, block_id)])
 
@@ -832,7 +855,7 @@ class RedisBackend:
     # Keyed collection
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
-        """Atomically bind an unused namespaced address to a block.
+        """Bind an unused namespaced address to a block, in one atomic step.
 
         Args:
             binding: Key binding to create.
@@ -841,8 +864,8 @@ class RedisBackend:
             Stored binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                address is already bound.
+            MemoryConflict: If the collection or the block does not exist, or
+                the address is already bound.
         """
 
         address = _encode_address(binding.address)
@@ -868,15 +891,17 @@ class RedisBackend:
 
         Args:
             binding: Replacement binding. Its collection id and address select
-                the existing binding to replace.
-            expected_block_id: Block id the binding must currently point to.
+                the current binding to replace.
+            expected_block_id: Block id that the binding points to now, as the
+                caller expects.
 
         Returns:
             Stored replacement binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, the address
-                is unbound, or it no longer points to `expected_block_id`.
+            MemoryConflict: If the collection or the block does not exist, the
+                address is not bound, or it no longer points to
+                `expected_block_id`.
         """
 
         address = _encode_address(binding.address)
@@ -907,7 +932,7 @@ class RedisBackend:
             address: Exact namespace and key to look up.
 
         Returns:
-            Stored binding, or `None` when the address is unused.
+            Stored binding, or `None` when the address is not bound.
         """
 
         encoded = _encode_address(address)
@@ -931,13 +956,18 @@ class RedisBackend:
     ) -> list[KeyBinding]:
         """Return one bounded page in stable namespace-and-key order.
 
+        Each page reads the whole collection hash with `HGETALL`, then filters,
+        sorts, and pages it in Python. So the cost of one page follows the size
+        of the collection.
+
         Args:
             collection_id: Id of the collection to list.
-            namespace: Optional exact namespace filter. With `recursive=True`
-                it is treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below `namespace`.
-            after: Optional exclusive start address used to page through
-                results in address order.
+            namespace: Optional exact namespace filter. With `recursive=True`,
+                it is a namespace prefix.
+            recursive: If `True`, the result also includes the nested
+                namespaces below `namespace`.
+            after: Optional exclusive start address, for pages in address
+                order.
             limit: Maximum number of bindings to return.
 
         Returns:
@@ -967,10 +997,11 @@ class RedisBackend:
         Args:
             collection_id: Id of the collection that owns the key space.
             address: Exact namespace and key to remove.
-            expected_block_id: Block id the binding must currently point to.
+            expected_block_id: Block id that the binding points to now, as the
+                caller expects.
 
         Raises:
-            MemoryConflict: If the address is unbound or it no longer points
+            MemoryConflict: If the address is not bound, or it no longer points
                 to `expected_block_id`.
         """
 
@@ -987,11 +1018,11 @@ class RedisBackend:
         self._transact(operation)
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
-        """Remove bindings owned by or pointing to one block.
+        """Remove the bindings that one block owns or that point to it.
 
         Args:
-            block_id: Id of the deleted block. Bindings whose collection id or
-                target block id match are removed.
+            block_id: Id of the deleted block. The call removes the bindings
+                whose collection id or target block id matches.
         """
 
         self._transact(lambda transaction: self._stage_key_binding_removal(transaction, {block_id}))
@@ -1000,14 +1031,14 @@ class RedisBackend:
     # Ordered event log
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:
-        """Atomically allocate a sequence and append a block reference.
+        """Allocate a sequence and append a block reference, in one atomic step.
 
         Args:
             log_id: Id of the ordered log to append to.
             block_id: Id of the memory block to place at the new position.
 
         Returns:
-            Stored entry carrying the allocated sequence number.
+            Stored entry with the allocated sequence number.
 
         Raises:
             MemoryConflict: If the log or referenced block does not exist.
@@ -1032,10 +1063,10 @@ class RedisBackend:
 
         Args:
             log_id: Id of the ordered log.
-            sequence: Exact position within the log.
+            sequence: Exact position in the log.
 
         Returns:
-            Stored entry, or `None` when the position holds no entry.
+            Stored entry, or `None` when the position has no entry.
 
         Raises:
             TypeError: If `sequence` is not an integer.
@@ -1067,7 +1098,7 @@ class RedisBackend:
             log_id: Id of the ordered log.
             start: Optional inclusive lower sequence bound.
             stop: Optional exclusive upper sequence bound.
-            reverse: Whether to return entries in descending sequence order.
+            reverse: If `True`, the entries come in descending sequence order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1103,11 +1134,12 @@ class RedisBackend:
         return self._direct(operation)
 
     def delete_log_entries_for_block(self, block_id: str) -> None:
-        """Remove a log and entries owned by or pointing to one block.
+        """Remove the log that one block owns, and the entries that point to the block.
 
         Args:
-            block_id: Id of the deleted block. A log owned by this id is
-                dropped, along with entries pointing to it in any other log.
+            block_id: Id of the deleted block. The call drops the log that this
+                id owns, with its sequence counter, and the entries that point
+                to the block in all other logs.
         """
 
         self._transact(lambda transaction: self._stage_log_removal(transaction, {block_id}))
@@ -1126,8 +1158,8 @@ class RedisBackend:
             Stored entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection already contains the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection already contains the block.
         """
 
         payload = _dump_json(_temporal_payload(entry), field_name="temporal entry")
@@ -1153,14 +1185,14 @@ class RedisBackend:
 
         Args:
             entry: Replacement entry. Its collection id and block id select
-                the existing entry to replace.
+                the current entry to replace.
 
         Returns:
             Stored replacement entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection does not contain the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection does not contain the block.
         """
 
         payload = _dump_json(_temporal_payload(entry), field_name="temporal entry")
@@ -1210,8 +1242,8 @@ class RedisBackend:
 
         Args:
             collection_id: Id of the temporal collection.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1256,11 +1288,11 @@ class RedisBackend:
         self._transact(operation)
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
-        """Remove temporal entries owned by or pointing to one block.
+        """Remove the temporal entries that one block owns or that point to it.
 
         Args:
-            block_id: Id of the deleted block. Entries whose collection id or
-                target block id match are removed.
+            block_id: Id of the deleted block. The call removes the entries
+                whose collection id or target block id matches.
         """
 
         self._transact(lambda transaction: self._stage_temporal_removal(transaction, {block_id}))
@@ -1277,33 +1309,34 @@ class RedisBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one temporal page matching every supplied time filter.
+        """Return one temporal page that matches all given time filters.
 
         Cost:
-            - Redis cannot apply these filters server-side, so the backend
-              pages through the collection in block-id order and matches each
-              page in Python until it fills `limit`.
-            - On a server that supports read-only scripts the first page is one
-              atomic script. A query answered inside that page - because the
-              page filled `limit`, or because it reached the end of the
-              collection - is done after that single read. It never takes the
-              mutation guard and never retries.
-            - A collection larger than one page falls back to the guarded scan,
-              which restarts from the start when a Genie write lands in the
-              middle of it.
+            - **Client-side filters:** Redis cannot apply these filters on the
+              server. So the backend reads the collection in pages of
+              block-id order, and it matches each page in Python until it fills
+              `limit`.
+            - **Cheap first page:** on a server that supports read-only scripts,
+              the first page is one atomic script. A query that ends inside
+              that page is complete after that one read. The page filled
+              `limit`, or it got to the end of the collection. That query never
+              takes the mutation guard, and it never retries.
+            - **Guarded scan:** a collection larger than one page falls back to
+              the guarded scan. That scan restarts from the start when a Genie
+              write lands in the middle of it.
 
         Args:
             collection_id: Id of the temporal collection.
-            occurred_only: Whether to keep only entries that carry an event
+            occurred_only: Whether to keep only entries that have an event
                 time.
             occurred_start: Optional inclusive lower bound on event time.
             occurred_stop: Optional exclusive upper bound on event time.
-            valid_at: Optional instant that an entry's validity period must
-                contain.
-            overlaps: Optional validity period an entry's own period must
-                overlap.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            valid_at: Optional instant that the validity period of an entry
+                contains.
+            overlaps: Optional validity period that the period of an entry
+                overlaps.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1369,7 +1402,7 @@ class RedisBackend:
     # Typed property graph and lineage DAG
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
-        """Persist a typed link between existing blocks.
+        """Store a typed link between existing blocks.
 
         Args:
             link: Link to store.
@@ -1378,8 +1411,8 @@ class RedisBackend:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, or the relation is protected as an acyclic graph.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, or the relation is protected as an acyclic graph.
             TypeError: If the link metadata is not strict JSON.
         """
 
@@ -1394,23 +1427,24 @@ class RedisBackend:
         return self._transact(operation)
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Atomically add a link unless it would create a directed cycle.
+        """Add a link in one atomic step, unless the link makes a directed cycle.
 
-        Existing links with the same relation are adopted on the first call
-        only when they already form a DAG. The relation is then protected from
-        ordinary link insertion.
+        - **First call:** the call adopts the current links with the same
+          relation only if they already form a DAG.
+        - **Protection:** after that, the relation is protected from ordinary
+          link inserts.
 
         Args:
             link: Link to store. Its relation identifies the protected graph
-                the cycle check applies to.
+                that the cycle check applies to.
 
         Returns:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, the relation already contains a cycle, or the new
-                link would create one.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, the relation already contains a cycle, or the new link
+                makes one. A self-link also makes one.
             TypeError: If the link metadata is not strict JSON.
         """
 
@@ -1433,13 +1467,13 @@ class RedisBackend:
         """Replace only the metadata of an existing link.
 
         Args:
-            link: Link containing the replacement metadata.
+            link: Link that holds the replacement metadata.
 
         Returns:
             Stored replacement link.
 
         Raises:
-            MemoryConflict: If the link is missing or any field other than
+            MemoryConflict: If the link does not exist, or a field other than
                 metadata changed.
             TypeError: If the link metadata is not strict JSON.
         """
@@ -1469,11 +1503,11 @@ class RedisBackend:
     ) -> list[MemoryLink]:
         """List links connected to one block.
 
-        The endpoint index carries the relation of every link it lists, so the
-        relation filter runs before any link document is read.
+        The endpoint index has the relation of each link that it lists. So the
+        relation filter runs before the backend reads a link document.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
@@ -1481,7 +1515,7 @@ class RedisBackend:
             Matching links in creation order.
 
         Raises:
-            ValueError: If `direction` is invalid.
+            ValueError: If `direction` is not valid.
         """
 
         if direction not in {"out", "in", "both"}:
@@ -1505,7 +1539,7 @@ class RedisBackend:
         """Delete incoming and outgoing links for one block.
 
         Args:
-            block_id: Block id whose connected links should be removed.
+            block_id: Block id whose connected links to remove.
         """
 
         self._transact(lambda transaction: self._stage_link_removal(transaction, {block_id}))
@@ -1514,11 +1548,13 @@ class RedisBackend:
     # Portable search
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search blocks using the portable in-memory matching behavior.
+        """Search blocks with the portable matching behavior of the in-memory backend.
 
-        Candidate blocks are narrowed by scope with Redis indexes, then matched
-        in Python so results stay consistent with the reference backend.
-        `_scope_candidate_blocks` decides how each scope reads its candidates.
+        - **Candidates:** Redis indexes narrow the candidate blocks by scope.
+        - **Matching:** the backend matches them in Python, so the results stay
+          consistent with the reference backend.
+        - **Scope paths:** `_scope_candidate_blocks` decides how each scope
+          reads its candidates.
 
         Args:
             query: Normalized query from the public API.
@@ -1567,7 +1603,7 @@ class RedisBackend:
         return f"{self.key_prefix}:order:{name}"
 
     def _blocks_key(self) -> str:
-        """Return the sorted set of every block id in storage order."""
+        """Return the sorted set of all block ids in storage order."""
 
         return f"{self.key_prefix}:blocks"
 
@@ -1587,12 +1623,12 @@ class RedisBackend:
         return f"{self.key_prefix}:link:{link_id}"
 
     def _outlinks_key(self, block_id: str) -> str:
-        """Return the sorted set of link ids that start at one block."""
+        """Return the sorted set of endpoint records for the links that start at one block."""
 
         return f"{self.key_prefix}:outlinks:{block_id}"
 
     def _inlinks_key(self, block_id: str) -> str:
-        """Return the sorted set of link ids that point at one block."""
+        """Return the sorted set of endpoint records for the links that point at one block."""
 
         return f"{self.key_prefix}:inlinks:{block_id}"
 
@@ -1612,7 +1648,7 @@ class RedisBackend:
         return f"{self.key_prefix}:keys:{collection_id}"
 
     def _keyowner_key(self, block_id: str) -> str:
-        """Return the set of bindings that point at one block."""
+        """Return the set of references to the bindings that point at one block."""
 
         return f"{self.key_prefix}:keyowner:{block_id}"
 
@@ -1627,7 +1663,7 @@ class RedisBackend:
         return f"{self.key_prefix}:logcounter:{log_id}"
 
     def _logmember_key(self, block_id: str) -> str:
-        """Return the set of log entries that point at one block."""
+        """Return the set of references to the log entries that point at one block."""
 
         return f"{self.key_prefix}:logmember:{block_id}"
 
@@ -1661,25 +1697,29 @@ class RedisBackend:
                 raise _translate_redis_error(error) from error
 
     def _read_script(self, name: str, *, keys: Sequence[str], args: Sequence[object]) -> Any:
-        """Run one read-only Lua script as a single atomic server step.
+        """Run one read-only Lua script as one atomic server step.
 
-        - Redis runs a script from start to finish before it serves another
-          client, so the script sees one consistent state. That removes both
-          the mutation guard and the retry that a multi-command read needs.
-        - Only use this for a read scoped to one block or to one `limit` page,
-          never for a scan of the dataset, because the script holds the whole
-          server for as long as it runs.
+        - **One consistent state:** Redis runs a script from start to finish
+          before it serves another client, so the script sees one consistent
+          state. That removes both the mutation guard and the retry that a read
+          with several commands needs.
+        - **Scope:** this is only for a read scoped to one block or to one
+          `limit` page, never for a scan of the dataset. The script holds the
+          whole server for as long as it runs.
+        - **Script cache:** the call sends `EVALSHA_RO` first. If the server
+          lost its script cache, it sends the script body with `EVAL_RO`.
 
         Args:
             name: Name of a script in `_LUA_SCRIPTS`.
-            keys: Keys the call declares. They only route the call.
+            keys: Keys that the call declares. They only route the call.
             args: Script arguments.
 
         Returns:
-            The reply the script returned.
+            The reply that the script returned.
 
         Raises:
-            BackendError: If the call fails. The subclass follows the failure.
+            BackendError: If the call fails. The subclass depends on the
+                failure.
         """
 
         with self._operation_client() as client:
@@ -1687,7 +1727,7 @@ class RedisBackend:
                 try:
                     return client.evalsha_ro(_LUA_DIGESTS[name], len(keys), *keys, *args)
                 except self._no_script_error:
-                    # The server dropped its script cache. Sending the body runs
+                    # The server lost its script cache. A send of the body runs
                     # the script and caches it again for the next call.
                     return client.eval_ro(_LUA_SCRIPTS[name], len(keys), *keys, *args)
             except GenieError:
@@ -1696,11 +1736,11 @@ class RedisBackend:
                 raise _translate_redis_error(error) from error
 
     def _script_blocks(self, payloads: Sequence[Any]) -> list[MemoryBlock]:
-        """Rebuild blocks from the payloads a read-only script returned.
+        """Rebuild blocks from the payloads that a read-only script returned.
 
         Args:
-            payloads: Stored block documents in the order the script returned
-                them.
+            payloads: Stored block documents, in the order that the script
+                returned them.
 
         Returns:
             Blocks in the same order.
@@ -1712,11 +1752,11 @@ class RedisBackend:
         return [_block_from_document(_load_document(payload, name="memory block")) for payload in payloads]
 
     def _script_links(self, payloads: Sequence[Any]) -> list[MemoryLink]:
-        """Rebuild links from the payloads a read-only script returned.
+        """Rebuild links from the payloads that a read-only script returned.
 
         Args:
-            payloads: Stored link documents in the order the script returned
-                them.
+            payloads: Stored link documents, in the order that the script
+                returned them.
 
         Returns:
             Links in the same order.
@@ -1733,17 +1773,17 @@ class RedisBackend:
         Args:
             collection_id: Id of the temporal collection.
             after_block_id: Optional exclusive start block id.
-            limit: Largest number of block ids the page may scan.
+            limit: Largest number of block ids that the page can scan.
 
         Returns:
-            How many block ids the page scanned, and the entries it read. A
-            scanned count below `limit` means the page reached the end of the
-            collection. The entry list can be shorter than the scanned count,
-            because an id whose payload is gone is skipped.
+            How many block ids the page scanned, and the entries that it read.
+            A scanned count below `limit` means that the page got to the end of
+            the collection. The entry list can be shorter than the scanned
+            count, because the script skips an id whose payload is gone.
 
         Raises:
-            BackendCorruption: If the reply has the wrong shape or an entry is
-                invalid.
+            BackendCorruption: If the reply has the wrong shape, or an entry is
+                not valid.
         """
 
         page_keys = [self._temporalindex_key(collection_id), self._temporal_key(collection_id)]
@@ -1753,17 +1793,19 @@ class RedisBackend:
         return int(reply[0]), self._script_temporal_entries(collection_id, reply[1])
 
     def _script_temporal_entries(self, collection_id: str, pairs: Sequence[Any]) -> list[TemporalEntry]:
-        """Rebuild temporal entries from the pairs a read-only script returned.
+        """Rebuild temporal entries from the pairs that a read-only script returned.
 
         Args:
             collection_id: Id of the temporal collection that was read.
-            pairs: Flat list of block id and stored payload, one pair per entry.
+            pairs: Flat list of block id and stored payload, one pair for each
+                entry.
 
         Returns:
-            Entries in the order the script returned them.
+            Entries in the order that the script returned them.
 
         Raises:
-            BackendCorruption: If the list is unpaired or an entry is invalid.
+            BackendCorruption: If the list has an odd length, or an entry is
+                not valid.
         """
 
         if len(pairs) % 2:
@@ -1774,11 +1816,11 @@ class RedisBackend:
         """Return one block and its ancestors from a single read-only script.
 
         Args:
-            block_id: Block id to start from.
+            block_id: Start block id.
 
         Returns:
-            The starting block followed by its ancestors, nearest parent first.
-            The list is empty when the starting block is gone.
+            The start block, then its ancestors, nearest parent first. The list
+            is empty when the start block is gone.
 
         Raises:
             BackendCorruption: If a stored document is not a valid block.
@@ -1787,12 +1829,13 @@ class RedisBackend:
         return self._script_blocks(self._read_script("ancestors", keys=[self._block_key(block_id)], args=[self.key_prefix, block_id]))
 
     def _script_descendants(self, block_id: str, reply: Sequence[Any], *, include_self: bool) -> list[MemoryBlock]:
-        """Rebuild one subtree from the edges and documents a script returned.
+        """Rebuild one subtree from the edges and documents that a script returned.
 
-        The script walks the subtree but does not order it. This method rebuilds
-        the parent-to-children map from the returned edges and reuses
-        `_depth_first_ids`, so the scripted read and the guarded read share one
-        ordering rule.
+        - **No order from the script:** the script walks the subtree, but it does
+          not put it in order.
+        - **One order rule:** this method rebuilds the parent-to-children map
+          from the returned edges and reuses `_depth_first_ids`. So the scripted
+          read and the guarded read share one order rule.
 
         Args:
             block_id: Subtree root id that was read.
@@ -1803,8 +1846,8 @@ class RedisBackend:
             Subtree blocks in depth-first creation order.
 
         Raises:
-            BackendCorruption: If the reply is malformed or a document is
-                invalid.
+            BackendCorruption: If the reply has a bad shape, or a document is
+                not valid.
         """
 
         if len(reply) != 2 or len(reply[0]) % 2 or len(reply[1]) % 2:
@@ -1824,13 +1867,13 @@ class RedisBackend:
         """Refuse a connection that lands on a replica.
 
         Why:
-            - A replica accepts no writes, so it answers every Genie write with
-              a read-only error that reaches the caller as `BackendReadOnly`.
+            - A replica accepts no writes, so it answers each Genie write with
+              a read-only error that gets to the caller as `BackendReadOnly`.
             - Reads are the silent case. With `initialize_schema=False` the
               backend opens, never writes, and serves whatever the replica has
               replicated, which can lag the primary by any amount and carries
               no signal at all.
-            - It refuses connecting to a replica, not a deployment that has
+            - It refuses a connection to a replica, not a deployment that has
               replicas. A primary that has replicas reports the primary role
               and passes.
 
@@ -1881,7 +1924,7 @@ class RedisBackend:
         )
 
     def _verify_eviction_policy(self) -> None:
-        """Refuse a server that may drop Genie keys to reclaim memory.
+        """Refuse a server that can drop Genie keys to get back memory.
 
         Why:
             - Genie sets no expiry on its keys, so only an `allkeys-*` value
@@ -1891,14 +1934,14 @@ class RedisBackend:
               over-limit write with the out-of-memory error, which reaches the
               caller as `BackendCapacityExceeded`.
             - Eviction is worse than that error, because Redis drops one key at
-              a time while one Genie block spans a stored document plus several
-              index entries. A dropped document leaves an index entry pointing
-              at data that is gone.
+              a time, while one Genie block spans a stored document plus
+              several index entries. A dropped document leaves an index entry
+              that points at data that is gone.
 
         How:
             - The two values come from `INFO memory` rather than `CONFIG GET`,
-              because managed Redis services often disable or rename `CONFIG`
-              and a restricted user may not be allowed to run it.
+              because managed Redis services often turn off or rename `CONFIG`,
+              and a restricted user is possibly not allowed to run it.
             - Only a reading that proves the server evicts fails. A blocked
               `INFO`, a client without it, a missing field, and an unreadable
               value all leave the setting unknown and pass.
@@ -1943,8 +1986,9 @@ class RedisBackend:
     def _detect_readonly_scripts(self) -> bool:
         """Return whether the server can run read-only Lua scripts.
 
-        - The check runs a trivial `EVAL_RO` instead of comparing a reported
-          version string, because that tests the capability the reads need.
+        - The check runs a trivial `EVAL_RO`, and it does not compare a
+          reported version string. So it tests the capability that the reads
+          need.
         - A server older than Redis 7.0, a client without `eval_ro`, and a
           deployment that blocks scripting all answer with a command error. The
           affected reads then use the mutation guard instead.
@@ -1965,11 +2009,15 @@ class RedisBackend:
             raise
 
     def _snapshot(self, operation: Callable[[Any], _T]) -> _T:
-        """Run one multi-command read and retry when a write interleaves.
+        """Run one read with several commands, and retry when a write comes between them.
 
-        The mutation guard is read before and after the operation. Every Genie
-        write replaces that value, so an unchanged value proves that the
-        commands in between observed one consistent state.
+        The read gets the mutation guard before and after the operation. Each
+        Genie write replaces that value. So an unchanged value proves that the
+        commands between the 2 reads saw one consistent state.
+
+        Raises:
+            BackendBusy: If writes interrupt the read until `max_retry_time` is
+                used up.
         """
 
         guard = self._guard_key()
@@ -1993,33 +2041,39 @@ class RedisBackend:
         """Run one optimistic read-modify-write attempt until it commits.
 
         Flow:
-            - The operation reads current state and stages its writes.
-            - The commit block watches the mutation guard, re-checks the value
-              seen by the read phase, then applies every staged write together.
+            - The operation reads the current state and stages its writes.
+            - The commit block watches the mutation guard, checks again the
+              value that the read phase saw, then applies all staged writes
+              together.
 
-        Every Genie write must go through this commit block. The client may
-        retry a dropped connection, and it refuses to repeat a command only
-        while a watch is open, where it raises a watch conflict instead. A
-        write sent outside this block could be applied twice.
+        Each Genie write goes through this commit block. The client can retry a
+        dropped connection and send the command again. Only while a watch is
+        open, it does not send the command again, and it raises a watch
+        conflict instead. So a write sent outside this block could be applied
+        twice.
 
-        Recognizing a lost commit reply:
-            - A commit ends by writing a fresh token into the guard, which lets
-              a retry recognize its own committed work.
-            - A connection that dies during `EXEC` reaches this loop as a watch
-              conflict whether or not the server applied the commit, and
-              re-running the operation would apply it a second time. So each
-              attempt first reads the guard: when it still holds the token of
-              the previous attempt, that commit landed and its result is
-              returned unchanged.
-            - The token proves a commit only while no other client has
-              committed since, because the next commit replaces it. Under
-              concurrent writes a lost `EXEC` reply is retried the same way it
-              was before, so this narrows the window rather than closing it.
-              See the adapter README for what a repeated operation does.
-            - The same check runs once more when the retry budget is spent,
-              because the last attempt of a write can lose its reply just like
-              any other. A commit the token still proves is reported as the
-              success it was instead of as `BackendBusy`.
+        Recognition of a lost commit reply:
+            - **Token:** a commit ends with a new token in the guard. So a retry
+              can recognize its own committed work.
+            - **First guard read:** a connection that closes during `EXEC` gets
+              to this loop as a watch conflict, whether or not the server
+              applied the commit. A new run of the operation would apply it a
+              second time. So each attempt first reads the guard. When the
+              guard still holds the token of the previous attempt, that commit
+              landed, and the call returns its result with no change.
+            - **Limit:** the token proves a commit only while no other client
+              has committed since, because the next commit replaces it. Under
+              concurrent writes, a lost `EXEC` reply gets the same retry as
+              before. So this makes the window smaller, but it does not close
+              it. The adapter README tells what a repeated operation does.
+            - **Last attempt:** the same check runs once more when the retry
+              budget is used up, because the last attempt of a write can also
+              lose its reply. A commit that the token still proves is reported
+              as the success that it was, not as `BackendBusy`.
+
+        Raises:
+            BackendBusy: If the attempts lose optimistic conflicts until
+                `max_retry_time` is used up.
         """
 
         guard = self._guard_key()
@@ -2054,10 +2108,10 @@ class RedisBackend:
                 try:
                     self._wait_before_retry(attempt, deadline, action="write")
                 except BackendBusy:
-                    # The budget is spent, so the loop will not come back around
-                    # to the token check at the top. Read the guard once more
-                    # rather than report a write that may have landed. A read
-                    # that fails here leaves the original error standing.
+                    # The budget is used up, so the loop does not come back to
+                    # the token check at the top. Read the guard once more, and
+                    # do not report a failure for a write that possibly landed.
+                    # If this read fails, the original error stays.
                     if committed is None:
                         raise
                     with suppress(*self._exception_types):
@@ -2066,7 +2120,7 @@ class RedisBackend:
                     raise
 
     def _wait_before_retry(self, attempt: int, deadline: float, *, action: str) -> None:
-        """Back off before the next attempt, or fail when the budget is spent.
+        """Wait before the next attempt, or fail when the budget is used up.
 
         Args:
             attempt: Number of attempts already made.
@@ -2074,7 +2128,7 @@ class RedisBackend:
             action: Either `"read"` or `"write"`, used in the error message.
 
         Raises:
-            BackendBusy: If the retry budget is exhausted.
+            BackendBusy: If the retry budget is used up.
         """
 
         if monotonic() >= deadline:
@@ -2089,7 +2143,7 @@ class RedisBackend:
             return list(pipeline.execute())
 
     def _zrange_batch(self, client: Any, keys: Sequence[str]) -> list[list[str]]:
-        """Return the complete members of several sorted sets in creation order."""
+        """Return all members of several sorted sets, in score order."""
 
         if not keys:
             return []
@@ -2125,7 +2179,7 @@ class RedisBackend:
         return [{str(field): str(value) for field, value in reply.items()} for reply in self._batch(client, plan)]
 
     def _require_client(self) -> Any:
-        """Return the open client or fail after `close`."""
+        """Return the open client, or raise `RuntimeError` after `close`."""
 
         with self._lifecycle:
             if self._client is None or self._closing:
@@ -2134,7 +2188,7 @@ class RedisBackend:
 
     @contextmanager
     def _operation_client(self) -> Generator[Any, None, None]:
-        """Lease the client so `close` cannot race an active operation."""
+        """Lend the client to one operation, so that `close` cannot race it."""
 
         with self._lifecycle:
             if self._client is None or self._closing:
@@ -2150,7 +2204,7 @@ class RedisBackend:
                     self._lifecycle.notify_all()
 
     def _discard_client(self) -> None:
-        """Drop the client reference and close it, ignoring failures."""
+        """Drop the client reference and close it. Failures are ignored."""
 
         with self._lifecycle:
             client = self._client
@@ -2163,12 +2217,13 @@ class RedisBackend:
     def _initialize_schema(self) -> None:
         """Create or advance the Genie schema record, then validate it.
 
-        The schema record and the unowned-key check are read in one atomic
-        batch. A concurrent constructor commits its schema record and the
-        mutation guard in one `EXEC`, so one batch sees both or neither. Two
-        separate reads could miss the record, then see the guard of a commit
-        that landed in between, and refuse an empty namespace that another
-        constructor had just claimed.
+        - **One atomic batch:** the schema record and the check for keys with
+          no owner are read in one atomic batch.
+        - **Why:** a concurrent constructor commits its schema record and the
+          mutation guard in one `EXEC`, so one batch sees both or neither. 2
+          separate reads could miss the record, then see the guard of a commit
+          that landed between them. They would then refuse an empty namespace
+          that another constructor had just claimed.
         """
 
         state, unowned = self._read_schema_state()
@@ -2186,8 +2241,8 @@ class RedisBackend:
     def _apply_schema_migration(self, target_version: int) -> None:
         """Apply one idempotent schema migration.
 
-        Redis has no schema objects to declare, so a migration only records
-        which document and index layout the stored keys follow.
+        Redis has no schema objects to declare. So a migration only records the
+        document and index layout that the stored keys follow.
 
         Args:
             target_version: Schema version to migrate to.
@@ -2200,7 +2255,7 @@ class RedisBackend:
             raise UnsupportedOperation(f"No Redis migration is available for schema version {target_version}.")
 
     def _write_schema_identity(self, version: int) -> None:
-        """Advance the owned schema record without overwriting another owner."""
+        """Advance the schema record that Genie owns. A record of another owner raises `UnsupportedOperation`."""
 
         def operation(transaction: _RedisTransaction) -> None:
             state = self._schema_record(transaction.client)
@@ -2211,7 +2266,7 @@ class RedisBackend:
         self._transact(operation)
 
     def _validate_schema(self) -> None:
-        """Validate an existing schema record without creating one."""
+        """Validate an existing schema record, but do not create one."""
 
         state = self._read_schema_identity()
         if state is None:
@@ -2229,7 +2284,7 @@ class RedisBackend:
         return _decode_schema_record(client.hgetall(self._schema_key()))
 
     def _validate_schema_identity(self, state: Mapping[str, str]) -> None:
-        """Require the stored schema record to match this Genie version."""
+        """Raise `UnsupportedOperation` if the stored schema record does not match this Genie version."""
 
         self._schema_version(state, allow_older=False)
 
@@ -2238,15 +2293,15 @@ class RedisBackend:
 
         Args:
             state: Stored schema record fields.
-            allow_older: Whether an older version may still be migrated.
+            allow_older: Whether an older version can still be migrated.
 
         Returns:
             Stored schema version.
 
         Raises:
             UnsupportedOperation: If the record belongs to another
-                application, its version is invalid or newer than supported,
-                or it is older and cannot be migrated.
+                application, its version is not valid or is newer than
+                supported, or it is older and cannot be migrated.
         """
 
         application_id = state.get("application_id")
@@ -2269,7 +2324,8 @@ class RedisBackend:
 
         Returns:
             The stored schema record, or `None` when it is absent, and whether
-            the namespace holds Genie keys that a schema record should own.
+            the namespace holds Genie keys that need a schema record as their
+            owner.
         """
 
         def operation(client: Any) -> tuple[dict[str, str] | None, bool]:
@@ -2318,8 +2374,8 @@ class RedisBackend:
     def _documents(self, client: Any, keys: Sequence[str], *, name: str) -> list[dict[str, Any]]:
         """Return stored documents for the keys that still exist.
 
-        Keys are read in bounded groups so one command never carries an
-        unbounded argument list, and the groups share one round trip.
+        The backend reads keys in bounded groups, so one command never carries
+        an unbounded argument list. The groups share one round trip.
         """
 
         groups = list(_chunks(keys, _READ_CHUNK))
@@ -2358,8 +2414,8 @@ class RedisBackend:
     def _descendant_documents(self, client: Any, block_id: str, *, include_self: bool) -> list[dict[str, Any]]:
         """Return stored subtree documents in depth-first creation order.
 
-        Child ids are read one ownership level at a time, so the number of
-        round trips follows the depth of the subtree instead of its size.
+        The backend reads child ids one ownership level at a time. So the
+        number of round trips follows the depth of the subtree, not its size.
         """
 
         if self._block_document(client, block_id) is None:
@@ -2405,7 +2461,7 @@ class RedisBackend:
         return False
 
     def _validate_parent(self, client: Any, block_id: str, parent_id: str | None) -> None:
-        """Require a parent placement to exist and not be self-referential."""
+        """Raise `MemoryConflict` if a parent does not exist or is the block itself."""
 
         if parent_id == block_id:
             raise MemoryConflict("A memory block cannot be its own parent.")
@@ -2413,7 +2469,7 @@ class RedisBackend:
             raise MemoryConflict(f"Parent memory block {parent_id!r} does not exist.")
 
     def _require_structure_blocks(self, client: Any, *, container_id: str, block_id: str, container_name: str) -> None:
-        """Require a structure container and referenced block to exist."""
+        """Raise `MemoryConflict` if a structure container or the referenced block does not exist."""
 
         def plan(pipeline: Any) -> None:
             pipeline.exists(self._block_key(container_id))
@@ -2426,7 +2482,7 @@ class RedisBackend:
             raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
 
     def _validate_new_link(self, client: Any, link: MemoryLink) -> None:
-        """Validate identity and endpoints before storing a link."""
+        """Check the id and the endpoints before the backend stores a link."""
 
         def plan(pipeline: Any) -> None:
             pipeline.exists(self._link_key(link.id))
@@ -2442,7 +2498,7 @@ class RedisBackend:
             raise MemoryConflict(f"Target memory block {link.target_id!r} does not exist.")
 
     def _relation_edges(self, client: Any, relation: str) -> list[tuple[str, str]]:
-        """Return every stored edge of one link relation."""
+        """Return all stored edges of one link relation."""
 
         members = client.zrange(self._relation_key(relation), 0, -1)
         return [_decode_edge_member(str(member)) for member in members]
@@ -2450,8 +2506,8 @@ class RedisBackend:
     def _connected_link_members(self, client: Any, block_id: str, direction: str) -> list[tuple[str, str, str, str]]:
         """Return the endpoint records connected to one block in creation order.
 
-        Each record holds the link id, its two endpoints, and its relation, so
-        a caller can filter without reading link documents.
+        Each record holds the link id, its 2 endpoints, and its relation. So a
+        caller can filter with no read of link documents.
         """
 
         if direction == "out":
@@ -2464,8 +2520,8 @@ class RedisBackend:
                 pipeline.zrange(self._outlinks_key(block_id), 0, -1, withscores=True)
                 pipeline.zrange(self._inlinks_key(block_id), 0, -1, withscores=True)
 
-            # A self-link sits in both endpoint sets under the same member, so
-            # merging on the member is what removes the duplicate.
+            # A self-link is in both endpoint sets under the same member. So a
+            # merge on the member removes the duplicate.
             ordered: dict[str, float] = {}
             for reply in self._batch(client, plan):
                 for member, score in reply:
@@ -2490,15 +2546,17 @@ class RedisBackend:
     def _scope_candidate_blocks(self, query: MemoryQuery) -> list[MemoryBlock]:
         """Return the candidate blocks one normalized query scope allows.
 
-        `Scope.SELF`, `Scope.SUBTREE`, and `Scope.ANCESTORS` read one block, one
-        subtree, or one parent chain, so they take the same block-scoped read
-        path as `get_block`, `descendants`, and `ancestors`. Those reads are
-        atomic on the server and never retry.
-
-        `Scope.GLOBAL` reads every stored block, and `Scope.LINKS` follows an
-        endpoint fan-out that one block can grow without a bound. Neither has a
-        size a script may safely hold the server for, so both keep the mutation
-        guard and may raise `BackendBusy` under sustained writes.
+        - **Block-scoped scopes:** `Scope.SELF`, `Scope.SUBTREE`, and
+          `Scope.ANCESTORS` read one block, one subtree, or one parent chain. So
+          they take the same block-scoped read path as `get_block`,
+          `descendants`, and `ancestors`. `Scope.SELF` is one command. With
+          read-only scripts, the other 2 are atomic on the server and never
+          retry. Without them, they use the mutation guard and can retry.
+        - **Guarded scopes:** `Scope.GLOBAL` reads all stored blocks, and
+          `Scope.LINKS` follows an endpoint fan-out that one block can grow with
+          no limit. Neither has a size for which a script can safely hold the
+          server. So both keep the mutation guard, and both can raise
+          `BackendBusy` under sustained writes.
 
         Args:
             query: Normalized query from the public API.
@@ -2526,7 +2584,7 @@ class RedisBackend:
         return self._snapshot(self._all_blocks)
 
     def _all_blocks(self, client: Any) -> list[MemoryBlock]:
-        """Return every stored block in creation order."""
+        """Return all stored blocks in creation order."""
 
         block_ids = [str(member) for member in client.zrange(self._blocks_key(), 0, -1)]
         return [_block_from_document(document) for document in self._block_documents(client, block_ids)]
@@ -2540,9 +2598,9 @@ class RedisBackend:
         return [_block_from_document(record) for record in (document, *self._ancestor_documents(client, block_id))]
 
     def _linked_blocks(self, client: Any, block_id: str) -> list[MemoryBlock]:
-        """Return the blocks a link connects to one block, in creation order.
+        """Return the blocks that a link connects to one block, in creation order.
 
-        The starting block is included when at least one link reaches it,
+        The start block is in the result when at least one link reaches it,
         because it is an endpoint of its own links.
         """
 
@@ -2619,12 +2677,13 @@ class RedisBackend:
         return _link_from_document(stored)
 
     def _stage_link_removal(self, transaction: _RedisTransaction, block_ids: set[str]) -> None:
-        """Stage removal of every link that touches one of the block ids.
+        """Stage the removal of all links that touch one of the block ids.
 
-        The endpoint members carry everything the cleanup needs, so this reads
-        no link documents. That matters for more than speed: a link id whose
-        document is already gone would otherwise keep its index entries alive,
-        because a missing document is skipped instead of reported.
+        - **No document reads:** the endpoint members carry all that the cleanup
+          needs, so this method reads no link documents.
+        - **Why it matters:** this is not only for speed. If not, a link id
+          whose document is already gone would keep its index entries, because
+          the reads skip a missing document and do not report it.
         """
 
         owners = sorted(block_ids)
@@ -2650,7 +2709,7 @@ class RedisBackend:
             self._stage_zrem(transaction, key, removed_members)
 
     def _stage_key_binding_removal(self, transaction: _RedisTransaction, block_ids: set[str]) -> None:
-        """Stage removal of key bindings owned by or pointing to the blocks."""
+        """Stage the removal of the key bindings that the blocks own or that point to them."""
 
         owners = sorted(block_ids)
         collections = self._hgetall_batch(transaction.client, [self._keys_key(block_id) for block_id in owners])
@@ -2674,7 +2733,7 @@ class RedisBackend:
             self._stage_hdel(transaction, key, removed_fields)
 
     def _stage_log_removal(self, transaction: _RedisTransaction, block_ids: set[str]) -> None:
-        """Stage removal of logs owned by and entries pointing to the blocks."""
+        """Stage the removal of the logs that the blocks own and of the entries that point to them."""
 
         owners = sorted(block_ids)
         owned = self._zrange_batch(transaction.client, [self._log_key(block_id) for block_id in owners])
@@ -2700,7 +2759,7 @@ class RedisBackend:
             self._stage_zrem(transaction, key, removed_entries)
 
     def _stage_temporal_removal(self, transaction: _RedisTransaction, block_ids: set[str]) -> None:
-        """Stage removal of temporal collections and entries for the blocks."""
+        """Stage the removal of the temporal collections and entries of the blocks."""
 
         owners = sorted(block_ids)
         collections = self._hgetall_batch(transaction.client, [self._temporal_key(block_id) for block_id in owners])
@@ -2731,9 +2790,10 @@ class RedisBackend:
 class _RedisTransaction:
     """One optimistic read-modify-write attempt against Redis.
 
-    The read phase runs ordinary commands through `client`. Writes are staged
-    instead of sent, so the commit block can apply all of them inside one
-    `MULTI`/`EXEC` block after it re-checks the mutation guard.
+    - **Read phase:** it runs ordinary commands through `client`.
+    - **Staged writes:** the attempt stages writes and does not send them. So
+      the commit block can apply all of them inside one `MULTI`/`EXEC` block,
+      after it checks the mutation guard again.
 
     Attributes:
         client: Redis client used by the read phase of this attempt.
@@ -2761,7 +2821,7 @@ class _RedisTransaction:
         self._writes.append(apply)
 
     def apply(self, pipeline: Any) -> None:
-        """Queue every staged write on one buffered pipeline.
+        """Queue all staged writes on one buffered pipeline.
 
         Args:
             pipeline: Pipeline already switched to buffered `MULTI` mode.
@@ -2863,7 +2923,7 @@ def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
 
 
 def _validate_expected_version(previous: MemoryBlock, replacement: MemoryBlock, expected_version: int | None) -> None:
-    """Raise when a conditional replacement does not match its version."""
+    """Raise `MemoryConflict` when a conditional replacement does not match its version."""
 
     if expected_version is None:
         return
@@ -3072,7 +3132,7 @@ def _decode_identity(value: object, *, size: int, name: str) -> list[Any]:
 
 
 def _dump_json(value: Any, *, field_name: str) -> str:
-    """Encode a strict JSON value without silently changing its type."""
+    """Encode a strict JSON value, with no silent type change."""
 
     _require_strict_json(value, field_name=field_name)
     return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -3095,7 +3155,7 @@ def _load_document(payload: object, *, name: str) -> dict[str, Any]:
 
 
 def _document_mapping(value: object, *, field_name: str) -> dict[str, Any]:
-    """Require one stored document field to be a JSON object."""
+    """Raise `TypeError` if a stored document field is not a JSON object."""
 
     if not isinstance(value, dict):
         raise TypeError(f"Stored Redis document field {field_name!r} must be a JSON object.")
@@ -3103,7 +3163,7 @@ def _document_mapping(value: object, *, field_name: str) -> dict[str, Any]:
 
 
 def _require_strict_json(value: Any, *, field_name: str) -> None:
-    """Require a value that round-trips through JSON without type changes."""
+    """Raise `TypeError` if a value does not round-trip through JSON with no type change."""
 
     if not _is_strict_json(value):
         raise TypeError(f"RedisBackend {field_name} must be strict JSON data.")
@@ -3124,7 +3184,7 @@ def _is_strict_json(value: Any) -> bool:
 
 
 def _stored_int(value: object, *, field_name: str) -> int:
-    """Return one stored integer, treating an absent value as zero."""
+    """Return one stored integer. An absent value is zero."""
 
     if value is None:
         return 0
@@ -3163,7 +3223,7 @@ def _decode_datetime(value: object) -> datetime:
 
 
 def _namespace_matches(candidate: tuple[str, ...], selected: tuple[str, ...] | None, *, recursive: bool) -> bool:
-    """Return whether a namespace satisfies an exact or prefix filter."""
+    """Return whether a namespace matches an exact or prefix filter."""
 
     if selected is None:
         return True
@@ -3181,7 +3241,7 @@ def _temporal_matches(
     valid_at: datetime | None,
     overlaps: ValidityInterval | None,
 ) -> bool:
-    """Return whether an entry satisfies all temporal index filters."""
+    """Return whether an entry matches all temporal index filters."""
 
     occurred_at = entry.occurred_at
     if occurred_only and occurred_at is None:
@@ -3304,7 +3364,7 @@ def _edge_path_exists(edges: Sequence[tuple[str, str]], start_id: str, target_id
 
 
 def _validate_sequence(value: object, *, name: str) -> None:
-    """Require a non-negative integer sequence value."""
+    """Raise an error if a sequence value is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -3326,7 +3386,7 @@ def _temporal_lex_start(after_block_id: str | None) -> str:
 
 
 def _validate_limit(value: object) -> None:
-    """Require a non-negative integer page limit."""
+    """Raise an error if a page limit is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("limit must be an integer.")
@@ -3335,7 +3395,7 @@ def _validate_limit(value: object) -> None:
 
 
 def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
-    """Validate and normalize an optional aware datetime to UTC."""
+    """Check an optional timezone-aware datetime, and return it in UTC."""
 
     if value is None:
         return None
@@ -3347,7 +3407,7 @@ def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
 
 
 def _validate_nonempty_string(value: object, *, name: str) -> None:
-    """Require a non-empty string configuration value."""
+    """Raise an error if a configuration value is not a non-empty string."""
 
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string.")
@@ -3356,7 +3416,7 @@ def _validate_nonempty_string(value: object, *, name: str) -> None:
 
 
 def _validate_key_prefix(value: object) -> None:
-    """Require a non-empty key prefix without whitespace."""
+    """Raise an error if a key prefix is empty or contains whitespace."""
 
     _validate_nonempty_string(value, name="key_prefix")
     if any(character.isspace() for character in str(value)):
@@ -3364,7 +3424,7 @@ def _validate_key_prefix(value: object) -> None:
 
 
 def _validate_timeout(value: object, *, name: str) -> None:
-    """Require a finite, non-negative timeout in seconds."""
+    """Raise an error if a timeout is not a finite, non-negative number of seconds."""
 
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TypeError(f"{name} must be a number.")
@@ -3373,7 +3433,7 @@ def _validate_timeout(value: object, *, name: str) -> None:
 
 
 def _validate_retries(value: object, *, name: str) -> None:
-    """Require a non-negative whole number of retries."""
+    """Raise an error if a number of retries is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -3382,20 +3442,24 @@ def _validate_retries(value: object, *, name: str) -> None:
 
 
 class _UnavailableWatchError(Exception):
-    """Placeholder used when the client exposes no watch conflict error."""
+    """Placeholder for a client that has no watch conflict error."""
 
 
 class _UnavailableNoScriptError(Exception):
-    """Placeholder used when the client exposes no missing-script error."""
+    """Placeholder for a client that has no missing-script error."""
 
 
 def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[BaseException], type[BaseException]]:
-    """Import the optional client and return it with its exception types."""
+    """Import the optional client, and return it with its exception types.
+
+    Raises:
+        UnsupportedOperation: If the `redis` package is not installed.
+    """
 
     try:
-        # Import the submodules, not just the package. The `redis` package binds
+        # Import the submodules, not only the package. The `redis` package binds
         # `redis.exceptions`, `redis.retry`, and `redis.backoff` only as a side
-        # effect of its own imports, so type checkers do not treat them as known
+        # effect of its own imports. So type checkers do not treat them as known
         # attributes of a plain `import redis`.
         import redis.backoff
         import redis.exceptions
@@ -3424,13 +3488,12 @@ def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[Bas
 def _transport_options(redis_module: Any, retries: int) -> dict[str, Any]:
     """Return the client options that reconnect after a dropped connection.
 
-    - The client retries a dropped connection only when it is given both a
-      retry policy and the error types that policy applies to, so this sets the
-      two options together.
-    - Only `ConnectionError` is listed. A command that timed out may still be
-      running on the server, and sending it again would spend the socket
-      timeout a second time. So a timeout stays one budget and reaches the
-      caller as `BackendBusy`.
+    - **Both options:** the client retries a dropped connection only when it
+      gets a retry policy and the error types that the policy applies to. So
+      this function sets the 2 options together.
+    - **Only `ConnectionError`:** a command that timed out can still run on the
+      server, and a second send would use the socket timeout again. So a
+      timeout stays one budget, and it gets to the caller as `BackendBusy`.
 
     Args:
         redis_module: The imported `redis` package.
@@ -3451,10 +3514,12 @@ def _transport_options(redis_module: Any, retries: int) -> dict[str, Any]:
 def _is_command_error(error: BaseException) -> bool:
     """Return whether Redis rejected the command itself.
 
-    A rejected command means the server, the deployment, or the user's
-    permissions do not offer it. A construction probe treats that as an unknown
-    reading and passes. A transport failure is not this case and still reaches
-    the caller.
+    - **Meaning:** a rejected command means that the server, the deployment,
+      or the permissions of the user do not offer it.
+    - **Probes:** a construction probe treats that as an unknown reading, and
+      it passes.
+    - **Transport failures:** they are not this case, and they still get to
+      the caller.
 
     Args:
         error: Client failure raised while a command ran.
@@ -3470,9 +3535,9 @@ def _is_cluster_reply(message: str) -> bool:
     """Return whether Redis answered with a cluster-mode error reply.
 
     A server sends these replies only in cluster mode, and it always sends the
-    code in upper case as the first word of the message. The match is therefore
-    exact and case-sensitive, so ordinary text that happens to start with the
-    same word is not mistaken for one.
+    code in upper case as the first word of the message. So the match is exact
+    and case-sensitive, and ordinary text that starts with the same word does
+    not match by accident.
 
     Args:
         message: Error message the client reported.
@@ -3485,7 +3550,11 @@ def _is_cluster_reply(message: str) -> bool:
 
 
 def _translate_redis_error(error: BaseException) -> GenieError:
-    """Translate client failures into stable Genie backend errors."""
+    """Translate client failures into stable Genie errors.
+
+    The result is a `BackendError` subclass, or `UnsupportedOperation` for a
+    cluster reply.
+    """
 
     names = {ancestor.__name__ for ancestor in type(error).__mro__}
     message = str(error) or type(error).__name__

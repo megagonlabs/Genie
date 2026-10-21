@@ -1,4 +1,4 @@
-"""Dependency-free codecs for common Python standard-library values."""
+"""Codecs for common values from the Python standard library, with no third-party dependencies."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from genie.codecs.json import MAX_NESTING_DEPTH, _json_error
 
 
 class BytesCodec:
-    """Codec for `bytes` values using base64 text payloads."""
+    """Codec for `bytes` values, with base64 text payloads."""
 
     content_type = "application/vnd.genie.bytes+base64"
 
@@ -56,13 +56,14 @@ class BytesCodec:
         """Decode a base64 payload back into bytes.
 
         Args:
-            value: Encoded value produced by `BytesCodec`.
+            value: Encoded value from `BytesCodec`.
 
         Returns:
             Decoded bytes.
 
         Raises:
-            TypeError: If the content type or payload shape is invalid.
+            TypeError: If `value` is not an `EncodedValue`, or its content type
+                or payload shape is not valid.
             ValueError: If the payload is not valid base64.
         """
 
@@ -100,7 +101,7 @@ class DatetimeCodec:
             value: Datetime-like value.
 
         Returns:
-            Encoded payload containing the concrete kind and ISO text.
+            Encoded payload with the concrete kind and the ISO text.
 
         Raises:
             TypeError: If `value` is not a supported datetime type.
@@ -120,14 +121,15 @@ class DatetimeCodec:
         """Decode ISO-8601 JSON data into a datetime-like value.
 
         Args:
-            value: Encoded value produced by `DatetimeCodec`.
+            value: Encoded value from `DatetimeCodec`.
 
         Returns:
             `datetime.datetime`, `datetime.date`, or `datetime.time`.
 
         Raises:
-            TypeError: If the content type or payload shape is invalid.
-            ValueError: If the payload cannot be parsed.
+            TypeError: If `value` is not an `EncodedValue`, or its content type
+                or payload shape is not valid.
+            ValueError: If the kind is unknown or the ISO text is not valid.
         """
 
         _require_content_type("DatetimeCodec", value, self.content_type)
@@ -163,7 +165,7 @@ class DecimalCodec:
         return isinstance(value, decimal.Decimal)
 
     def encode(self, value: Any) -> EncodedValue:
-        """Encode a decimal as a precision-preserving string.
+        """Encode a decimal as a string that keeps its full precision.
 
         Args:
             value: Decimal value.
@@ -180,17 +182,18 @@ class DecimalCodec:
         return EncodedValue(self.content_type, str(value))
 
     def decode(self, value: EncodedValue) -> decimal.Decimal:
-        """Decode a precision-preserving string into a decimal.
+        """Decode a decimal string into a decimal with the same precision.
 
         Args:
-            value: Encoded value produced by `DecimalCodec`.
+            value: Encoded value from `DecimalCodec`.
 
         Returns:
             Decoded decimal.
 
         Raises:
-            TypeError: If the content type or payload shape is invalid.
-            decimal.InvalidOperation: If the decimal text is invalid.
+            TypeError: If `value` is not an `EncodedValue`, or its content type
+                or payload shape is not valid.
+            decimal.InvalidOperation: If the decimal text is not valid.
         """
 
         _require_content_type("DecimalCodec", value, self.content_type)
@@ -217,7 +220,7 @@ class UUIDCodec:
         return isinstance(value, uuid.UUID)
 
     def encode(self, value: Any) -> EncodedValue:
-        """Encode a UUID as canonical string text.
+        """Encode a UUID as canonical text.
 
         Args:
             value: UUID value.
@@ -234,17 +237,18 @@ class UUIDCodec:
         return EncodedValue(self.content_type, str(value))
 
     def decode(self, value: EncodedValue) -> uuid.UUID:
-        """Decode canonical UUID text.
+        """Decode UUID text into a `uuid.UUID`.
 
         Args:
-            value: Encoded value produced by `UUIDCodec`.
+            value: Encoded value from `UUIDCodec`.
 
         Returns:
             Decoded UUID.
 
         Raises:
-            TypeError: If the content type or payload shape is invalid.
-            ValueError: If the UUID text is invalid.
+            TypeError: If `value` is not an `EncodedValue`, or its content type
+                or payload shape is not valid.
+            ValueError: If the UUID text is not valid.
         """
 
         _require_content_type("UUIDCodec", value, self.content_type)
@@ -256,9 +260,10 @@ class UUIDCodec:
 class DataclassCodec:
     """Codec for registered dataclass types.
 
-    The codec does not import classes by name while decoding. Callers register
-    trusted dataclass types up front, and encoded payloads carry a stable
-    `module:qualname` key that selects one of those registered classes.
+    - **No import on decode:** the codec does not import classes by name.
+    - **Registered types only:** callers register trusted dataclass types before use.
+    - **Type key:** each encoded payload has a stable `module:qualname` key. The
+      key selects one of the registered classes.
     """
 
     content_type = "application/vnd.genie.dataclass+json"
@@ -267,7 +272,7 @@ class DataclassCodec:
         """Create a dataclass codec.
 
         Args:
-            types: Trusted dataclass types this codec may round-trip.
+            types: Trusted dataclass types that this codec can round-trip.
         """
 
         self._types: dict[str, type[Any]] = {}
@@ -275,7 +280,9 @@ class DataclassCodec:
             self.register_type(type_)
 
     def register_type(self, type_: type[Any]) -> None:
-        """Register a dataclass type for future encode/decode operations.
+        """Register a dataclass type for later encode and decode operations.
+
+        A second registration of the same type has no effect.
 
         Args:
             type_: Dataclass type to register.
@@ -310,9 +317,11 @@ class DataclassCodec:
     def encode(self, value: Any) -> EncodedValue:
         """Encode a registered dataclass instance.
 
-        Only `init=True` fields are encoded. Field values must already be
-        JSON-compatible so the encoded payload remains portable across backend
-        adapters.
+        - **Fields:** the codec encodes only the fields with `init=True`.
+        - **Field values:** the codec accepts only JSON-compatible field values.
+          So the encoded payload stays portable across backend adapters.
+        - **Copies:** the codec copies lists and dictionaries into plain `list`
+          and `dict` objects.
 
         Args:
             value: Registered dataclass instance.
@@ -321,8 +330,8 @@ class DataclassCodec:
             Encoded dataclass payload.
 
         Raises:
-            TypeError: If `value` is not registered or contains a non-JSON
-                field value.
+            TypeError: If `value` is not an instance of a registered
+                dataclass, or a field value is not JSON-compatible.
             ValueError: If a field value nests lists and dictionaries more
                 than `MAX_NESTING_DEPTH` levels deep.
         """
@@ -352,14 +361,16 @@ class DataclassCodec:
         """Decode a registered dataclass instance.
 
         Args:
-            value: Encoded value produced by `DataclassCodec`.
+            value: Encoded value from `DataclassCodec`.
 
         Returns:
             Dataclass instance.
 
         Raises:
-            TypeError: If the content type, payload shape, or registered type is
-                invalid.
+            TypeError: If `value` is not an `EncodedValue`, its content type or
+                payload shape is not valid, or the type is not registered. Also
+                if a stored field value is not JSON-compatible, or the stored
+                fields do not match the dataclass constructor.
             ValueError: If a stored field value nests lists and dictionaries
                 more than `MAX_NESTING_DEPTH` levels deep.
         """
@@ -373,7 +384,7 @@ class DataclassCodec:
         type_ = self._types.get(type_key)
         if type_ is None:
             raise TypeError(f"Dataclass type {type_key!r} is not registered.")
-        # Check each field on its own, like `encode`, so the `fields` wrapper does not count as one more level.
+        # Check each field value alone, as `encode` does. Then the `fields` wrapper does not add a level.
         return type_(**{name: _copy_json_value(item) for name, item in fields.items()})
 
 
@@ -386,7 +397,7 @@ class EnumCodec:
         """Create an enum codec.
 
         Args:
-            types: Trusted enum types this codec may round-trip.
+            types: Trusted enum types that this codec can round-trip.
         """
 
         self._types: dict[str, type[enum.Enum]] = {}
@@ -394,7 +405,9 @@ class EnumCodec:
             self.register_type(type_)
 
     def register_type(self, type_: type[enum.Enum]) -> None:
-        """Register an enum type for future encode/decode operations.
+        """Register an enum type for later encode and decode operations.
+
+        A second registration of the same type has no effect.
 
         Args:
             type_: Enum type to register.
@@ -448,15 +461,15 @@ class EnumCodec:
         """Decode a registered enum member.
 
         Args:
-            value: Encoded value produced by `EnumCodec`.
+            value: Encoded value from `EnumCodec`.
 
         Returns:
             Enum member.
 
         Raises:
-            TypeError: If the content type, payload shape, or registered type is
-                invalid.
-            KeyError: If the enum member name does not exist.
+            TypeError: If `value` is not an `EncodedValue`, its content type or
+                payload shape is not valid, or the type is not registered.
+            KeyError: If the enum has no member with the stored name.
         """
 
         _require_content_type("EnumCodec", value, self.content_type)
@@ -472,7 +485,7 @@ class EnumCodec:
 
 
 def _require_content_type(codec_name: str, value: EncodedValue, expected: str) -> None:
-    """Raise when an encoded value belongs to a different codec."""
+    """Raise `TypeError` if `value` is not an `EncodedValue` or has the content type of a different codec."""
 
     if not isinstance(value, EncodedValue):
         raise TypeError(f"{codec_name} can decode only EncodedValue instances.")
@@ -481,7 +494,7 @@ def _require_content_type(codec_name: str, value: EncodedValue, expected: str) -
 
 
 def _require_mapping_payload(codec_name: str, data: Any) -> dict[str, Any]:
-    """Return a mapping payload or raise a codec-shaped error."""
+    """Return the payload if it is a dictionary. Otherwise raise a `TypeError` that names the codec."""
 
     if not isinstance(data, dict):
         raise TypeError(f"{codec_name} payload must be a dictionary.")
@@ -489,17 +502,17 @@ def _require_mapping_payload(codec_name: str, data: Any) -> dict[str, Any]:
 
 
 def _type_key(type_: type[Any]) -> str:
-    """Return a stable key for a trusted Python type."""
+    """Return the stable `module:qualname` key of a trusted Python type."""
 
     return f"{type_.__module__}:{type_.__qualname__}"
 
 
 def _copy_json_value(value: Any) -> Any:
-    """Return a defensive copy of strict JSON-compatible data.
+    """Return a copy of strict JSON-compatible data in plain lists and dictionaries.
 
-    This helper uses the same rules as `JsonCodec`, including
-    `MAX_NESTING_DEPTH`, so wrapper payloads can be stored by any backend that
-    supports JSON-shaped values.
+    - **Rules:** the same rules as `JsonCodec`, with `MAX_NESTING_DEPTH`.
+    - **Why:** each backend that supports JSON-shaped values can then store the
+      wrapper payloads.
 
     Raises:
         TypeError: If the value is not JSON-compatible.
@@ -516,7 +529,8 @@ def _copy_json_value(value: Any) -> Any:
 def _copy_plain_json(value: Any) -> Any:
     """Copy checked JSON data into plain lists and dictionaries.
 
-    The recursion is safe because `_json_error` already bounded the depth.
+    The recursion is safe. `_copy_json_value` calls `_json_error` first, and that
+    check limits the depth.
     """
 
     if isinstance(value, list):

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 
 def require_non_empty_str(value: object, *, field_name: str) -> str:
-    """Require a non-empty string, such as an id, block type, or relation.
+    """Raise an error if a value is not a non-empty string, such as an id, a block type, or a relation.
 
     Args:
         value: Value to check.
-        field_name: Name used in the error message.
+        field_name: Name for the error message.
 
     Returns:
         `value`, unchanged.

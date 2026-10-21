@@ -27,22 +27,28 @@ from genie.structures.records import TemporalEntry, TemporalItem, ValidityInterv
 
 @runtime_checkable
 class TemporalAccess(BlockReader, AccessChecker, Protocol):
-    """Small access surface required by `TemporalCollection`."""
+    """Small access surface that `TemporalCollection` requires."""
 
 
 class TemporalCollection:
     """A time-filtered view over existing memory blocks.
 
-    Temporal membership is separate from block ownership and values. Every
-    collection can attach one event time, validity period, or both to a block.
-    Queries scan the portable store unless a compatible temporal index is
-    supplied. Both paths resolve results through normal memory access so scope
-    and block policies remain in effect.
-
-    Reading needs `read` on the collection block and on each member. `add`,
-    `replace`, and `remove` also need `write` on the collection block, checked
-    through the access object, so a principal that can only read the
-    collection cannot change its membership.
+    - **Separate membership:** temporal membership is separate from block
+      ownership and values.
+    - **One entry for each block:** a collection attaches one event time, one
+      validity period, or both to a block.
+    - **Scan or index:** queries scan the portable store, unless an index is
+      given or the store is also a `TemporalIndex`.
+    - **Same checks on both paths:** both paths resolve results through normal
+      memory access, so the scope and the block policies stay in effect. The
+      facade also checks each entry against the filters again, also for index
+      results.
+    - **Reads:** a read needs `read` on the collection block and on each member.
+    - **Changes:** `add`, `replace`, and `remove` also need `write` on the
+      collection block. The access object checks it. So a principal that can
+      only read the collection cannot change its membership.
+    - **Unreadable members:** `get` raises `AccessDenied`. The scan methods skip
+      them.
     """
 
     __slots__ = (
@@ -64,24 +70,27 @@ class TemporalCollection:
         index: TemporalIndex | BlockRouter | None = None,
         hooks: HookRegistry | None = None,
     ) -> None:
-        """Create a temporal view anchored by a visible collection block.
+        """Create a temporal view with a visible collection block as its anchor.
 
         Args:
-            access: Full or scoped memory access used to resolve blocks.
-            store: Backend capability that persists temporal membership, or a
-                routing backend that resolves to the route holding the
+            access: Full or scoped memory access that resolves blocks.
+            store: Backend capability that stores temporal membership, or a
+                routing backend that resolves to the route that holds the
                 collection.
             collection: Block or id that identifies this temporal collection.
-            index: Optional efficient temporal query index. When omitted, the
-                store is used as the index if it implements `TemporalIndex`;
-                otherwise queries use a portable paged scan. A routing backend
-                resolves to the route holding the collection.
-            hooks: Optional registry. Defaults to the registry owned by a
-                `Memory` or `MemoryHandle` access object.
+            index: Optional efficient temporal query index. Without one, the
+                facade uses the store as the index if the store implements
+                `TemporalIndex`. If not, queries use a portable paged scan. A
+                routing backend resolves to the route that holds the
+                collection.
+            hooks: Optional registry. Defaults to the registry of a `Memory` or
+                `MemoryHandle` access object.
 
         Raises:
-            MemoryNotFound: If the collection block is missing.
-            UnsupportedOperation: If a supplied capability is unsupported.
+            AccessDenied: If the principal cannot read the collection block.
+            MemoryNotFound: If the collection block does not exist.
+            UnsupportedOperation: If the store or the index does not support
+                the needed capability.
         """
 
         missing_message = f"Temporal collection block {_block_id(collection)!r} does not exist."
@@ -127,7 +136,8 @@ class TemporalCollection:
         Args:
             block: Existing memory block or id.
             occurred_at: Optional time when an event happened.
-            validity: Optional half-open period when information is valid.
+            validity: Optional half-open period in which the information is
+                valid.
 
         Returns:
             Created temporal entry and resolved block.
@@ -136,6 +146,11 @@ class TemporalCollection:
             AccessDenied: If the collection denies `write` or the block denies
                 `read`.
             MemoryConflict: If the block is already in this collection.
+            MemoryNotFound: If the collection or the block does not exist.
+            TypeError: If `occurred_at` is not a datetime or `validity` is not
+                a `ValidityInterval`.
+            ValueError: If `occurred_at` and `validity` are both `None`, or
+                `occurred_at` is naive.
         """
 
         with hook_operation(
@@ -175,8 +190,9 @@ class TemporalCollection:
 
         Args:
             block: Existing visible temporal member.
-            occurred_at: Replacement event time, or `None` to omit it.
-            validity: Replacement validity period, or `None` to omit it.
+            occurred_at: Replacement event time, or `None` for no event time.
+            validity: Replacement validity period, or `None` for no validity
+                period.
 
         Returns:
             Replacement temporal entry and resolved block.
@@ -185,6 +201,11 @@ class TemporalCollection:
             AccessDenied: If the collection denies `write` or the block denies
                 `read`.
             MemoryConflict: If the block is not in this collection.
+            MemoryNotFound: If the collection or the block does not exist.
+            TypeError: If `occurred_at` is not a datetime or `validity` is not
+                a `ValidityInterval`.
+            ValueError: If `occurred_at` and `validity` are both `None`, or
+                `occurred_at` is naive.
         """
 
         with hook_operation(
@@ -225,11 +246,13 @@ class TemporalCollection:
             block: Memory block or id to look up.
 
         Returns:
-            Temporal item pairing the entry with its block, or `None` when the
+            Temporal item with the entry and its block, or `None` when the
             collection does not contain the block.
 
         Raises:
-            MemoryNotFound: If the entry references a block that no longer
+            AccessDenied: If the principal cannot read the collection or the
+                member block.
+            MemoryNotFound: If the entry refers to a block that no longer
                 exists.
         """
 
@@ -240,7 +263,7 @@ class TemporalCollection:
         return self._resolve_exact(entry)
 
     def remove(self, block: BlockRef) -> None:
-        """Remove temporal membership without deleting the memory block.
+        """Remove temporal membership. The memory block stays.
 
         Args:
             block: Existing visible temporal member.
@@ -249,6 +272,7 @@ class TemporalCollection:
             AccessDenied: If the collection denies `write` or the block denies
                 `read`.
             MemoryConflict: If the block is not in this collection.
+            MemoryNotFound: If the collection or the block does not exist.
         """
 
         with hook_operation(
@@ -283,22 +307,32 @@ class TemporalCollection:
         overlaps: ValidityInterval | None = None,
         limit: int = 100,
     ) -> list[TemporalItem]:
-        """Return visible entries matching all supplied temporal filters.
+        """Return visible entries that match all given temporal filters.
 
-        Event bounds use `[occurred_start, occurred_stop)`. `valid_at`
-        selects validity intervals containing one instant. `overlaps` selects
-        validity intervals that overlap the supplied half-open period. Entries
-        missing a time field required by a filter do not match.
+        - **Event bounds:** `[occurred_start, occurred_stop)`.
+        - **`valid_at`:** selects validity intervals that contain one instant.
+        - **`overlaps`:** selects validity intervals that overlap the given
+          half-open period.
+        - **No time field:** an entry without a time field that a filter
+          needs does not match.
 
         Args:
             occurred_start: Optional inclusive event-time lower bound.
             occurred_stop: Optional exclusive event-time upper bound.
-            valid_at: Optional instant that a validity period must contain.
-            overlaps: Optional period that a validity period must overlap.
+            valid_at: Optional instant that a validity period contains.
+            overlaps: Optional period that a validity period overlaps.
             limit: Maximum visible items to return.
 
         Returns:
-            Visible temporal items in stable ascending block-id order.
+            Visible temporal items in stable ascending block-id order. The list
+            leaves out targets that do not exist or that the principal cannot
+            read.
+
+        Raises:
+            TypeError: If a time bound is not a datetime, `overlaps` is not a
+                `ValidityInterval`, or `limit` is not an integer.
+            ValueError: If a time bound is naive, `occurred_stop` is earlier
+                than `occurred_start`, or `limit` is negative.
         """
 
         return self._scan(
@@ -319,7 +353,7 @@ class TemporalCollection:
     ) -> list[TemporalItem]:
         """Return visible entries with event times in a half-open range.
 
-        Entries without an event time are excluded.
+        Entries without an event time are not in the result.
 
         Args:
             start: Optional inclusive lower bound on event time.
@@ -327,8 +361,8 @@ class TemporalCollection:
             limit: Maximum visible items to return.
 
         Returns:
-            Visible temporal items in ascending block-id order. Missing or
-            inaccessible targets are omitted.
+            Visible temporal items in ascending block-id order. The list leaves
+            out targets that do not exist or that the principal cannot read.
 
         Raises:
             TypeError: If a bound is not a datetime or `limit` is not an
@@ -349,16 +383,16 @@ class TemporalCollection:
     def valid_at(self, when: datetime, *, limit: int = 100) -> list[TemporalItem]:
         """Return visible entries whose validity contains `when`.
 
-        Validity periods are half-open, so an entry matches when `when` is at
-        or after its start and strictly before its end.
+        Validity periods are half-open. So an entry matches when `when` is at
+        or after its start and before its end.
 
         Args:
-            when: Instant an entry's validity period must contain.
+            when: Instant that the validity period of an entry contains.
             limit: Maximum visible items to return.
 
         Returns:
-            Visible temporal items in ascending block-id order. Missing or
-            inaccessible targets are omitted.
+            Visible temporal items in ascending block-id order. The list leaves
+            out targets that do not exist or that the principal cannot read.
 
         Raises:
             TypeError: If `when` is not a datetime or `limit` is not an
@@ -384,12 +418,12 @@ class TemporalCollection:
         """Return visible entries whose validity overlaps `interval`.
 
         Args:
-            interval: Validity period an entry's own period must overlap.
+            interval: Validity period that the period of an entry overlaps.
             limit: Maximum visible items to return.
 
         Returns:
-            Visible temporal items in ascending block-id order. Missing or
-            inaccessible targets are omitted.
+            Visible temporal items in ascending block-id order. The list leaves
+            out targets that do not exist or that the principal cannot read.
 
         Raises:
             TypeError: If `interval` is not a `ValidityInterval` or `limit` is
@@ -416,7 +450,7 @@ class TemporalCollection:
         overlaps: ValidityInterval | None,
         limit: int,
     ) -> list[TemporalItem]:
-        """Scan or index temporal entries and apply normal visibility checks."""
+        """Scan the store or query the index, then apply the filters and the normal visibility checks."""
 
         self._require_collection()
         occurred_start = _normalize_optional_time(
@@ -484,7 +518,7 @@ class TemporalCollection:
         return items
 
     def _resolve_exact(self, entry: TemporalEntry) -> TemporalItem:
-        """Resolve one exact entry without hiding access or integrity errors."""
+        """Resolve one exact entry, and do not hide access or integrity errors."""
 
         block = self._access.get(entry.block_id)
         if block is None:
@@ -492,7 +526,7 @@ class TemporalCollection:
         return TemporalItem(entry=entry, block=block)
 
     def _require_collection(self) -> MemoryBlock:
-        """Return the visible collection block or raise when it was deleted."""
+        """Return the visible collection block, or raise `MemoryNotFound` if it was deleted."""
 
         collection = self._access.get(self.collection_id)
         if collection is None:
@@ -500,14 +534,14 @@ class TemporalCollection:
         return collection
 
     def _require_writable_collection(self) -> MemoryBlock:
-        """Return the visible collection block after requiring `write` on it."""
+        """Return the visible collection block after a `write` check on it."""
 
         collection = self._require_collection()
         self._access.require_access(Operation.WRITE, collection.id)
         return collection
 
     def _require_block(self, block: BlockRef) -> MemoryBlock:
-        """Return a visible block or raise a clear missing-block error."""
+        """Return a visible block, or raise `MemoryNotFound` with a clear message."""
 
         stored = self._access.get(block)
         if stored is None:
@@ -524,7 +558,7 @@ def _matches(
     valid_at: datetime | None,
     overlaps: ValidityInterval | None,
 ) -> bool:
-    """Return whether a temporal entry satisfies all supplied filters."""
+    """Return whether a temporal entry matches all given filters."""
 
     occurred_at = entry.occurred_at
     if occurred_only and occurred_at is None:
@@ -543,13 +577,13 @@ def _matches(
 
 
 def _intervals_overlap(left: ValidityInterval, right: ValidityInterval) -> bool:
-    """Return whether two half-open, optionally open-ended intervals overlap."""
+    """Return whether 2 half-open intervals overlap. An interval can have no end."""
 
     return not ((left.invalid_at is not None and left.invalid_at <= right.valid_at) or (right.invalid_at is not None and right.invalid_at <= left.valid_at))
 
 
 def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
-    """Validate and normalize an optional aware datetime to UTC."""
+    """Check an optional timezone-aware datetime, and return it in UTC."""
 
     if value is None:
         return None
@@ -567,7 +601,7 @@ def _block_id(block: BlockRef) -> str:
 
 
 def _validate_limit(limit: object) -> None:
-    """Require a non-negative integer result limit."""
+    """Raise an error if a result limit is not a non-negative integer."""
 
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise TypeError("limit must be an integer.")

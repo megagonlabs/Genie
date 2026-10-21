@@ -15,10 +15,10 @@ class LinkRelations:
     """Reserved Genie link relation constants.
 
     Attributes:
-        MOUNT: Symbolic mount relation. Mount links point from a source block
-            to another memory root. They do not imply parent/child ownership,
-            subtree membership, recursive delete ownership, or access
-            inheritance.
+        MOUNT: Symbolic mount relation. A mount link points from a source
+            block to another memory root. It does not imply parent and child
+            ownership, subtree membership, ownership for recursive delete, or
+            access inheritance.
     """
 
     MOUNT = "genie.mount"
@@ -38,22 +38,25 @@ def new_link_id() -> str:
 class MemoryLink:
     """A typed edge between two memory blocks.
 
-    Links represent relationships that are separate from parent/child
-    ownership. They do not imply subtree membership or access inheritance.
+    - **Relationship, not ownership:** a link is a relationship that is separate
+      from parent and child ownership.
+    - **No inheritance:** it does not imply subtree membership or access
+      inheritance.
 
     Attributes:
-        source_id: Id of the block the link starts from.
-        target_id: Id of the block the link points to.
+        source_id: Id of the block where the link starts.
+        target_id: Id of the block that the link points to.
         relation: Application-defined relationship type.
-        id: Stable link identifier.
+        id: Stable link id.
         metadata: Optional relationship metadata. `Memory.update_link` merges
-            metadata while preserving the other link fields.
-        created_at: UTC timestamp for link creation.
+            metadata and keeps the other link fields.
+        created_at: UTC timestamp of the link creation.
 
     Raises:
         TypeError: If `source_id`, `target_id`, `relation`, or `id` is not a
             string.
-        ValueError: If `source_id`, `target_id`, `relation`, or `id` is empty.
+        ValueError: If `source_id`, `target_id`, `relation`, or `id` is empty
+            or contains only whitespace.
     """
 
     source_id: str
@@ -64,7 +67,7 @@ class MemoryLink:
     created_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        """Validate the endpoint, relation, and identity fields."""
+        """Check the endpoint, relation, and id fields."""
 
         require_non_empty_str(self.source_id, field_name="MemoryLink source_id")
         require_non_empty_str(self.target_id, field_name="MemoryLink target_id")

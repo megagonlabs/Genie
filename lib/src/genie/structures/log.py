@@ -25,19 +25,21 @@ from genie.structures.records import LogEntry, LogItem
 
 @runtime_checkable
 class SequenceAccess(BlockReader, AccessChecker, Protocol):
-    """Small access surface required by `EventLog`."""
+    """Small access surface that `EventLog` requires."""
 
 
 class EventLog:
     """An append-only ordered view over existing memory blocks.
 
-    The sequence store atomically allocates stable positions. Blocks remain
-    owned and stored through normal Genie memory and may appear in more than one
-    log or structure.
-
-    Reading needs `read` on the log block and on each member. `append` also
-    needs `write` on the log block, checked through the access object, so a
-    principal that can only read the log cannot add to it.
+    - **Positions:** the sequence store allocates stable positions atomically.
+    - **Ownership:** normal Genie memory still owns and stores the blocks. One
+      block can be in more than one log or structure.
+    - **Reads:** a read needs `read` on the log block and on each member.
+    - **Appends:** `append` also needs `write` on the log block. The access
+      object checks it. So a principal that can only read the log cannot add to
+      it.
+    - **Unreadable members:** `get` raises `AccessDenied`. `read` and `tail` skip
+      them.
     """
 
     __slots__ = (
@@ -57,19 +59,21 @@ class EventLog:
         log: BlockRef,
         hooks: HookRegistry | None = None,
     ) -> None:
-        """Create an event-log view anchored by a visible log block.
+        """Create an event-log view with a visible log block as its anchor.
 
         Args:
-            access: Full or scoped memory access used to resolve blocks.
+            access: Full or scoped memory access that resolves blocks.
             store: Backend capability that appends entries atomically, or a
-                routing backend that resolves to the route holding the log.
+                routing backend that resolves to the route that holds the log.
             log: Block or id that identifies this ordered log.
-            hooks: Optional registry. Defaults to the registry owned by a
-                `Memory` or `MemoryHandle` access object.
+            hooks: Optional registry. Defaults to the registry of a `Memory` or
+                `MemoryHandle` access object.
 
         Raises:
-            MemoryNotFound: If the log block is missing.
-            UnsupportedOperation: If `store` lacks the sequence capability.
+            AccessDenied: If the principal cannot read the log block.
+            MemoryNotFound: If the log block does not exist.
+            UnsupportedOperation: If `store` does not have the sequence
+                capability.
         """
 
         store = resolve_store(store, log, missing_message=f"Event log block {_block_id(log)!r} does not exist.")
@@ -92,7 +96,7 @@ class EventLog:
         return self._require_log()
 
     def append(self, block: BlockRef) -> LogItem:
-        """Atomically append an existing visible block to this log.
+        """Append an existing visible block to this log, in one atomic step.
 
         Args:
             block: Existing memory block or id.
@@ -102,7 +106,7 @@ class EventLog:
 
         Raises:
             AccessDenied: If the log denies `write` or the block denies `read`.
-            MemoryNotFound: If the log or block is missing.
+            MemoryNotFound: If the log or the block does not exist.
         """
 
         with hook_operation(
@@ -141,10 +145,12 @@ class EventLog:
             sequence: Exact position within the log.
 
         Returns:
-            Visible log item, or `None` when the position holds no entry.
+            Visible log item, or `None` when the position has no entry.
 
         Raises:
-            MemoryNotFound: If the position references a block that no longer
+            AccessDenied: If the principal cannot read the log or the member
+                block.
+            MemoryNotFound: If the position refers to a block that no longer
                 exists.
             TypeError: If `sequence` is not an integer.
             ValueError: If `sequence` is negative.
@@ -168,16 +174,18 @@ class EventLog:
         """Read visible entries from an optional half-open sequence range.
 
         Args:
-            start: Optional inclusive starting sequence.
-            stop: Optional exclusive ending sequence.
-            reverse: Whether to return newest entries first.
+            start: Optional inclusive start sequence.
+            stop: Optional exclusive end sequence.
+            reverse: If `True`, the newest entries come first.
             limit: Maximum visible items to return.
 
         Returns:
-            Visible log items in ascending or descending sequence order.
-            Missing or inaccessible targets are omitted.
+            Visible log items in ascending or descending sequence order. The
+            list leaves out targets that do not exist or that the principal
+            cannot read.
 
         Raises:
+            AccessDenied: If the principal cannot read the log block.
             TypeError: If `reverse` is not a boolean, or `start`, `stop`, or
                 `limit` is not an integer.
             ValueError: If a bound or `limit` is negative, or `stop` is less
@@ -248,7 +256,7 @@ class EventLog:
         return items
 
     def _resolve_exact(self, entry: LogEntry) -> LogItem:
-        """Resolve one exact entry without hiding access or integrity errors."""
+        """Resolve one exact entry, and do not hide access or integrity errors."""
 
         block = self._access.get(entry.block_id)
         if block is None:
@@ -259,7 +267,7 @@ class EventLog:
         return LogItem(entry=entry, block=block)
 
     def _require_log(self) -> MemoryBlock:
-        """Return the visible log block or raise when it was deleted."""
+        """Return the visible log block, or raise `MemoryNotFound` if it was deleted."""
 
         log = self._access.get(self.log_id)
         if log is None:
@@ -267,14 +275,14 @@ class EventLog:
         return log
 
     def _require_writable_log(self) -> MemoryBlock:
-        """Return the visible log block after requiring `write` on it."""
+        """Return the visible log block after a `write` check on it."""
 
         log = self._require_log()
         self._access.require_access(Operation.WRITE, log.id)
         return log
 
     def _require_block(self, block: BlockRef) -> MemoryBlock:
-        """Return a visible block or raise a clear missing-block error."""
+        """Return a visible block, or raise `MemoryNotFound` with a clear message."""
 
         stored = self._access.get(block)
         if stored is None:
@@ -289,7 +297,7 @@ def _block_id(block: BlockRef) -> str:
 
 
 def _validate_sequence(value: object, *, name: str) -> None:
-    """Require a non-negative integer sequence value."""
+    """Raise an error if a sequence value is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -298,7 +306,7 @@ def _validate_sequence(value: object, *, name: str) -> None:
 
 
 def _validate_limit(limit: object) -> None:
-    """Require a non-negative integer result limit."""
+    """Raise an error if a result limit is not a non-negative integer."""
 
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise TypeError("limit must be an integer.")

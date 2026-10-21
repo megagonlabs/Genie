@@ -26,20 +26,22 @@ from genie.structures.records import KeyBinding, KeyedItem, MemoryAddress
 
 @runtime_checkable
 class KeyedAccess(BlockReader, AccessChecker, Protocol):
-    """Small access surface required by `KeyedCollection`."""
+    """Small access surface that `KeyedCollection` requires."""
 
 
 class KeyedCollection:
     """A visible namespaced key map for existing memory blocks.
 
-    Blocks remain owned and stored by normal Genie memory. The keyed store owns
-    only address-to-block bindings and enforces atomic uniqueness and
-    compare-and-swap updates.
-
-    Reading needs `read` on the collection block and on each member. `bind`,
-    `rebind`, and `unbind` also need `write` on the collection block, checked
-    through the access object, so a principal that can only read the
-    collection cannot change what its addresses point to.
+    - **Ownership:** normal Genie memory still owns and stores the blocks.
+    - **Keyed store:** the keyed store owns only the bindings from address to
+      block. It makes sure that each address is unique, and it does
+      compare-and-swap updates atomically.
+    - **Reads:** a read needs `read` on the collection block and on each member.
+    - **Changes:** `bind`, `rebind`, and `unbind` also need `write` on the
+      collection block. The access object checks it. So a principal that can
+      only read the collection cannot change what its addresses point to.
+    - **Unreadable members:** `get` and `get_item` raise `AccessDenied`. `items`
+      skips them.
     """
 
     __slots__ = (
@@ -59,20 +61,22 @@ class KeyedCollection:
         collection: BlockRef,
         hooks: HookRegistry | None = None,
     ) -> None:
-        """Create a keyed view anchored by a visible collection block.
+        """Create a keyed view with a visible collection block as its anchor.
 
         Args:
-            access: Full or scoped memory access used to resolve blocks.
+            access: Full or scoped memory access that resolves blocks.
             store: Backend capability that stores key bindings atomically, or a
-                routing backend that resolves to the route holding the
+                routing backend that resolves to the route that holds the
                 collection.
-            collection: Block or id that identifies this collection's key space.
-            hooks: Optional registry. Defaults to the registry owned by a
-                `Memory` or `MemoryHandle` access object.
+            collection: Block or id that identifies the key space of this
+                collection.
+            hooks: Optional registry. Defaults to the registry of a `Memory` or
+                `MemoryHandle` access object.
 
         Raises:
-            MemoryNotFound: If the collection block is missing.
-            UnsupportedOperation: If `store` lacks the keyed capability.
+            AccessDenied: If the principal cannot read the collection block.
+            MemoryNotFound: If the collection block does not exist.
+            UnsupportedOperation: If `store` does not have the keyed capability.
         """
 
         store = resolve_store(
@@ -101,7 +105,7 @@ class KeyedCollection:
         return self._require_collection()
 
     def bind(self, address: MemoryAddress, block: BlockRef) -> KeyedItem:
-        """Atomically bind an unused address to an existing visible block.
+        """Bind an unused address to an existing visible block, in one atomic step.
 
         Args:
             address: Namespace and key to bind.
@@ -114,7 +118,8 @@ class KeyedCollection:
             AccessDenied: If the collection denies `write` or the block denies
                 `read`.
             MemoryConflict: If the address is already bound.
-            MemoryNotFound: If the collection or block is missing.
+            MemoryNotFound: If the collection or the block does not exist.
+            TypeError: If `address` is not a `MemoryAddress`.
         """
 
         with hook_operation(
@@ -150,20 +155,24 @@ class KeyedCollection:
         *,
         expected: BlockRef,
     ) -> KeyedItem:
-        """Atomically move an address when its current block still matches.
+        """Move an address in one atomic step, if its current block still matches.
 
         Args:
             address: Existing collection address.
             block: New visible memory block or id.
-            expected: Block or id that must currently own the address.
+            expected: Block or id that the address points to now, as the
+                caller expects.
 
         Returns:
             Replacement binding and resolved new block.
 
         Raises:
-            AccessDenied: If the collection denies `write` or the new block
-                denies `read`.
-            MemoryConflict: If the address is missing or changed.
+            AccessDenied: If the collection denies `write`, or the current or
+                the new block denies `read`.
+            MemoryConflict: If the address is not bound or points to a
+                different block.
+            MemoryNotFound: If the new block does not exist.
+            TypeError: If `address` is not a `MemoryAddress`.
         """
 
         with hook_operation(
@@ -210,11 +219,14 @@ class KeyedCollection:
             address: Exact namespace and key to look up.
 
         Returns:
-            Visible block, or `None` when the address is unbound.
+            Visible block, or `None` when the address is not bound.
 
         Raises:
+            AccessDenied: If the principal cannot read the collection or the
+                bound block.
             MemoryNotFound: If the address is bound to a block that no longer
                 exists.
+            TypeError: If `address` is not a `MemoryAddress`.
         """
 
         item = self.get_item(address)
@@ -227,12 +239,15 @@ class KeyedCollection:
             address: Exact namespace and key to look up.
 
         Returns:
-            Keyed item pairing the binding with its block, or `None` when the
-            address is unbound.
+            Keyed item with the binding and its block, or `None` when the
+            address is not bound.
 
         Raises:
+            AccessDenied: If the principal cannot read the collection or the
+                bound block.
             MemoryNotFound: If the address is bound to a block that no longer
                 exists.
+            TypeError: If `address` is not a `MemoryAddress`.
         """
 
         _require_address(address)
@@ -259,14 +274,17 @@ class KeyedCollection:
 
         Args:
             namespace: Optional exact namespace. With `recursive=True`, it is
-                treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below `namespace`.
+                a namespace prefix.
+            recursive: If `True`, the list also includes the nested namespaces
+                below `namespace`.
             limit: Maximum visible items to return.
 
         Returns:
-            Visible keyed items. Missing or inaccessible targets are omitted.
+            Visible keyed items. The list leaves out targets that do not exist
+            or that the principal cannot read.
 
         Raises:
+            AccessDenied: If the principal cannot read the collection.
             TypeError: If `recursive` is not a boolean or `limit` is not an
                 integer.
             ValueError: If `limit` is negative.
@@ -308,18 +326,22 @@ class KeyedCollection:
         return items
 
     def unbind(self, address: MemoryAddress, *, expected: BlockRef) -> None:
-        """Atomically remove an address when its current block still matches.
+        """Remove an address in one atomic step, if its current block still matches.
 
-        The memory block is not deleted. Removing structural membership and
-        deleting a block are separate operations.
+        The memory block stays. A removal of structural membership and a block
+        delete are separate operations.
 
         Args:
             address: Existing collection address.
-            expected: Block or id that must currently own the address.
+            expected: Block or id that the address points to now, as the
+                caller expects.
 
         Raises:
-            AccessDenied: If the collection denies `write`.
-            MemoryConflict: If the address is missing or changed.
+            AccessDenied: If the collection denies `write`, or the current block
+                denies `read`.
+            MemoryConflict: If the address is not bound or points to a
+                different block.
+            TypeError: If `address` is not a `MemoryAddress`.
         """
 
         with hook_operation(
@@ -353,7 +375,7 @@ class KeyedCollection:
             after_change(self._hooks, context, change)
 
     def _require_collection(self) -> MemoryBlock:
-        """Return the visible collection block or raise when it was deleted."""
+        """Return the visible collection block, or raise `MemoryNotFound` if it was deleted."""
 
         collection = self._access.get(self.collection_id)
         if collection is None:
@@ -363,14 +385,14 @@ class KeyedCollection:
         return collection
 
     def _require_writable_collection(self) -> MemoryBlock:
-        """Return the visible collection block after requiring `write` on it."""
+        """Return the visible collection block after a `write` check on it."""
 
         collection = self._require_collection()
         self._access.require_access(Operation.WRITE, collection.id)
         return collection
 
     def _require_block(self, block: BlockRef) -> MemoryBlock:
-        """Return a visible block or raise a clear missing-block error."""
+        """Return a visible block, or raise `MemoryNotFound` with a clear message."""
 
         stored = self._access.get(block)
         if stored is None:
@@ -387,7 +409,7 @@ def _block_id(block: BlockRef) -> str:
 def _normalize_namespace(
     namespace: tuple[str, ...] | None,
 ) -> tuple[str, ...] | None:
-    """Validate and freeze an optional namespace tuple."""
+    """Check an optional namespace, and return it as a tuple."""
 
     if namespace is None:
         return None
@@ -395,14 +417,14 @@ def _normalize_namespace(
 
 
 def _require_address(address: object) -> None:
-    """Require a typed collection address."""
+    """Raise `TypeError` if a value is not a `MemoryAddress`."""
 
     if not isinstance(address, MemoryAddress):
         raise TypeError("address must be a MemoryAddress.")
 
 
 def _validate_limit(limit: object) -> None:
-    """Require a non-negative integer result limit."""
+    """Raise an error if a result limit is not a non-negative integer."""
 
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise TypeError("limit must be an integer.")

@@ -16,11 +16,11 @@ from genie.policy.principal import Principal
 
 
 class AccessDenied(PermissionError):
-    """Raised when a principal cannot perform a memory operation."""
+    """Genie raises this `PermissionError` when a principal cannot perform a memory operation."""
 
 
 class Operation(StrEnum):
-    """Operation names checked by the policy engine."""
+    """Built-in operation names that the policy engine checks."""
 
     READ = "read"
     WRITE = "write"
@@ -32,10 +32,15 @@ class Operation(StrEnum):
 class PolicyEngine:
     """Evaluate block-level policies for a principal.
 
+    - **Rule order:** a built-in field of the policy, then the entry in
+      `MemoryPolicy.operations` of the block, then the engine default.
+    - **No policy:** a block with `policy=None` uses
+      `MemoryPolicy.owner_private()`.
+
     Attributes:
-        operations: Default rules for application-defined operations. A
-            block's own `MemoryPolicy.operations` entry overrides the default
-            for a matching operation name.
+        operations: Default rules for application-defined operations. An entry
+            with the same name in `MemoryPolicy.operations` of a block
+            overrides the default.
     """
 
     def __init__(self, *, operations: Mapping[str, AccessRule] | None = None) -> None:
@@ -43,12 +48,14 @@ class PolicyEngine:
 
         Args:
             operations: Optional default rules for application-defined
-                operations. Block-level `MemoryPolicy.operations` entries
-                override these defaults for matching operation names.
+                operations. Block-level entries in `MemoryPolicy.operations`
+                with the same names override these defaults.
 
         Raises:
-            ValueError: If a custom operation attempts to override a built-in
-                Genie operation.
+            TypeError: If `operations` is not a mapping of string names to
+                `AccessRule` values.
+            ValueError: If a custom operation name is empty or is a built-in
+                Genie operation name.
         """
 
         self.operations: Mapping[str, AccessRule] = _freeze_operation_rules(
@@ -61,19 +68,19 @@ class PolicyEngine:
         block: MemoryBlock,
         principal: Principal,
     ) -> None:
-        """Require that a principal may perform an operation.
+        """Raise `AccessDenied` if a principal cannot perform an operation.
 
         Args:
             operation: Operation to check.
-            block: Block carrying the policy.
-            principal: Principal attempting the operation.
+            block: Block that has the policy.
+            principal: Principal that tries the operation.
 
         Raises:
             AccessDenied: If the policy does not allow the operation.
-            TypeError: If the block, principal, policy, or operation has an
-                invalid runtime type.
-            ValueError: If `operation` is neither built-in nor configured as a
-                custom operation.
+            TypeError: If the block, principal, policy, or operation has a
+                runtime type that is not valid.
+            ValueError: If `operation` is empty, or is neither built-in nor
+                configured as a custom operation.
         """
 
         if not self.allows(operation, block, principal):
@@ -88,21 +95,21 @@ class PolicyEngine:
         block: MemoryBlock,
         principal: Principal,
     ) -> bool:
-        """Return whether a principal may perform an operation.
+        """Return whether a principal can perform an operation.
 
         Args:
             operation: Operation to check.
-            block: Block carrying the policy.
-            principal: Principal attempting the operation.
+            block: Block that has the policy.
+            principal: Principal that tries the operation.
 
         Returns:
-            `True` when the operation is allowed.
+            `True` when the policy allows the operation.
 
         Raises:
-            TypeError: If the block, principal, policy, or operation has an
-                invalid runtime type.
-            ValueError: If `operation` is neither built-in nor configured as a
-                custom operation.
+            TypeError: If the block, principal, policy, or operation has a
+                runtime type that is not valid.
+            ValueError: If `operation` is empty, or is neither built-in nor
+                configured as a custom operation.
         """
 
         if not isinstance(block, MemoryBlock):

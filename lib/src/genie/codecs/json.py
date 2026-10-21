@@ -1,4 +1,4 @@
-"""JSON-compatible default codec."""
+"""The default codec, for JSON-compatible values."""
 
 from __future__ import annotations
 
@@ -9,21 +9,23 @@ from typing import Any
 
 from genie.codecs.base import EncodedValue
 
-# Most levels of nested lists and dictionaries in one JSON value.
-# - **Counts containers only:** `[]` and `{}` are one level each. Scalars add no level.
-# - **Keeps later steps safe:** copies and backend JSON checks recurse once per level, so this bound keeps
-#   them far below the Python recursion limit.
-# - **Also stops cycles:** a list or dictionary that contains itself is deeper than any bound.
+# Maximum number of levels of nested lists and dictionaries in one JSON value.
+# - **Only containers count:** each `[]` and each `{}` is one level. Scalars add no level.
+# - **Later steps stay safe:** copies and backend JSON checks recurse once per level. This limit keeps them
+#   far below the Python recursion limit.
+# - **Cycles also fail:** a list or dictionary that contains itself is deeper than any limit.
 MAX_NESTING_DEPTH = 100
 
 
 class JsonCodec:
     """Codec for JSON-compatible values.
 
-    The codec accepts `None`, strings, booleans, integers, finite floats, lists,
-    and dictionaries with string keys, nested at most `MAX_NESTING_DEPTH` levels
-    deep. Values are deep-copied on encode and decode so callers cannot mutate
-    stored state through returned objects.
+    - **Accepts:** `None`, strings, booleans, integers, finite floats, lists, and
+      dictionaries with string keys.
+    - **Rejects:** `enum.Enum` members, also when the enum is a `str` or an `int`.
+    - **Depth:** lists and dictionaries nest at most `MAX_NESTING_DEPTH` levels.
+    - **Copies:** encode and decode deep-copy the value. So a caller cannot change
+      the stored state through a returned object.
     """
 
     content_type = "application/json"
@@ -31,15 +33,15 @@ class JsonCodec:
     def can_encode(self, value: Any) -> bool:
         """Return whether the value is JSON-compatible.
 
-        A value that nests too deeply still returns `True`, so `encode` can
-        reject it with `ValueError` instead of the registry reporting that no
-        codec handles lists or dictionaries.
+        For a value that nests too deeply, this method still returns `True`.
+        Then `encode` rejects the value with `ValueError`, and the registry does
+        not report that no codec accepts lists or dictionaries.
 
         Args:
             value: User-level value.
 
         Returns:
-            `True` when the value can be encoded by this codec.
+            `True` when this codec can encode the value.
         """
 
         return not isinstance(_json_error(value), TypeError)
@@ -74,9 +76,9 @@ class JsonCodec:
             A deep copy of the encoded data.
 
         Raises:
-            TypeError: If the encoded value was produced by another codec, or
-                the payload is not JSON-compatible or nests more than
-                `MAX_NESTING_DEPTH` levels deep.
+            TypeError: If `value` is not an `EncodedValue` or has the content
+                type of another codec, or if the payload is not JSON-compatible
+                or nests more than `MAX_NESTING_DEPTH` levels deep.
         """
 
         if not isinstance(value, EncodedValue):
@@ -90,12 +92,12 @@ class JsonCodec:
 
 
 def _json_error(value: Any) -> TypeError | ValueError | None:
-    """Return the first strict JSON problem in a value, or `None`.
+    """Return the first strict JSON problem that the walk finds in a value, or `None`.
 
     - **`TypeError`:** a part of the value is not strict JSON data.
     - **`ValueError`:** lists and dictionaries nest more than `MAX_NESTING_DEPTH` levels deep.
-    - **No recursion:** the walk uses its own stack and stops at the bound, so a deep value cannot raise `RecursionError` here.
-    - **Speed:** only lists and dictionaries go on the stack. Scalars are checked in place.
+    - **No recursion:** the walk uses its own stack and stops at the limit. So a deep value cannot raise `RecursionError` here.
+    - **Speed:** only lists and dictionaries go on the stack. The walk checks scalars in place.
     """
 
     if not _is_container(value):
@@ -122,13 +124,13 @@ def _json_error(value: Any) -> TypeError | ValueError | None:
 
 
 def _is_container(value: Any) -> bool:
-    """Return whether a value is a list or dictionary that the walk descends into."""
+    """Return whether a value is a list or a dictionary, and not an enum member, so that the walk goes into it."""
 
     return isinstance(value, list | dict) and not isinstance(value, enum.Enum)
 
 
 def _scalar_error(value: Any) -> TypeError | None:
-    """Return a `TypeError` for a non-container value that is not strict JSON, or `None`."""
+    """Return a `TypeError` if a non-container value is not strict JSON. Otherwise return `None`."""
 
     if isinstance(value, enum.Enum):
         return TypeError(f"{type(value).__name__!r} is not JSON-compatible.")

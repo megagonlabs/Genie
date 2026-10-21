@@ -1,19 +1,20 @@
 """Genie public API.
 
-Genie provides platform-agnostic, storage/database-agnostic, and
-use-case-agnostic building blocks for developers building their own memory
-systems.
+Genie gives parts for developers who build their own memory systems. The parts
+do not depend on a platform, a storage engine or database, or a use case.
 
-- The core package defines memory blocks, parent/child ownership, scoped
-  access, `MemoryPolicy.owner_private()` as the default block policy, and
-  interfaces for storage, search, links, policies, hooks, and value encoding.
-- Applications provide their own business logic, memory structure, storage
-  adapters, retrieval strategy, and value types.
-- Most applications start with `Memory` and pass bounded `MemoryHandle`
-  instances to agents.
-- **Every public name is importable from `genie`,** and also from its focused
-  subpackage, such as `genie.structures` or `genie.backend`. Both styles reach
-  the same object, so `from genie import OwnershipTree` and
+- **Core package:** it defines memory blocks, parent and child ownership,
+  scoped access, `MemoryPolicy.owner_private()` as the default block policy,
+  and interfaces for storage, search, links, policies, hooks, and value
+  encoding.
+- **Application parts:** applications provide their own business logic,
+  memory structure, retrieval strategy, and value types. They can use a
+  shipped storage adapter, or provide their own.
+- **Usual start:** most applications start with `Memory` and give bounded
+  `MemoryHandle` instances to agents.
+- **Imports:** each public name can be imported from `genie`, and also from
+  its focused subpackage, such as `genie.structures` or `genie.backend`. Both
+  styles get the same object. So `from genie import OwnershipTree` and
   `from genie.structures import OwnershipTree` are equivalent.
 """
 

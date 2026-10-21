@@ -19,7 +19,7 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Import policy engine objects on first use to avoid import cycles.
+    """Import the policy engine objects on first use, so that there is no import cycle.
 
     Args:
         name: Exported attribute name.
@@ -28,7 +28,7 @@ def __getattr__(name: str):
         The requested policy engine object.
 
     Raises:
-        AttributeError: If the name is not exported by this module.
+        AttributeError: If this module does not export the name.
     """
 
     if name in {"AccessDenied", "Operation", "PolicyEngine"}:

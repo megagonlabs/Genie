@@ -1,4 +1,4 @@
-"""Hook interface for observing or customizing memory operations."""
+"""Hook interface that observes or customizes memory operations."""
 
 from __future__ import annotations
 
@@ -20,52 +20,58 @@ from genie.query.result import SearchResult
 
 
 class MemoryHook:
-    """No-op hook base class for customizing Genie behavior.
+    """No-op base class for hooks that customize Genie behavior.
 
-    Subclasses can override one or more methods. Hooks run inside the public
-    `Memory` operation flow, so they should avoid long-running or unreliable
-    side effects unless the application is prepared for those failures.
-
-    Callbacks that only observe finished work are isolated from one another:
-    every hook receives them even when another hook raises, so one unreachable
-    sink cannot cost the others the record they are owed.
+    - **Overrides:** a subclass can override one or more methods.
+    - **Synchronous:** hooks run inside the public `Memory` operation flow. So a
+      slow or unreliable side effect can make the operation slow, or make it
+      raise an error.
+    - **Isolated observers:** callbacks that only observe finished work are
+      isolated from each other. Each hook gets them, also when another hook
+      raises. So one sink that is not available cannot take the record away
+      from the other hooks.
+    - **`fail_open` covers the observing callbacks:** the `after_*` callbacks
+      that return `None`, `on_denied`, `on_suppressed`, and
+      `on_operation_end`. What they report is already decided when they run.
+      For `on_suppressed`, it is decided immediately after. So a best-effort
+      audit sink can declare that its own outages do not get to callers.
+    - **`fail_open` does not cover transforms:** it never applies to `before_*`
+      callbacks or to `after_search`, because they still change what is stored
+      or returned. If the registry contained the failure of a redaction hook
+      there, the value that the hook exists to change would silently pass
+      through.
 
     Attributes:
-        fail_open: Whether failures of this hook's observing callbacks are
-            contained and logged instead of raised. Observing callbacks are the
-            `after_*` callbacks that return `None`, `on_denied`,
-            `on_suppressed`, and `on_operation_end`; what they report is
-            already decided when they run, or in the case of `on_suppressed`
-            about to be, so a best-effort audit sink can declare that its own
-            outages must not break callers. This never applies to `before_*`
-            callbacks or to `after_search`, which still shape what gets stored
-            or returned: a redaction hook whose failure was contained there
-            would silently pass through the value it existed to change.
+        fail_open: If `True`, the registry logs the failures of the observing
+            callbacks of this hook and does not raise them.
     """
 
     fail_open: bool = False
 
     def before_put(self, context: HookContext, block: MemoryBlock) -> MemoryBlock:
-        """Run before a block is stored.
+        """Run before `Memory` stores a new block.
 
-        Hooks may annotate or rewrite fields, but they must not change
-        `parent_id`; parent placement is checked before hooks run.
+        - **Allowed changes:** a hook can change `value`, `metadata`,
+          `content_type`, and `policy`. A change to any other field raises
+          `ValueError`.
+        - **Parent:** `Memory` checks the parent placement before hooks run. So
+          a hook cannot change `parent_id`.
 
         Args:
-            context: Operation context shared with the matching after callback.
-            block: Block about to be stored.
+            context: Operation context that the paired after callback shares.
+            block: Block before `Memory` stores it.
 
         Returns:
-            Block to pass to the backend. Hooks may return a modified copy.
+            Block to give to the backend. A hook can return a changed copy.
         """
 
         return block
 
     def after_put(self, context: HookContext, block: MemoryBlock) -> None:
-        """Run after a block is stored.
+        """Run after the backend stores a block.
 
         Args:
-            context: Operation context shared with the matching before callback.
+            context: Operation context that the paired before callback shares.
             block: Stored block.
         """
 
@@ -77,20 +83,22 @@ class MemoryHook:
         current: MemoryBlock,
         proposed: MemoryBlock,
     ) -> MemoryBlock:
-        """Run before a block value or metadata update.
+        """Run before an update of a block value or metadata.
 
-        The hook context distinguishes `set` from `update`.
-        Hooks may change the proposed value, metadata, or content type. Stable
-        identity, ownership, policy, creator, timestamps, and version fields
-        are checked by `Memory` after hooks run.
+        - **`set` or `update`:** the hook context tells `set` and `update` apart.
+        - **Allowed changes:** a hook can change the proposed `value`,
+          `metadata`, or `content_type`.
+        - **Protected fields:** after hooks run, `Memory` checks the stable
+          identity, type, ownership, policy, creator, timestamp, and version
+          fields.
 
         Args:
-            context: Operation context shared with the matching after callback.
+            context: Operation context that the paired after callback shares.
             current: Stored block before the update.
             proposed: Proposed replacement block.
 
         Returns:
-            Replacement block to pass to the backend.
+            Replacement block to give to the backend.
         """
 
         return proposed
@@ -104,9 +112,9 @@ class MemoryHook:
         """Run after a block update commits.
 
         Args:
-            context: Operation context shared with the matching before callback.
-            previous: Block state read before the update.
-            stored: Persisted replacement block.
+            context: Operation context that the paired before callback shares.
+            previous: Block as read before the update.
+            stored: Replacement block that the backend stored.
         """
 
         return
@@ -115,8 +123,8 @@ class MemoryHook:
         """Run before a block lookup.
 
         Args:
-            context: Operation context shared with the matching after callback.
-            block_id: Id being fetched.
+            context: Operation context that the paired after callback shares.
+            block_id: Id of the block to get.
         """
 
         return
@@ -125,21 +133,21 @@ class MemoryHook:
         """Run after a block lookup.
 
         Args:
-            context: Operation context shared with the matching before callback.
-            block: Fetched block, or `None` when missing.
+            context: Operation context that the paired before callback shares.
+            block: Block from the lookup, or `None` if the block does not exist.
         """
 
         return
 
     def before_search(self, context: HookContext, query: MemoryQuery) -> MemoryQuery:
-        """Run before search is sent to the backend.
+        """Run before `Memory` sends a search to the backend.
 
         Args:
-            context: Operation context shared with the matching after callback.
+            context: Operation context that the paired after callback shares.
             query: Normalized memory query.
 
         Returns:
-            Query to send to the backend. Hooks may return a modified query.
+            Query to send to the backend. A hook can return a changed query.
         """
 
         return query
@@ -150,15 +158,15 @@ class MemoryHook:
         query: MemoryQuery,
         results: list[SearchResult],
     ) -> list[SearchResult]:
-        """Run after search results are decoded and policy-filtered.
+        """Run after `Memory` decodes the search results and filters them by policy.
 
         Args:
-            context: Operation context shared with the matching before callback.
-            query: Query that was executed.
+            context: Operation context that the paired before callback shares.
+            query: Query that ran.
             results: Search results.
 
         Returns:
-            Results to return to the caller. Hooks may rerank or filter them.
+            Results to return to the caller. A hook can rerank or filter them.
         """
 
         return results
@@ -166,15 +174,15 @@ class MemoryHook:
     def before_traverse(self, context: HookContext, traversal: Traversal) -> None:
         """Run before a structural read follows relationships between blocks.
 
-        This covers direct children, ancestors, link listing, mount listing and
-        discovery, and subtree membership tests. Traversal results are
-        backend-owned and already filtered by the reading principal's read
-        policy, so this callback observes the read rather than narrowing or
-        widening it.
+        - **Coverage:** direct children, ancestors, link listing, mount listing
+          and discovery, and subtree membership tests.
+        - **Observe only:** traversal results belong to the backend, and the
+          `read` policy of the principal filters them first. So this callback
+          observes the read. It does not make the read narrower or wider.
 
         Args:
-            context: Operation context shared with the matching after callback.
-            traversal: Read about to run, with nothing disclosed yet.
+            context: Operation context that the paired after callback shares.
+            traversal: Read before it runs. It discloses nothing yet.
         """
 
         return
@@ -182,29 +190,29 @@ class MemoryHook:
     def after_traverse(self, context: HookContext, traversal: Traversal) -> None:
         """Run after a structural read discloses blocks, links, or membership.
 
-        This is where a subtree read becomes visible to an audit trail: the
-        traversal carries every block or link the caller receives, so a hook
-        can record the volume and identity of what one call disclosed.
+        Here an audit trail can see a subtree read. The traversal holds each
+        block or link that the caller gets. So a hook can record the volume and
+        the identity of what one call disclosed.
 
         Args:
-            context: Operation context shared with the matching before callback.
-            traversal: Completed read, carrying what it disclosed.
+            context: Operation context that the paired before callback shares.
+            traversal: Completed read, with what it disclosed.
         """
 
         return
 
     def before_add_link(self, context: HookContext, link: MemoryLink) -> MemoryLink:
-        """Run before a regular, acyclic, or mount link is stored.
+        """Run before `Memory` stores a regular, acyclic, or mount link.
 
-        Hooks may change metadata. Link identity, endpoints, relation, and
-        creation time are checked by `Memory` after hooks run.
+        A hook can change `metadata` only. After hooks run, `Memory` checks the
+        link identity, endpoints, relation, and creation time.
 
         Args:
-            context: Operation context shared with the matching after callback.
+            context: Operation context that the paired after callback shares.
             link: Proposed link.
 
         Returns:
-            Link to pass to the backend.
+            Link to give to the backend.
         """
 
         return link
@@ -213,8 +221,8 @@ class MemoryHook:
         """Run after a regular, acyclic, or mount link commits.
 
         Args:
-            context: Operation context shared with the matching before callback.
-            link: Persisted link.
+            context: Operation context that the paired before callback shares.
+            link: Stored link.
         """
 
         return
@@ -225,15 +233,18 @@ class MemoryHook:
         current: MemoryLink,
         proposed: MemoryLink,
     ) -> MemoryLink:
-        """Run before replacement link metadata is stored.
+        """Run before `Memory` stores new link metadata.
+
+        A hook can change `metadata` only. After hooks run, `Memory` checks the
+        other link fields.
 
         Args:
-            context: Operation context shared with the matching after callback.
+            context: Operation context that the paired after callback shares.
             current: Stored link before the update.
             proposed: Proposed replacement link.
 
         Returns:
-            Replacement link to pass to the backend.
+            Replacement link to give to the backend.
         """
 
         return proposed
@@ -247,9 +258,9 @@ class MemoryHook:
         """Run after a link metadata update commits.
 
         Args:
-            context: Operation context shared with the matching before callback.
+            context: Operation context that the paired before callback shares.
             previous: Stored link before the update.
-            stored: Persisted replacement link.
+            stored: Replacement link that the backend stored.
         """
 
         return
@@ -259,13 +270,13 @@ class MemoryHook:
         context: HookContext,
         change: StructureChange[Any],
     ) -> None:
-        """Run before keyed, log, or temporal structural state changes.
+        """Run before a change to keyed, log, or temporal structural state.
 
-        Structural records are immutable and backend-owned, so this callback
-        observes rather than transforms the proposed change.
+        Structural records cannot change, and they belong to the backend. So
+        this callback observes the proposed change and does not transform it.
 
         Args:
-            context: Operation context shared with the matching after callback.
+            context: Operation context that the paired after callback shares.
             change: Proposed structural change.
         """
 
@@ -279,31 +290,31 @@ class MemoryHook:
         """Run after a structural state change commits.
 
         Args:
-            context: Operation context shared with the matching before callback.
-            change: Persisted structural change.
+            context: Operation context that the paired before callback shares.
+            change: Stored structural change.
         """
 
         return
 
     def before_delete(self, context: HookContext, block: MemoryBlock) -> None:
-        """Run before a block is deleted.
+        """Run before the backend deletes a block.
 
         Args:
-            context: Operation context shared with the matching after callback.
-            block: Block about to be deleted.
+            context: Operation context that the paired after callback shares.
+            block: Block to delete.
         """
 
         return
 
     def after_delete(self, context: HookContext, block: MemoryBlock) -> None:
-        """Run after a block is deleted.
+        """Run after the backend deletes a block.
 
-        Recursive deletion calls this once per removed block. Those deletions
-        are already committed, so every block reaches every hook even when one
-        of them raises.
+        A recursive delete calls this once for each removed block. Those
+        deletions are already committed. So each block gets to each hook, also
+        when one hook raises.
 
         Args:
-            context: Operation context shared with the matching before callback.
+            context: Operation context that the paired before callback shares.
             block: Deleted block.
         """
 
@@ -316,46 +327,50 @@ class MemoryHook:
         subject_id: str | None,
         reason: str,
     ) -> None:
-        """Run when a policy or handle boundary refuses an operation.
+        """Run when a policy or a handle boundary refuses an operation.
 
-        This is an observation, not a decision: the refusal stands and hooks
-        cannot reverse it. Exceptions raised here never replace the
-        `AccessDenied` the caller receives.
+        This is an observation, not a decision. The refusal stays, and hooks
+        cannot reverse it. An `Exception` from this callback never replaces the
+        `AccessDenied` that the caller gets.
 
         Args:
-            context: Context shared with the operation's other callbacks.
-            operation: Policy operation that was checked, or the
-                `HandleCapability` boundary that refused. Policy names are
-                bare and handle names are namespaced, so the two never collide.
-            subject_id: Block the refusal applies to. This is the handle root
-                for capability refusals that name no block, and `None` when an
-                unbounded handle has no root.
-            reason: Message describing the refusal.
+            context: Context that the other callbacks of the operation share.
+            operation: Policy operation that the check used, or the
+                `HandleCapability` boundary that refused. A custom operation
+                that `require_access` checks arrives as a plain `str`. Built-in
+                policy names have no namespace, and handle names have a
+                namespace, so the two never collide.
+            subject_id: Block that the refusal applies to. For a capability
+                refusal that names no block, this is the handle root. It is
+                `None` when an unbounded handle has no root.
+            reason: Message that describes the refusal.
         """
 
         return
 
     def on_suppressed(self, context: HookContext, suppression: Suppression) -> None:
-        """Run when trusted code disables hook dispatch.
+        """Run when trusted code turns off hook dispatch.
 
-        - Every registered hook is told, whatever the window's reach, including
-          the hooks it is about to silence. A hook learns that it is going to
-          stop reporting before it does.
-        - The window is bounded by the terminal event of the same operation,
-          which every hook receives once dispatch is restored.
-        - Operations performed inside it report the suppression as their parent
-          operation, so a mandatory hook records the window, what happened
-          during it, and its end.
-        - Unlike the other observing callbacks, this one reports work that is
-          not decided yet. A failure here leaves dispatch enabled and the
-          suppressed body unrun, because the record of a suppression is the
-          reason the suppression is allowed at all.
+        - **All hooks get it:** each registered hook gets this callback, for any
+          reach of the window. This includes the hooks that the window will
+          silence. So a hook knows that it will no longer report before that happens.
+        - **Nested windows:** a hook that an outer window already silences does
+          not get this callback from an inner window.
+        - **End of the window:** the terminal event of the same operation closes
+          the window. Each hook gets it after dispatch starts again.
+        - **Parent of the work inside:** operations inside the window report the
+          suppression as their parent operation. So a mandatory hook records
+          the window, what happened in it, and its end.
+        - **Not decided yet:** unlike the other observing callbacks, this one
+          reports work that is not decided yet. If it fails, dispatch stays on
+          and the suppressed body does not run. Genie allows a suppression only
+          because of this record.
 
         Args:
-            context: Context of the suppression window, shared with its
-                terminal event and inherited by the operations inside it.
-            suppression: Reach of the window, the hooks it silences, and the
-                mandatory hooks that keep reporting through it.
+            context: Context of the suppression window. Its terminal event
+                shares it, and the operations inside it inherit it.
+            suppression: Reach of the window, the hooks that it silences, and
+                the mandatory hooks that continue to report through it.
         """
 
         return
@@ -366,21 +381,22 @@ class MemoryHook:
         outcome: HookOutcome,
         error: BaseException | None,
     ) -> None:
-        """Run exactly once when a logical operation finishes.
+        """Run exactly once when a logical operation ends.
 
-        - It runs for every operation that starts, whether it commits, is
-          refused, or fails. The paired callbacks do not.
-        - So it is the right place to close a span, record latency, and release
-          state stashed by a before callback.
-        - It is also the only callback that observes refusals and failures on
-          operations whose before callbacks never ran.
-        - The reported `error` is the exception leaving the operation. Genie
-          never lets an exception raised here replace it.
+        - **Always runs:** it runs for each operation that starts, if the
+          operation commits, is refused, or fails. The paired callbacks do not
+          always run.
+        - **Use:** so it is the correct place to close a span, record latency,
+          and release state that a before callback saved.
+        - **Refusals and failures:** it is also the only callback that sees
+          refusals and failures of operations whose before callbacks never ran.
+        - **`error`:** the reported `error` is the exception that leaves the
+          operation. An `Exception` from this callback never replaces it.
 
         Args:
-            context: Context shared with the operation's other callbacks.
+            context: Context that the other callbacks of the operation share.
             outcome: Whether the operation committed, was denied, or failed.
-            error: Exception ending the operation, or `None` after success.
+            error: Exception that ended the operation, or `None` after success.
         """
 
         return

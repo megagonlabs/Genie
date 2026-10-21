@@ -1,4 +1,4 @@
-"""Search query model used by memory APIs and backend adapters."""
+"""Search query model for the memory APIs and the backend adapters."""
 
 from __future__ import annotations
 
@@ -11,17 +11,18 @@ from genie.query.scope import Scope
 
 @dataclass(frozen=True, slots=True)
 class MemoryQuery:
-    """Search parameters normalized before reaching a backend.
+    """Search parameters in normalized form, before they get to a backend.
 
     Attributes:
         text: Optional text query.
-        root_id: Optional block id that anchors scoped searches.
-        scope: Search scope normalized to a `Scope` value.
-        types: Optional block types normalized to an immutable tuple.
-        filters: Metadata or block-field filters. Human-friendly operators are
-            normalized to canonical `$...` operator names.
-        limit: Maximum number of results. `0` is allowed; negative values are
-            rejected.
+        root_id: Optional block id that is the anchor of a scoped search.
+        scope: Search scope as a `Scope` value.
+        types: Optional block types, as a tuple.
+        filters: Metadata or block-field filters. Friendly operators change to
+            canonical `$...` operator names.
+        limit: Maximum number of results from the backend. It is a candidate
+            budget, not a result count. The value `0` is allowed, and a
+            negative value raises `ValueError`.
     """
 
     text: str | None = None
@@ -40,21 +41,21 @@ class MemoryQuery:
         filters: dict[str, Any] | None = None,
         limit: int = 20,
     ) -> None:
-        """Validate inputs and store their canonical forms.
+        """Check the inputs, and store them in canonical form.
 
         Args:
             text: Optional text query.
-            root_id: Optional block id that anchors scoped searches.
-            scope: Search scope as a `Scope` value or string.
-            types: Optional block types supplied as a list or tuple.
+            root_id: Optional block id that is the anchor of a scoped search.
+            scope: Search scope as a `Scope` value or a string.
+            types: Optional block types, as a list or a tuple.
             filters: Metadata or block-field filters.
             limit: Maximum number of results.
 
         Raises:
-            TypeError: If text, root, types, filters, or limit have invalid
-                runtime types.
-            ValueError: If `scope` is invalid, `limit` is negative, or a
-                filter uses an unknown operator.
+            TypeError: If text, root, types, filters, or limit have runtime
+                types that are not valid.
+            ValueError: If `scope` is not a known scope, `limit` is negative,
+                or a filter uses an unknown operator.
         """
 
         if text is not None and not isinstance(text, str):

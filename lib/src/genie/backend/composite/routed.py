@@ -1,9 +1,10 @@
 """Routed backend composition helpers.
 
-`RoutedBackend` lets one public `MemoryBackend` coordinate multiple internal
-backends. Each memory block has exactly one owning route, while search,
-traversal, and link interfaces may be route-local or supplied as shared
-indexes/stores.
+- **One public backend:** `RoutedBackend` lets one public `MemoryBackend`
+  coordinate several internal backends.
+- **One owner:** each memory block has exactly one owning route.
+- **Local or shared:** search, traversal, and link interfaces can be local to
+  a route, or a caller can give shared indexes and stores.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ RouteSelector = Callable[[MemoryBlock], RouteKey | None]
 
 @dataclass(frozen=True, slots=True)
 class RouteInfo:
-    """Catalog entry describing which route owns a block.
+    """Catalog entry that tells which route owns a block.
 
     Attributes:
         block_id: Memory block id.
@@ -46,9 +47,11 @@ class RouteInfo:
 class InMemoryLinkStore:
     """Simple standalone link store for routed backends.
 
-    Unlike `InMemoryBackend`, this store does not own memory blocks and does not
-    validate endpoint existence. `RoutedBackend` performs endpoint validation
-    before writing links to a shared link store.
+    - **No blocks:** unlike `InMemoryBackend`, this store does not own memory
+      blocks, and it does not check that the endpoints exist.
+    - **Endpoint check:** `RoutedBackend` checks the endpoints before it writes
+      links to a shared link store.
+    - **No acyclic inserts:** this store does not implement `AcyclicLinkStore`.
     """
 
     def __init__(self) -> None:
@@ -81,13 +84,13 @@ class InMemoryLinkStore:
         """Replace the metadata of an existing link.
 
         Args:
-            link: Link containing the replacement metadata.
+            link: Link with the replacement metadata.
 
         Returns:
             Defensive copy of the stored replacement link.
 
         Raises:
-            MemoryConflict: If the link is missing or any field other than
+            MemoryConflict: If the link does not exist, or a field other than
                 metadata changed.
         """
 
@@ -111,7 +114,7 @@ class InMemoryLinkStore:
         """List links connected to a block.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
@@ -119,7 +122,7 @@ class InMemoryLinkStore:
             Defensive copies of matching links.
 
         Raises:
-            ValueError: If `direction` is invalid.
+            ValueError: If `direction` is not valid.
         """
 
         if direction not in {"out", "in", "both"}:
@@ -141,7 +144,7 @@ class InMemoryLinkStore:
         """Delete links connected to a block.
 
         Args:
-            block_id: Block id whose links should be removed.
+            block_id: Block id whose links to remove.
         """
 
         with self._lock:
@@ -153,22 +156,21 @@ class InMemoryLinkStore:
 class RoutedBackend:
     """Route blocks across multiple backend adapters.
 
-    A `RoutedBackend` still satisfies the single `MemoryBackend` interface. Route
-    selection is an implementation detail hidden behind the public `Memory`
-    object.
-
-    A tree never spans routes. A child is always stored in its parent's route,
-    and a block cannot be reparented into another route. Route-local traversal
-    and link delegation is exact because of that invariant rather than
-    approximate.
-
-    The composite implements the core `MemoryBackend` contract and
-    `AcyclicLinkStore`. Links are part of the core contract, so the composite
-    already routes them, and it routes acyclic insertion the same way. It owns
-    no structural state, so it does not implement the other optional structure
-    capability protocols in `genie.backend.structure_capabilities`. It does
-    implement `BlockRouter`, so passing it as a structure facade's store
-    resolves to the route that does.
+    - **One interface:** a `RoutedBackend` still satisfies the single
+      `MemoryBackend` interface. The route selection is an implementation
+      detail behind the public `Memory` object.
+    - **One route for each tree:** a tree never spans routes. A child is always
+      stored in the route of its parent, and a block cannot move to a parent in
+      another route. Because of this invariant, route-local traversal and link
+      delegation are exact, not approximate.
+    - **Capabilities:** the composite implements the core `MemoryBackend`
+      contract and `AcyclicLinkStore`. Links are part of the core contract, so
+      the composite already routes them, and it routes acyclic inserts the
+      same way.
+    - **No structural state:** it does not implement the other optional
+      structure capability protocols in `genie.backend.structure_capabilities`.
+    - **`BlockRouter`:** it implements `BlockRouter`. So as the store of a
+      structure facade, it resolves to the route that holds the records.
     """
 
     def __init__(
@@ -185,19 +187,24 @@ class RoutedBackend:
 
         Args:
             routes: Mapping of route keys to backend adapters.
-            route_selector: Optional selector used for new root blocks. It may
-                return `None` to use `default_route` or inherit the parent route.
-            default_route: Route used when the selector returns `None`.
-            traversal_index: Optional shared traversal index. If omitted,
-                traversal is handled by the route that owns the block.
-            search_index: Optional shared search index. If omitted, searches are
-                run against route backends and merged when needed.
-            link_store: Optional shared link store. If omitted, links are stored
-                route-locally and cross-route links are rejected.
+            route_selector: Optional selector for new blocks. It can return
+                `None`. Then a root block uses `default_route`, and a child uses
+                the route of its parent. For a child, a selected route that
+                is not the parent route raises `MemoryConflict`. For a root
+                block, a route that is not configured raises `MemoryConflict`.
+            default_route: Route for a new root block when there is no selector,
+                or the selector returns `None`. Defaults to the first route.
+            traversal_index: Optional shared traversal index. Without one, the
+                route that owns the block does the traversal.
+            search_index: Optional shared search index. Without one, searches
+                run against the route backends, and the results merge when
+                needed.
+            link_store: Optional shared link store. Without one, links stay in
+                their route, and cross-route links are rejected.
 
         Raises:
-            ValueError: If no routes are configured or the default route is
-                invalid.
+            ValueError: If no routes are configured, or the default route is
+                not one of them.
         """
 
         if not routes:
@@ -217,10 +224,10 @@ class RoutedBackend:
     def routes(self) -> Mapping[RouteKey, MemoryBackend]:
         """Return a read-only view of the configured routes.
 
-        The mapping is a live view, so it reflects later `register_route` calls.
-        Routes are read-only because replacing one has to go through
-        `register_route`, which refuses to strand blocks the outgoing backend
-        still holds.
+        - **Live view:** the mapping shows later `register_route` calls.
+        - **Read-only:** a route replacement goes only through
+          `register_route`. It refuses to leave behind blocks that the old
+          backend still holds.
 
         Returns:
             Read-only mapping of route keys to backend adapters.
@@ -238,23 +245,25 @@ class RoutedBackend:
     ) -> None:
         """Register a backend route after initialization.
 
-        Runtime route registration is intended for cases where application code
-        discovers a symbolic mount or tenant descriptor that requires opening a
-        backend adapter that was not known when the routed backend was created.
-        Existing `Memory` objects and `MemoryHandle` instances that share this
-        routed backend can use the new route immediately.
+        - **Use:** application code finds a symbolic mount or a tenant
+          descriptor, and it needs a backend adapter that was not known when
+          the routed backend was created.
+        - **Immediate effect:** existing `Memory` objects and `MemoryHandle`
+          instances that share this routed backend can use the new route at
+          once.
 
         Args:
             route: Route key to register.
             backend: Backend adapter for the route.
-            replace: Whether an existing route may be replaced. A route is
-                replaceable only when its backend still holds no blocks.
-            make_default: Whether future unselected root blocks should use this
-                route as the default.
+            replace: Whether an existing route can be replaced. A replacement
+                is possible only when the backend of the route holds no blocks.
+            make_default: If `True`, later root blocks with no selected route
+                use this route as the default.
 
         Raises:
-            MemoryConflict: If the route already exists without `replace`, or
-                if replacing it would strand blocks the route still holds.
+            MemoryConflict: If the route already exists and `replace` is
+                `False`, or if a replacement leaves behind blocks that the route
+                still holds.
         """
 
         with self._lock:
@@ -268,7 +277,7 @@ class RoutedBackend:
                 self.default_route = route
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Persist a new block to its owning route.
+        """Store a new block in its owning route.
 
         Args:
             block: Encoded block to store.
@@ -290,7 +299,7 @@ class RoutedBackend:
             return stored
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        """Fetch a block by id from its owning route.
+        """Get a block by id from its owning route.
 
         Args:
             block_id: Memory block id.
@@ -310,20 +319,21 @@ class RoutedBackend:
     ) -> MemoryBlock:
         """Replace a block in its current owning route.
 
-        Updates do not move a block to another route. A reparented block must
-        keep the same parent route.
+        An update does not move a block to another route. A block with a new
+        parent stays in the same route, so the new parent is also in that
+        route.
 
         Args:
             block: Encoded replacement block.
-            expected_version: Required current version. When supplied, the
+            expected_version: Expected current version. With a value, the
                 owning route applies the compare-and-swap.
 
         Returns:
             Stored replacement block.
 
         Raises:
-            MemoryConflict: If the block is missing, its version changed, or
-                the new parent is in another route.
+            MemoryConflict: If the block does not exist, its version changed,
+                or the new parent is in another route.
         """
 
         with self._lock:
@@ -347,13 +357,14 @@ class RoutedBackend:
     ) -> None:
         """Delete a block from its owning route and remove catalog state.
 
-        Catalog entries and shared link-store links are removed for the block
-        and every descendant the owning route deleted with it.
+        The backend removes the catalog entries and the shared link-store
+        links of the block and of each descendant that the owning route deleted
+        with it.
 
         Args:
-            block_id: Memory block id. Missing ids are ignored.
+            block_id: Memory block id. An unknown id is ignored.
             expected_versions: Exact id-to-version snapshot of the subtree to
-                delete. When supplied, the owning route applies the
+                delete. With a value, the owning route applies the
                 compare-and-swap.
 
         Raises:
@@ -376,7 +387,7 @@ class RoutedBackend:
                     self.link_store.delete_links_for_block(block.id)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
-        """Return direct children for a block id.
+        """Return the direct children of a block id.
 
         Args:
             block_id: Parent block id.
@@ -391,13 +402,13 @@ class RoutedBackend:
         return [] if backend is None else backend.children(block_id)
 
     def ancestors(self, block_id: str) -> list[MemoryBlock]:
-        """Return ancestors for a block id.
+        """Return the ancestors of a block id.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
 
         Returns:
-            Ancestor blocks in nearest-parent-first order.
+            Ancestor blocks, nearest parent first.
         """
 
         if self.traversal_index is not None:
@@ -406,11 +417,11 @@ class RoutedBackend:
         return [] if backend is None else backend.ancestors(block_id)
 
     def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
-        """Return descendants for a block id.
+        """Return the descendants of a block id.
 
         Args:
             block_id: Root block id.
-            include_self: Whether to include the root block.
+            include_self: If `True`, the result includes the root block.
 
         Returns:
             Descendant blocks in backend-defined traversal order.
@@ -422,20 +433,20 @@ class RoutedBackend:
         return [] if backend is None else backend.descendants(block_id, include_self=include_self)
 
     def contains(self, root_id: str, block_id: str) -> bool:
-        """Return whether `block_id` is in `root_id`'s subtree.
+        """Return whether `block_id` is in the subtree of `root_id`.
 
         Args:
             root_id: Potential subtree root id.
             block_id: Candidate block id.
 
         Returns:
-            `True` when the candidate is equal to or below the root.
+            `True` when the candidate is the root or is below it.
         """
 
         if self.traversal_index is not None:
             return self.traversal_index.contains(root_id, block_id)
-        # A tree never spans routes, so blocks owned by different routes can
-        # never share a subtree. The early `False` is exact, not a fallback.
+        # A tree never spans routes, so blocks in different routes can never
+        # share a subtree. The early `False` is exact, not a fallback.
         root_route = self._route_for_existing_block(root_id, missing_ok=True)
         block_route = self._route_for_existing_block(block_id, missing_ok=True)
         if root_route is None or block_route is None or root_route != block_route:
@@ -443,7 +454,7 @@ class RoutedBackend:
         return self._routes[root_route].contains(root_id, block_id)
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
-        """Persist a link in the shared link store or source route.
+        """Store a link in the shared link store or in the source route.
 
         Args:
             link: Link to store.
@@ -452,9 +463,8 @@ class RoutedBackend:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, or a cross-route link is attempted without a shared
-                link store.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, or a cross-route link has no shared link store.
         """
 
         with self._lock:
@@ -467,19 +477,19 @@ class RoutedBackend:
             return self._routes[source_route].add_link(link)
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Persist a link only when its relation stays acyclic.
+        """Store a link only when its relation stays acyclic.
 
         The cycle check runs in the store that holds the links:
 
-        - With a shared link store, that store checks the relation across all
+        - **Shared link store:** that store checks the relation across all
           routes.
-        - Without one, the route that owns both endpoints checks it. Links
-          never cross routes in this mode, so a cycle can only form inside one
-          route, and the route-local check is exact.
-
-        Without a shared link store, each route protects a relation on its own.
-        A route rejects ordinary `add_link` calls for the relation only after
-        its own first acyclic insertion, not after one in another route.
+        - **No shared link store:** the route that owns both endpoints checks
+          it. Links never cross routes in this mode. So a cycle can form only
+          inside one route, and the route-local check is exact.
+        - **Protection for each route:** without a shared link store, each route
+          protects a relation alone. A route rejects ordinary `add_link` calls
+          for the relation only after its own first acyclic insert, not after
+          one in another route.
 
         Args:
             link: Link to store. Its relation identifies the protected graph.
@@ -488,11 +498,11 @@ class RoutedBackend:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, the link would close a cycle, or a cross-route link is
-                attempted without a shared link store.
-            UnsupportedOperation: If the store that would hold the link does
-                not support atomic acyclic links.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, the link closes a cycle, or a cross-route link has no
+                shared link store.
+            UnsupportedOperation: If the store for the link does not support
+                atomic acyclic links.
         """
 
         with self._lock:
@@ -510,16 +520,16 @@ class RoutedBackend:
             return backend.add_acyclic_link(link)
 
     def update_link(self, link: MemoryLink) -> MemoryLink:
-        """Replace link metadata in the shared store or source route.
+        """Replace link metadata in the shared store or in the source route.
 
         Args:
-            link: Existing link containing the replacement metadata.
+            link: Existing link with the replacement metadata.
 
         Returns:
             Stored replacement link.
 
         Raises:
-            MemoryConflict: If the link is missing or any field other than
+            MemoryConflict: If the link does not exist, or a field other than
                 metadata changed.
         """
 
@@ -536,10 +546,10 @@ class RoutedBackend:
         relation: str | None = None,
         direction: Literal["out", "in", "both"] = "out",
     ) -> list[MemoryLink]:
-        """List links from the shared link store or owning route.
+        """List links from the shared link store or from the owning route.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
@@ -556,7 +566,7 @@ class RoutedBackend:
         """Delete links connected to a block.
 
         Args:
-            block_id: Block id whose connected links should be removed.
+            block_id: Block id whose connected links to remove.
         """
 
         with self._lock:
@@ -568,13 +578,21 @@ class RoutedBackend:
                 backend.delete_links_for_block(block_id)
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search through the shared search index or route-local indexes.
+        """Search through the shared search index or the route-local indexes.
+
+        - **Shared index:** with a shared search index, it answers all searches.
+        - **`links` scope:** with a shared link store, the composite matches
+          the blocks that the root links to.
+        - **Other scoped searches:** the route of the root answers.
+        - **Global search:** each route returns up to `limit` results. The
+          composite merges them by score and keeps the first `limit`.
 
         Args:
             query: Normalized memory query.
 
         Returns:
-            Search results from the shared index, scoped route, or merged routes.
+            Search results from the shared index, the scoped route, or the
+            merged routes.
         """
 
         if self.search_index is not None:
@@ -593,17 +611,18 @@ class RoutedBackend:
     def backend_for_block(self, block_id: str) -> MemoryBackend | None:
         """Return the backend that owns a block id.
 
-        This is the routing primitive. Every route-local operation resolves its
-        target backend through this method instead of reading `routes` directly.
-
-        It reports ownership. A structure facade does not need it: pass the
-        composite as the facade's store and it resolves the owning route through
-        `BlockRouter`. Resolve by hand only to use a route's optional
-        capabilities directly, and check the capability first, because
-        `MemoryBackend` does not include the optional structure protocols.
-
-        Because a tree never spans routes, the backend returned for a container
-        block also owns every block in that container's subtree.
+        - **Routing primitive:** each route-local operation resolves its target
+          backend through this method, not through `routes`.
+        - **Ownership report:** a structure facade does not need it. As the
+          store of a facade, the composite resolves the owning route through
+          `BlockRouter`.
+        - **Manual resolution:** it is only for direct use of the optional
+          capabilities of a route. `MemoryBackend` does not include the
+          optional structure protocols, so a caller checks the capability
+          first.
+        - **Subtrees:** a tree never spans routes. So the backend for a
+          container block also owns each block in the subtree of that
+          container.
 
         Args:
             block_id: Memory block id.
@@ -628,24 +647,25 @@ class RoutedBackend:
         return self._route_for_existing_block(block_id, missing_ok=True)
 
     def _route_holds_blocks(self, route: RouteKey) -> bool:
-        """Return whether a route's backend still holds any block.
+        """Return whether the backend of a route still holds a block.
 
-        The backend is asked directly, because the catalog is a cache filled
-        lazily as blocks are routed. A composite opened over a store that
-        already has data starts with an empty catalog, so the catalog alone
-        would report a populated route as empty.
-
-        The probe is a bounded global search, which every `MemoryBackend`
-        supports. A backend whose search index is stale or externally managed
-        can still under-report, so a route the catalog already knows about is
-        treated as populated without probing.
+        - **Catalog first:** a route that the catalog already knows counts as
+          populated, with no probe.
+        - **Backend probe:** otherwise the method asks the backend directly. The
+          catalog is a cache that fills lazily when blocks are routed. So a
+          composite opened over a store that already has data starts with an
+          empty catalog.
+        - **Probe form:** the probe is a bounded global search, which each
+          `MemoryBackend` supports. A backend whose search index is stale or
+          managed from outside can still report too few blocks.
+        - **No search support:** if the search raises `UnsupportedOperation`,
+          the route counts as empty.
 
         Args:
-            route: Route key to inspect.
+            route: Route key to examine.
 
         Returns:
-            `True` when the route still holds blocks, or when emptiness cannot
-            be established.
+            `True` when the catalog knows the route or the probe finds a block.
         """
 
         if route in self._catalog.values():
@@ -656,7 +676,7 @@ class RoutedBackend:
             return False
 
     def _route_for_new_block(self, block: MemoryBlock) -> RouteKey:
-        """Choose and validate the owning route for a new block."""
+        """Choose and check the owning route for a new block."""
 
         selected = self.route_selector(block) if self.route_selector is not None else None
         if block.parent_id is not None:
@@ -691,7 +711,7 @@ class RoutedBackend:
         *,
         missing_ok: bool = False,
     ) -> RouteKey | None:
-        """Find the route that owns an existing block."""
+        """Find the route that owns an existing block, and record it in the catalog."""
 
         with self._lock:
             route = self._catalog.get(block_id)
@@ -709,7 +729,7 @@ class RoutedBackend:
             return discovered[0]
 
     def _search_linked_blocks(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search blocks connected to a root through the shared link store."""
+        """Search the blocks that the shared link store connects to a root."""
 
         root_id = query.root_id
         if root_id is None:
@@ -726,7 +746,7 @@ class RoutedBackend:
 
 
 def _search_blocks(query: MemoryQuery, blocks: list[MemoryBlock]) -> list[SearchResult]:
-    """Apply portable in-memory matching to a list of blocks."""
+    """Apply the portable in-memory matcher to a list of blocks."""
 
     results: list[SearchResult] = []
     text = query.text.casefold() if query.text else None
@@ -749,7 +769,7 @@ def _search_blocks(query: MemoryQuery, blocks: list[MemoryBlock]) -> list[Search
 
 
 def _copy_block(block: MemoryBlock) -> MemoryBlock:
-    """Return a block copy with isolated mutable payloads."""
+    """Return a block copy whose mutable payloads are separate copies."""
 
     return block.with_updates(
         value=deepcopy(block.value),
@@ -758,7 +778,7 @@ def _copy_block(block: MemoryBlock) -> MemoryBlock:
 
 
 def _copy_link(link: MemoryLink) -> MemoryLink:
-    """Return a link copy with isolated mutable metadata."""
+    """Return a link copy whose mutable metadata is a separate copy."""
 
     return MemoryLink(
         id=link.id,

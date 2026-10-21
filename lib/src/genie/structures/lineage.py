@@ -1,4 +1,4 @@
-"""Lineage DAG facade over relation-scoped property-graph edges."""
+"""Lineage DAG facade over the property-graph edges of one relation."""
 
 from __future__ import annotations
 
@@ -13,15 +13,17 @@ from genie.structures.records import GraphNeighbor, GraphPath
 
 @runtime_checkable
 class LineageAccess(GraphAccess, AcyclicLinkWriter, Protocol):
-    """Access surface required by `LineageDAG`."""
+    """Access surface that `LineageDAG` requires."""
 
 
 class LineageDAG:
     """A directed acyclic lineage view over existing typed links.
 
-    One exact link relation identifies the DAG. Edges point from a predecessor
-    to a successor. Reads and metadata updates use `PropertyGraph`; insertion
-    uses the access object's atomic acyclic-link operation.
+    - **One relation:** one exact link relation identifies the DAG.
+    - **Direction:** edges point from a predecessor to a successor.
+    - **Reads and updates:** reads and metadata updates use `PropertyGraph`.
+    - **Inserts:** inserts use the atomic acyclic-link operation of the access
+      object.
     """
 
     __slots__ = ("_access", "_graph", "relation")
@@ -30,15 +32,17 @@ class LineageDAG:
         """Create a lineage DAG for one application-defined relation.
 
         Args:
-            access: Full or scoped graph access with atomic DAG insertion.
-            relation: Exact link relation that identifies this DAG. Relation
-                names are shared across the whole backend, so use a distinct,
-                prefixed name for each lineage graph, such as
-                `"billing.derived_from"`.
+            access: Full or scoped graph access that can insert DAG edges
+                atomically.
+            relation: Exact link relation that identifies this DAG. The whole
+                backend shares relation names. A distinct prefixed name for
+                each lineage graph, such as `"billing.derived_from"`, keeps the
+                graphs apart.
 
         Raises:
             TypeError: If `relation` is not a string.
-            ValueError: If `relation` is empty or reserved for mounts.
+            ValueError: If `relation` is empty, contains only whitespace, or is
+                the reserved mount relation.
         """
 
         _validate_relation(relation)
@@ -53,20 +57,20 @@ class LineageDAG:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Atomically add a predecessor-to-successor edge.
+        """Add a predecessor-to-successor edge in one atomic step.
 
         Args:
             predecessor: Existing source block that came earlier.
-            successor: Existing target block derived later.
-            metadata: Optional edge properties such as provenance details.
+            successor: Existing target block that came later from it.
+            metadata: Optional edge properties, such as provenance details.
 
         Returns:
             Created typed link.
 
         Raises:
-            AccessDenied: If scope or policy rejects either endpoint.
-            MemoryConflict: If the edge would create a directed cycle.
-            MemoryNotFound: If either endpoint is missing.
+            AccessDenied: If the scope or a policy rejects an endpoint.
+            MemoryConflict: If the edge makes a directed cycle.
+            MemoryNotFound: If an endpoint does not exist.
             UnsupportedOperation: If the backend cannot insert atomically.
         """
 
@@ -83,19 +87,20 @@ class LineageDAG:
         *,
         metadata: dict[str, Any],
     ) -> MemoryLink:
-        """Merge metadata into one lineage edge without changing topology.
+        """Merge metadata into one lineage edge. The topology does not change.
 
         Args:
             edge: Existing lineage edge to update.
             metadata: Edge property fields to merge.
 
         Returns:
-            Persisted replacement link with stable identity and endpoints.
+            Stored replacement link, with the same identity and endpoints.
 
         Raises:
-            MemoryConflict: If the edge does not belong to this DAG's
-                relation.
-            MemoryNotFound: If the edge no longer exists.
+            MemoryNotFound: If the edge does not exist, or the access object
+                cannot see it.
+            ValueError: If the edge does not belong to the relation of this
+                DAG.
         """
 
         stored = self._require_stored_edge(edge)
@@ -111,11 +116,14 @@ class LineageDAG:
         """Return visible lineage edges connected to one block.
 
         Args:
-            block: Memory block or id whose edges should be returned.
+            block: Memory block or id whose edges to return.
             direction: Edge direction relative to the selected block.
 
         Returns:
-            Visible edges in this DAG's relation, in edge order.
+            Visible edges in the relation of this DAG, in edge order.
+
+        Raises:
+            ValueError: If `direction` is not `"out"`, `"in"`, or `"both"`.
         """
 
         return self._graph.edges(
@@ -125,19 +133,20 @@ class LineageDAG:
         )
 
     def predecessors(self, block: BlockRef) -> list[GraphNeighbor]:
-        """Return visible direct predecessors connected by incoming edges.
+        """Return visible direct predecessors that incoming edges connect.
 
         Args:
-            block: Memory block or id whose predecessors should be returned.
+            block: Memory block or id whose predecessors to return.
 
         Returns:
-            One neighbor record per incoming edge, so parallel edges remain
-            distinct.
+            One neighbor record for each incoming edge, so parallel edges stay
+            separate.
 
         Raises:
             MemoryConflict: If a backend returns an edge that is not connected
                 to the selected block.
-            MemoryNotFound: If an edge endpoint disappears during traversal.
+            MemoryNotFound: If an edge endpoint no longer exists during the
+                traversal.
         """
 
         return self._graph.neighbors(
@@ -147,19 +156,20 @@ class LineageDAG:
         )
 
     def successors(self, block: BlockRef) -> list[GraphNeighbor]:
-        """Return visible direct successors connected by outgoing edges.
+        """Return visible direct successors that outgoing edges connect.
 
         Args:
-            block: Memory block or id whose successors should be returned.
+            block: Memory block or id whose successors to return.
 
         Returns:
-            One neighbor record per outgoing edge, so parallel edges remain
-            distinct.
+            One neighbor record for each outgoing edge, so parallel edges stay
+            separate.
 
         Raises:
             MemoryConflict: If a backend returns an edge that is not connected
                 to the selected block.
-            MemoryNotFound: If an edge endpoint disappears during traversal.
+            MemoryNotFound: If an edge endpoint no longer exists during the
+                traversal.
         """
 
         return self._graph.neighbors(
@@ -175,20 +185,20 @@ class LineageDAG:
         max_depth: int = 6,
         limit: int = 100,
     ) -> list[GraphPath]:
-        """Return bounded lineage paths walking toward earlier blocks.
+        """Return bounded lineage paths that go toward earlier blocks.
 
         Args:
-            block: Starting memory block or id.
+            block: Start memory block or id.
             max_depth: Maximum number of edges in a returned path.
             limit: Maximum number of paths to return.
 
         Returns:
-            Paths of length one through `max_depth` in breadth-first order.
+            Paths with 1 to `max_depth` edges, in breadth-first order.
 
         Raises:
-            MemoryNotFound: If the starting block is missing.
+            MemoryNotFound: If the start block does not exist.
             TypeError: If `max_depth` or `limit` is not an integer.
-            ValueError: If either bound is negative.
+            ValueError: If a bound is negative.
         """
 
         return self._graph.walk(
@@ -206,20 +216,20 @@ class LineageDAG:
         max_depth: int = 6,
         limit: int = 100,
     ) -> list[GraphPath]:
-        """Return bounded lineage paths walking toward derived blocks.
+        """Return bounded lineage paths that go toward derived blocks.
 
         Args:
-            block: Starting memory block or id.
+            block: Start memory block or id.
             max_depth: Maximum number of edges in a returned path.
             limit: Maximum number of paths to return.
 
         Returns:
-            Paths of length one through `max_depth` in breadth-first order.
+            Paths with 1 to `max_depth` edges, in breadth-first order.
 
         Raises:
-            MemoryNotFound: If the starting block is missing.
+            MemoryNotFound: If the start block does not exist.
             TypeError: If `max_depth` or `limit` is not an integer.
-            ValueError: If either bound is negative.
+            ValueError: If a bound is negative.
         """
 
         return self._graph.walk(
@@ -240,16 +250,16 @@ class LineageDAG:
         """Return the shortest visible forward lineage path, if one exists.
 
         Args:
-            predecessor: Starting memory block or id.
+            predecessor: Start memory block or id.
             successor: Target memory block or id.
-            max_depth: Maximum number of edges to inspect.
+            max_depth: Maximum number of edges in the path.
 
         Returns:
-            Shortest path, a zero-edge path when both blocks are the same, or
-            `None` when no path is found within `max_depth`.
+            Shortest path, a path with zero edges when both blocks are the
+            same, or `None` if no path is inside the `max_depth` limit.
 
         Raises:
-            MemoryNotFound: If either endpoint is missing.
+            MemoryNotFound: If an endpoint does not exist.
             TypeError: If `max_depth` is not an integer.
             ValueError: If `max_depth` is negative.
         """
@@ -263,7 +273,7 @@ class LineageDAG:
         )
 
     def _require_relation(self, edge: MemoryLink) -> None:
-        """Require an edge belonging to this relation-scoped DAG."""
+        """Raise `ValueError` if an edge does not belong to the relation of this DAG."""
 
         if edge.relation != self.relation:
             raise ValueError(
@@ -272,7 +282,7 @@ class LineageDAG:
             )
 
     def _require_stored_edge(self, edge: MemoryLink) -> MemoryLink:
-        """Return the canonical visible edge instead of trusting caller fields."""
+        """Return the stored visible edge, and do not trust the fields from the caller."""
 
         stored = next(
             (
@@ -288,7 +298,7 @@ class LineageDAG:
 
 
 def _validate_relation(relation: object) -> None:
-    """Require a non-empty, non-mount relation string."""
+    """Raise an error if a relation is not a non-empty string, or is the mount relation."""
 
     if not isinstance(relation, str):
         raise TypeError("relation must be a string.")

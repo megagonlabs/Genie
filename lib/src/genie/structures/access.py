@@ -1,9 +1,11 @@
 """Shared memory access protocols for optional structures.
 
-Structure facades depend on these small protocols instead of a concrete
-`Memory` or `MemoryHandle` class. Both public access classes satisfy the
-combined `MemoryAccess` protocol. A facade can depend on a narrower protocol
-when it needs only part of the memory API.
+- **Small protocols:** structure facades depend on these protocols, not on a
+  concrete `Memory` or `MemoryHandle` class.
+- **Combined protocol:** both public access classes satisfy the combined
+  `MemoryAccess` protocol.
+- **Narrow needs:** a facade can depend on a narrower protocol when it needs
+  only part of the memory API.
 """
 
 from __future__ import annotations
@@ -21,21 +23,25 @@ BlockRef: TypeAlias = str | MemoryBlock
 """A memory block or its stable id."""
 
 LinkDirection: TypeAlias = Literal["out", "in", "both"]
-"""Direction used when listing links relative to a block."""
+"""Link direction relative to a block, for a link listing."""
 
 
 @runtime_checkable
 class BlockReader(Protocol):
-    """Read access needed by structure facades."""
+    """Read access that structure facades need."""
 
     def get(self, block_id: BlockRef) -> MemoryBlock | None:
-        """Fetch a visible memory block by block or id.
+        """Get a visible memory block by block or id.
 
         Args:
             block_id: Block or block id to read.
 
         Returns:
-            Visible block, or `None` when it is missing or not visible.
+            Visible block, or `None` when the block does not exist.
+
+        Raises:
+            AccessDenied: If the principal cannot read the block, or a handle
+                boundary refuses it.
         """
 
         ...
@@ -43,7 +49,7 @@ class BlockReader(Protocol):
 
 @runtime_checkable
 class BlockWriter(Protocol):
-    """Block mutation access needed by structure facades."""
+    """Block change access that structure facades need."""
 
     def put(
         self,
@@ -62,7 +68,7 @@ class BlockWriter(Protocol):
             type: Application-defined block type.
             value: User-level value to encode and store.
             parent: Optional parent block or id.
-            metadata: Optional metadata used for filtering or indexing.
+            metadata: Optional metadata for filters or indexes.
             policy: Optional block-level access policy.
             content_type: Optional explicit codec content type.
             id: Optional caller-provided block id.
@@ -80,7 +86,7 @@ class BlockWriter(Protocol):
         *,
         content_type: str | None = None,
     ) -> MemoryBlock:
-        """Replace a memory block's value.
+        """Replace the value of a memory block.
 
         Args:
             block_id: Block or block id to replace.
@@ -114,7 +120,7 @@ class BlockWriter(Protocol):
         ...
 
     def delete(self, block_id: BlockRef) -> None:
-        """Delete a memory block using the access object's normal rules.
+        """Delete a memory block with the normal rules of the access object.
 
         Args:
             block_id: Block or block id to delete, together with everything it
@@ -126,19 +132,21 @@ class BlockWriter(Protocol):
 
 @runtime_checkable
 class AccessChecker(Protocol):
-    """Policy check access needed by facades that change membership."""
+    """Policy check access that facades need to change membership."""
 
     def require_access(self, operation: Operation | str, block_id: BlockRef) -> None:
-        """Require that the acting principal may perform an operation on a block.
+        """Raise `AccessDenied` if the acting principal cannot perform an operation on a block.
 
         Args:
             operation: Built-in `Operation`, or the name of a custom operation
                 configured on the policy engine.
-            block_id: Block or block id carrying the policy.
+            block_id: Block or block id that has the policy.
 
         Raises:
             AccessDenied: If the operation is not allowed.
             MemoryNotFound: If the block does not exist.
+            ValueError: If `operation` is not a built-in or configured custom
+                operation.
         """
 
         ...
@@ -146,7 +154,7 @@ class AccessChecker(Protocol):
 
 @runtime_checkable
 class TreeReader(Protocol):
-    """Parent/child traversal access needed by tree-based structures."""
+    """Parent and child traversal access that tree structures need."""
 
     def children(self, block_id: BlockRef) -> list[MemoryBlock]:
         """Return visible direct children of a memory block.
@@ -164,10 +172,10 @@ class TreeReader(Protocol):
         """Return visible ancestors of a memory block.
 
         Args:
-            block_id: Block or block id to inspect.
+            block_id: Block or block id to examine.
 
         Returns:
-            Visible ancestor blocks in nearest-parent-first order.
+            Visible ancestor blocks, nearest parent first.
         """
 
         ...
@@ -175,7 +183,7 @@ class TreeReader(Protocol):
 
 @runtime_checkable
 class LinkReader(Protocol):
-    """Typed-link lookup access needed by graph-based structures."""
+    """Typed-link lookup access that graph structures need."""
 
     def list_links(
         self,
@@ -187,12 +195,12 @@ class LinkReader(Protocol):
         """List visible links connected to a memory block.
 
         Args:
-            block_id: Block or block id to inspect.
+            block_id: Block or block id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
         Returns:
-            Visible links matching the filters.
+            Visible links that match the filters.
         """
 
         ...
@@ -200,7 +208,7 @@ class LinkReader(Protocol):
 
 @runtime_checkable
 class LinkWriter(Protocol):
-    """Typed-link mutation access needed by graph-based structures."""
+    """Typed-link change access that graph structures need."""
 
     def add_link(
         self,
@@ -213,8 +221,8 @@ class LinkWriter(Protocol):
         """Create a typed link between two memory blocks.
 
         Args:
-            source: Block or id the link starts from.
-            target: Block or id the link points to.
+            source: Block or id where the link starts.
+            target: Block or id that the link points to.
             relation: Application-defined relationship type.
             metadata: Optional relationship metadata.
 
@@ -245,7 +253,7 @@ class LinkWriter(Protocol):
 
 @runtime_checkable
 class AcyclicLinkWriter(Protocol):
-    """Atomic acyclic-link mutation access needed by DAG structures."""
+    """Atomic acyclic-link change access that DAG structures need."""
 
     def add_acyclic_link(
         self,
@@ -255,16 +263,19 @@ class AcyclicLinkWriter(Protocol):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Atomically create a typed link unless it would form a cycle.
+        """Create a typed link in one atomic step, unless the link makes a cycle.
 
         Args:
-            source: Block or id the link starts from.
-            target: Block or id the link points to.
-            relation: Relation identifying the protected acyclic graph.
+            source: Block or id where the link starts.
+            target: Block or id that the link points to.
+            relation: Relation that identifies the protected acyclic graph.
             metadata: Optional relationship metadata.
 
         Returns:
             Stored link.
+
+        Raises:
+            MemoryConflict: If the link makes a cycle.
         """
 
         ...
@@ -272,7 +283,7 @@ class AcyclicLinkWriter(Protocol):
 
 @runtime_checkable
 class SearchAccess(Protocol):
-    """Search access needed by structures with portable query fallbacks."""
+    """Search access for structures that have portable query fallbacks."""
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
         """Run a normalized memory query through the access boundary.
@@ -299,4 +310,4 @@ class MemoryAccess(
     SearchAccess,
     Protocol,
 ):
-    """Combined structural interface implemented by `Memory` and `MemoryHandle`."""
+    """Combined structural interface that `Memory` and `MemoryHandle` implement."""

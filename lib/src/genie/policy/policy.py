@@ -17,30 +17,30 @@ BUILTIN_OPERATION_NAMES = frozenset(
         "traverse_down",
     }
 )
-"""Operation names reserved by Genie's core memory API."""
+"""Operation names that the core memory API of Genie reserves."""
 
 
 @dataclass(frozen=True, slots=True)
 class AccessRule:
     """A rule that grants or denies one operation.
 
-    The defaults deny everyone. `AccessRule()` is the same as
-    `AccessRule.deny()`, and a rule built from `principals`, `roles`, or
-    `allow_owner` allows only those.
+    - **Fail closed:** the defaults deny everyone. `AccessRule()` is the same as
+      `AccessRule.deny()`.
+    - **Grants:** a rule made from `principals`, `roles`, or `allow_owner`
+      allows only those.
 
     Attributes:
-        allow_all: Whether every principal is allowed.
-        principals: Explicit principal ids allowed when `allow_all` is false.
-        roles: Principal roles allowed when `allow_all` is false.
-        allow_owner: Whether the block creator is allowed when `allow_all` is
-            false. The owner is the principal id stored in
-            `MemoryBlock.created_by`.
+        allow_all: If `True`, all principals pass.
+        principals: Explicit principal ids that pass when `allow_all` is false.
+        roles: Principal roles that pass when `allow_all` is false.
+        allow_owner: Whether the block creator passes when `allow_all` is
+            false. The owner is the principal id in `MemoryBlock.created_by`.
 
     Raises:
         TypeError: If a flag is not a boolean, or `principals` or `roles` is
             not a set of strings.
         ValueError: If `principals` or `roles` contains an empty string, or
-            `allow_all` is combined with `principals`, `roles`, or
+            `allow_all` is `True` together with `principals`, `roles`, or
             `allow_owner`.
     """
 
@@ -50,7 +50,7 @@ class AccessRule:
     allow_owner: bool = False
 
     def __post_init__(self) -> None:
-        """Validate flags and freeze principal and role collections."""
+        """Check the flags, and freeze the principal and role sets."""
 
         if not isinstance(self.allow_all, bool):
             raise TypeError("AccessRule allow_all must be a boolean.")
@@ -74,7 +74,7 @@ class AccessRule:
 
     @classmethod
     def allow(cls) -> AccessRule:
-        """Create a rule that allows every principal.
+        """Create a rule that allows all principals.
 
         Returns:
             An allow-all access rule.
@@ -84,7 +84,7 @@ class AccessRule:
 
     @classmethod
     def deny(cls) -> AccessRule:
-        """Create a rule that denies every principal.
+        """Create a rule that denies all principals.
 
         Returns:
             A deny-all access rule.
@@ -105,10 +105,11 @@ class AccessRule:
         Args:
             principals: Principal ids to allow.
             roles: Role names to allow.
-            owner: Whether to allow the block creator.
+            owner: If `True`, the block creator also passes.
 
         Returns:
-            A selective access rule.
+            A rule that allows only the listed principals and roles, and the
+            owner if `owner` is `True`.
         """
 
         return cls(
@@ -129,11 +130,12 @@ class AccessRule:
         return cls(allow_all=False, allow_owner=True)
 
     def allows(self, principal: Principal, *, owner_id: str | None = None) -> bool:
-        """Return whether the principal satisfies this rule.
+        """Return whether the principal passes this rule.
 
         Args:
-            principal: Principal attempting an operation.
-            owner_id: Optional creator principal id for owner-aware rules.
+            principal: Principal that tries an operation.
+            owner_id: Principal id of the block creator. With `None`, the owner
+                grant does not apply.
 
         Returns:
             `True` when the principal is allowed.
@@ -149,7 +151,7 @@ class AccessRule:
 
 
 class _FrozenOperationRules(Mapping[str, AccessRule]):
-    """Immutable, deepcopy-friendly mapping for custom operation rules."""
+    """Mapping of custom operation rules that cannot change and that `deepcopy` can copy."""
 
     def __init__(self, rules: Mapping[str, AccessRule]) -> None:
         """Create an immutable copy of operation rules.
@@ -166,7 +168,7 @@ class _FrozenOperationRules(Mapping[str, AccessRule]):
         return self._rules[key]
 
     def __iter__(self) -> Iterator[str]:
-        """Iterate over operation names."""
+        """Return an iterator over the operation names."""
 
         return iter(self._rules)
 
@@ -176,14 +178,14 @@ class _FrozenOperationRules(Mapping[str, AccessRule]):
         return len(self._rules)
 
     def __deepcopy__(self, memo: dict[int, object]) -> _FrozenOperationRules:
-        """Return a copied immutable mapping."""
+        """Return a copy of the mapping that also cannot change."""
 
         copied = self.__class__(deepcopy(self._rules, memo))
         memo[id(self)] = copied
         return copied
 
     def __repr__(self) -> str:
-        """Return a developer-friendly representation."""
+        """Return a representation for developers."""
 
         return repr(self._rules)
 
@@ -192,28 +194,35 @@ class _FrozenOperationRules(Mapping[str, AccessRule]):
 class MemoryPolicy:
     """Access policy attached to a memory block.
 
-    Each field controls one operation family. Scope limits are enforced
-    separately by `MemoryHandle`. Applications can attach named custom
-    operations through `operations` and evaluate them with `PolicyEngine`.
-
-    Every built-in field defaults to `AccessRule.owner()`, so `MemoryPolicy()`
-    is the same as `MemoryPolicy.owner_private()`. A policy that sets only
-    some fields keeps the other operations owner-only.
+    - **One field for each family:** each built-in field controls one operation
+      family.
+    - **Scope is separate:** `MemoryHandle` applies the scope limits, not the
+      policy.
+    - **Custom operations:** applications can attach named custom operations
+      through `operations`. `PolicyEngine` evaluates them.
+    - **Owner-only default:** each built-in field defaults to
+      `AccessRule.owner()`. So `MemoryPolicy()` is the same as
+      `MemoryPolicy.owner_private()`. A policy that sets only some fields keeps
+      the other operations owner-only.
 
     Attributes:
         read: Permission to read the block value and metadata.
-        write: Permission to update or delete the block.
+        write: Permission to update or delete the block. It also controls new
+            children under the block, new links from it, and membership
+            changes when the block is a structure container.
         search: Permission for the block to appear in search results.
-        traverse_up: Permission to traverse from this block to ancestors.
-        traverse_down: Permission to traverse from this block to descendants.
+        traverse_up: Permission to go from this block to its ancestors.
+        traverse_down: Permission to go from this block to its descendants. A
+            new child under the block also needs it.
         operations: Optional application-defined operation rules, such as
-            `"export"` or `"approve"`. These names cannot override Genie's
-            built-in operation fields.
+            `"export"` or `"approve"`. These names cannot replace the built-in
+            operation fields of Genie.
 
     Raises:
         TypeError: If a built-in field is not an `AccessRule`, or `operations`
-            is not a mapping of names to `AccessRule` values.
-        ValueError: If `operations` reuses a name reserved by Genie.
+            is not a mapping of string names to `AccessRule` values.
+        ValueError: If `operations` uses a name that Genie reserves, or an
+            empty name.
     """
 
     read: AccessRule = field(default_factory=AccessRule.owner)
@@ -224,7 +233,7 @@ class MemoryPolicy:
     operations: Mapping[str, AccessRule] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate and freeze custom operation rules."""
+        """Check the built-in fields, and freeze the custom operation rules."""
 
         for field_name in (
             "read",
@@ -242,7 +251,7 @@ class MemoryPolicy:
         """Create a public policy.
 
         Returns:
-            A policy that allows every operation to every principal.
+            A policy that allows all built-in operations to all principals.
         """
 
         allow_rule = AccessRule.allow()
@@ -258,8 +267,8 @@ class MemoryPolicy:
     def owner_private(cls) -> MemoryPolicy:
         """Create a policy that allows only the block creator.
 
-        The owner is resolved from `MemoryBlock.created_by` when a policy check
-        runs. This is the default policy for new `Memory` blocks.
+        - **Owner:** a policy check gets the owner from `MemoryBlock.created_by`.
+        - **Default:** this is the default policy for new `Memory` blocks.
 
         Returns:
             A policy that allows only the creator to read, write, search, and
@@ -284,17 +293,17 @@ class MemoryPolicy:
     ) -> MemoryPolicy:
         """Create a policy that allows the creator plus listed principals or roles.
 
-        This is useful for managed memory systems where the creator should keep
-        access, but a supervisor, service principal, or admin role also needs
-        read, write, search, and traversal access.
+        It suits managed memory systems in which the creator keeps access, and
+        a supervisor, a service principal, or an admin role also gets read,
+        write, search, and traversal access.
 
         Args:
             principals: Additional principal ids to allow.
             roles: Additional role names to allow.
 
         Returns:
-            A policy that allows the creator, listed principals, and listed
-            roles for core memory operations.
+            A policy that allows the creator, the listed principals, and the
+            listed roles for the built-in memory operations.
         """
 
         rule = AccessRule.only(principals=principals, roles=roles, owner=True)
@@ -312,7 +321,7 @@ def _normalize_names(
     *,
     field_name: str,
 ) -> frozenset[str]:
-    """Return validated access-rule names as an immutable set."""
+    """Check access-rule names, and return them as a `frozenset`."""
 
     if not isinstance(values, set | frozenset):
         raise TypeError(f"AccessRule {field_name} must be a set of strings.")
@@ -326,7 +335,7 @@ def _normalize_names(
 def _freeze_operation_rules(
     rules: Mapping[str, AccessRule],
 ) -> _FrozenOperationRules:
-    """Validate and freeze application-defined policy operation rules."""
+    """Check the application-defined operation rules, and return a frozen copy."""
 
     if not isinstance(rules, Mapping):
         raise TypeError("Custom policy operations must be a mapping.")

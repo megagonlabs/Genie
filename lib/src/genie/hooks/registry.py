@@ -50,41 +50,43 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class HookRegistry:
-    """Ordered collection of hooks with bounded, reentrancy-safe dispatch.
+    """Ordered collection of hooks, with a depth limit and a guard against reentry.
 
-    Dispatch methods require the explicit context yielded by `operation`.
-    `Memory` and structure facades manage this lifecycle for normal use.
+    Dispatch methods accept only the context that `operation` yields. `Memory`
+    and the structure facades manage this lifecycle for normal use.
 
     Isolated callbacks:
-        - Every hook receives `after_put`, `after_update`, `after_get`,
+        - Each hook gets `after_put`, `after_update`, `after_get`,
           `after_traverse`, `after_add_link`, `after_update_link`,
           `after_structure_change`, `after_delete`, `on_denied`, and
-          `on_operation_end` even when another hook raises. A recursive delete
-          reports every removed block before any failure surfaces.
-        - What these callbacks report is already decided, so stopping at the
-          first failure would only destroy the records the remaining hooks and
-          blocks are owed.
-        - Collected failures are still reported: attached as notes to an
-          exception the caller is already receiving, raised when there is none,
-          and merely logged for hooks that declare `fail_open`.
+          `on_operation_end`, also when another hook raises. A recursive delete
+          reports each removed block before any failure surfaces.
+        - These callbacks report work that is already decided. A stop at the
+          first failure only takes the records away from the other hooks and
+          blocks.
+        - The registry still reports collected failures. It attaches them as
+          notes to an exception that the caller already gets. If there is no
+          such exception, it raises them. For hooks that declare `fail_open`,
+          it only logs them.
+        - The registry collects only `Exception` failures. A `BaseException`,
+          such as `KeyboardInterrupt`, stops dispatch at once.
 
     Fail-fast callbacks:
-        - Every `before_` callback and `after_search` can still change what the
-          caller stores or receives, so they fail fast and ignore `fail_open`.
+        - Each `before_` callback and `after_search` can still change what the
+          caller stores or gets. So they fail fast and ignore `fail_open`.
 
     Auditable membership:
-        - Registration is by object identity and rejects a repeat, so a hook
-          cannot be dispatched twice and report one operation as two.
-        - `hooks` lists what is installed, so startup can assert that an audit
-          hook is present.
-        - A hook registered as mandatory can be neither unregistered nor
-          suppressed.
+        - Registration uses object identity and rejects a repeat. So the
+          registry cannot dispatch a hook twice and report one operation as two.
+        - `hooks` lists the registered hooks, so startup code can assert that an
+          audit hook is present.
+        - A hook registered as mandatory cannot be unregistered or suppressed.
 
     Suppression:
-        - Suppressing anything is an operation.
-        - `on_suppressed` is isolated like the other observing callbacks, but
-          it reports work that has not happened yet, so a failure there refuses
-          the window rather than being reported after it.
+        - Each suppression is an operation.
+        - `on_suppressed` is isolated like the other observing callbacks. But it
+          reports work that has not happened yet. So a failure there refuses the
+          window, and the registry does not report the failure after the window.
     """
 
     def __init__(
@@ -96,10 +98,10 @@ class HookRegistry:
         """Create a registry.
 
         Args:
-            hooks: Initial hooks in dispatch order. Register mandatory hooks
-                with `register` instead, which takes the flag.
-            max_depth: Maximum zero-based depth for operations started inside
-                hooks. Top-level operations have depth zero.
+            hooks: Initial hooks in dispatch order. For a mandatory hook, use
+                `register`, which accepts the flag.
+            max_depth: Maximum zero-based depth for operations that start
+                inside hooks. Top-level operations have depth zero.
 
         Raises:
             TypeError: If `max_depth` is not an integer or an initial hook is
@@ -121,9 +123,8 @@ class HookRegistry:
     def hooks(self) -> tuple[MemoryHook, ...]:
         """Registered hooks in dispatch order.
 
-        The tuple is a snapshot, so registering or unregistering does not
-        change one already taken and a hook cannot reach the dispatch order
-        through it.
+        The tuple is a snapshot. A later `register` or `unregister` call does
+        not change it, and a hook cannot change the dispatch order through it.
         """
 
         return tuple(self._hooks)
@@ -132,27 +133,29 @@ class HookRegistry:
     def mandatory(self) -> tuple[MemoryHook, ...]:
         """Registered mandatory hooks in dispatch order.
 
-        These are the hooks that keep reporting through any suppression window
-        and cannot be unregistered, so this is the set a startup check asserts
-        when an audit trail has to survive the code that runs after it.
+        These hooks continue to report through each suppression window, and
+        they cannot be unregistered. So a startup check asserts this set when
+        an audit trail has to stay in place for all code that runs later.
         """
 
         return tuple(hook for hook in self._hooks if id(hook) in self._mandatory)
 
     def register(self, hook: MemoryHook, *, mandatory: bool = False) -> None:
-        """Append a hook to the dispatch order.
+        """Add a hook at the end of the dispatch order.
 
-        Hooks are identified by object identity, so two instances of the same
-        class are two hooks and registering one instance twice is refused
-        rather than silently doubling what it reports.
+        - **Identity:** the registry identifies hooks by object identity. So 2
+          instances of the same class are 2 hooks.
+        - **No repeat:** a second registration of the same instance raises
+          `ValueError`. Without this check, the hook reports each operation
+          twice.
 
         Args:
             hook: Hook to register.
-            mandatory: Whether the hook must keep running. A mandatory hook
-                cannot be unregistered or suppressed, which makes it the way to
-                install an audit hook that the rest of the process cannot
-                detach. Pass it on the initial registration; a registered hook
-                cannot be re-registered to change the flag.
+            mandatory: Whether the hook is mandatory. A mandatory hook cannot
+                be unregistered or suppressed. So it is the way to install an
+                audit hook that the rest of the process cannot detach. The flag
+                applies only on the first registration, because a second
+                `register` call for the same hook raises `ValueError`.
 
         Raises:
             TypeError: If `hook` is not a `MemoryHook`.
@@ -173,8 +176,8 @@ class HookRegistry:
     def unregister(self, hook: MemoryHook) -> None:
         """Remove a hook from the dispatch order.
 
-        A hook registered again later is appended, so removal and reregistration
-        change dispatch order.
+        A hook that is registered again later goes to the end. So a removal
+        and a new registration change the dispatch order.
 
         Args:
             hook: Hook to remove.
@@ -201,30 +204,33 @@ class HookRegistry:
         principal_id: str | None = None,
         attributes: Mapping[str, str] | None = None,
     ) -> Generator[HookContext, None, None]:
-        """Create causal context around one logical operation.
+        """Open the causal context of one logical operation.
 
-        Leaving the context dispatches `on_operation_end` exactly once for
-        every operation that starts, so hooks always observe a terminal event
-        even when the operation is refused or fails.
+        When the context closes, the registry dispatches `on_operation_end`
+        exactly once for each operation that starts. So hooks always get a
+        terminal event, also when the operation is refused or fails.
 
         Args:
-            operation: Logical operation being performed. Use `scope` for
-                spans Genie does not model.
-            principal_id: Acting principal when available. Defaults to the
-                principal of the enclosing operation or scope.
-            attributes: Attributes to add to the ones inherited from the
-                enclosing operation or scope. Added attributes win on conflict.
+            operation: Logical operation. `scope` opens spans that Genie does
+                not model.
+            principal_id: Acting principal, if available. Defaults to the
+                principal of the operation or scope that contains this one.
+            attributes: Attributes to add to the attributes inherited from the
+                operation or scope that contains this one. Added attributes win
+                on conflict.
 
         Yields:
-            Context shared by the operation's before and after callbacks.
+            Context that the before and after callbacks of the operation share.
 
         Raises:
-            HookRecursionError: If nested operations exceed `max_depth`. The
-                operation does not start, so no terminal event is dispatched.
-            TypeError: If the attributes are not strings.
-            ValueError: If `operation` is not a recognized hook operation, or
-                is `HookOperation.SCOPE` or `HookOperation.SUPPRESS`, which
-                `scope` and `suppress` open instead.
+            HookRecursionError: If nested operations go above `max_depth`. The
+                operation does not start, so the registry dispatches no
+                terminal event.
+            TypeError: If the attributes are not a mapping of strings to
+                strings.
+            ValueError: If `operation` is not a known hook operation, or is
+                `HookOperation.SCOPE` or `HookOperation.SUPPRESS`. `scope` and
+                `suppress` open those operations.
         """
 
         if not isinstance(operation, HookOperation):
@@ -249,7 +255,7 @@ class HookRegistry:
         principal_id: str | None,
         attributes: Mapping[str, str] | None,
     ) -> Generator[HookContext, None, None]:
-        """Open causal context and dispatch the terminal event on the way out."""
+        """Open the causal context, and dispatch the terminal event when the context closes."""
 
         context = self._new_context(operation, principal_id, attributes)
         token = _CURRENT_OPERATION.set(context)
@@ -277,35 +283,35 @@ class HookRegistry:
     ) -> Generator[HookContext, None, None]:
         """Group the memory operations of one caller-defined logical span.
 
-        - A scope names work Genie does not model, such as an agent run, a
-          turn, or a tool call.
-        - It opens causal context without dispatching any callback. Operations
-          started inside it become children of the scope and inherit its
-          attributes at any nesting depth.
-        - So hooks receive the grouping key on every event without the scope
-          itself appearing as an operation.
+        - **Purpose:** a scope names work that Genie does not model, such as an
+          agent run, a turn, or a tool call.
+        - **No callbacks:** it opens causal context and dispatches no callback.
+          Operations that start inside it become children of the scope, and
+          they inherit its attributes at any depth.
+        - **Result:** hooks get the group key on each event, but the scope
+          itself does not appear as an operation.
 
         Args:
-            name: Caller-defined span name, such as `"agent.turn"`. Scope
-                names are free-form; the context reports it as `scope_name`
-                under the `HookOperation.SCOPE` operation.
-            principal_id: Acting principal when available. Defaults to the
-                principal of the enclosing operation or scope.
-            attributes: Attributes inherited by everything inside the scope,
-                added to the ones inherited from an enclosing operation or
-                scope.
+            name: Caller-defined span name, such as `"agent.turn"`. The name is
+                free-form. The context reports it as `scope_name` under the
+                `HookOperation.SCOPE` operation.
+            principal_id: Acting principal, if available. Defaults to the
+                principal of the operation or scope that contains this one.
+            attributes: Attributes that everything inside the scope inherits.
+                The registry adds them to the attributes inherited from an
+                operation or scope that contains this one.
 
         Yields:
-            Context describing the scope. Hooks never receive it directly; it
-            reaches them as the parent operation id and inherited attributes of
-            the operations inside.
+            Context of the scope. Hooks never get it directly. It gets to them
+            as the parent operation id and the inherited attributes of the
+            operations inside.
 
         Raises:
-            HookRecursionError: If scopes opened inside hooks exceed
+            HookRecursionError: If scopes opened inside hooks go above
                 `max_depth`.
-            TypeError: If `name` is not a string or the attributes are not
-                strings.
-            ValueError: If `name` is empty.
+            TypeError: If `name` is not a string, or the attributes are not a
+                mapping of strings to strings.
+            ValueError: If `name` is empty or contains only whitespace.
         """
 
         if not isinstance(name, str):
@@ -331,46 +337,49 @@ class HookRegistry:
         principal_id: str | None = None,
         attributes: Mapping[str, str] | None = None,
     ) -> Generator[HookContext, None, None]:
-        """Temporarily suppress this registry or selected hooks.
+        """Suppress this registry or selected hooks for a short time.
 
-        This trusted escape hatch is intended for migrations and carefully
-        controlled hook-internal writes. Normal recursive callbacks are handled
-        automatically and do not require suppression.
-
-        Turning hooks off is the one thing a trail cannot afford to lose, so a
-        window is an operation rather than a silent gap:
-
-        - Every hook receives `on_suppressed` before dispatch stops, including
-          the hooks being suppressed.
-        - The operations performed inside report the window as their parent.
-        - Every hook receives the window's terminal event once dispatch is
-          restored.
-        - A mandatory hook keeps reporting throughout, so it witnesses the
-          window and its contents rather than only its edges.
+        - **Use:** this trusted escape hatch is for migrations and for writes
+          inside hooks that are under careful control. The registry already
+          handles normal recursive callbacks, so they do not need suppression.
+        - **An operation, not a silent gap:** a trail cannot lose the record
+          that hooks are off. So the window is an operation:
+          - Each hook gets `on_suppressed` before dispatch stops. This includes
+            the hooks that the window suppresses.
+          - The operations inside the window report it as their parent.
+          - Each hook gets the terminal event of the window after dispatch
+            starts again.
+          - A mandatory hook continues to report during the window. So it
+            records the window and its contents, not only its start and end.
+        - **Nested windows:** a hook that an outer window silences gets no
+          events from an inner window.
 
         Args:
-            *hooks: Specific hooks to suppress. Omit to suppress the complete
-                registry in the current context, including hooks registered
-                while the window is open. Mandatory hooks are never suppressed.
-            principal_id: Principal opening the window. Defaults to the
-                principal of the enclosing operation or scope.
-            attributes: Attributes to add to the ones inherited from the
-                enclosing operation or scope, such as the migration or ticket
-                the window is for. Operations inside inherit them.
+            *hooks: Hooks to suppress. With no hooks, the call suppresses the
+                complete registry in the current context. This includes hooks
+                that are registered while the window is open. Mandatory hooks
+                are never suppressed.
+            principal_id: Principal that opens the window. Defaults to the
+                principal of the operation or scope that contains it.
+            attributes: Attributes to add to the inherited attributes, such as
+                the migration or ticket that the window is for. Operations
+                inside the window inherit them.
 
         Yields:
-            Context of the window, shared with its terminal event and inherited
-            by the operations inside it.
+            Context of the window. Its terminal event shares it, and the
+            operations inside the window inherit it.
 
         Raises:
-            Exception: The first failure raised by `on_suppressed`, once every
-                hook has been told. Dispatch stays enabled and the suppressed
-                body does not run, because a suppression no hook could record is
-                the one this callback exists to prevent.
-            HookRecursionError: If windows opened inside hooks exceed
+            Exception: The first failure that `on_suppressed` raises, after
+                each hook got the callback. Dispatch stays on, and the
+                suppressed body does not run. This callback exists to prevent
+                a suppression that no hook can record.
+            HookRecursionError: If windows opened inside hooks go above
                 `max_depth`.
-            TypeError: If the attributes are not strings.
-            ValueError: If a named hook is not registered or is mandatory.
+            TypeError: If the attributes are not a mapping of strings to
+                strings.
+            ValueError: If a named hook is not registered or is mandatory. The
+                window does not open.
         """
 
         suppression = self._plan_suppression(hooks)
@@ -384,7 +393,7 @@ class HookRegistry:
 
     @contextmanager
     def _suppressed(self, suppression: Suppression) -> Generator[None, None, None]:
-        """Disable the suppression's dispatch for the current context only."""
+        """Turn off dispatch for the hooks of the suppression, in the current context only."""
 
         if suppression.scope is SuppressionScope.REGISTRY:
             registries_token = _SUPPRESSED_REGISTRIES.set(
@@ -404,14 +413,14 @@ class HookRegistry:
             _SUPPRESSED_HOOKS.reset(hooks_token)
 
     def _plan_suppression(self, hooks: tuple[MemoryHook, ...]) -> Suppression:
-        """Describe the window a `suppress` call opens.
+        """Describe the window that a `suppress` call opens.
 
         Args:
-            hooks: Hooks named by the caller, or empty for the whole registry.
+            hooks: Hooks that the caller names, or empty for the whole registry.
 
         Returns:
-            The window, naming the hooks that stop reporting in dispatch order
-            and the mandatory hooks that keep reporting through it.
+            The window. It names the hooks that no longer report, in dispatch
+            order, and the mandatory hooks that continue to report.
 
         Raises:
             ValueError: If a named hook is not registered or is mandatory.
@@ -447,7 +456,7 @@ class HookRegistry:
         )
 
     def _index_of(self, hook: MemoryHook) -> int | None:
-        """Return a hook's position in the dispatch order, by identity."""
+        """Return the position of a hook in the dispatch order, by identity, or `None`."""
 
         for index, registered in enumerate(self._hooks):
             if registered is hook:
@@ -459,11 +468,14 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            block: Block about to be stored.
+            block: Block before the backend stores it.
 
         Returns:
-            Block returned by the last hook that rewrote it, or `block` when
-            no hook changed it.
+            Block from the last hook that changed it, or `block` if no hook
+            changed it.
+
+        Raises:
+            TypeError: If a hook returns an object that is not a `MemoryBlock`.
         """
 
         for hook in self._hooks_for(context):
@@ -492,12 +504,15 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            current: Block as currently stored.
-            proposed: Block the caller wants to store.
+            current: Block as it is stored now.
+            proposed: Block that the caller wants to store.
 
         Returns:
-            Replacement block returned by the last hook that rewrote it, or
-            `proposed` when no hook changed it.
+            Replacement block from the last hook that changed it, or `proposed`
+            if no hook changed it.
+
+        Raises:
+            TypeError: If a hook returns an object that is not a `MemoryBlock`.
         """
 
         for hook in self._hooks_for(context):
@@ -527,7 +542,7 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            block_id: Id of the block being read.
+            block_id: Id of the block to read.
         """
 
         for hook in self._hooks_for(context):
@@ -538,8 +553,8 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            block: Block that was read, or `None` when it was not found or
-                not visible.
+            block: Block that was read, or `None` if the block does not
+                exist.
         """
 
         self._dispatch_observers(context, "after_get", block)
@@ -553,11 +568,14 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            query: Normalized query about to run.
+            query: Normalized query before it runs.
 
         Returns:
-            Query returned by the last hook that rewrote it, or `query` when
-            no hook changed it.
+            Query from the last hook that changed it, or `query` if no hook
+            changed it.
+
+        Raises:
+            TypeError: If a hook returns an object that is not a `MemoryQuery`.
         """
 
         for hook in self._hooks_for(context):
@@ -574,20 +592,21 @@ class HookRegistry:
     ) -> list[SearchResult]:
         """Dispatch `after_search` in registration order.
 
-        These hooks rerank and filter what the caller receives, so a failure
-        stops dispatch instead of passing unreviewed results through.
+        These hooks can rerank and filter what the caller gets. So a failure
+        stops dispatch, and results that a hook did not review do not get to
+        the caller.
 
         Args:
             context: Active operation context.
-            query: Query that produced the results.
-            results: Results collected so far.
+            query: Query that gave the results.
+            results: Results that the search collected.
 
         Returns:
-            Results returned by the last hook that rewrote them, or `results`
-            when no hook changed them.
+            Results from the last hook that changed them, or `results` if no
+            hook changed them.
 
         Raises:
-            TypeError: If a hook returns something other than a list of
+            TypeError: If a hook returns an object that is not a list of
                 `SearchResult` values.
         """
 
@@ -608,7 +627,7 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            traversal: Traversal about to run.
+            traversal: Traversal before it runs.
         """
 
         for hook in self._hooks_for(context):
@@ -619,7 +638,7 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            traversal: Traversal that ran, including its results.
+            traversal: Traversal that ran, with its results.
         """
 
         self._dispatch_observers(context, "after_traverse", traversal)
@@ -629,11 +648,14 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            link: Link about to be stored.
+            link: Link before the backend stores it.
 
         Returns:
-            Link returned by the last hook that rewrote it, or `link` when no
-            hook changed it.
+            Link from the last hook that changed it, or `link` if no hook
+            changed it.
+
+        Raises:
+            TypeError: If a hook returns an object that is not a `MemoryLink`.
         """
 
         for hook in self._hooks_for(context):
@@ -662,12 +684,15 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            current: Link as currently stored.
-            proposed: Link the caller wants to store.
+            current: Link as it is stored now.
+            proposed: Link that the caller wants to store.
 
         Returns:
-            Replacement link returned by the last hook that rewrote it, or
-            `proposed` when no hook changed it.
+            Replacement link from the last hook that changed it, or `proposed`
+            if no hook changed it.
+
+        Raises:
+            TypeError: If a hook returns an object that is not a `MemoryLink`.
         """
 
         for hook in self._hooks_for(context):
@@ -701,7 +726,7 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            change: Structure change about to be applied.
+            change: Structure change before the backend applies it.
         """
 
         for hook in self._hooks_for(context):
@@ -716,7 +741,7 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            change: Structure change that was applied.
+            change: Structure change that the backend applied.
         """
 
         self._dispatch_observers(context, "after_structure_change", change)
@@ -726,22 +751,22 @@ class HookRegistry:
 
         Args:
             context: Active operation context.
-            block: Block about to be deleted.
+            block: Block before the backend deletes it.
         """
 
         for hook in self._hooks_for(context):
             self._invoke(context, hook, "before_delete", block)
 
     def after_delete(self, context: HookContext, *blocks: MemoryBlock) -> None:
-        """Dispatch `after_delete` for every deleted block, in order.
+        """Dispatch `after_delete` for each deleted block, in order.
 
-        A recursive delete commits its whole subtree at once, so the record of
-        one removed block is not the caller's to trade for another's: every
-        block is reported to every hook before any failure surfaces.
+        A recursive delete commits its whole subtree at once. So a hook failure
+        on one removed block cannot remove the record of another block. Each
+        block gets to each hook before any failure surfaces.
 
         Args:
             context: Active operation context.
-            *blocks: Deleted blocks, in deletion order.
+            *blocks: Deleted blocks, in the order of deletion.
         """
 
         failures: list[Exception] = []
@@ -760,16 +785,18 @@ class HookRegistry:
     ) -> None:
         """Dispatch `on_denied` in registration order.
 
-        A refusal must reach the caller unchanged, so every hook is called even
-        when one raises. Failures are attached to `error` as notes when it is
-        provided and raised only when the caller has no refusal to receive.
+        The refusal gets to the caller with no change. So the registry calls
+        each hook, also when one raises. If `error` has a value, the registry
+        attaches the failures to it as notes. It raises them only when the
+        caller gets no refusal.
 
         Args:
             context: Active operation context.
             operation: Policy operation or handle capability that refused.
-            subject_id: Block the refusal applies to, when one is known.
-            reason: Message describing the refusal.
-            error: Refusal being raised, so hook failures cannot replace it.
+            subject_id: Block that the refusal applies to, if known.
+            reason: Message that describes the refusal.
+            error: Refusal that the caller gets. The registry attaches hook
+                failures to it, so they cannot replace it.
         """
 
         failures = self._collect(context, "on_denied", operation, subject_id, reason)
@@ -783,21 +810,22 @@ class HookRegistry:
         *,
         scope_name: str | None = None,
     ) -> HookContext:
-        """Create context nested under the active operation or scope.
+        """Create a context under the active operation or scope.
 
         Args:
             operation: Logical operation, or `HookOperation.SCOPE`.
             principal_id: Acting principal, or `None` to inherit one.
-            attributes: Attributes to add to the inherited ones.
+            attributes: Attributes to add to the inherited attributes.
             scope_name: Caller-defined span name for a scope.
 
         Returns:
-            Context describing the new operation or scope.
+            Context of the new operation or scope.
 
         Raises:
-            HookRecursionError: If a hook-originated context exceeds
-                `max_depth`.
-            TypeError: If the attributes are not strings.
+            HookRecursionError: If a context that starts inside a hook goes
+                above `max_depth`.
+            TypeError: If the attributes are not a mapping of strings to
+                strings.
         """
 
         parent = _CURRENT_OPERATION.get()
@@ -829,23 +857,28 @@ class HookRegistry:
         outcome: HookOutcome,
         error: BaseException | None,
     ) -> None:
-        """Dispatch the terminal callback once per hook in registration order.
+        """Dispatch the terminal callback once to each hook, in registration order.
 
-        Every hook is called even when an earlier hook raises, so one
-        unreliable observer cannot cost another hook the cleanup or audit
-        record it is owed. Failures are reported as notes on an operation that
-        already failed, and raised when the operation itself succeeded.
+        The registry calls each hook, also when an earlier hook raises. So one
+        unreliable observer cannot make another hook lose its cleanup or its
+        audit record. If the operation already failed, the failures become
+        notes on its error. If the operation succeeded, the registry raises
+        them.
         """
 
         failures = self._collect(context, "on_operation_end", outcome, error)
         _report_failures(failures, "on_operation_end", error)
 
     def _hooks_for(self, context: HookContext) -> tuple[MemoryHook, ...]:
-        """Return registered hooks after validating the dispatch context.
+        """Check the dispatch context, then return the registered hooks.
 
-        The dispatch order is snapshotted, so a callback that registers or
-        unregisters a hook changes what the next event reaches rather than
-        skipping a hook that is owed this one.
+        The registry takes a snapshot of the dispatch order. So if a callback
+        registers or unregisters a hook, the change applies from the next
+        event. It does not skip a hook in the current event.
+
+        Raises:
+            ValueError: If `context` is not the active operation context, or is
+                a scope context.
         """
 
         if _CURRENT_OPERATION.get() is not context:
@@ -866,15 +899,15 @@ class HookRegistry:
         callback_name: str,
         *args: object,
     ) -> None:
-        """Dispatch one observing callback to every hook, then report failures.
+        """Dispatch one observing callback to each hook, then report the failures.
 
         Args:
             context: Active operation context.
-            callback_name: Observing callback to invoke on each hook.
-            *args: Arguments passed after the context.
+            callback_name: Observing callback to call on each hook.
+            *args: Arguments that follow the context.
 
         Raises:
-            Exception: The first collected failure, once every hook has run.
+            Exception: The first collected failure, after all hooks ran.
         """
 
         _report_failures(self._collect(context, callback_name, *args), callback_name)
@@ -885,17 +918,21 @@ class HookRegistry:
         callback_name: str,
         *args: object,
     ) -> list[Exception]:
-        """Invoke one observing callback on every hook and collect its failures.
+        """Call one observing callback on each hook, and collect its failures.
 
-        Dispatch continues past a raising hook because the work being observed
-        is already decided: the failure cannot undo it, and stopping would only
-        deny the remaining hooks their record. Failures from hooks that declare
-        `fail_open` are logged and dropped here rather than returned.
+        - **Dispatch continues after a hook raises.** The work that the callback
+          reports is already decided. The failure cannot undo it, and a stop
+          only takes the record away from the other hooks.
+        - **`fail_open` hooks:** the registry logs their failures and drops
+          them. It does not return them.
+        - **`Exception` only:** the registry does not collect a
+          `BaseException`, such as `KeyboardInterrupt`. It stops dispatch at
+          once.
 
         Args:
             context: Active operation context.
-            callback_name: Observing callback to invoke on each hook.
-            *args: Arguments passed after the context.
+            callback_name: Observing callback to call on each hook.
+            *args: Arguments that follow the context.
 
         Returns:
             Failures raised by hooks that are not fail-open, in dispatch order.
@@ -925,7 +962,7 @@ class HookRegistry:
         callback_name: str,
         *args: object,
     ) -> object:
-        """Invoke one callback unless it is suppressed or already active."""
+        """Call one callback, unless it is suppressed or already active, and return `_SKIPPED` if it did not run."""
 
         if id(hook) not in self._mandatory:
             if id(self) in _SUPPRESSED_REGISTRIES.get():
@@ -944,7 +981,7 @@ class HookRegistry:
 
 
 def _fails_open(hook: MemoryHook) -> bool:
-    """Return whether a hook's observing failures must stay contained."""
+    """Return whether a hook declares `fail_open`."""
 
     return bool(getattr(hook, "fail_open", False))
 
@@ -954,19 +991,19 @@ def _report_failures(
     callback: str,
     error: BaseException | None = None,
 ) -> None:
-    """Report collected callback failures without losing or substituting any.
+    """Report collected callback failures, with no failure lost or replaced.
 
     Args:
         failures: Failures collected from hooks that are not fail-open.
-        callback: Callback that failed, named in the reported notes.
-        error: Exception already leaving the operation, when there is one. Hook
-            failures become notes on it so they cannot replace what the caller
-            is receiving.
+        callback: Callback that failed. The reported notes name it.
+        error: Exception that already leaves the operation, if there is one.
+            Hook failures become notes on it, so they cannot replace what the
+            caller gets.
 
     Raises:
         Exception: The first collected failure, when the operation has no error
-            of its own to preserve. Any remaining failures are attached to it
-            as notes so no failure is hidden by another.
+            of its own to keep. The other failures become notes on it, so no
+            failure hides another.
     """
 
     if not failures:
@@ -982,7 +1019,7 @@ def _report_failures(
 
 
 def _require_type(value: object, expected: type[Any], callback: str) -> Any:
-    """Return a callback value after checking its public contract."""
+    """Check that a callback value has the expected type, and return the value."""
 
     if not isinstance(value, expected):
         raise TypeError(f"{callback} hooks must return {expected.__name__}.")

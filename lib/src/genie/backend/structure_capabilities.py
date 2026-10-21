@@ -1,13 +1,16 @@
 """Optional backend protocols for DAG, keyed, ordered, and temporal structures.
 
-The protocols here are optional extensions to `MemoryBackend`. Structure
-facades depend on them instead of on concrete backend classes, and they check
-for the capability at construction time so a backend that does not implement
-one fails early with `UnsupportedOperation`.
-
-Each protocol covers an operation that cannot be implemented safely as a
-portable read followed by a write. Implementations must serialize the read and
-the write so concurrent callers cannot interleave them.
+- **Optional extensions:** the protocols here are optional extensions to
+  `MemoryBackend`.
+- **Early failure:** structure facades depend on them, not on concrete
+  backend classes. A facade that takes a store checks for the capability when
+  it is built. So a backend without the capability fails early with
+  `UnsupportedOperation`. `LineageDAG` takes no store, so its first `add`
+  raises `UnsupportedOperation` instead.
+- **Atomic operations:** each protocol covers an operation that is not safe
+  as a portable read followed by a write. The contract requires that
+  implementations serialize the read and the write, so concurrent callers
+  cannot interleave them.
 """
 
 from __future__ import annotations
@@ -29,23 +32,26 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class AcyclicLinkStore(Protocol):
-    """Atomic insertion interface for relation-scoped directed acyclic graphs.
+    """Atomic insert interface for directed acyclic graphs of one relation.
 
-    The exact link relation identifies one protected graph. Implementations
-    must serialize the reachability check and insertion with every link write
-    for that relation. After a relation is protected, ordinary `add_link`
-    calls must reject the relation or apply the same cycle check.
+    - **One graph for each relation:** the exact link relation identifies one
+      protected graph.
+    - **Serialized check:** the contract requires that implementations
+      serialize the reachability check and the insert with each link write for
+      that relation.
+    - **Protected relation:** after a relation is protected, an ordinary
+      `add_link` call rejects the relation or applies the same cycle check.
     """
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Atomically add a link unless it would close a directed cycle.
+        """Add a link in one atomic step, unless it closes a directed cycle.
 
-        Existing links with the same relation are part of the graph. The first
-        protected insertion may adopt them only when they are already acyclic.
+        Current links with the same relation are part of the graph. The first
+        protected insert adopts them only when they are already acyclic.
 
         Args:
-            link: Link to store. Its relation identifies the protected graph
-                the cycle check applies to.
+            link: Link to store. Its relation identifies the protected graph of
+                the cycle check.
 
         Returns:
             Stored link.
@@ -62,8 +68,9 @@ class AcyclicLinkStore(Protocol):
 class KeyedStore(Protocol):
     """Atomic persistence interface for namespaced key bindings.
 
-    Implementations must make bind, compare-and-swap rebind, and conditional
-    unbind operations atomic for one `(collection_id, address)` pair.
+    The contract requires that implementations make the bind, the
+    compare-and-swap rebind, and the conditional unbind atomic for one
+    `(collection_id, address)` pair.
     """
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
@@ -92,14 +99,15 @@ class KeyedStore(Protocol):
         Args:
             binding: Replacement binding. Its collection id and address select
                 the existing binding to replace.
-            expected_block_id: Block id the binding must currently point to
-                for the replacement to apply.
+            expected_block_id: Block id that the binding points to now. The
+                replacement applies only if this id matches.
 
         Returns:
             Stored replacement binding.
 
         Raises:
-            MemoryConflict: If the address is missing or changed.
+            MemoryConflict: If the address is not bound or points to a
+                different block.
         """
 
         ...
@@ -134,11 +142,12 @@ class KeyedStore(Protocol):
 
         Args:
             collection_id: Id of the collection to list.
-            namespace: Optional exact namespace filter. With `recursive=True`
-                it is treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below `namespace`.
-            after: Optional exclusive start address used to page through
-                results in address order.
+            namespace: Optional exact namespace filter. With `recursive=True`,
+                it is a namespace prefix.
+            recursive: If `True`, the result also includes the nested
+                namespaces below `namespace`.
+            after: Optional exclusive start address, for pages in address
+                order.
             limit: Maximum number of bindings to return.
 
         Returns:
@@ -159,17 +168,18 @@ class KeyedStore(Protocol):
         Args:
             collection_id: Id of the collection that owns the key space.
             address: Exact namespace and key to remove.
-            expected_block_id: Block id the binding must currently point to
-                for the removal to apply.
+            expected_block_id: Block id that the binding points to now. The
+                removal applies only if this id matches.
 
         Raises:
-            MemoryConflict: If the address is missing or changed.
+            MemoryConflict: If the address is not bound or points to a
+                different block.
         """
 
         ...
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
-        """Remove bindings owned by or pointing to a deleted block.
+        """Remove the bindings that a deleted block owns, or that point to it.
 
         Args:
             block_id: Id of the deleted block. Bindings whose collection id or
@@ -181,41 +191,40 @@ class KeyedStore(Protocol):
 
 @runtime_checkable
 class SequenceStore(Protocol):
-    """Atomic persistence interface for ordered append-only logs.
+    """Atomic storage interface for ordered append-only logs.
 
-    Implementations must allocate one unique, monotonically increasing
-    sequence number for every append to a given log.
-
-    An append carries no uniqueness key, so an adapter that retries a commit
-    whose reply was lost can append the same block twice, at two sequences.
-
-    - An application that needs exactly-once appends should carry its own token
-      in the appended block and skip a duplicate on read.
-    - Each adapter README states what its retry repeats.
+    - **Sequence numbers:** the contract requires one unique, monotonically
+      increasing sequence number for each append to a given log.
+    - **No uniqueness key:** an append has no uniqueness key. So an adapter
+      that retries a commit whose reply was lost can append the same block
+      twice, at 2 sequences.
+    - **Exactly-once appends:** an application that needs them puts its own
+      token in the appended block, and skips a duplicate on read.
+    - **Adapter guides:** each adapter README tells what its retry repeats.
     """
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:
-        """Atomically allocate a sequence and append a block reference.
+        """Allocate a sequence and append a block reference, in one atomic step.
 
         Args:
             log_id: Id of the ordered log to append to.
             block_id: Id of the memory block to place at the new position.
 
         Returns:
-            Stored entry carrying the allocated sequence number.
+            Stored entry with the allocated sequence number.
         """
 
         ...
 
     def get_log_entry(self, log_id: str, sequence: int) -> LogEntry | None:
-        """Return one exact log entry, or `None` when it is absent.
+        """Return one exact log entry, or `None` when it does not exist.
 
         Args:
             log_id: Id of the ordered log.
-            sequence: Exact position within the log.
+            sequence: Exact position in the log.
 
         Returns:
-            Stored entry, or `None` when the position holds no entry.
+            Stored entry, or `None` when the position has no entry.
         """
 
         ...
@@ -235,7 +244,7 @@ class SequenceStore(Protocol):
             log_id: Id of the ordered log.
             start: Optional inclusive lower sequence bound.
             stop: Optional exclusive upper sequence bound.
-            reverse: Whether to return entries in descending sequence order.
+            reverse: If `True`, the entries come in descending sequence order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -246,7 +255,7 @@ class SequenceStore(Protocol):
         ...
 
     def delete_log_entries_for_block(self, block_id: str) -> None:
-        """Remove logs owned by and entries pointing to a deleted block.
+        """Remove the logs that a deleted block owns, and the entries that point to it.
 
         Args:
             block_id: Id of the deleted block. Entries whose log id or target
@@ -258,15 +267,16 @@ class SequenceStore(Protocol):
 
 @runtime_checkable
 class TemporalStore(Protocol):
-    """Persistence interface for temporal collection membership.
+    """Storage interface for temporal collection membership.
 
-    Entries are unique by `(collection_id, block_id)`. Implementations must
-    return list results in ascending block-id order so callers can scan in
-    bounded pages without relying on a database-specific cursor.
+    - **Unique entries:** entries are unique by `(collection_id, block_id)`.
+    - **Order:** the contract requires list results in ascending block-id
+      order. So callers can scan in bounded pages with no database-specific
+      cursor.
     """
 
     def add_temporal_entry(self, entry: TemporalEntry) -> TemporalEntry:
-        """Add a temporal entry only when the block is not already present.
+        """Add a temporal entry only when the block is not already in the collection.
 
         Args:
             entry: Collection id, block id, and event time or validity period
@@ -302,7 +312,7 @@ class TemporalStore(Protocol):
         collection_id: str,
         block_id: str,
     ) -> TemporalEntry | None:
-        """Return an exact temporal entry, or `None` when it is absent.
+        """Return an exact temporal entry, or `None` when it does not exist.
 
         Args:
             collection_id: Id of the temporal collection.
@@ -326,8 +336,8 @@ class TemporalStore(Protocol):
 
         Args:
             collection_id: Id of the temporal collection.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -350,7 +360,7 @@ class TemporalStore(Protocol):
         ...
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
-        """Remove collections owned by and entries pointing to a deleted block.
+        """Remove the collections that a deleted block owns, and the entries that point to it.
 
         Args:
             block_id: Id of the deleted block. Entries whose collection id or
@@ -362,11 +372,11 @@ class TemporalStore(Protocol):
 
 @runtime_checkable
 class TemporalIndex(Protocol):
-    """Optional index for prefiltering temporal collection entries.
+    """Optional index that filters temporal collection entries first.
 
-    Implementations must apply all supplied filters and return entries in
-    ascending block-id order. Bounds and validity intervals use half-open
-    semantics.
+    - **Filters and order:** the contract requires that implementations apply
+      all given filters, and return entries in ascending block-id order.
+    - **Half-open:** bounds and validity intervals are half-open.
     """
 
     def query_temporal_entries(
@@ -381,20 +391,19 @@ class TemporalIndex(Protocol):
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one bounded page matching the supplied temporal filters.
+        """Return one bounded page that matches the given temporal filters.
 
         Args:
             collection_id: Id of the temporal collection.
-            occurred_only: Whether to keep only entries that carry an event
-                time.
+            occurred_only: If `True`, only entries with an event time stay.
             occurred_start: Optional inclusive lower bound on event time.
             occurred_stop: Optional exclusive upper bound on event time.
-            valid_at: Optional instant that an entry's validity period must
-                contain.
-            overlaps: Optional validity period an entry's own period must
-                overlap.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            valid_at: Optional instant that the validity period of an entry
+                contains.
+            overlaps: Optional validity period that the period of an entry
+                overlaps.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:

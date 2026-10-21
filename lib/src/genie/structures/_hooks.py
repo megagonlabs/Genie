@@ -1,4 +1,4 @@
-"""Internal hook integration shared by structure facades."""
+"""Internal hook integration that the structure facades share."""
 
 from __future__ import annotations
 
@@ -10,15 +10,18 @@ from genie.hooks import HookContext, HookOperation, HookRegistry
 
 
 def resolve_hooks(access: object, explicit: HookRegistry | None) -> HookRegistry | None:
-    """Resolve an explicit or memory-owned registry without widening handles.
+    """Return the explicit registry, or the registry that the access object uses.
+
+    The order is: the explicit registry, then `access.hooks`, then the registry
+    of the `Memory` behind a `MemoryHandle`.
 
     Args:
-        access: Memory or handle access object a facade was built on.
-        explicit: Registry supplied by the caller, if any.
+        access: Memory or handle access object of the facade.
+        explicit: Registry from the caller, if any.
 
     Returns:
-        The explicit registry, the one the access object exposes, or `None`
-        when neither is available.
+        The explicit registry, the registry of the access object, or `None` if
+        there is neither.
     """
 
     if explicit is not None:
@@ -32,13 +35,13 @@ def resolve_hooks(access: object, explicit: HookRegistry | None) -> HookRegistry
 
 
 def principal_id(access: object) -> str | None:
-    """Return an access object's principal id when available.
+    """Return the principal id of an access object, if available.
 
     Args:
-        access: Memory or handle access object a facade was built on.
+        access: Memory or handle access object of the facade.
 
     Returns:
-        Principal id, or `None` when the access object exposes none.
+        Principal id, or `None` if the access object has none.
     """
 
     principal = getattr(access, "principal", None)
@@ -47,14 +50,13 @@ def principal_id(access: object) -> str | None:
 
 
 def context_attributes(access: object) -> Mapping[str, str] | None:
-    """Return an access object's hook context attributes when available.
+    """Return the hook context attributes of an access object, if available.
 
     Args:
-        access: Memory or handle access object a facade was built on.
+        access: Memory or handle access object of the facade.
 
     Returns:
-        Hook context attributes, or `None` when the access object exposes
-        none.
+        Hook context attributes, or `None` if the access object has none.
     """
 
     candidate = getattr(access, "attributes", None)
@@ -72,13 +74,13 @@ def hook_operation(
 
     Args:
         hooks: Registry to open an operation on, or `None`.
-        operation: Logical operation being performed.
+        operation: Logical operation.
         principal: Principal id to record on the context.
         attributes: Optional hook context attributes.
 
     Returns:
-        A registry operation context manager, or one yielding `None` when no
-        registry is configured.
+        A registry operation context manager, or a context manager that yields
+        `None` if no registry is configured.
     """
 
     if hooks is None:
@@ -96,7 +98,7 @@ def before_change(
     Args:
         hooks: Registry to dispatch through, or `None` to do nothing.
         context: Active operation context.
-        change: Structure change about to be applied.
+        change: Structure change before the backend applies it.
 
     Raises:
         RuntimeError: If a registry is configured without an operation
@@ -119,7 +121,7 @@ def after_change(
     Args:
         hooks: Registry to dispatch through, or `None` to do nothing.
         context: Active operation context.
-        change: Structure change that was applied.
+        change: Structure change that the backend applied.
 
     Raises:
         RuntimeError: If a registry is configured without an operation

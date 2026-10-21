@@ -1,66 +1,66 @@
-"""Exception types raised by Genie memory operations."""
+"""Exception types that Genie memory operations raise."""
 
 
 class GenieError(Exception):
-    """Base exception for all Genie-specific errors."""
+    """Base exception for Genie errors. `AccessDenied` is a `PermissionError`, not a subclass of this class."""
 
 
 class MemoryNotFound(GenieError):
-    """Raised when a requested memory block or link does not exist."""
+    """Genie raises this error when a requested memory block or link does not exist."""
 
 
 class MemoryConflict(GenieError):
-    """Raised when a write would violate memory structure constraints."""
+    """Genie raises this error when a write breaks a memory structure rule, or a concurrent change makes the write stale."""
 
 
 class UnsupportedOperation(GenieError):
-    """Raised when a backend does not support a requested capability."""
+    """Genie raises this error when a backend does not support a requested capability."""
 
 
 class HookRecursionError(GenieError):
-    """Raised when nested hook operations exceed the configured depth."""
+    """Genie raises this error when nested hook operations go above the configured depth."""
 
 
 class BackendError(GenieError):
     """Base class for backend failures that are not memory conflicts.
 
     Attributes:
-        retryable: Whether retrying the operation may succeed without changing
-            the request.
+        retryable: If `True`, the same request can succeed when it runs again
+            with no change.
     """
 
     retryable = False
 
 
 class BackendBusy(BackendError):
-    """Raised when backend contention exceeds the configured wait time.
+    """A backend raises this error when contention goes above the configured wait time.
 
     Attributes:
-        retryable: Always `True`; the same request may succeed once contention
-            clears.
+        retryable: Always `True`. The same request can succeed after the
+            contention ends.
     """
 
     retryable = True
 
 
 class BackendUnavailable(BackendError):
-    """Raised when backend storage cannot currently be reached or used.
+    """A backend raises this error when it cannot reach or use its storage now.
 
     Attributes:
-        retryable: Always `True`; the same request may succeed once storage is
-            reachable again.
+        retryable: Always `True`. The same request can succeed after the
+            storage is available again.
     """
 
     retryable = True
 
 
 class BackendReadOnly(BackendError):
-    """Raised when a write is attempted against read-only backend storage."""
+    """A backend raises this error when a write goes to read-only backend storage."""
 
 
 class BackendCapacityExceeded(BackendError):
-    """Raised when backend space or another storage limit is exhausted."""
+    """A backend raises this error when it has no more space, or another storage limit is reached."""
 
 
 class BackendCorruption(BackendError):
-    """Raised when backend data or storage is corrupt or not a database."""
+    """A backend raises this error when its data or storage is corrupt, or is not a database."""

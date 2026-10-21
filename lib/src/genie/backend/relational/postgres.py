@@ -1,26 +1,26 @@
-"""Persistent PostgreSQL backend implementing every Genie storage capability.
+"""Persistent PostgreSQL backend that implements all Genie storage capabilities.
 
-The adapter keeps the same storage layout as `SQLiteBackend`: one table for
-blocks, one for links, and one for each optional structure capability. Values,
-metadata, policies, key namespaces, and timestamps use the same portable
-encodings, so the two relational backends store the same data in the same shape.
+- **Same layout as `SQLiteBackend`:** tables for blocks and links, and tables
+  for the optional structure capabilities. Values, metadata, policies, key
+  namespaces, and timestamps use the same portable encodings. So the 2
+  relational backends store the same data in the same shape.
 
-Three PostgreSQL details are handled on purpose.
+3 PostgreSQL details are on purpose:
 
-- Advisory lock per write. Every write takes one transaction-scoped advisory
-  lock before it reads or changes Genie state. PostgreSQL allows concurrent
-  writers, so without the lock a compound "read, check, then write" step could
-  interleave with another writer. The lock gives the serialized-writer model
-  that `SQLiteBackend` gets from `BEGIN IMMEDIATE` and `Neo4jBackend` gets from
-  its guard node.
-- `COLLATE "C"` on every text column. PostgreSQL otherwise compares text with
-  the database collation, which depends on the server locale, can ignore
-  punctuation, and can change when the operating system upgrades its locale
-  data. Genie needs plain byte order, because stored timestamps are compared as
-  strings and paging uses `block_id > ...`.
-- JSON stored as `text`, not `jsonb`. `jsonb` normalizes what it stores and
-  rejects the NUL character inside strings, so it would not round-trip Genie
-  values byte for byte.
+- **Advisory lock for each write.** Each write takes one transaction-scoped
+  advisory lock before it reads or changes Genie state. PostgreSQL allows
+  concurrent writers. Without the lock, a compound "read, check, then write"
+  step could interleave with another writer. The lock gives the
+  serialized-writer model that `SQLiteBackend` gets from `BEGIN IMMEDIATE` and
+  `Neo4jBackend` gets from its guard node.
+- **`COLLATE "C"` on each text column.** Otherwise, PostgreSQL compares text
+  with the database collation. That collation depends on the server locale,
+  can ignore punctuation, and can change when the operating system upgrades its
+  locale data. Genie needs plain byte order, because it compares stored
+  timestamps as strings, and paging uses `block_id > ...`.
+- **JSON stored as `text`, not `jsonb`.** `jsonb` normalizes what it stores,
+  and it rejects the NUL character inside strings. So it would not round-trip
+  Genie values byte for byte.
 """
 
 from __future__ import annotations
@@ -137,9 +137,9 @@ _EXPECTED_TABLE_COLUMNS: dict[str, tuple[tuple[str, str, bool], ...]] = {
     ),
 }
 
-# PostgreSQL creates one index for every primary key and unique constraint. The
-# schema names those constraints explicitly, so the index names below stay the
-# same on every server version.
+# PostgreSQL creates one index for each primary key and unique constraint. The
+# schema gives those constraints explicit names, so the index names below stay
+# the same on all server versions.
 _EXPECTED_INDEXES = {
     "acyclic_relations_pkey",
     "blocks_id_key",
@@ -208,27 +208,30 @@ _FOREIGN_KEY_QUERY = """
 
 
 class PostgresBackend:
-    """Persistent backend backed by the official `psycopg` PostgreSQL driver.
+    """Persistent backend on the official `psycopg` PostgreSQL driver.
 
-    The `psycopg` package is an optional dependency. Install it with
-    `pip install 'genie[postgres]'` before constructing this backend.
-
-    The backend implements the required `MemoryBackend` behavior and every
-    optional structure capability. One connection is owned by each instance. An
-    internal reentrant lock protects that connection, while a transaction-scoped
-    advisory lock serializes writes across separate backend instances and
-    separate processes.
-
-    All Genie tables live inside one PostgreSQL schema, which defaults to
-    `"genie"`. Several Genie datasets can share one database by using different
-    schema names.
+    - **Optional driver:** the `psycopg` package is an optional dependency.
+      `pip install 'genie[postgres]'` installs it. The constructor raises
+      `UnsupportedOperation` without it.
+    - **Capabilities:** the backend implements the required `MemoryBackend`
+      behavior and all optional capabilities.
+    - **One connection:** each instance owns one connection. An internal
+      reentrant lock protects it.
+    - **Several instances:** a transaction-scoped advisory lock serializes the
+      writes of separate backend instances and separate processes on the same
+      schema.
+    - **One schema:** all Genie tables are in one PostgreSQL schema, with the
+      default name `"genie"`. Several Genie datasets can share one database
+      with different schema names.
 
     Attributes:
-        conninfo: PostgreSQL connection string this backend opened.
-        schema: PostgreSQL schema that holds every Genie table.
-        timeout: Seconds a statement waits for a lock another writer holds.
-        connect_timeout: Seconds allowed while establishing a connection.
-        durability: PostgreSQL `synchronous_commit` mode in use.
+        conninfo: PostgreSQL connection string that this backend opened.
+        schema: PostgreSQL schema that holds all Genie tables.
+        timeout: Seconds that a statement waits for a lock that another writer
+            holds.
+        connect_timeout: Seconds for the connection setup.
+        durability: Durability mode in use, `"full"` or `"normal"`. It sets
+            `synchronous_commit` to `on` or `off`.
     """
 
     def __init__(
@@ -242,37 +245,42 @@ class PostgresBackend:
         verify_server_role: bool = True,
         initialize_schema: bool = True,
     ) -> None:
-        """Connect and create, migrate, or validate the Genie schema.
+        """Connect, and create, migrate, or validate the Genie schema.
 
-        `psycopg` connects while this constructor runs, so a successful
-        construction already proves the server is reachable. There is no
-        separate connectivity flag.
+        `psycopg` connects during this constructor. So a successful
+        construction already proves that the server is reachable, and there is
+        no separate connectivity flag.
 
         Args:
             conninfo: PostgreSQL connection string, such as
                 `"postgresql://user:password@localhost:5432/app"`.
-            schema: PostgreSQL schema that holds every Genie table. It must be
-                a plain unquoted identifier.
-            timeout: Seconds a statement waits for a lock another writer holds.
-                `0` waits forever.
-            connect_timeout: Seconds allowed while establishing a connection.
+            schema: PostgreSQL schema that holds all Genie tables. It is a
+                plain unquoted identifier: ASCII letters, digits, and
+                underscores, with no digit first and at most 63 bytes.
+            timeout: Seconds that a statement waits for a lock that another
+                writer holds. `0` waits with no limit.
+            connect_timeout: Seconds for the connection setup. The driver gets
+                only the whole seconds, `int(connect_timeout)`.
             durability: PostgreSQL `synchronous_commit` mode. `"full"` is the
-                production-safe default. `"normal"` allows better write
-                throughput, but the most recent commits may be lost after a
+                safe default for production. `"normal"` gives better write
+                throughput, but the most recent commits can be lost after a
                 server crash.
-            verify_server_role: Whether to refuse a connection that lands on a
-                read-only replica. The check refuses only when the server
-                reports that it is in recovery, so a primary that has replicas
-                stays supported.
-            initialize_schema: Whether to create the schema and its missing
-                tables and indexes. Set this to `False` for runtime identities
-                that may use existing data but may not run DDL.
+            verify_server_role: Whether to refuse a connection to a read-only
+                replica. The check refuses only when the server reports that it
+                is in recovery. So a primary that has replicas stays supported.
+            initialize_schema: Whether to create the schema, and the tables
+                and indexes that it does not have yet. `False` suits runtime identities that use
+                existing data but cannot run DDL.
 
         Raises:
             TypeError: If an argument has the wrong type.
-            ValueError: If `conninfo`, `schema`, or a timeout is invalid.
-            UnsupportedOperation: If the driver is unavailable, the connection
-                lands on a replica, or the stored schema is incompatible.
+            ValueError: If `conninfo` is empty, `schema` is not a plain
+                identifier, a timeout is negative or not finite, or
+                `durability` is not `"full"` or `"normal"`.
+            UnsupportedOperation: If the driver is not available, the
+                connection goes to a replica, or the stored schema is
+                incompatible. With `initialize_schema=False`, also if the
+                schema or its record does not exist, or its version is older.
             BackendError: If PostgreSQL cannot be reached or configured.
         """
 
@@ -301,8 +309,8 @@ class PostgresBackend:
         self._lock = RLock()
         self._connection: Any | None = None
 
-        # `schema` is validated as a plain identifier above, so quoting it here
-        # cannot inject SQL. Table names are constant.
+        # The code above checks that `schema` is a plain identifier, so the
+        # quotes here cannot inject SQL. Table names are constant.
         quoted_schema = f'"{schema}"'
         self._blocks = f"{quoted_schema}.blocks"
         self._links = f"{quoted_schema}.links"
@@ -358,12 +366,12 @@ class PostgresBackend:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Close the owned connection when leaving a context manager.
+        """Close the owned connection when the `with` block ends.
 
         Args:
-            exc_type: Type of the exception leaving the block, if any.
-            exc: Exception instance leaving the block, if any.
-            traceback: Traceback of the exception leaving the block, if any.
+            exc_type: Type of the exception that leaves the block, if any.
+            exc: Exception instance that leaves the block, if any.
+            traceback: Traceback of the exception that leaves the block, if any.
         """
 
         self.close()
@@ -371,11 +379,11 @@ class PostgresBackend:
     def close(self) -> None:
         """Close the owned PostgreSQL connection.
 
-        Calling `close` more than once is safe. Operations after closing raise
+        A second `close` call is safe. Operations after `close` raise
         `RuntimeError`.
 
         Raises:
-            BackendError: If PostgreSQL fails while closing.
+            BackendError: If PostgreSQL fails during the close.
         """
 
         with self._lock:
@@ -393,16 +401,17 @@ class PostgresBackend:
     # Core block storage and ownership traversal
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Persist a new encoded memory block.
+        """Store a new encoded memory block.
 
         Args:
             block: Block to create.
 
         Returns:
-            Stored block reconstructed from PostgreSQL.
+            Stored block, read back from PostgreSQL.
 
         Raises:
-            MemoryConflict: If the id exists or the parent is invalid.
+            MemoryConflict: If the id already exists, or the parent does not
+                exist or is the block itself.
             TypeError: If the encoded value or metadata is not strict JSON.
         """
 
@@ -429,13 +438,13 @@ class PostgresBackend:
             return _block_from_row(row)
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        """Fetch a block by id.
+        """Get a block by id.
 
         Args:
             block_id: Memory block id.
 
         Returns:
-            An isolated block value, or `None` when it does not exist.
+            A new block object, or `None` when the block does not exist.
         """
 
         with self._read_transaction() as connection:
@@ -452,14 +461,17 @@ class PostgresBackend:
 
         Args:
             block: Complete replacement block.
-            expected_version: Required current version for compare-and-swap.
+            expected_version: Current version that the compare-and-swap
+                requires.
 
         Returns:
-            Stored replacement reconstructed from PostgreSQL.
+            Stored replacement, read back from PostgreSQL.
 
         Raises:
-            MemoryConflict: If the block is missing, its version changed, or
-                its parent is invalid.
+            MemoryConflict: If the block does not exist, its version changed,
+                or the new parent does not exist, is the block itself, or is one
+                of its descendants. With `expected_version`, also if the
+                replacement does not increase the version by exactly one.
             TypeError: If the encoded value or metadata is not strict JSON.
         """
 
@@ -518,17 +530,17 @@ class PostgresBackend:
     ) -> None:
         """Delete a subtree, optionally from an exact version snapshot.
 
-        Cascading foreign keys remove the links, key bindings, log entries, and
-        temporal entries that belong to the deleted blocks in the same
-        transaction.
+        In the same transaction, cascading foreign keys remove the links, key
+        bindings, log entries, and temporal entries of the deleted blocks.
 
         Args:
-            block_id: Root block id to delete. Missing ids are ignored.
-            expected_versions: Exact subtree id-to-version snapshot required
-                for the deletion.
+            block_id: Root block id to delete. If the id does not exist and
+                `expected_versions` is empty or `None`, nothing happens.
+            expected_versions: Exact snapshot of the subtree, as block id to
+                version, that the delete requires.
 
         Raises:
-            MemoryConflict: If the supplied subtree snapshot is stale.
+            MemoryConflict: If the given subtree snapshot is stale.
         """
 
         with self._write_transaction() as connection:
@@ -569,10 +581,10 @@ class PostgresBackend:
         """Return ancestors from the nearest parent upward.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
 
         Returns:
-            Ancestor blocks in nearest-parent-first order.
+            Ancestor blocks, nearest parent first.
         """
 
         with self._read_transaction() as connection:
@@ -588,7 +600,7 @@ class PostgresBackend:
 
         Args:
             block_id: Root block id.
-            include_self: Whether to include `block_id` in the result.
+            include_self: If `True`, the result includes `block_id`.
 
         Returns:
             Descendant blocks in depth-first creation order.
@@ -598,7 +610,7 @@ class PostgresBackend:
             return [_block_from_row(row) for row in self._descendant_rows(connection, block_id, include_self=include_self)]
 
     def contains(self, root_id: str, block_id: str) -> bool:
-        """Return whether `block_id` is equal to or below `root_id`.
+        """Return whether `block_id` is `root_id` or is below it.
 
         Args:
             root_id: Potential subtree root id.
@@ -615,7 +627,7 @@ class PostgresBackend:
     # Keyed collection
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
-        """Atomically bind an unused namespaced address to a block.
+        """Bind an unused namespaced address to a block, in one atomic step.
 
         Args:
             binding: Key binding to create.
@@ -624,8 +636,8 @@ class PostgresBackend:
             Stored binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                address is already bound.
+            MemoryConflict: If the collection or the block does not exist, or
+                the address is already bound.
         """
 
         with self._write_transaction() as connection:
@@ -654,19 +666,21 @@ class PostgresBackend:
         *,
         expected_block_id: str,
     ) -> KeyBinding:
-        """Atomically replace a binding when its block id still matches.
+        """Replace a binding in one atomic step, if its block id still matches.
 
         Args:
             binding: Replacement binding. Its collection id and address select
-                the existing binding to replace.
-            expected_block_id: Block id the binding must currently point to.
+                the current binding to replace.
+            expected_block_id: Block id that the binding points to now, as the
+                caller expects.
 
         Returns:
             Stored replacement binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, the address
-                is unbound, or it no longer points to `expected_block_id`.
+            MemoryConflict: If the collection or the block does not exist, the
+                address is not bound, or it no longer points to
+                `expected_block_id`.
         """
 
         with self._write_transaction() as connection:
@@ -707,7 +721,7 @@ class PostgresBackend:
             address: Exact namespace and key to look up.
 
         Returns:
-            Stored binding, or `None` when the address is unused.
+            Stored binding, or `None` when the address is not bound.
         """
 
         with self._read_transaction() as connection:
@@ -732,17 +746,20 @@ class PostgresBackend:
     ) -> list[KeyBinding]:
         """Return one bounded page in stable namespace-and-key order.
 
-        Namespaces are stored as JSON text, so the namespace filter and the
-        address ordering are applied in Python. This keeps the result identical
-        to the other shipped adapters.
+        - **Python filter:** namespaces are stored as JSON text. So each call
+          reads all bindings of the collection, and the namespace filter and
+          the address order run in Python.
+        - **Same result:** `SQLiteBackend` also filters and sorts in Python, so
+          both relational backends give the same result.
 
         Args:
             collection_id: Id of the collection to list.
-            namespace: Optional exact namespace filter. With `recursive=True`
-                it is treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below `namespace`.
-            after: Optional exclusive start address used to page through
-                results in address order.
+            namespace: Optional exact namespace filter. With `recursive=True`,
+                it is a namespace prefix.
+            recursive: If `True`, the result also includes the nested
+                namespaces below `namespace`.
+            after: Optional exclusive start address, for pages in address
+                order.
             limit: Maximum number of bindings to return.
 
         Returns:
@@ -788,15 +805,16 @@ class PostgresBackend:
         *,
         expected_block_id: str,
     ) -> None:
-        """Atomically remove a binding when its block id still matches.
+        """Remove a binding in one atomic step, if its block id still matches.
 
         Args:
             collection_id: Id of the collection that owns the key space.
             address: Exact namespace and key to remove.
-            expected_block_id: Block id the binding must currently point to.
+            expected_block_id: Block id that the binding points to now, as the
+                caller expects.
 
         Raises:
-            MemoryConflict: If the address is unbound or it no longer points
+            MemoryConflict: If the address is not bound, or it no longer points
                 to `expected_block_id`.
         """
 
@@ -818,11 +836,11 @@ class PostgresBackend:
                 raise MemoryConflict(f"Key address {address!r} in collection {collection_id!r} no longer points to expected block {expected_block_id!r}.")
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
-        """Remove bindings owned by or pointing to one deleted block.
+        """Remove the bindings that one deleted block owns, and the bindings that point to it.
 
         Args:
-            block_id: Id of the deleted block. Bindings whose collection id or
-                target block id match are removed.
+            block_id: Id of the deleted block. The call removes the bindings
+                whose collection id or target block id matches.
         """
 
         with self._write_transaction() as connection:
@@ -838,19 +856,20 @@ class PostgresBackend:
     # Ordered event log
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:
-        """Atomically allocate a sequence and append a block reference.
+        """Allocate a sequence and append a block reference, in one atomic step.
 
-        The counter row is created or advanced by one upsert, so the allocation
-        needs no separate read. Sequence numbers stay gapless, which is why the
-        adapter uses a counter row instead of a PostgreSQL sequence: a sequence
-        is not transactional and would skip numbers on a rolled back append.
+        - **One upsert:** one upsert creates or advances the counter row, so
+          the allocation needs no separate read.
+        - **Counter row, not a sequence:** a PostgreSQL sequence is not
+          transactional, so it skips a number when an append rolls back. The
+          counter row does not skip numbers.
 
         Args:
             log_id: Id of the ordered log to append to.
             block_id: Id of the memory block to place at the new position.
 
         Returns:
-            Stored entry carrying the allocated sequence number.
+            Stored entry with the allocated sequence number.
 
         Raises:
             MemoryConflict: If the log or referenced block does not exist.
@@ -894,10 +913,10 @@ class PostgresBackend:
 
         Args:
             log_id: Id of the ordered log.
-            sequence: Exact position within the log.
+            sequence: Exact position in the log.
 
         Returns:
-            Stored entry, or `None` when the position holds no entry.
+            Stored entry, or `None` when the position has no entry.
 
         Raises:
             TypeError: If `sequence` is not an integer.
@@ -931,7 +950,7 @@ class PostgresBackend:
             log_id: Id of the ordered log.
             start: Optional inclusive lower sequence bound.
             stop: Optional exclusive upper sequence bound.
-            reverse: Whether to return entries in descending sequence order.
+            reverse: If `True`, entries come in descending sequence order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -978,11 +997,12 @@ class PostgresBackend:
             return [_log_entry_from_row(row) for row in rows]
 
     def delete_log_entries_for_block(self, block_id: str) -> None:
-        """Remove a log and entries owned by or pointing to one block.
+        """Remove the log that one deleted block owns, and the entries that point to the block.
 
         Args:
-            block_id: Id of the deleted block. A log owned by this id is
-                dropped, along with entries pointing to it in any other log.
+            block_id: Id of the deleted block. The call drops the log of this
+                id with its counter, and the entries that point to the block in
+                any log.
         """
 
         with self._write_transaction() as connection:
@@ -1012,8 +1032,8 @@ class PostgresBackend:
             Stored entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection already contains the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection already contains the block.
         """
 
         with self._write_transaction() as connection:
@@ -1041,14 +1061,14 @@ class PostgresBackend:
 
         Args:
             entry: Replacement entry. Its collection id and block id select
-                the existing entry to replace.
+                the current entry to replace.
 
         Returns:
             Stored replacement entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection does not contain the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection does not contain the block.
         """
 
         with self._write_transaction() as connection:
@@ -1109,8 +1129,8 @@ class PostgresBackend:
 
         Args:
             collection_id: Id of the temporal collection.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1164,11 +1184,11 @@ class PostgresBackend:
                 raise MemoryConflict(f"Memory block {block_id!r} is not in temporal collection {collection_id!r}.")
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
-        """Remove temporal entries owned by or pointing to one block.
+        """Remove the temporal entries that one deleted block owns, and the entries that point to it.
 
         Args:
-            block_id: Id of the deleted block. Entries whose collection id or
-                target block id match are removed.
+            block_id: Id of the deleted block. The call removes the entries
+                whose collection id or target block id matches.
         """
 
         with self._write_transaction() as connection:
@@ -1192,20 +1212,19 @@ class PostgresBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one temporal page matching every supplied time filter.
+        """Return one temporal page that matches all given time filters.
 
         Args:
             collection_id: Id of the temporal collection.
-            occurred_only: Whether to keep only entries that carry an event
-                time.
+            occurred_only: If `True`, only entries with an event time match.
             occurred_start: Optional inclusive lower bound on event time.
             occurred_stop: Optional exclusive upper bound on event time.
-            valid_at: Optional instant that an entry's validity period must
-                contain.
-            overlaps: Optional validity period an entry's own period must
-                overlap.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            valid_at: Optional instant that the validity period of an entry
+                contains.
+            overlaps: Optional validity period that the period of an entry
+                overlaps.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1284,7 +1303,7 @@ class PostgresBackend:
     # Typed links and lineage DAG
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
-        """Persist a typed link between existing blocks.
+        """Store a typed link between existing blocks.
 
         Args:
             link: Link to store.
@@ -1293,8 +1312,8 @@ class PostgresBackend:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, or the relation is protected as an acyclic graph.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, or the relation is protected as an acyclic graph.
         """
 
         with self._write_transaction() as connection:
@@ -1304,23 +1323,24 @@ class PostgresBackend:
             return self._insert_link(connection, link)
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Atomically add a link unless it would create a directed cycle.
+        """Add a link in one atomic step, unless the link makes a directed cycle.
 
-        Existing links with the same relation are adopted on the first call
-        only when they already form a DAG. The relation is then protected from
-        ordinary link insertion.
+        - **First call:** the current links with the same relation stay. The
+          first call accepts them only if they already form a DAG.
+        - **Protection:** after a successful call, a plain `add_link` with the
+          relation raises `MemoryConflict`.
 
         Args:
-            link: Link to store. Its relation identifies the protected graph
-                the cycle check applies to.
+            link: Link to store. Its relation identifies the protected graph of
+                the cycle check.
 
         Returns:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, the relation already contains a cycle, or the new
-                link would create one.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, the relation already contains a cycle, or the new link
+                makes one. A self-link is a cycle.
         """
 
         with self._write_transaction() as connection:
@@ -1348,13 +1368,13 @@ class PostgresBackend:
         """Replace only the metadata of an existing link.
 
         Args:
-            link: Link containing the replacement metadata.
+            link: Link with the replacement metadata.
 
         Returns:
             Stored replacement link.
 
         Raises:
-            MemoryConflict: If the link is missing or any field other than
+            MemoryConflict: If the link does not exist, or a field other than
                 metadata changed.
         """
 
@@ -1390,7 +1410,7 @@ class PostgresBackend:
         """List links connected to one block.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
@@ -1398,7 +1418,7 @@ class PostgresBackend:
             Matching links.
 
         Raises:
-            ValueError: If `direction` is invalid.
+            ValueError: If `direction` is not `"out"`, `"in"`, or `"both"`.
         """
 
         if direction not in {"out", "in", "both"}:
@@ -1432,7 +1452,7 @@ class PostgresBackend:
         """Delete incoming and outgoing links for one block.
 
         Args:
-            block_id: Block id whose connected links should be removed.
+            block_id: Block id whose connected links to remove.
         """
 
         with self._write_transaction() as connection:
@@ -1448,17 +1468,18 @@ class PostgresBackend:
     # Portable search
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search blocks using the portable in-memory matching behavior.
+        """Search blocks with the portable matching behavior of the in-memory backend.
 
-        Candidate rows are narrowed in SQL by scope, then matched in Python so
-        results stay consistent with the reference backend.
+        - **SQL step:** SQL selects the candidate rows by scope only.
+        - **Python step:** Python then matches the types, filters, and text. So
+          the results stay the same as in the reference backend.
 
         Args:
             query: Normalized query from the public API.
 
         Returns:
-            Search results ordered by descending score, limited to
-            `query.limit`.
+            Search results in descending score order, at most `query.limit`
+            results.
         """
 
         with self._read_transaction() as connection:
@@ -1486,11 +1507,11 @@ class PostgresBackend:
     # Connection, schema, and transaction helpers
 
     def _configure_connection(self) -> None:
-        """Apply the session settings the backend relies on.
+        """Apply the session settings that the backend needs.
 
-        Both settings are ordinary session parameters, so PostgreSQL raises
-        when a value is invalid instead of ignoring it quietly. There is no
-        need to read them back.
+        Both settings are ordinary session parameters. So PostgreSQL raises an
+        error for a value that is not valid, and does not ignore it. The
+        backend does not read them back.
         """
 
         connection = self._require_connection()
@@ -1504,20 +1525,19 @@ class PostgresBackend:
         )
 
     def _verify_server_role(self) -> None:
-        """Refuse a connection that lands on a read-only replica.
+        """Refuse a connection to a read-only replica.
 
-        A replica refuses every write, so a backend opened against one fails on
-        the first `put_block`. The check reads `pg_is_in_recovery()`, which is
-        the least privileged answer to the question and stays available on
-        managed services.
-
-        The check refuses only on proof. A rejected function call, a missing
-        row, and an unreadable value all leave the role unknown, and unknown
-        passes, so the probe never rejects a server that would work. A
-        connection failure is left to reach the caller.
-
-        The role is read once. A failover or a proxy can still move this
-        connection to a replica later, and that is not detected.
+        - **Why:** a replica refuses all writes, so a backend on a replica fails
+          on the first `put_block`.
+        - **How:** the check reads `pg_is_in_recovery()`. This function needs
+          the fewest privileges, and managed services keep it available.
+        - **Refusal only on proof:** a rejected function call, a missing row,
+          and an unreadable value all leave the role unknown, and an unknown
+          role passes. So the probe never rejects a server that would work. A
+          connection failure still gets to the caller.
+        - **One read:** the role is read once. A failover or a proxy can still
+          move this connection to a replica later, and the backend does not
+          detect that.
 
         Raises:
             UnsupportedOperation: If the server reports that it is in recovery.
@@ -1544,11 +1564,13 @@ class PostgresBackend:
     def _initialize_schema(self) -> None:
         """Create the schema namespace, run migrations, then validate.
 
-        The namespace creation, the record read, the unowned-table check, and
-        the migration run in one transaction under the advisory lock. A
-        constructor that starts at the same time waits for the lock and then
-        reads the record the first one committed. Reading outside the lock
-        could miss the record and then see that constructor's tables.
+        - **One locked transaction:** the namespace creation, the record read,
+          the unowned-table check, and the migration run in one transaction
+          under the advisory lock.
+        - **Concurrent constructors:** a constructor that starts at the same
+          time waits for the lock. Then it reads the record that the first
+          constructor committed. A read outside the lock could miss the record,
+          and then see the tables of that constructor.
         """
 
         with self._write_transaction() as transaction:
@@ -1576,7 +1598,7 @@ class PostgresBackend:
         self._validate_schema()
 
     def _validate_schema(self) -> None:
-        """Require a matching schema record and the exact owned objects."""
+        """Raise `UnsupportedOperation` if the schema or its record does not exist or does not match, or the owned objects are not exact."""
 
         connection = self._require_connection()
         if not self._namespace_exists(connection):
@@ -1597,7 +1619,7 @@ class PostgresBackend:
         return row is not None
 
     def _namespace_tables(self, connection: Any) -> set[str]:
-        """Return every base table name inside the configured schema."""
+        """Return all base table names inside the configured schema."""
 
         rows = connection.execute(
             """
@@ -1623,7 +1645,7 @@ class PostgresBackend:
         ).fetchone()
 
     def _schema_version(self, state: Mapping[str, Any], *, allow_older: bool) -> int:
-        """Validate schema ownership and return its supported version."""
+        """Check the schema owner and version, and return the version, or raise `UnsupportedOperation`."""
 
         application_id = state.get("application_id")
         version = state.get("version")
@@ -1638,7 +1660,7 @@ class PostgresBackend:
         return version
 
     def _validate_schema_objects(self, connection: Any) -> None:
-        """Require the exact tables, columns, indexes, and foreign keys Genie owns."""
+        """Raise `UnsupportedOperation` if the tables, columns, indexes, or foreign keys do not match the Genie schema exactly."""
 
         actual_tables = self._namespace_tables(connection)
         expected_tables = set(_EXPECTED_TABLE_COLUMNS)
@@ -1692,11 +1714,12 @@ class PostgresBackend:
 
     @contextmanager
     def _read_transaction(self) -> Generator[Any, None, None]:
-        """Yield one repeatable-read, read-only transaction under the lock.
+        """Yield one repeatable-read, read-only transaction under the instance lock.
 
-        A repeatable-read snapshot keeps a multi-statement read consistent, and
-        a read-only transaction under that isolation level cannot fail with a
-        serialization error.
+        - **Consistent:** a repeatable-read snapshot keeps a read with several
+          statements consistent.
+        - **No serialization errors:** a read-only transaction at that
+          isolation level cannot fail with a serialization error.
         """
 
         with self._lock:
@@ -1714,10 +1737,12 @@ class PostgresBackend:
     def _write_transaction(self) -> Generator[Any, None, None]:
         """Yield one serialized write transaction and commit it atomically.
 
-        The advisory lock is transaction scoped, so PostgreSQL releases it on
-        commit or rollback. It makes every compound "read, check, then write"
-        step atomic against other Genie writers, in this process and in any
-        other, which is the model `SQLiteBackend` gets from `BEGIN IMMEDIATE`.
+        - **Release:** the advisory lock is transaction scoped, so PostgreSQL
+          releases it on commit or rollback.
+        - **Atomic steps:** it makes each compound "read, check, then write"
+          step atomic against other Genie writers of the same schema, in this
+          process and in other processes. `SQLiteBackend` gets the same model
+          from `BEGIN IMMEDIATE`.
         """
 
         with self._lock:
@@ -1735,7 +1760,7 @@ class PostgresBackend:
                 raise _translate_postgres_error(error) from error
 
     def _discard_connection(self) -> None:
-        """Best-effort cleanup after constructor failure."""
+        """Clean up after a constructor failure, as far as possible."""
 
         connection = self._connection
         self._connection = None
@@ -1747,7 +1772,7 @@ class PostgresBackend:
             pass
 
     def _require_connection(self) -> Any:
-        """Return the open connection or fail after `close`."""
+        """Return the open connection, or raise `RuntimeError` after `close`."""
 
         if self._connection is None:
             raise RuntimeError("PostgresBackend is closed.")
@@ -1778,7 +1803,7 @@ class PostgresBackend:
         block_id: str,
         parent_id: str | None,
     ) -> None:
-        """Require a valid parent id for a create or move."""
+        """Raise `MemoryConflict` if the parent id is not valid for a create or a move."""
 
         if parent_id == block_id:
             raise MemoryConflict("A memory block cannot be its own parent.")
@@ -1817,9 +1842,9 @@ class PostgresBackend:
     ) -> list[dict[str, Any]]:
         """Return descendant rows in depth-first creation order.
 
-        The recursive term carries the storage order of every block on the path
-        as an array. PostgreSQL compares arrays element by element, so ordering
-        by that path gives depth-first creation order.
+        The recursive term holds the storage order of each block on the path as
+        an array. PostgreSQL compares arrays element by element. So an order by
+        that path gives depth-first creation order.
         """
 
         return connection.execute(
@@ -1843,7 +1868,7 @@ class PostgresBackend:
         ).fetchall()
 
     def _contains(self, connection: Any, root_id: str, block_id: str) -> bool:
-        """Check ownership containment using one recursive query."""
+        """Check ownership containment with one recursive query."""
 
         row = connection.execute(
             f"""
@@ -1873,7 +1898,7 @@ class PostgresBackend:
         block_id: str,
         container_name: str,
     ) -> None:
-        """Require a structure container and referenced block to exist."""
+        """Raise `MemoryConflict` if the structure container or the referenced block does not exist."""
 
         if self._block_row(connection, container_id) is None:
             raise MemoryConflict(f"{container_name} block {container_id!r} does not exist.")
@@ -1881,7 +1906,7 @@ class PostgresBackend:
             raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
 
     def _validate_new_link(self, connection: Any, link: MemoryLink) -> None:
-        """Require a new link id and two stored endpoints."""
+        """Raise `MemoryConflict` if the link id already exists or an endpoint is not stored."""
 
         if self._link_row(connection, link.id) is not None:
             raise MemoryConflict(f"Memory link {link.id!r} already exists.")
@@ -1891,7 +1916,7 @@ class PostgresBackend:
             raise MemoryConflict(f"Target memory block {link.target_id!r} does not exist.")
 
     def _insert_link(self, connection: Any, link: MemoryLink) -> MemoryLink:
-        """Insert a validated link inside the caller's transaction."""
+        """Insert a checked link inside the transaction of the caller."""
 
         try:
             connection.execute(
@@ -1934,7 +1959,7 @@ class PostgresBackend:
         *,
         relation: str,
     ) -> bool:
-        """Return whether one relation has a directed path between two blocks."""
+        """Return whether one relation has a directed path between 2 blocks."""
 
         row = connection.execute(
             f"""
@@ -2024,7 +2049,7 @@ class PostgresBackend:
         return self._all_block_rows(connection)
 
     def _all_block_rows(self, connection: Any) -> list[dict[str, Any]]:
-        """Return every stored block row in storage order."""
+        """Return all stored block rows in storage order."""
 
         return connection.execute(f"SELECT {_BLOCK_COLUMNS} FROM {self._blocks} ORDER BY storage_order").fetchall()
 
@@ -2148,7 +2173,7 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
 
 
 def _qualified_columns(table: str, columns: str) -> str:
-    """Qualify a comma-separated constant column list for joined queries."""
+    """Add the table name to each column of a constant comma-separated column list, for joined queries."""
 
     return ", ".join(f"{table}.{column.strip()}" for column in columns.replace("\n", " ").split(",") if column.strip())
 
@@ -2223,7 +2248,7 @@ def _validate_expected_version(
     replacement: MemoryBlock,
     expected_version: int | None,
 ) -> None:
-    """Validate one optional compare-and-swap block replacement."""
+    """Raise `MemoryConflict` if an optional compare-and-swap replacement does not match `expected_version` or does not increase the version by exactly one."""
 
     if expected_version is None:
         return
@@ -2367,7 +2392,7 @@ def _decode_rule(payload: Mapping[str, Any]) -> AccessRule:
 
 
 def _dump_json(value: Any, *, field_name: str) -> str:
-    """Encode a strict JSON value without silently changing its type."""
+    """Encode a strict JSON value, with no silent type change, or raise `TypeError`."""
 
     if not _is_strict_json(value):
         raise TypeError(f"PostgresBackend {field_name} must be strict JSON data.")
@@ -2381,7 +2406,7 @@ def _dump_json(value: Any, *, field_name: str) -> str:
 
 
 def _load_json(value: object) -> Any:
-    """Decode one JSON text value into an isolated Python object."""
+    """Decode one JSON text value into a new Python object, or raise `BackendCorruption`."""
 
     if not isinstance(value, str):
         raise BackendCorruption("Stored PostgreSQL JSON values must be strings.")
@@ -2433,7 +2458,7 @@ def _decode_datetime(value: object) -> datetime:
 
 
 def _encode_namespace(namespace: tuple[str, ...]) -> str:
-    """Encode a namespace tuple without losing segment boundaries."""
+    """Encode a namespace tuple, and keep the segment boundaries."""
 
     return _dump_json(list(namespace), field_name="key namespace")
 
@@ -2465,9 +2490,12 @@ def _namespace_matches(
 def _advisory_lock_key(schema: str) -> int:
     """Return the stable advisory lock key for one Genie schema.
 
-    Two Genie datasets in the same database use different schemas, so the key
-    is derived from the schema name. `zlib.crc32` is used because Python's own
-    `hash` is randomized per process and would not agree between two backends.
+    - **One key for each schema:** 2 Genie datasets in the same database use
+      different schemas, so the key comes from the schema name.
+    - **`zlib.crc32`:** the built-in `hash` of Python changes for each process,
+      so 2 backends would not agree on it.
+    - **Collisions:** 2 schema names with the same CRC-32 share one lock. This
+      only serializes more writes.
 
     Args:
         schema: PostgreSQL schema that holds the Genie tables.
@@ -2481,7 +2509,7 @@ def _advisory_lock_key(schema: str) -> int:
 
 
 def _validate_sequence(value: object, *, name: str) -> None:
-    """Require a non-negative integer sequence value."""
+    """Raise an error if a sequence value is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -2490,7 +2518,7 @@ def _validate_sequence(value: object, *, name: str) -> None:
 
 
 def _validate_limit(value: object) -> None:
-    """Require a non-negative integer page limit."""
+    """Raise an error if a page limit is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("limit must be an integer.")
@@ -2499,7 +2527,7 @@ def _validate_limit(value: object) -> None:
 
 
 def _validate_nonempty_string(value: object, *, name: str) -> None:
-    """Require a non-empty string configuration value."""
+    """Raise an error if a configuration value is not a non-empty string."""
 
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string.")
@@ -2508,7 +2536,7 @@ def _validate_nonempty_string(value: object, *, name: str) -> None:
 
 
 def _validate_timeout(value: object, *, name: str) -> None:
-    """Require a finite, non-negative timeout in seconds."""
+    """Raise an error if a timeout is not a finite, non-negative number of seconds."""
 
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TypeError(f"{name} must be a number.")
@@ -2517,19 +2545,22 @@ def _validate_timeout(value: object, *, name: str) -> None:
 
 
 def _validate_schema_name(value: object) -> None:
-    """Require a plain unquoted PostgreSQL identifier for the schema.
+    """Raise an error if the schema is not a plain unquoted PostgreSQL identifier.
 
-    The schema name is placed into SQL as a quoted identifier rather than as a
-    parameter, because PostgreSQL does not accept a parameter where a table
-    name belongs. Restricting it to letters, digits, and underscores keeps that
-    safe.
+    - **Why:** the schema name goes into SQL as a quoted identifier, not as a
+      parameter, because PostgreSQL does not accept a parameter where a table
+      name goes.
+    - **Safe characters:** the name has only ASCII letters, digits, and
+      underscores, with no digit first and at most 63 bytes. This keeps the
+      quoted name safe.
 
     Args:
-        value: Schema name supplied by the caller.
+        value: Schema name from the caller.
 
     Raises:
         TypeError: If the value is not a string.
-        ValueError: If the value is not a plain identifier or is too long.
+        ValueError: If the value is empty, is not a plain identifier, or is
+            longer than 63 bytes.
     """
 
     if not isinstance(value, str):
@@ -2543,7 +2574,7 @@ def _validate_schema_name(value: object) -> None:
 
 
 def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
-    """Validate and normalize an optional aware datetime to UTC."""
+    """Check an optional timezone-aware datetime, and return it in UTC."""
 
     if value is None:
         return None
@@ -2559,8 +2590,8 @@ def _load_psycopg() -> tuple[Any, Any, tuple[type[BaseException], ...], tuple[ty
 
     Returns:
         The `psycopg` module, its `dict_row` row factory, the exception types
-        the backend translates, and the integrity error types that mean a
-        constraint rejected a write.
+        that the backend translates, and the integrity error types that tell
+        that a constraint rejected a write.
 
     Raises:
         UnsupportedOperation: If `psycopg` is not installed.
@@ -2575,22 +2606,22 @@ def _load_psycopg() -> tuple[Any, Any, tuple[type[BaseException], ...], tuple[ty
 
 
 def _is_connection_failure(error: BaseException) -> bool:
-    """Return whether a driver failure means the server is unreachable."""
+    """Return whether a driver failure tells that the server cannot be reached: SQLSTATE class `08`, or no SQLSTATE on an `OperationalError` or `InterfaceError`."""
 
     sqlstate = str(getattr(error, "sqlstate", "") or "")
     if sqlstate.startswith("08"):
         return True
     if sqlstate:
         return False
-    # A dropped socket arrives as an OperationalError with no SQLSTATE.
+    # A dropped socket comes as an OperationalError or InterfaceError with no SQLSTATE.
     return type(error).__name__ in {"OperationalError", "InterfaceError"}
 
 
 def _translate_postgres_error(error: BaseException) -> GenieError:
     """Translate driver-specific failures into stable Genie backend errors.
 
-    PostgreSQL reports a five-character SQLSTATE for every server-side error,
-    so the mapping reads that code instead of matching message text.
+    PostgreSQL reports a five-character SQLSTATE for each server-side error.
+    So the mapping reads that code, and does not match message text.
 
     Args:
         error: Failure raised by `psycopg`.

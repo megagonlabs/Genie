@@ -1,7 +1,7 @@
 # Relational backends
 
-Genie ships two relational adapters. Both provide every core capability and
-every optional one, and both store the same data in the same shape.
+Genie ships 2 relational adapters. Both implement all core capabilities and all
+optional capabilities, and both store the same data in the same shape.
 
 | Backend | Driver | Good fit |
 | --- | --- | --- |
@@ -19,17 +19,19 @@ with SQLiteBackend("memory.db") as backend:
     memory.put(type="note", value={"text": "Persist this"})
 ```
 
-The `sqlite3` driver that ships with Python is enough. You need neither the
-SQLite command-line program nor an extra Python package.
+The `sqlite3` driver in the Python standard library is enough. The SQLite
+command-line program and extra Python packages are not necessary.
 
 ### Behavior
 
-- **File databases** use foreign keys, write-ahead logging (WAL), a lock timeout, and full synchronous durability. `durability="normal"` gives up durability after a recent crash in exchange for speed.
-- **Block updates** are protected by a version compare-and-swap.
-- **Recursive deletion** checks one exact snapshot of the subtree and deletes leaves first.
-- **Construction** checks the Genie application identity and the exact schema, and runs ordered atomic migrations. An incompatible database is rejected and left unchanged.
-- **Tables** hold blocks, links, keys, logs, and temporal entries. Values and metadata are strict JSON, and constraints and transactions keep the structure correct.
-- **Operational failures** use `BackendError`. `BackendBusy` and `BackendUnavailable` can be retried, while read-only, capacity, and corruption errors have their own types. The SQLite error stays available as `__cause__`.
+- **Connection settings:** each connection turns on foreign keys, a lock timeout, and full synchronous durability. A file database also uses write-ahead logging (WAL). `durability="normal"` is faster, but the most recent commits can be lost after a power or operating-system crash.
+- **Lock timeout:** `timeout` is the number of seconds to wait for a lock that another connection holds. Then the call raises `BackendBusy`. `timeout=0` does not wait. Construction also opens a write transaction, so the constructor waits for the lock too.
+- **Block updates** use a version compare-and-swap.
+- **Recursive delete** checks one exact snapshot of the subtree and deletes leaves first.
+- **Construction** checks the Genie application identity and the exact schema, and runs ordered atomic migrations. It rejects an incompatible database, and the tables, the data, and the application id of that database do not change. But the constructor switches a file database to WAL mode before this check, so a rejected file stays in WAL mode.
+- **Adoption:** a database with application id 0 and the exact current schema passes the check. The constructor then sets the Genie application id on it.
+- **Tables** hold blocks, links, keys, logs, and temporal entries. Values and metadata are strict JSON. Constraints and transactions keep the structure correct.
+- **Operational failures** use `BackendError`. `BackendBusy` and `BackendUnavailable` are retryable. Read-only, capacity, and corruption errors have their own types. The SQLite error stays available as `__cause__`.
 
 ## `PostgresBackend`
 
@@ -46,55 +48,56 @@ with PostgresBackend("postgresql://user:password@localhost:5432/app") as backend
     memory.put(type="note", value={"text": "Persist this"})
 ```
 
-- **`user`, `password`, and `app` are placeholders.** Put your own PostgreSQL user, password, and database name in their place. Unlike `SQLiteBackend` above, this block does not run as written.
+- **`user`, `password`, and `app` are placeholders.** Your own PostgreSQL user, password, and database name go in their place. Unlike the `SQLiteBackend` example above, this block does not run as written.
 
-`psycopg` connects while the constructor runs, so a successful construction
-already proves the server is reachable. There is no separate connectivity flag.
+`psycopg` connects during the constructor. So a successful construction already
+proves that the server is reachable, and there is no separate connectivity flag.
 
 ### Layout
 
-- **One PostgreSQL schema holds every table,** and it defaults to `"genie"`. Several Genie datasets can share one database by using different schema names, the same way `RedisBackend` uses `key_prefix`.
+- **One PostgreSQL schema holds all tables,** and its default name is `"genie"`. Several Genie datasets can share one database with different schema names, as `RedisBackend` does with `key_prefix`.
 - **Table names match `SQLiteBackend`:** `blocks`, `links`, `acyclic_relations`, `key_bindings`, `log_counters`, `log_entries`, and `temporal_entries`, plus `schema_info` for the schema record.
-- **The `schema` argument is restricted to letters, digits, and underscores,** because it is placed into SQL as a quoted identifier. PostgreSQL does not accept a parameter where a table name belongs.
+- **The `schema` argument has only ASCII letters, digits, and underscores.** It does not start with a digit, and it has at most 63 bytes. The reason is that the name goes into SQL as a quoted identifier, because PostgreSQL does not accept a parameter where a table name goes.
 
 ### Behavior
 
-- **Every write takes one transaction-scoped advisory lock** before it reads or changes Genie state. PostgreSQL allows concurrent writers, so without that lock a compound "read, check, then write" step could interleave with another writer. The lock gives the same serialized-writer model that `SQLiteBackend` gets from `BEGIN IMMEDIATE`, and PostgreSQL releases it on commit or rollback.
-- **Reads run in a repeatable-read, read-only transaction,** so a read made of several statements sees one consistent snapshot and cannot fail with a serialization error.
+- **Each write takes one transaction-scoped advisory lock** before it reads or changes Genie state. PostgreSQL allows concurrent writers. Without that lock, a compound "read, check, then write" step could interleave with another writer. The lock gives the same serialized-writer model that `SQLiteBackend` gets from `BEGIN IMMEDIATE`. PostgreSQL releases it on commit or rollback.
+- **Reads run in a repeatable-read, read-only transaction.** So a read with several statements sees one consistent snapshot, and it cannot fail with a serialization error.
 - **Block updates use a version compare-and-swap.**
-- **Recursive deletion** checks one exact subtree snapshot, then deletes the subtree in one statement and lets cascading foreign keys remove the links, key bindings, log entries, and temporal entries that belong to it.
-- **`timeout` sets `lock_timeout`,** so a write that waits too long for another writer fails with `BackendBusy` instead of hanging.
-- **`durability="normal"` sets `synchronous_commit` to `off`,** which trades the most recent commits after a crash for write throughput — the same trade `SQLiteBackend` offers.
-- **Sequence numbers come from a counter row,** not from a PostgreSQL sequence. A sequence is not transactional and would skip numbers on a rolled back append, and Genie log sequences must stay gapless.
-- **Construction** reads the schema record for its application id and version, runs ordered migrations, then validates the exact tables, columns, indexes, and foreign keys from the system catalogs. It refuses a record owned by another application, a version newer than it supports, and a schema that holds tables with no Genie record. `initialize_schema=False` validates without running any DDL, for a runtime identity that may use existing data but may not administer schema.
-- **Driver failures map to Genie's stable `BackendError` types by SQLSTATE** rather than by message text. The original error stays available as `__cause__`.
+- **Recursive delete** checks one exact subtree snapshot. Then it deletes the subtree in one statement, and cascading foreign keys remove the links, key bindings, log entries, and temporal entries that belong to it.
+- **`timeout` sets `lock_timeout`.** So a write that waits too long for another writer fails with `BackendBusy` and does not hang. `timeout=0` waits with no limit, because PostgreSQL turns `lock_timeout` off at 0.
+- **`durability="normal"` sets `synchronous_commit` to `off`.** This gives more write throughput, but the most recent commits can be lost after a crash. `SQLiteBackend` offers the same trade.
+- **Sequence numbers come from a counter row,** not from a PostgreSQL sequence. A sequence is not transactional, so it skips a number when an append rolls back. The counter row does not skip numbers.
+- **Construction** reads the schema record for its application id and version, runs ordered migrations, and then validates the exact tables, columns, indexes, and foreign keys from the system catalogs. It refuses a record of another application, a version newer than it supports, and a schema with tables but no Genie record.
+- **`initialize_schema=False`** validates and runs no DDL. It suits a runtime identity that uses existing data but does not administer the schema. In this mode, no migration runs, so construction also refuses a missing schema and an older schema version.
+- **Driver failures map to the stable Genie error types by SQLSTATE,** not by message text. Integrity errors (SQLSTATE class `23`) become `MemoryConflict`, and other failures become `BackendError` types. A dropped connection with no SQLSTATE becomes `BackendUnavailable`. The original error stays available as `__cause__`.
 
 ### Connection health
 
-- **One connection, no retries.** A commit whose reply never arrives reaches the caller as `BackendUnavailable`, and the caller decides what to do.
-- **So `append_log_entry` never appends the same block twice here,** because nothing is replayed on your behalf. This matches `SQLiteBackend`. `Neo4jBackend`, `RedisBackend`, and `MongoDBBackend` do retry, and they carry that caveat instead.
+- **One connection, no retries.** A commit whose reply never arrives gets to the caller as `BackendUnavailable`, and the caller decides what to do.
+- **So `append_log_entry` never appends the same block twice on its own,** because the adapter replays nothing. This matches `SQLiteBackend`. `Neo4jBackend`, `RedisBackend`, and `MongoDBBackend` do retry, and they have that caveat.
 
 ### Server role check
 
-- **Construction reads `pg_is_in_recovery()`** and refuses a connection that lands on a read-only replica, because a replica refuses every write.
-- **It refuses only on proof.** A rejected function call, a missing row, and an unreadable value all leave the role unknown, and unknown passes.
+- **Construction reads `pg_is_in_recovery()`.** It refuses a connection to a read-only replica with `UnsupportedOperation`, because a replica refuses all writes.
+- **It refuses only on proof.** A rejected function call, a missing row, and an unreadable value all leave the role unknown, and an unknown role passes. A connection failure still gets to the caller.
 - **`verify_server_role=False`** opens a backend against a replica on purpose.
-- **The role is read once.** A failover or a proxy can still move the connection to a replica later, and that is not detected.
+- **The role is read once.** A failover or a proxy can still move the connection to a replica later, and the backend does not detect that.
 
 ## Limits
 
-- **Portable search scans the candidates inside the scope.** Use another search implementation for large text or vector indexes. `PostgresBackend` deliberately does not use `tsvector` or a vector extension, because its results must match the reference backend.
-- **JSON is stored as `text`, not `jsonb`.** `jsonb` would allow filter matching inside SQL, but it normalizes what it stores and rejects the NUL character inside strings, so it would not round-trip Genie values byte for byte.
-- **PostgreSQL cannot store NUL in a `text` column at all.** Block ids, types, content types, principals, link relations, and key names are stored as plain text, so a value containing NUL is refused. `SQLiteBackend` accepts it. JSON payloads are not affected, because the encoder writes NUL as an escape sequence rather than as a raw character.
-- **Every text column is declared `COLLATE "C"`.** PostgreSQL otherwise compares text with the database collation, which depends on the server locale, can ignore punctuation, and can change when the operating system upgrades its locale data. Genie needs plain byte order, because stored timestamps are compared as strings and paging uses `block_id > ...`.
+- **Portable search scans the candidates inside the scope.** Large text or vector indexes need another search implementation. `PostgresBackend` does not use `tsvector` or a vector extension on purpose, so that its results match the reference backend.
+- **JSON is stored as `text`, not `jsonb`.** `jsonb` would allow filter matching inside SQL. But it normalizes what it stores, and it rejects the NUL character inside strings. So it would not round-trip Genie values byte for byte.
+- **PostgreSQL cannot store NUL in a `text` column at all.** Block ids, types, content types, principals, link relations, and key names are plain text, so PostgreSQL refuses a value with NUL. `SQLiteBackend` accepts it. JSON payloads are not affected, because the encoder writes NUL as an escape sequence, not as a raw character.
+- **Each text column is declared `COLLATE "C"`.** Otherwise, PostgreSQL compares text with the database collation. That collation depends on the server locale, can ignore punctuation, and can change when the operating system upgrades its locale data. Genie needs plain byte order, because it compares stored timestamps as strings, and paging uses `block_id > ...`.
 - **Production deployments decide their own** backup, restore, monitoring, process, and performance requirements.
 
 ## Tests
 
 - **`SQLiteBackend`** tests run with a plain `pytest`.
-- **`PostgresBackend`** live tests need the `postgres` extra installed and `GENIE_POSTGRES_DSN` set.
-- **`GENIE_POSTGRES_SCHEMA`** is optional and chooses the schema. It defaults to `genie_test`.
-- **Full suite:** run `../../../scripts/test_full.sh` from the repository root to start a throwaway PostgreSQL container and run everything.
+- **`PostgresBackend`** live tests need the `postgres` extra and `GENIE_POSTGRES_DSN`.
+- **`GENIE_POSTGRES_SCHEMA`** is optional and selects the schema. Its default is `genie_test`.
+- **Full suite:** `lib/scripts/test_full.sh`, run from the repository root, starts disposable server containers, PostgreSQL among them, and runs the complete suite.
 
 Related: [Backend contracts](../README.md), [document
 backends](../document/README.md), [SQLite

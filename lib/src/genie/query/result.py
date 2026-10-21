@@ -10,16 +10,17 @@ from genie.memory.block import MemoryBlock
 
 @dataclass(frozen=True, slots=True)
 class SearchResult:
-    """A block returned from a search operation.
+    """A block that a search operation returns.
 
     Attributes:
         block: Matching memory block.
-        score: Backend-defined ranking score. Higher scores sort first in the
-            in-memory backend.
+        score: Ranking score that the backend defines. `SearchResult` stores it
+            as a `float`. The in-memory backend puts higher scores first.
         reason: Optional human-readable reason for the match.
 
     Raises:
-        TypeError: If a field has an invalid runtime type.
+        TypeError: If a field has a runtime type that is not valid, or `score`
+            is a `bool`.
         ValueError: If `score` is not finite.
     """
 
@@ -28,7 +29,7 @@ class SearchResult:
     reason: str | None = None
 
     def __post_init__(self) -> None:
-        """Validate the portable result shape used across backend boundaries."""
+        """Check the portable result shape that crosses backend boundaries, and store `score` as a `float`."""
 
         if not isinstance(self.block, MemoryBlock):
             raise TypeError("SearchResult block must be a MemoryBlock.")

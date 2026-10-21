@@ -1,22 +1,25 @@
-"""Search scope values supported by Genie."""
+"""Search scope values that Genie supports."""
 
 from enum import StrEnum
 
 
 class Scope(StrEnum):
-    """Where a search operation should look for candidate blocks.
+    """Where a search operation looks for candidate blocks.
 
-    A scope is resolved against the query's `root_id`. Every scope except
-    `GLOBAL` needs one, and `MemoryHandle` further restricts which scopes a
-    caller may use.
+    - **Root:** Genie resolves a scope against the `root_id` of the query.
+      `Memory.search` raises `ValueError` if a scope other than `GLOBAL` has no
+      root.
+    - **Handles:** `MemoryHandle` puts more limits on the scopes that a caller
+      can use.
 
     Attributes:
         SELF: Only the root block itself.
-        SUBTREE: The root block and everything it owns, at any depth.
+        SUBTREE: The root block and everything that it owns, at any depth.
         ANCESTORS: The root block and its parents up to the top of the tree.
-        LINKS: Blocks connected to the root by a typed link, in either
-            direction. Link membership does not imply ownership.
-        GLOBAL: Every block, ignoring the root.
+        LINKS: Blocks that a typed link connects to the root, in either
+            direction. The root itself is also in scope if it has at least one
+            link. A link does not imply ownership.
+        GLOBAL: All blocks. The root does not limit the candidates.
     """
 
     SELF = "self"

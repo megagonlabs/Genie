@@ -1,8 +1,8 @@
 """Shared store resolution for structure facades.
 
-Facades bind to the backend that holds their structure records. When a caller
-supplies a composite backend instead, these helpers resolve it to the route that
-owns the anchoring block.
+- **Binding:** facades bind to the backend that holds their structure records.
+- **Composite backends:** when a caller gives a composite backend, these
+  helpers resolve it to the route that owns the anchor block.
 """
 
 from __future__ import annotations
@@ -31,22 +31,23 @@ def block_id(block: BlockRef) -> str:
 def resolve_store(store: Any, container: BlockRef, *, missing_message: str) -> Any:
     """Resolve a routing backend to the route that owns a container block.
 
-    A composite backend implements the core `MemoryBackend` contract and none of
-    the optional structure capabilities, so it cannot hold structure records
-    itself. When `store` routes blocks, return the backend that owns `container`
-    so the facade binds to the adapter that does. Any other store is returned
-    unchanged.
-
-    A container and its subtree always share one route, so the resolved backend
-    owns every block the structure can hold.
+    - **Why:** a composite backend implements the core `MemoryBackend`
+      contract and none of the optional structure capabilities. So it cannot
+      hold structure records itself.
+    - **Routing store:** when `store` routes blocks, this function returns the
+      backend that owns `container`. The facade then binds to that adapter.
+    - **Other stores:** this function returns them with no change.
+    - **One route:** a container and its subtree always share one route. So the
+      resolved backend owns each block that the structure can hold.
 
     Args:
-        store: Store or routing backend supplied by the caller.
-        container: Block or id anchoring the structure.
-        missing_message: Error text used when no route owns the container.
+        store: Store or routing backend from the caller.
+        container: Block or id that is the anchor of the structure.
+        missing_message: Error text for the case in which no route owns the
+            container.
 
     Returns:
-        Store the facade should bind to.
+        Store for the facade to bind to.
 
     Raises:
         MemoryNotFound: If `store` routes blocks and no route owns `container`.

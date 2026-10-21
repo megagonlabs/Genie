@@ -1,4 +1,4 @@
-"""Versioned records composed from keyed identities and ordered logs."""
+"""Versioned records made from keyed identities and ordered logs."""
 
 from __future__ import annotations
 
@@ -26,25 +26,31 @@ from genie.structures.records import (
 
 @runtime_checkable
 class VersionedAccess(BlockReader, AccessChecker, Protocol):
-    """Small access surface required by `VersionedRecords`."""
+    """Small access surface that `VersionedRecords` requires."""
 
 
 @runtime_checkable
 class VersionedStore(KeyedStore, SequenceStore, Protocol):
-    """Combined existing capabilities required by `VersionedRecords`."""
+    """Combined existing capabilities that `VersionedRecords` requires."""
 
 
 class VersionedRecords:
     """Stable keyed identities with ordered immutable revision references.
 
-    A namespaced address maps to one existing identity block. That identity
-    block also anchors an event log of existing revision blocks. Log sequence
-    zero maps to logical revision one. The facade never rebinds identities and
-    does not create, update, or delete payload blocks.
-
-    `register` needs `write` on the collection block. `append` needs `write`
-    on the identity block, because the identity anchors the revision log.
-    Reading needs only `read` on those blocks and on each revision.
+    - **Identity:** a namespaced address maps to one existing identity block.
+    - **Revision log:** the identity block is also the anchor of an event log of
+      existing revision blocks. Log sequence zero maps to logical revision one.
+    - **Gaps:** a deleted revision block removes its log entry, and the
+      facade does not use that revision number again.
+    - **No payload changes:** the facade never rebinds identities. It does not
+      create, update, or delete payload blocks.
+    - **Writes:** `register` needs `write` on the collection block. `append`
+      needs `write` on the identity block, because the identity is the anchor
+      of the revision log.
+    - **Reads:** a read needs only `read` on those blocks and on each revision.
+      If the principal cannot read the collection or the identity, a read
+      raises `AccessDenied`. A listing skips revisions that the principal
+      cannot read.
     """
 
     __slots__ = ("_access", "_hooks", "_identities", "_store", "collection_id")
@@ -60,17 +66,20 @@ class VersionedRecords:
         """Create a versioned-record collection.
 
         Args:
-            access: Full or scoped memory access used to resolve every block.
-            store: Backend implementing keyed and sequence capabilities, or a
-                routing backend that resolves to the route holding the
+            access: Full or scoped memory access that resolves all blocks.
+            store: Backend that implements the keyed and sequence capabilities,
+                or a routing backend that resolves to the route that holds the
                 collection.
-            collection: Block or id that owns the record address space.
-            hooks: Optional registry forwarded to the reused keyed collection
-                and event logs. Defaults to the access object's registry.
+            collection: Block or id that is the anchor of the record address
+                space.
+            hooks: Optional registry for the reused keyed collection and event
+                logs. Defaults to the registry of the access object.
 
         Raises:
-            MemoryNotFound: If the collection block is missing.
-            UnsupportedOperation: If the store lacks either required capability.
+            AccessDenied: If the principal cannot read the collection block.
+            MemoryNotFound: If the collection block does not exist.
+            UnsupportedOperation: If the store does not have both required
+                capabilities.
         """
 
         store = resolve_store(
@@ -100,11 +109,13 @@ class VersionedRecords:
         return self._identities.collection
 
     def register(self, address: MemoryAddress, identity: BlockRef) -> KeyedItem:
-        """Atomically bind an unused address to a stable identity block.
+        """Bind an unused address to a stable identity block, in one atomic step.
 
-        The identity is also the anchor for this record's revision log. The
-        first revision is appended separately so registration never claims a
-        cross-structure transaction.
+        - **Anchor:** the identity is also the anchor of the revision log of this
+          record.
+        - **Separate first append:** the first revision is a separate `append`
+          call. So the registration never claims a transaction across 2
+          structures.
 
         Args:
             address: Stable namespace and key for the logical record.
@@ -117,6 +128,8 @@ class VersionedRecords:
             AccessDenied: If the collection denies `write` or the identity
                 denies `read`.
             MemoryConflict: If the address is already registered.
+            MemoryNotFound: If the collection or the identity block does not
+                exist.
         """
 
         return self._identities.bind(address, identity)
@@ -128,8 +141,14 @@ class VersionedRecords:
             address: Address of a registered stable identity.
 
         Returns:
-            Visible identity block, or `None` when the address is
-            unregistered.
+            Visible identity block, or `None` when the address is not
+            registered.
+
+        Raises:
+            AccessDenied: If the principal cannot read the collection or the
+                identity block.
+            MemoryNotFound: If the address is bound to a block that no longer
+                exists.
         """
 
         return self._identities.get(address)
@@ -145,14 +164,17 @@ class VersionedRecords:
 
         Args:
             namespace: Optional exact namespace. With `recursive=True`, it is
-                treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below `namespace`.
+                a namespace prefix.
+            recursive: If `True`, the list also includes the nested namespaces
+                below `namespace`.
             limit: Maximum visible identities to return.
 
         Returns:
-            Visible identities in ascending address order.
+            Visible identities in ascending address order. The list leaves out
+            identities that do not exist or that the principal cannot read.
 
         Raises:
+            AccessDenied: If the principal cannot read the collection.
             TypeError: If `recursive` is not a boolean or `limit` is not an
                 integer.
             ValueError: If `limit` is negative.
@@ -165,19 +187,21 @@ class VersionedRecords:
         )
 
     def append(self, address: MemoryAddress, block: BlockRef) -> RevisionItem:
-        """Atomically append an existing block as the next logical revision.
+        """Append an existing block as the next logical revision, in one atomic step.
 
         Args:
             address: Address of a registered stable identity.
-            block: Existing visible block holding the new revision value.
+            block: Existing visible block that holds the new revision value.
 
         Returns:
             Allocated positive revision number and resolved revision block.
 
         Raises:
-            AccessDenied: If the identity denies `write` or the block denies
+            AccessDenied: If the principal cannot read the collection or the
+                identity, the identity denies `write`, or the block denies
                 `read`.
-            MemoryNotFound: If no identity is registered at `address`.
+            MemoryNotFound: If no identity is registered at `address`, or the
+                block does not exist.
         """
 
         identity = self.identity(address)
@@ -200,8 +224,12 @@ class VersionedRecords:
             address: Address of a registered stable identity.
 
         Returns:
-            Newest visible revision, or `None` when the address is
-            unregistered or has no visible revision.
+            Newest visible revision, or `None` when the address is not
+            registered or has no visible revision.
+
+        Raises:
+            AccessDenied: If the principal cannot read the collection or the
+                identity block.
         """
 
         log = self._log(address)
@@ -222,10 +250,12 @@ class VersionedRecords:
             revision: Positive logical revision number.
 
         Returns:
-            Matching revision, or `None` when the address is unregistered or
+            Matching revision, or `None` when the address is not registered or
             the revision does not exist.
 
         Raises:
+            AccessDenied: If the principal cannot read the collection, the
+                identity block, or the revision block.
             TypeError: If `revision` is not an integer.
             ValueError: If `revision` is less than one.
         """
@@ -252,14 +282,17 @@ class VersionedRecords:
             address: Address of a registered stable identity.
             start: Inclusive positive logical revision number.
             stop: Optional exclusive positive logical revision number.
-            reverse: Whether to return newest revisions first.
+            reverse: If `True`, the newest revisions come first.
             limit: Maximum visible revisions to return.
 
         Returns:
-            Visible revisions in ascending or descending revision order.
-            Missing or inaccessible targets are omitted.
+            Visible revisions in ascending or descending revision order. The
+            list leaves out targets that do not exist or that the principal
+            cannot read.
 
         Raises:
+            AccessDenied: If the principal cannot read the collection or the
+                identity block.
             TypeError: If `reverse` is not a boolean, or `start`, `stop`, or
                 `limit` is not an integer.
             ValueError: If `start` or `stop` is less than one, `limit` is
@@ -286,7 +319,7 @@ class VersionedRecords:
         return [_revision_item(item) for item in items]
 
     def _log(self, address: MemoryAddress) -> EventLog | None:
-        """Return the visible revision log for a registered identity."""
+        """Return the visible revision log of a registered identity, or `None`."""
 
         identity = self.identity(address)
         if identity is None:
@@ -300,7 +333,7 @@ class VersionedRecords:
 
 
 def _revision_item(item: LogItem) -> RevisionItem:
-    """Convert a zero-based log item to a positive logical revision."""
+    """Change a zero-based log item into a positive logical revision."""
 
     return RevisionItem(
         entry=RevisionEntry(
@@ -313,7 +346,7 @@ def _revision_item(item: LogItem) -> RevisionItem:
 
 
 def _validate_revision(value: object, *, name: str) -> None:
-    """Require a positive integer logical revision number."""
+    """Raise an error if a logical revision number is not a positive integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -322,7 +355,7 @@ def _validate_revision(value: object, *, name: str) -> None:
 
 
 def _validate_limit(limit: object) -> None:
-    """Require a non-negative integer result limit."""
+    """Raise an error if a result limit is not a non-negative integer."""
 
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise TypeError("limit must be an integer.")

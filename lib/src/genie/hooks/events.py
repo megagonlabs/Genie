@@ -1,4 +1,4 @@
-"""Typed context and events shared by Genie hooks."""
+"""Typed context and event values that Genie hooks share."""
 
 from __future__ import annotations
 
@@ -21,21 +21,21 @@ _EMPTY_ATTRIBUTES: Mapping[str, str] = MappingProxyType({})
 class HookOperation(StrEnum):
     """Logical operations and spans that appear in a hook context.
 
-    Mount resolution, handle creation, and `require_access` checks appear
-    here so refusals can be reported. They do not have paired before and after
-    callbacks, so they reach hooks only through `on_denied` and the matching
-    terminal event.
-
-    `SUPPRESS` is the registry disabling its own dispatch. It is an operation
-    like any other, so a suppression window is announced by `on_suppressed`,
-    bounded by a terminal event, and named as the parent of everything done
-    inside it.
-
-    `SCOPE` is the one member that dispatches nothing. It marks a
-    caller-defined span opened with `HookRegistry.scope`, which names work
-    Genie does not model and carries that name in `HookContext.scope_name`.
-    Hooks never receive a scope context, so every `operation` they observe is
-    one Genie performed.
+    - **Operations with no paired callbacks:** mount resolution, handle
+      creation, and `require_access` checks are members, so that hooks can get
+      their refusals. These operations have no paired before and after
+      callbacks, and they open an operation only when they refuse. So they get
+      to hooks only through `on_denied` and the related `denied` terminal
+      event.
+    - **`SUPPRESS`:** the registry turns off its own dispatch. This is an
+      operation like the others. So `on_suppressed` announces the suppression
+      window, a terminal event closes it, and each operation inside it names it
+      as the parent.
+    - **`SCOPE`:** the only member that dispatches nothing. It marks a
+      caller-defined span that `HookRegistry.scope` opens. The span names work
+      that Genie does not model, and `HookContext.scope_name` holds that name.
+      Hooks never get a scope context. So each `operation` that a hook sees is
+      an operation that Genie performed.
     """
 
     PUT = "put"
@@ -74,10 +74,11 @@ HookOrigin = Literal["caller", "hook"]
 class HandleCapability(StrEnum):
     """Handle boundaries and capabilities that can refuse an operation.
 
-    A refusal reported with one of these names came from a `MemoryHandle`
-    boundary rather than from a block policy, which distinguishes an attempt to
-    leave a sandbox from an ordinary permission failure. Namespaced values
-    never collide with the policy `Operation` names that share the parameter.
+    - **Source:** a refusal with one of these names comes from a `MemoryHandle`
+      boundary, not from a block policy. So a hook can tell an attempt to leave
+      a sandbox apart from an ordinary permission failure.
+    - **No collision:** the values have a namespace. So they never collide with
+      the built-in policy `Operation` names that use the same parameter.
     """
 
     SUBTREE = "handle.subtree"
@@ -92,9 +93,11 @@ class HandleCapability(StrEnum):
 class HookOutcome(StrEnum):
     """Terminal result of one logical operation.
 
-    `DENIED` marks a policy refusal, which is an expected decision rather
-    than a fault. Every other failure is `ERROR`; hooks can inspect the
-    reported exception when they need a finer classification.
+    - **`DENIED`:** the operation raised `AccessDenied`, from a block policy or
+      from a `MemoryHandle` boundary. A refusal is an expected decision, not a
+      fault.
+    - **`ERROR`:** all other failures. A hook can examine the reported
+      exception when it needs a finer classification.
     """
 
     SUCCESS = "success"
@@ -103,10 +106,10 @@ class HookOutcome(StrEnum):
 
 
 def freeze_attributes(attributes: Mapping[str, str] | None) -> Mapping[str, str]:
-    """Validate hook context attributes and return an immutable copy.
+    """Check hook context attributes and return a copy that cannot change.
 
-    Attributes are flat string pairs, so audit records, metric labels, and
-    tracing spans can carry them without further conversion.
+    Attributes are flat pairs of strings. So audit records, metric labels, and
+    tracing spans can hold them with no more conversion.
 
     Args:
         attributes: Attributes to normalize, or `None` for no attributes.
@@ -137,23 +140,25 @@ class HookContext:
     """Causal context for one logical operation.
 
     Attributes:
-        operation_id: Unique id shared by the operation's before and after
-            callbacks.
-        parent_operation_id: Id of the operation or scope active when this one
-            began.
-        operation: Logical operation being performed. A caller-defined span
-            reports `HookOperation.SCOPE`.
-        origin: Whether the operation began in caller code or inside a hook.
-        depth: Zero-based nesting depth.
-        principal_id: Acting principal when one is available.
-        attributes: Read-only string labels describing this operation, the
-            access object that performed it, and the scopes containing it.
-            Nested operations inherit them at any depth, so hooks can group
-            related work without knowing how calls nest.
-        started_at: Timezone-aware UTC timestamp taken when the operation
-            began. With the terminal event it gives the operation's duration.
-        scope_name: Caller-defined span name. Set for `HookOperation.SCOPE`
-            contexts and `None` for every operation Genie performs.
+        operation_id: Unique id that the before and after callbacks of the
+            operation share.
+        parent_operation_id: Id of the operation or scope that was active
+            when this operation started.
+        operation: Logical operation. A caller-defined span reports
+            `HookOperation.SCOPE`.
+        origin: `"caller"` if the operation started in caller code, or
+            `"hook"` if it started inside a hook.
+        depth: Zero-based depth of nested operations and scopes.
+        principal_id: Acting principal, if one is available.
+        attributes: Read-only string labels. They describe this operation, the
+            access object that performed it, and the scopes that contain it.
+            Nested operations inherit them at any depth. So hooks can group
+            related work with no knowledge of how the calls nest.
+        started_at: Timezone-aware UTC timestamp of the operation start. With
+            the terminal event, it gives the duration of the operation.
+        scope_name: Caller-defined span name. It has a value for
+            `HookOperation.SCOPE` contexts, and it is `None` for each operation
+            that Genie performs.
     """
 
     operation_id: str
@@ -167,13 +172,13 @@ class HookContext:
     scope_name: str | None = None
 
     def __post_init__(self) -> None:
-        """Freeze attributes against hook mutation and pair the scope name.
+        """Freeze the attributes so that hooks cannot change them, and check the scope name.
 
         Raises:
             TypeError: If the attributes are not a mapping of strings to
                 strings.
-            ValueError: If a scope has no name or a performed operation has
-                one.
+            ValueError: If a scope has no name, or an operation that Genie
+                performs has one.
         """
 
         object.__setattr__(self, "attributes", freeze_attributes(self.attributes))
@@ -188,15 +193,15 @@ class HookContext:
     def is_scope(self) -> bool:
         """Return whether this context names a caller-defined scope.
 
-        Scope contexts dispatch no callbacks, so hooks see them only as the
-        parent id and inherited attributes of the operations inside them.
+        Scope contexts dispatch no callbacks. So hooks see a scope only as the
+        parent id and the inherited attributes of the operations inside it.
         """
 
         return self.operation is HookOperation.SCOPE
 
 
 class StructureKind(StrEnum):
-    """Structural state families exposed to hooks."""
+    """Families of structural state that hooks can see."""
 
     KEYED_COLLECTION = "keyed_collection"
     EVENT_LOG = "event_log"
@@ -204,7 +209,7 @@ class StructureKind(StrEnum):
 
 
 class StructureAction(StrEnum):
-    """Mutations supported by structural hook events."""
+    """Changes that structural hook events report."""
 
     BIND = "bind"
     REBIND = "rebind"
@@ -222,17 +227,18 @@ RecordT = TypeVar("RecordT")
 class StructureChange(Generic[RecordT]):
     """One logical change to structure membership.
 
-    `before` and `after` contain the facade's immutable structural record,
-    such as a key binding, log entry, or temporal entry. A before callback may
-    see `after=None` when the backend must allocate the final record.
+    - **Records:** `before` and `after` hold the immutable structural record of
+      the facade, such as a key binding, a log entry, or a temporal entry.
+    - **No final record yet:** a before callback can get `after=None` when the
+      backend makes the final record.
 
     Attributes:
-        kind: Structural state family.
-        action: Mutation within that family.
-        container_id: Collection or log block id.
-        block_id: Referenced memory block id.
-        before: Existing structural record, when applicable.
-        after: Proposed or persisted structural record, when available.
+        kind: Family of structural state.
+        action: Change in that family.
+        container_id: Id of the collection block or the log block.
+        block_id: Id of the memory block that the record refers to.
+        before: Current structural record, if there is one.
+        after: Proposed or stored structural record, if it is available.
     """
 
     kind: StructureKind
@@ -244,16 +250,16 @@ class StructureChange(Generic[RecordT]):
 
 
 class TraversalKind(StrEnum):
-    """Relationships a structural read can follow.
+    """Relationships that a structural read can follow.
 
-    `LINKS` covers link listing in any direction, and `CONTAINS` covers a
-    subtree membership test, which follows ownership without returning what it
-    finds.
-
-    `MOUNTS` and `SUBTREE_MOUNTS` separate the symbolic mounts of one block
-    from a scan that collects them from every readable block under a root. The
-    two report the same kind of record from very different amounts of memory, so
-    a trail that could not tell them apart would understate the second.
+    - **`LINKS`:** link listing in any direction.
+    - **`CONTAINS`:** a subtree membership test. It follows ownership and does
+      not return what it finds.
+    - **`MOUNTS` and `SUBTREE_MOUNTS`:** `MOUNTS` is the symbolic mounts of one
+      block. `SUBTREE_MOUNTS` is a scan that collects the mounts of each
+      readable block under a root. The two report the same kind of record from
+      very different amounts of memory. If a trail cannot tell them apart, it
+      shows the scan as a much smaller read than it is.
     """
 
     CHILDREN = "children"
@@ -268,31 +274,31 @@ class TraversalKind(StrEnum):
 class Traversal:
     """One structural read that follows relationships between blocks.
 
-    A traversal names a starting block rather than the blocks it returns, so
-    one call can disclose many. Both callbacks receive the same value: the
-    before callback sees the read that is about to run, and the after callback
-    sees the same read carrying what it disclosed.
-
-    Traversal results are already filtered by the reading principal's read
-    policy, and blocks that policy hides are absent rather than reported as
-    refusals.
+    - **Start block:** a traversal names the block where the read starts, not
+      the blocks that it returns. So one call can disclose many blocks.
+    - **Same value for both callbacks:** the before callback sees the read
+      before it runs. The after callback sees the same read with what it
+      disclosed.
+    - **Already filtered:** the `read` policy of the principal filters the
+      results first. A block that the policy hides is not in the results, and
+      the read does not report it as a refusal.
 
     Attributes:
-        kind: Relationship the read follows.
-        origin_id: Block the read starts from, which is the scanned root of a
-            subtree read.
-        target_id: Candidate block of a containment test, and `None` for every
-            other kind.
-        relation: Relation the read filtered on, when one applies. A mount read
-            reports the reserved mount relation.
-        direction: Link direction relative to `origin_id` for a link or mount
-            read, and `None` for every other kind.
-        blocks: Decoded blocks a `children` or `ancestors` read disclosed.
-            Empty until the read completes.
-        links: Links a link or mount read disclosed. Empty until the read
-            completes.
-        contained: Result of a containment test. `None` until the test
-            completes, and for every other kind.
+        kind: Relationship that the read follows.
+        origin_id: Block where the read starts. For a subtree read, this is the
+            scanned root.
+        target_id: Candidate block of a containment test, and `None` for all
+            other kinds.
+        relation: Relation that the read filtered on, if one applies. A mount
+            read reports the reserved mount relation.
+        direction: Link direction relative to `origin_id` for a link read or a
+            mount read, and `None` for all other kinds.
+        blocks: Decoded blocks that a `children` or `ancestors` read disclosed.
+            Empty until the read is complete.
+        links: Links that a link read or a mount read disclosed. Empty until
+            the read is complete.
+        contained: Result of a containment test. `None` until the test is
+            complete, and for all other kinds.
     """
 
     kind: TraversalKind
@@ -308,10 +314,12 @@ class Traversal:
 class SuppressionScope(StrEnum):
     """Reach of one suppression window.
 
-    `SELECTED` names the hooks it silences and leaves the rest reporting.
-    `REGISTRY` silences every hook that is not mandatory, including hooks
-    registered after the window opens, so the two are not interchangeable even
-    when they silence the same hooks today.
+    - **`SELECTED`:** silences the hooks that it names. The other hooks continue
+      to report.
+    - **`REGISTRY`:** silences each hook that is not mandatory. This includes
+      hooks that are registered after the window opens.
+    - **Not interchangeable:** the two scopes are different, also when they
+      silence the same hooks now.
     """
 
     SELECTED = "selected"
@@ -320,25 +328,25 @@ class SuppressionScope(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Suppression:
-    """One window in which hook dispatch is deliberately disabled.
+    """One window in which hook dispatch is off on purpose.
 
-    Suppression is a trusted escape hatch, so the escape is itself an event. A
-    hook learns that it is about to stop reporting before it does. The window
-    is:
+    Suppression is a trusted escape hatch, so the escape is also an event. A
+    hook knows that it will no longer report before that happens. The window:
 
-    - announced by `on_suppressed`;
-    - closed by the terminal event of the same `HookOperation.SUPPRESS`
+    - starts with `on_suppressed`;
+    - ends with the terminal event of the same `HookOperation.SUPPRESS`
       operation; and
-    - named as the parent of every operation performed inside it.
+    - is the parent of each operation inside it.
 
     Attributes:
         scope: Whether the window names its hooks or covers the registry.
-        hooks: Hooks that stop reporting, in dispatch order. A registry-wide
-            window lists the hooks registered when it opened; hooks registered
-            while it is open are suppressed too without appearing here.
-        mandatory: Registered hooks that keep reporting because they were
-            registered as mandatory, in dispatch order. These are the hooks
-            that can still witness what happens inside the window.
+        hooks: Hooks that no longer report, in dispatch order. A window for the
+            whole registry lists the hooks that were registered when it opened.
+            Hooks that are registered while it is open are also suppressed,
+            but they are not in this list.
+        mandatory: Registered hooks that continue to report because they are
+            mandatory, in dispatch order. Only these hooks can record what
+            happens inside the window.
     """
 
     scope: SuppressionScope

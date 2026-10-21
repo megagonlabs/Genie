@@ -1,4 +1,4 @@
-"""Main memory system interface."""
+"""Main interface of the memory system."""
 
 from __future__ import annotations
 
@@ -38,22 +38,22 @@ if TYPE_CHECKING:
 class Memory:
     """Main interface for a Genie memory system.
 
-    - Configures the backend, codecs, hooks, policy engine, default principal,
-      default policy, and the attributes hooks observe.
-    - Coordinates parent/child ownership, scoped access, links, mounts, search,
-      hooks, and codecs.
-    - Owns none of the application business logic, memory structure, storage
-      layout, retrieval strategy, or value meaning.
-    - Trusted application code usually keeps this object and passes bounded
-      `MemoryHandle` objects to agents.
+    - **Configuration:** the backend, codecs, hooks, policy engine, default
+      principal, default policy, and the attributes that hooks see.
+    - **Coordination:** parent and child ownership, scoped access, links,
+      mounts, search, hooks, and codecs.
+    - **Not in scope:** the application business logic, memory structure,
+      storage layout, retrieval strategy, and value meaning.
+    - **Usual use:** trusted application code keeps this object and gives
+      bounded `MemoryHandle` objects to agents.
 
     Attributes:
-        backend: Adapter that persists blocks and links.
-        principal: Principal every operation through this object acts as.
-        policy_engine: Evaluator consulted before each block access.
-        codecs: Registry used to encode and decode block values.
-        default_policy: Policy attached to blocks created without one.
-        attributes: Read-only string labels attached to every hook context this
+        backend: Adapter that stores blocks and links.
+        principal: Principal for all operations through this object.
+        policy_engine: Evaluator that checks each block access.
+        codecs: Registry that encodes and decodes block values.
+        default_policy: Policy for blocks that are created without one.
+        attributes: Read-only string labels on each hook context that this
             memory opens.
     """
 
@@ -73,19 +73,19 @@ class Memory:
         Args:
             backend: Backend adapter. Defaults to `InMemoryBackend`.
             principal: Acting principal for operations through this memory.
+                Defaults to the `system` principal.
             policy_engine: Policy evaluator. Defaults to `PolicyEngine`.
-            hooks: Hook list or registry. `Memory.hooks` is read-only
-                afterwards, so pass a registry when it has to carry mandatory
-                hooks the rest of the process cannot detach.
-            codecs: Codec registry. Defaults to a registry containing
+            hooks: Hook list or registry. `Memory.hooks` is read-only after
+                this call. So for mandatory hooks that the rest of the process
+                cannot detach, give a registry.
+            codecs: Codec registry. Defaults to a registry with only
                 `JsonCodec`.
-            default_policy: Policy attached to new blocks when
-                `put(..., policy=None)`. Defaults to
-                `MemoryPolicy.owner_private()`.
-            attributes: String labels attached to every hook context this
-                memory opens, such as a service, tenant, or deployment name.
-                Operations inside a `HookRegistry` scope inherit that scope's
-                attributes as well, and these win on conflict.
+            default_policy: Policy for new blocks when `put(..., policy=None)`.
+                Defaults to `MemoryPolicy.owner_private()`.
+            attributes: String labels on each hook context that this memory
+                opens, such as a service, tenant, or deployment name.
+                Operations inside a `HookRegistry` scope also inherit the
+                attributes of that scope. These attributes win on conflict.
 
         Raises:
             TypeError: If a configured backend, principal, policy engine,
@@ -115,12 +115,13 @@ class Memory:
 
     @property
     def hooks(self) -> HookRegistry:
-        """Registry every operation of this memory dispatches through.
+        """Registry through which each operation of this memory dispatches.
 
-        The registry is fixed for the life of the memory. Its contents are not:
-        use `HookRegistry.register` and `HookRegistry.unregister` to change
-        which hooks run, so a hook installed as mandatory cannot be detached by
-        replacing the registry that dispatches it.
+        - **Fixed registry:** the registry stays the same for the life of the
+          memory.
+        - **Changeable contents:** `HookRegistry.register` and
+          `HookRegistry.unregister` change which hooks run. So code cannot
+          detach a mandatory hook with a new registry.
         """
 
         return self._hooks
@@ -142,9 +143,9 @@ class Memory:
             type: Application-defined block type.
             value: User-level value to encode and store.
             parent: Optional parent block or id.
-            metadata: Optional metadata used for filtering or indexing.
-            policy: Optional block-level access policy. When omitted, the
-                memory's `default_policy` is attached.
+            metadata: Optional metadata for filters or indexes.
+            policy: Optional block-level access policy. Without one, the block
+                gets the `default_policy` of the memory.
             content_type: Optional explicit codec content type.
             id: Optional caller-provided block id.
 
@@ -152,7 +153,9 @@ class Memory:
             Stored block with decoded value.
 
         Raises:
-            AccessDenied: If the principal cannot write under the parent.
+            AccessDenied: If the principal cannot `write` or `traverse_down`
+                the parent.
+            MemoryConflict: If a block with the same `id` already exists.
             MemoryNotFound: If the parent id does not exist.
             TypeError: If `type` or `id` is not a string, `parent` is not a
                 block or string id, `policy` is not a `MemoryPolicy`, metadata
@@ -198,13 +201,13 @@ class Memory:
             return self._decode_block(stored)
 
     def get(self, block_id: str | MemoryBlock) -> MemoryBlock | None:
-        """Fetch a memory block by id.
+        """Get a memory block by id.
 
         Args:
             block_id: Block or block id.
 
         Returns:
-            Decoded block, or `None` when missing.
+            Decoded block, or `None` when the block does not exist.
 
         Raises:
             AccessDenied: If the principal cannot read the block.
@@ -232,7 +235,7 @@ class Memory:
         *,
         content_type: str | None = None,
     ) -> MemoryBlock:
-        """Replace a block's value.
+        """Replace the value of a block.
 
         Args:
             block_id: Block or block id to update.
@@ -244,8 +247,8 @@ class Memory:
 
         Raises:
             AccessDenied: If the principal cannot write and read the block.
-                `write` is checked first. `read` is also needed because the
-                stored block is returned.
+                The `write` check runs first. `read` is also needed, because
+                the call returns the stored block.
             MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
             TypeError: If `block_id` is not a block or string id, or no codec
@@ -286,7 +289,7 @@ class Memory:
 
         Args:
             block_id: Block or block id to update.
-            value: Dict fields to merge into the existing decoded value.
+            value: Dictionary fields to merge into the current decoded value.
             metadata: Metadata fields to merge.
 
         Returns:
@@ -294,8 +297,8 @@ class Memory:
 
         Raises:
             AccessDenied: If the principal cannot write and read the block.
-                `write` is checked first. `read` is also needed because the
-                stored block is returned.
+                The `write` check runs first. `read` is also needed, because
+                the call returns the stored block.
             MemoryConflict: If another writer changes the block before commit.
             MemoryNotFound: If the block does not exist.
             TypeError: If `block_id` is not a block or string id, `value` is
@@ -336,14 +339,15 @@ class Memory:
     def delete(self, block_id: str | MemoryBlock) -> None:
         """Delete a block and its descendants.
 
-        - Authorization checks the target block alone. Write access to the
-          target removes everything the target owns, and descendant policies
-          are not consulted.
-        - Ownership already carries this power. A writable parent can be
-          restructured, so treating its subtree as separately protected would
-          only let one unwritable descendant strand the whole branch.
-        - A descendant that must outlive its parent belongs outside the
-          subtree, linked or mounted instead of owned.
+        - **Target only:** authorization checks only the target block. `write`
+          on the target removes everything that the target owns. Genie does
+          not check the policies of the descendants.
+        - **Why:** ownership already gives this power. A parent with `write`
+          already controls its subtree. If each descendant had its own
+          protection, one descendant without `write` could stop the delete of
+          the whole branch.
+        - **To outlive the parent:** a descendant stays outside the subtree,
+          with a link or a mount instead of ownership.
 
         Args:
             block_id: Block or block id to delete.
@@ -370,13 +374,13 @@ class Memory:
             self.hooks.after_delete(context, *decoded_blocks)
 
     def children(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
-        """Return readable direct children for a block.
+        """Return the readable direct children of a block.
 
         Args:
             block_id: Parent block or id.
 
         Returns:
-            Decoded child blocks the principal can read.
+            Decoded child blocks that the principal can read.
 
         Raises:
             AccessDenied: If the principal cannot traverse downward from the
@@ -400,13 +404,14 @@ class Memory:
             return children
 
     def ancestors(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
-        """Return readable ancestors for a block.
+        """Return the readable ancestors of a block.
 
         Args:
-            block_id: Block or id whose parents should be traversed.
+            block_id: Block or id whose parents to traverse.
 
         Returns:
-            Decoded ancestor blocks the principal can read.
+            Decoded ancestor blocks that the principal can read, nearest parent
+            first.
 
         Raises:
             AccessDenied: If the principal cannot traverse upward from the
@@ -437,7 +442,7 @@ class Memory:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Create a typed non-hierarchical relationship between two blocks.
+        """Create a typed relationship between 2 blocks, with no ownership.
 
         Args:
             source: Source block or id.
@@ -451,7 +456,10 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write the source or read the
                 target.
-            MemoryNotFound: If either endpoint is missing.
+            MemoryConflict: If an earlier `add_acyclic_link` protects
+                `relation`. Then only `add_acyclic_link` can add links with
+                that relation.
+            MemoryNotFound: If an endpoint does not exist.
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON
                 dictionary.
@@ -478,8 +486,8 @@ class Memory:
     ) -> MemoryLink:
         """Merge metadata into an existing typed link.
 
-        Link identity and topology remain unchanged. The returned object is a
-        replacement value representing the state persisted by the backend.
+        The link identity and topology do not change. The returned object is
+        a replacement value with the state that the backend stored.
 
         Args:
             link: Existing link returned by `add_link` or `list_links`.
@@ -490,10 +498,10 @@ class Memory:
 
         Raises:
             AccessDenied: If the principal cannot write and read the source, or
-                read the target. `read` on the source is needed because the
-                stored link is returned. A pending mount without a registered
-                target is governed by its source policy.
-            MemoryNotFound: If the link or a non-mount endpoint is missing.
+                read the target. `read` on the source is needed, because the
+                call returns the stored link. For a pending mount with no
+                registered target, only the source policy applies.
+            MemoryNotFound: If the link or a non-mount endpoint does not exist.
             TypeError: If `link` is not a `MemoryLink`, or metadata is not a
                 strict JSON dictionary.
             ValueError: If metadata nests lists and dictionaries more than
@@ -535,11 +543,14 @@ class Memory:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Atomically create a typed link unless it would form a cycle.
+        """Create a typed link in one atomic step, unless the link makes a cycle.
 
-        Cycle detection includes every stored link with the exact same
-        relation. The backend performs the reachability check and insertion as
-        one operation.
+        - **Cycle check:** it includes all stored links with the exact same
+          relation.
+        - **One operation:** the backend does the reachability check and the
+          insert as one operation.
+        - **Protected relation:** after the first acyclic link, a plain
+          `add_link` with the same relation raises `MemoryConflict`.
 
         Args:
             source: Source block or id.
@@ -553,12 +564,14 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write the source or read the
                 target.
-            MemoryConflict: If existing or proposed links would contain a cycle.
-            MemoryNotFound: If either endpoint is missing.
+            MemoryConflict: If the current links and the new link contain a
+                cycle.
+            MemoryNotFound: If an endpoint does not exist.
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON
                 dictionary.
-            UnsupportedOperation: If the backend lacks atomic DAG insertion.
+            UnsupportedOperation: If the backend cannot insert DAG links
+                atomically.
             ValueError: If an endpoint id or `relation` is empty, `relation`
                 is the reserved mount relation, metadata nests lists and
                 dictionaries more than `MAX_NESTING_DEPTH` levels deep, or a
@@ -586,16 +599,16 @@ class Memory:
         hook_operation: HookOperation,
         acyclic: bool,
     ) -> MemoryLink:
-        """Authorize, hook, and persist one link insertion.
+        """Authorize one link insert, dispatch its hooks, and store it.
 
         Args:
             source: Source block or id.
             target: Target block or id.
             relation: Relation type stored on the link.
             metadata: Optional relationship metadata.
-            hook_operation: Logical operation the insertion is reported under.
-            acyclic: Whether the backend must reject the link when it would
-                close a cycle over `relation`.
+            hook_operation: Logical operation that reports the insert.
+            acyclic: If `True`, the backend rejects a link that closes a cycle
+                over `relation`.
 
         Returns:
             Stored memory link.
@@ -657,10 +670,11 @@ class Memory:
     ) -> list[MemoryLink]:
         """List readable links connected to a block.
 
-        Links are returned only when the principal can read both endpoints.
+        The call returns a link only when the principal can read both
+        endpoints.
 
         Args:
-            block_id: Block or id to inspect.
+            block_id: Block or id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
@@ -673,7 +687,7 @@ class Memory:
             TypeError: If `block_id` is not a block or string id, or
                 `relation` is not a string or `None`.
             ValueError: If `block_id` or `relation` is empty, or `direction`
-                is invalid.
+                is not valid.
         """
 
         with self._operation(HookOperation.LIST_LINKS) as context:
@@ -709,10 +723,10 @@ class Memory:
     ) -> MemoryLink:
         """Create a symbolic mount from one block to another block.
 
-        A mount is stored as a typed link with the reserved
-        `LinkRelations.MOUNT` relation. It does not make the target a child of
-        the source, does not affect subtree traversal, and is not followed by
-        recursive delete.
+        - **Storage:** a mount is a typed link with the reserved
+          `LinkRelations.MOUNT` relation.
+        - **No ownership:** it does not make the target a child of the source.
+          Subtree traversal and recursive delete do not follow it.
 
         Args:
             source: Source block or id where the mount link starts.
@@ -725,7 +739,7 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write the source or read the
                 target.
-            MemoryNotFound: If either endpoint is missing.
+            MemoryNotFound: If an endpoint does not exist.
             TypeError: If `source` or `target` is not a block or string id, or
                 metadata is not a strict JSON dictionary.
             ValueError: If an endpoint id is empty, metadata nests lists and
@@ -749,9 +763,9 @@ class Memory:
             source: Source block or id where the mount link starts.
 
         Returns:
-            Readable outgoing mount links. Mounts whose target route has not
-            been registered yet are returned as pending symbolic references;
-            resolving them returns `None` until the target becomes available.
+            Readable outgoing mount links. A mount whose target route is not
+            registered yet comes back as a pending symbolic reference. Its
+            resolution returns `None` until the target is available.
 
         Raises:
             AccessDenied: If the principal cannot read `source`.
@@ -790,14 +804,16 @@ class Memory:
     ) -> list[MemoryLink]:
         """Discover symbolic mounts attached to blocks in a regular subtree.
 
-        Discovery scans the normal parent/child subtree below `root` and
-        returns readable outgoing mount links found on those source blocks. It
-        does not resolve mount targets and does not traverse into mounted
-        target trees.
+        - **Scan:** discovery scans the normal parent and child subtree below
+          `root`. It returns the readable outgoing mount links of those source
+          blocks.
+        - **No resolution:** it does not resolve mount targets, and it does not
+          go into the mounted target trees.
 
         Args:
             root: Subtree root block or id to scan.
-            include_self: Whether mounts on `root` itself should be included.
+            include_self: If `True`, the result includes the mounts on `root`
+                itself.
 
         Returns:
             Readable mount links whose source is inside the scanned subtree.
@@ -842,11 +858,11 @@ class Memory:
         """Resolve a mount link to its target block.
 
         Args:
-            mount: Mount link returned by `add_mount` or `list_mounts`.
+            mount: Mount link from `add_mount` or `list_mounts`.
 
         Returns:
-            Decoded target block, or `None` if the mount or target no longer
-            exists.
+            Decoded target block, or `None` if the mount or the target no
+            longer exists.
 
         Raises:
             AccessDenied: If the principal cannot read the source or target.
@@ -898,10 +914,10 @@ class Memory:
             types: Optional block types to include.
             filters: Optional metadata or block-field filters.
             limit: Maximum result count. The backend applies this limit before
-                policy and scope filtering runs, so a search can return fewer
-                results than the limit even when more matching blocks are
-                visible. Callers that need a full page request a larger limit
-                and truncate the result themselves.
+                the policy and scope filters run. So a search can return fewer
+                results than the limit, also when more visible blocks match. A
+                caller that needs a full page asks for a larger limit and cuts
+                the result itself.
 
         Returns:
             Search results with decoded blocks.
@@ -940,7 +956,7 @@ class Memory:
         limit: int,
         boundary: Callable[[HookContext, MemoryQuery], None] | None = None,
     ) -> tuple[MemoryQuery, list[SearchResult]]:
-        """Run `search` and also return the query that the backend ran.
+        """Run `search`, and also return the query that the backend ran.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
@@ -951,10 +967,10 @@ class Memory:
             filters: Optional metadata or block-field filters.
             limit: Maximum result count.
             boundary: Optional extra check for the query that `before_search`
-                hooks return. It runs inside this operation before the query
-                is authorized again, and raises `AccessDenied` to refuse.
-                `MemoryHandle` passes one so a hook cannot widen a search past
-                the handle's root or capabilities.
+                hooks return. It runs inside this operation, before the query
+                is authorized again, and it raises `AccessDenied` to refuse.
+                `MemoryHandle` gives one, so a hook cannot widen a search past
+                the root or the capabilities of the handle.
 
         Returns:
             The query after `before_search` hooks, and the visible results.
@@ -972,9 +988,9 @@ class Memory:
             )
             self._authorize_query(context, memory_query)
             memory_query = self.hooks.before_search(context, memory_query)
-            # Hooks may return a freshly constructed query. Normalize once more so
-            # backends receive canonical filter operators, then check access again
-            # so hooks cannot pass through a wider query root or scope.
+            # Hooks can return a new query. Normalize it again, so backends get
+            # canonical filter operators. Then check access again, so hooks
+            # cannot pass a wider query root or scope.
             memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
             if boundary is not None:
                 boundary(context, memory_query)
@@ -984,9 +1000,8 @@ class Memory:
                 replace(result, block=self._decode_block(result.block))
                 for result in raw_results
             ]
-            # One visibility verdict per block id for the whole call, shared by
-            # both filter passes, so a block is read once however many passes
-            # look at it.
+            # One visibility verdict for each block id for the whole call. Both
+            # filter passes share it, so each block is read only once.
             verdicts: dict[str, bool] = {}
             visible_results = self._filter_visible_results(
                 memory_query,
@@ -1001,18 +1016,19 @@ class Memory:
             return memory_query, self._filter_visible_results(memory_query, hooked_results, verdicts)
 
     def require_access(self, operation: Operation | str, block_id: str | MemoryBlock) -> None:
-        """Require that this principal may perform an operation on a block.
+        """Raise `AccessDenied` if this principal cannot perform an operation on a block.
 
-        The block is not changed and nothing is returned. The check is the one
-        every operation runs before it touches the block, so code that has to
-        refuse early, such as a structure facade changing membership, can ask
-        it directly. A refusal is reported to `on_denied` under
-        `HookOperation.REQUIRE_ACCESS`. An allowed check is not reported.
+        - **No change:** the block does not change, and the call returns nothing.
+        - **Same check as operations:** each operation runs this check before
+          it touches the block. So code that refuses early can ask for it
+          directly. An example is a structure facade that changes membership.
+        - **Hooks:** a refusal goes to `on_denied` under
+          `HookOperation.REQUIRE_ACCESS`. An allowed check is not reported.
 
         Args:
             operation: Built-in `Operation`, or the name of a custom operation
                 configured on the policy engine.
-            block_id: Block or block id carrying the policy.
+            block_id: Block or block id that has the policy.
 
         Raises:
             AccessDenied: If the block policy does not allow the operation.
@@ -1036,19 +1052,20 @@ class Memory:
         allow_mounts: bool = False,
         allow_policy_override: bool = False,
     ) -> MemoryHandle:
-        """Create a bounded memory handle to pass to agents.
+        """Create a bounded memory handle to give to agents.
 
         Args:
-            root: Root block or id that bounds the handle.
+            root: Root block or id that is the boundary of the handle.
             principal: Principal for operations through the handle. Defaults to
-                this `Memory` handle's principal.
-            default_scope: Default search scope used by the returned handle.
-            allow_up: Whether ancestor traversal/search is allowed.
+                the principal of this `Memory`.
+            default_scope: Default search scope of the returned handle.
+            allow_up: Whether ancestor traversal and ancestor search are
+                allowed.
             allow_global: Whether global search is allowed.
             allow_mounts: Whether the handle can create, list, and resolve
                 symbolic mounts whose source is inside the handle.
-            allow_policy_override: Whether the handle can pass explicit block
-                policies to `put`. Leave false for untrusted agent code.
+            allow_policy_override: Whether the handle can give explicit block
+                policies to `put`. For untrusted agent code, it stays `False`.
 
         Returns:
             A `MemoryHandle` backed by this memory system.
@@ -1099,21 +1116,23 @@ class Memory:
     ) -> MemoryHandle:
         """Create an explicit unbounded memory handle.
 
-        An unbounded handle has no default subtree root. It can still be limited
-        by principal policies and options such as `allow_global`.
-        Non-global searches through an unbounded handle must provide an explicit
-        root.
+        - **No root:** an unbounded handle has no default subtree root.
+        - **Other limits stay:** principal policies and options such as
+          `allow_global` still limit it.
+        - **Search root:** a non-global search through an unbounded handle
+          needs an explicit root.
 
         Args:
             principal: Principal for operations through the handle. Defaults to
-                this `Memory` handle's principal.
-            default_scope: Default search scope used by the returned handle.
-            allow_up: Whether ancestor traversal/search is allowed.
+                the principal of this `Memory`.
+            default_scope: Default search scope of the returned handle.
+            allow_up: Whether ancestor traversal and ancestor search are
+                allowed.
             allow_global: Whether global search is allowed.
             allow_mounts: Whether the handle can create, list, and resolve
                 symbolic mounts whose source is visible through the handle.
-            allow_policy_override: Whether the handle can pass explicit block
-                policies to `put`. Leave false for untrusted agent code.
+            allow_policy_override: Whether the handle can give explicit block
+                policies to `put`. For untrusted agent code, it stays `False`.
 
         Returns:
             An unbounded `MemoryHandle` backed by this memory system.
@@ -1142,9 +1161,9 @@ class Memory:
             block_id: Candidate block or id.
 
         Returns:
-            `True` when the candidate is equal to or below the root and its
-            read policy permits the current principal. Missing candidates and
-            unreadable candidates return `False`.
+            `True` when the candidate is the root or is below it, and its read
+            policy allows the current principal. A candidate that does not
+            exist or that the principal cannot read gives `False`.
 
         Raises:
             AccessDenied: If downward traversal from the root is denied.
@@ -1174,7 +1193,7 @@ class Memory:
             return contained
 
     def _contains_raw(self, root_id: str, block_id: str) -> bool:
-        """Return backend ownership membership without policy evaluation."""
+        """Return ownership membership from the backend, with no policy check."""
 
         return self.backend.contains(root_id, block_id)
 
@@ -1189,7 +1208,7 @@ class Memory:
         allow_mounts: bool,
         allow_policy_override: bool,
     ) -> MemoryHandle:
-        """Construct a `MemoryHandle` after root validation is complete."""
+        """Create a `MemoryHandle` after the root check is complete."""
 
         from genie.memory.handle import MemoryHandle
 
@@ -1215,7 +1234,7 @@ class Memory:
         filters: dict[str, Any] | None,
         limit: int,
     ) -> MemoryQuery:
-        """Convert friendly search arguments into a `MemoryQuery`."""
+        """Change friendly search arguments into a `MemoryQuery`."""
 
         if isinstance(query, MemoryQuery):
             return query
@@ -1231,7 +1250,7 @@ class Memory:
         )
 
     def _authorize_query(self, context: HookContext, query: MemoryQuery) -> None:
-        """Require the access a query root and scope demand, or raise."""
+        """Raise an error if the principal does not have the access that the query root and scope need."""
 
         if query.root_id is None:
             if query.scope != Scope.GLOBAL:
@@ -1254,18 +1273,19 @@ class Memory:
         *,
         principal: Principal | None = None,
     ) -> AbstractContextManager[HookContext]:
-        """Open causal context for one operation performed by this memory.
+        """Open the causal context of one operation that this memory performs.
 
-        Every operation reports the acting principal and this memory's
-        attributes, so a handle-derived memory is distinguishable in the trail
-        from the trusted memory it shares state with.
+        Each operation reports the acting principal and the attributes of this
+        memory. So the trail can tell a `Memory` that a handle derives apart
+        from the trusted memory whose state it shares.
 
         Args:
-            operation: Logical operation being performed.
-            principal: Acting principal. Defaults to this memory's principal.
+            operation: Logical operation.
+            principal: Acting principal. Defaults to the principal of this
+                memory.
 
         Returns:
-            Context manager yielding the operation's `HookContext`.
+            Context manager that yields the `HookContext` of the operation.
         """
 
         acting = self.principal if principal is None else principal
@@ -1283,13 +1303,14 @@ class Memory:
         *,
         principal: Principal | None = None,
     ) -> None:
-        """Require policy access inside an operation and report refusals.
+        """Check policy access inside an operation, and report refusals.
 
         Args:
             context: Active operation context.
             operation: Policy operation to check.
-            block: Block carrying the policy.
-            principal: Principal to check. Defaults to this memory's principal.
+            block: Block that has the policy.
+            principal: Principal to check. Defaults to the principal of this
+                memory.
 
         Raises:
             AccessDenied: If the block policy does not allow the operation.
@@ -1310,22 +1331,24 @@ class Memory:
         *,
         principal: Principal | None = None,
     ) -> None:
-        """Require policy access for a call that starts no operation.
+        """Check policy access for a call that starts no operation.
 
-        Mount resolution, handle creation, and `require_access` have no paired
-        callbacks, so a refusal opens one operation context to carry the denial
-        and its terminal event. Allowed calls stay unobserved.
+        - **Refusals only:** mount resolution, handle creation, and
+          `require_access` have no paired callbacks. So a refusal opens one
+          operation context for the denial and its terminal event.
+        - **Allowed calls:** hooks do not see them.
 
         Args:
-            hook_operation: Logical operation to report the refusal under.
+            hook_operation: Logical operation that reports the refusal.
             operation: Policy operation to check.
-            block: Block carrying the policy.
-            principal: Principal to check. Defaults to this memory's principal.
+            block: Block that has the policy.
+            principal: Principal to check. Defaults to the principal of this
+                memory.
 
         Raises:
-            AccessDenied: If the block policy does not allow the operation. A
-                registry that cannot report the refusal does not change what
-                the caller receives.
+            AccessDenied: If the block policy does not allow the operation. If
+                the registry cannot report the refusal, the caller still gets
+                the same error, with a note.
         """
 
         acting = self.principal if principal is None else principal
@@ -1341,7 +1364,7 @@ class Memory:
                 raise denied
 
     def _require_raw(self, block_id: str) -> MemoryBlock:
-        """Fetch an encoded block or raise `MemoryNotFound`."""
+        """Get an encoded block, or raise `MemoryNotFound`."""
 
         block = self.backend.get_block(block_id)
         if block is None:
@@ -1349,7 +1372,7 @@ class Memory:
         return block
 
     def _require_stored_link(self, link: MemoryLink) -> MemoryLink:
-        """Fetch a canonical link value or raise `MemoryNotFound`."""
+        """Get the stored link value, or raise `MemoryNotFound`."""
 
         if not isinstance(link, MemoryLink):
             raise TypeError("link must be a MemoryLink.")
@@ -1366,7 +1389,7 @@ class Memory:
         return stored
 
     def _decode_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Decode a stored block value and isolate metadata."""
+        """Decode a stored block value, and copy the metadata."""
 
         decoded = self.codecs.decode(EncodedValue(block.content_type, block.value))
         return block.with_updates(value=decoded, metadata=deepcopy(block.metadata))
@@ -1387,9 +1410,11 @@ class Memory:
     def _can_read_mount(self, link: MemoryLink) -> bool:
         """Return whether a mount link is visible to the current principal.
 
-        Mounts may point at routes that are discovered and registered later. In
-        that pending state the source policy controls visibility. If the target
-        block is already known, its read policy must also allow access.
+        - **Pending mounts:** a mount can point at a route that a caller finds
+          and registers later. In that pending state, the source policy
+          controls visibility.
+        - **Known target:** if the target block is already known, its read
+          policy also has to allow access.
         """
 
         if link.relation != LinkRelations.MOUNT:
@@ -1410,21 +1435,23 @@ class Memory:
     ) -> list[SearchResult]:
         """Filter search results by stored block visibility and query scope.
 
+        - **Shared verdicts:** `search` gives one `verdicts` mapping to both of
+          its filter passes. So the pass after `after_search` does not read
+          each block a second time.
+        - **Same strictness:** a reused verdict is as strict as a new check.
+          Each decision in `_can_return_search_result` comes from the block id
+          and the stored block that it names, never from the rest of a result.
+        - **Consequence:** if a hook deletes the block of a result inside
+          `after_search`, that result stays on the page.
+
         Args:
-            query: Query the results came from.
+            query: Query that gave the results.
             results: Results to filter.
-            verdicts: Visibility decisions already made during this operation,
-                keyed by block id. `search` passes one mapping to both of its
-                filter passes, which is what keeps the pass after
-                `after_search` from reading every block a second time. Reusing
-                a verdict is as strict as asking again, because every decision
-                in `_can_return_search_result` is derived from the block id and
-                the stored block it names, never from the rest of a result. One
-                consequence: a hook that deletes a result's block inside
-                `after_search` does not remove that result from the page.
+            verdicts: Visibility decisions from earlier in this operation, by
+                block id.
 
         Returns:
-            The results the acting principal may receive.
+            The results that the acting principal can get.
         """
 
         decisions = {} if verdicts is None else verdicts
@@ -1438,7 +1465,7 @@ class Memory:
         return visible
 
     def _can_return_search_result(self, query: MemoryQuery, result: SearchResult) -> bool:
-        """Return whether a result is visible for the current query/principal."""
+        """Return whether a result is visible for the current query and principal."""
 
         stored = self.backend.get_block(result.block.id)
         if stored is None:
@@ -1481,9 +1508,10 @@ def _require_block_hook_invariants(
     callback: str,
     mutable_fields: tuple[str, ...],
 ) -> None:
-    """Require block hooks to change only the fields their callback allows.
+    """Raise `ValueError` if a block hook changes a field that its callback does not allow.
 
-    Every other `MemoryBlock` field is protected, including fields added later.
+    All other `MemoryBlock` fields are protected, also fields that a later
+    version adds.
     """
 
     changed = [
@@ -1502,7 +1530,7 @@ def _require_block_hook_invariants(
 
 
 def _copy_metadata(metadata: object | None) -> dict[str, Any]:
-    """Validate and copy one public or hook-produced metadata dictionary."""
+    """Check and copy one metadata dictionary from a caller or a hook."""
 
     if metadata is None:
         return {}
@@ -1523,7 +1551,7 @@ def _require_link_hook_invariants(
     *,
     callback: str,
 ) -> None:
-    """Require link hooks to preserve identity and topology."""
+    """Raise `ValueError` if a link hook changes the identity or the topology of the link."""
 
     stable_fields = ("id", "source_id", "target_id", "relation", "created_at")
     changed = [

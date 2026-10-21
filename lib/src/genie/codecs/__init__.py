@@ -1,4 +1,4 @@
-"""Value codec interfaces and built-in codec implementations."""
+"""Codec interfaces for memory values, and the built-in codecs."""
 
 from genie.codecs.base import CodecRegistry, EncodedValue, MemoryCodec
 from genie.codecs.json import MAX_NESTING_DEPTH, JsonCodec

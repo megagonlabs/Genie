@@ -1,4 +1,4 @@
-"""Property-graph facade over Genie's existing blocks and typed links."""
+"""Property-graph facade over the existing blocks and typed links of Genie."""
 
 from __future__ import annotations
 
@@ -20,15 +20,17 @@ from genie.structures.records import GraphNeighbor, GraphPath
 
 @runtime_checkable
 class GraphAccess(BlockReader, LinkReader, LinkWriter, Protocol):
-    """Small access surface required by `PropertyGraph`."""
+    """Small access surface that `PropertyGraph` requires."""
 
 
 class PropertyGraph:
-    """Access-aware property graph using blocks as nodes and links as edges.
+    """Property graph that uses blocks as nodes and links as edges, through an access object.
 
-    The facade adds graph traversal but no graph persistence. Edge creation,
-    metadata updates, edge lookup, block reads, policy checks, and handle scope
-    checks remain in the supplied `Memory` or `MemoryHandle` object.
+    - **Traversal only:** the facade adds graph traversal, but it stores nothing
+      of its own.
+    - **Access object does the work:** edge creation, metadata updates, edge
+      lookup, block reads, policy checks, and handle scope checks stay in the
+      `Memory` or `MemoryHandle` object.
     """
 
     __slots__ = ("_access",)
@@ -37,7 +39,7 @@ class PropertyGraph:
         """Create a property-graph view over a memory access object.
 
         Args:
-            access: Full or scoped memory access used for every graph operation.
+            access: Full or scoped memory access for all graph operations.
         """
 
         self._access = access
@@ -62,8 +64,8 @@ class PropertyGraph:
             Created memory link.
 
         Raises:
-            AccessDenied: If scope or policy rejects either endpoint.
-            MemoryNotFound: If either endpoint is missing.
+            AccessDenied: If the scope or a policy rejects an endpoint.
+            MemoryNotFound: If an endpoint does not exist.
         """
 
         return self._access.add_link(
@@ -79,14 +81,14 @@ class PropertyGraph:
         *,
         metadata: dict[str, Any],
     ) -> MemoryLink:
-        """Merge properties into an existing edge without changing topology.
+        """Merge properties into an existing edge. The topology does not change.
 
         Args:
             edge: Existing memory link.
             metadata: Edge property fields to merge.
 
         Returns:
-            Persisted replacement link with stable identity and endpoints.
+            Stored replacement link, with the same identity and endpoints.
         """
 
         return self._access.update_link(edge, metadata=metadata)
@@ -101,12 +103,15 @@ class PropertyGraph:
         """Return visible edges connected to one node.
 
         Args:
-            block: Memory block or id to inspect.
+            block: Memory block or id to examine.
             relation: Optional exact relation filter.
             direction: Edge direction relative to the selected node.
 
         Returns:
-            Matching visible memory links in the access object's order.
+            Visible memory links that match, in the order of the access object.
+
+        Raises:
+            ValueError: If `direction` is not `"out"`, `"in"`, or `"both"`.
         """
 
         _validate_direction(direction)
@@ -123,13 +128,14 @@ class PropertyGraph:
         relation: str | None = None,
         direction: LinkDirection = "out",
     ) -> list[GraphNeighbor]:
-        """Return visible neighboring nodes with the edges used to reach them.
+        """Return visible neighbor nodes, with the edges that reach them.
 
-        One record is returned per edge, so parallel edges remain distinct.
-        Self-links are reported as outgoing when `direction="both"`.
+        - **One record for each edge:** so parallel edges stay separate.
+        - **Self-links:** with `direction="both"`, a self-link is reported as
+          outgoing.
 
         Args:
-            block: Memory block or id whose neighbors should be returned.
+            block: Memory block or id whose neighbors to return.
             relation: Optional exact relation filter.
             direction: Edge direction relative to the selected node.
 
@@ -139,7 +145,9 @@ class PropertyGraph:
         Raises:
             MemoryConflict: If a backend returns an edge that is not connected
                 to the selected node.
-            MemoryNotFound: If an edge endpoint disappears during traversal.
+            MemoryNotFound: If an edge endpoint no longer exists during the
+                traversal.
+            ValueError: If `direction` is not `"out"`, `"in"`, or `"both"`.
         """
 
         block_id = _block_id(block)
@@ -158,27 +166,28 @@ class PropertyGraph:
         max_depth: int = 1,
         limit: int = 100,
     ) -> list[GraphPath]:
-        """Return bounded simple paths from a visible starting node.
+        """Return bounded simple paths from a visible start node.
 
-        Paths are returned in breadth-first order, so shorter paths appear
-        first. A block is not repeated inside one path; this prevents cycles
-        from making traversal infinite while allowing the graph itself to
-        contain cycles. Parallel edges produce separate paths.
+        - **Order:** breadth-first, so shorter paths come first.
+        - **No repeated block in a path:** so a cycle cannot make the traversal
+          infinite. The graph itself can still contain cycles.
+        - **Parallel edges:** each one gives a separate path.
 
         Args:
-            start: Starting memory block or id.
-            relation: Optional exact relation filter applied at every step.
-            direction: Edge direction followed at every step.
+            start: Start memory block or id.
+            relation: Optional exact relation filter for each step.
+            direction: Edge direction to follow at each step.
             max_depth: Maximum number of edges in a returned path.
             limit: Maximum number of paths to return.
 
         Returns:
-            Paths of length one through `max_depth` in breadth-first order.
+            Paths with 1 to `max_depth` edges, in breadth-first order.
+            `max_depth=0` or `limit=0` gives an empty list.
 
         Raises:
-            MemoryNotFound: If the starting block is missing.
+            MemoryNotFound: If the start block does not exist.
             TypeError: If `max_depth` or `limit` is not an integer.
-            ValueError: If either bound is negative or direction is invalid.
+            ValueError: If a bound is negative or `direction` is not valid.
         """
 
         _validate_bound(max_depth, name="max_depth")
@@ -220,26 +229,27 @@ class PropertyGraph:
         direction: LinkDirection = "out",
         max_depth: int = 6,
     ) -> GraphPath | None:
-        """Return the shortest visible path between two nodes.
+        """Return the shortest visible path between 2 nodes.
 
-        Breadth-first traversal returns the first shortest path using the edge
-        order supplied by the access object. The search is always depth-bounded.
+        - **First shortest path:** a breadth-first traversal returns the first
+          shortest path, in the edge order of the access object.
+        - **Depth limit:** the search always stops at `max_depth`.
 
         Args:
-            start: Starting memory block or id.
+            start: Start memory block or id.
             target: Target memory block or id.
-            relation: Optional exact relation filter applied at every step.
-            direction: Edge direction followed at every step.
-            max_depth: Maximum number of edges to inspect.
+            relation: Optional exact relation filter for each step.
+            direction: Edge direction to follow at each step.
+            max_depth: Maximum number of edges in the path.
 
         Returns:
-            Shortest path, a zero-edge path when both nodes are the same, or
-            `None` when no path is found within `max_depth`.
+            Shortest path, a path with zero edges when both nodes are the same,
+            or `None` if no path is inside the `max_depth` limit.
 
         Raises:
-            MemoryNotFound: If either endpoint is missing.
+            MemoryNotFound: If an endpoint does not exist.
             TypeError: If `max_depth` is not an integer.
-            ValueError: If `max_depth` is negative or direction is invalid.
+            ValueError: If `max_depth` is negative or `direction` is not valid.
         """
 
         _validate_bound(max_depth, name="max_depth")
@@ -309,7 +319,7 @@ class PropertyGraph:
         return GraphNeighbor(block=neighbor, link=edge, direction=direction)
 
     def _require_node(self, block: BlockRef) -> MemoryBlock:
-        """Return a visible node or raise a clear missing-node error."""
+        """Return a visible node, or raise `MemoryNotFound` with a clear message."""
 
         stored = self._access.get(block)
         if stored is None:
@@ -324,7 +334,7 @@ def _block_id(block: BlockRef) -> str:
 
 
 def _validate_bound(value: object, *, name: str) -> None:
-    """Require a non-negative integer traversal bound."""
+    """Raise an error if a traversal bound is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -333,7 +343,7 @@ def _validate_bound(value: object, *, name: str) -> None:
 
 
 def _validate_direction(value: object) -> None:
-    """Require a supported link traversal direction."""
+    """Raise `ValueError` if a link traversal direction is not supported."""
 
     if value not in {"out", "in", "both"}:
         raise ValueError("direction must be one of 'out', 'in', or 'both'.")

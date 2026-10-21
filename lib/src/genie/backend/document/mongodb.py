@@ -1,41 +1,47 @@
-"""Persistent MongoDB backend implementing every Genie storage capability.
+"""Persistent MongoDB backend that implements all Genie storage capabilities.
 
 Storage layout:
-    One MongoDB database holds every Genie collection, and it defaults to
-    `"genie"`. Several Genie datasets can share one server by using different
-    database names, the same way `PostgresBackend` uses a schema. Collection
-    names match the table names in `SQLiteBackend` and `PostgresBackend`, so
-    the same records live in the same shape there.
+    - One MongoDB database holds all Genie collections. Its default name is
+      `"genie"`.
+    - Several Genie datasets can share one server with different database
+      names, as `PostgresBackend` does with a schema.
+    - The record collections have the same names as the tables in
+      `SQLiteBackend` and `PostgresBackend`, so the same records have the same
+      shape there. `schema_info` matches only `PostgresBackend`, and `guard`
+      and `counters` have no table in either.
 
 Encodings:
-    Values, metadata, policies, key namespaces, and timestamps use the same
-    portable encodings `SQLiteBackend`, `PostgresBackend`, and `Neo4jBackend`
-    use. Block values and metadata are stored as JSON text rather than as BSON
-    subdocuments, for the same reason `PostgresBackend` stores `text` instead
-    of `jsonb`: BSON cannot
-    round-trip every JSON object. A key containing a dot, a key starting with
-    `$`, and an integer larger than 64 bits all change or fail on the way in.
-    Storing the encoded text keeps the value byte for byte and keeps caller
-    data out of field names.
+    - Values, metadata, policies, key namespaces, and timestamps use the same
+      portable encodings as `SQLiteBackend`, `PostgresBackend`, and
+      `Neo4jBackend`.
+    - Block values and metadata are JSON text, not BSON subdocuments.
+      `PostgresBackend` stores `text` instead of `jsonb` for the same reason:
+      BSON cannot round-trip all JSON objects. A key with a dot, a key that
+      starts with `$`, and an integer larger than 64 bits all change or fail on
+      the way in.
+    - The encoded text keeps the value byte for byte, and it keeps caller data
+      out of field names.
 
 Writes:
-    Every write runs inside one multi-document transaction, and the first
-    thing it does is increment a shared guard document. Two writers cannot
-    hold that document at once, so a compound "read, check, then write" step
-    is atomic against every other Genie writer. This is the serialized-writer
-    model `SQLiteBackend` gets from `BEGIN IMMEDIATE` and `PostgresBackend`
-    gets from an advisory lock. MongoDB has no lock a transaction can wait on,
-    so the writer that loses the guard is retried instead of blocked.
+    - Each write runs inside one multi-document transaction. Its first step
+      increments a shared guard document.
+    - 2 writers cannot hold that document at the same time. So a compound
+      "read, check, then write" step is atomic against all other Genie
+      writers. This is the serialized-writer model that `SQLiteBackend` gets
+      from `BEGIN IMMEDIATE` and `PostgresBackend` gets from an advisory lock.
+    - MongoDB has no lock that a transaction can wait on. So the writer that
+      loses the guard is retried, not blocked.
 
 Reads:
-    A read that fits in one command needs nothing extra, because MongoDB
-    applies one command atomically. A read made of several commands runs
-    inside a transaction so it sees one snapshot.
+    - A read that fits in one command needs nothing extra, because MongoDB
+      applies one command atomically.
+    - A read of several commands runs inside a transaction, so it sees one
+      snapshot.
 
 Deployment:
-    Multi-document transactions need a replica set or a sharded cluster. A
-    standalone `mongod` cannot run them, so construction refuses one unless
-    `verify_transaction_support=False` is passed.
+    - Multi-document transactions need a replica set or a sharded cluster.
+    - A standalone `mongod` cannot run them. So construction refuses one,
+      unless the caller gives `verify_transaction_support=False`.
 """
 
 from __future__ import annotations
@@ -89,12 +95,12 @@ _BLOCK_ORDER_COUNTER = "blocks"
 _LINK_ORDER_COUNTER = "links"
 
 # MongoDB index and sort directions. They are plain integers, so the module
-# stays importable without the optional driver.
+# can still be imported without the optional driver.
 _ASCENDING = 1
 _DESCENDING = -1
 
-# One `$in` list is part of a command document, and a command document may not
-# exceed 16 MB. Long id lists are split into chunks of this size.
+# One `$in` list is part of a command document, and a command document cannot
+# be larger than 16 MB. Long id lists are split into chunks of this size.
 _QUERY_CHUNK = 500
 
 _FIRST_BACKOFF_SECONDS = 0.001
@@ -120,10 +126,10 @@ class _IndexSpec:
     """One MongoDB index owned by Genie.
 
     Attributes:
-        name: Explicit index name. Genie names every index it creates, so the
-            names stay the same on every server version.
+        name: Explicit index name. Genie names each index that it creates, so
+            the names stay the same on all server versions.
         keys: Indexed fields in order, each with its direction.
-        unique: Whether the index enforces uniqueness.
+        unique: Whether the index makes its keys unique.
     """
 
     __slots__ = ("keys", "name", "unique")
@@ -134,7 +140,7 @@ class _IndexSpec:
         Args:
             name: Explicit index name.
             keys: Indexed fields in order, each with its direction.
-            unique: Whether the index enforces uniqueness.
+            unique: Whether the index makes its keys unique.
         """
 
         self.name = name
@@ -142,8 +148,9 @@ class _IndexSpec:
         self.unique = unique
 
 
-# Every Genie collection, with the indexes Genie creates for it. MongoDB adds
-# the `_id_` index to each collection on its own, so it is not listed here.
+# All Genie collections, with the indexes that Genie creates for each one.
+# MongoDB adds the `_id_` index to each collection itself, so this list does not
+# include it.
 _SCHEMA_COLLECTIONS: dict[str, tuple[_IndexSpec, ...]] = {
     _SCHEMA_INFO: (),
     _GUARD: (),
@@ -176,7 +183,7 @@ _SCHEMA_COLLECTIONS: dict[str, tuple[_IndexSpec, ...]] = {
     ),
 }
 
-# Server error codes that mean the same thing on every MongoDB deployment.
+# Server error codes that mean the same thing on all MongoDB deployments.
 _CONFLICT_CODES = frozenset({11000, 11001})
 _BUSY_CODES = frozenset({24, 46, 50, 112, 225, 239, 251, 262, 290})
 _READ_ONLY_CODES = frozenset({13, 10107, 13435, 13436})
@@ -187,36 +194,35 @@ _TRANSPORT_CODES = frozenset({6, 7, 89, 91, 11600})
 
 
 class _RetryTransaction(Exception):
-    """Internal signal that the whole transaction must run again."""
+    """Internal signal that the whole transaction runs again."""
 
 
 class MongoDBBackend:
-    """Persistent document backend backed by the official `pymongo` driver.
+    """Persistent document backend on the official `pymongo` driver.
 
-    The `pymongo` package is an optional dependency. Install it with
-    `pip install 'genie[mongodb]'` before constructing this backend.
-
-    The backend implements the required `MemoryBackend` behavior and every
-    optional structure capability. One client is owned by each instance. Every
-    write runs inside a multi-document transaction that first takes a shared
-    guard document, which serializes Genie writers across instances and across
-    processes.
-
-    Multi-document transactions need a replica set or a sharded cluster, so a
-    standalone `mongod` is not a supported target.
-
-    Every method that takes an id, a relation, or a collection id raises
-    `TypeError` when that argument is not a string. MongoDB would otherwise
-    read a value such as `{"$ne": None}` as a query operator.
+    - **Optional driver:** `pymongo` is an optional dependency.
+      `pip install 'genie[mongodb]'` installs it.
+    - **Capabilities:** the backend implements the required `MemoryBackend`
+      behavior and all optional structure capabilities.
+    - **One client:** each instance owns one client.
+    - **Serialized writes:** each write runs inside a multi-document
+      transaction that first takes a shared guard document. This serializes
+      Genie writers across instances and across processes.
+    - **Deployment:** multi-document transactions need a replica set or a
+      sharded cluster. So a standalone `mongod` is not a supported target.
+    - **String ids only:** each method that takes an id, a relation, or a
+      collection id raises `TypeError` when that argument is not a string.
+      Otherwise MongoDB reads a value such as `{"$ne": None}` as a query
+      operator.
 
     Attributes:
-        uri: MongoDB connection string this backend opened.
-        database: MongoDB database that holds every Genie collection.
-        connect_timeout: Seconds allowed while selecting a server and opening
-            a connection.
-        socket_timeout: Seconds allowed while waiting for one command reply.
-        max_retry_time: Maximum seconds a transaction may keep losing conflicts
-            before `BackendBusy` is raised.
+        uri: MongoDB connection string that this backend opened.
+        database: MongoDB database that holds all Genie collections.
+        connect_timeout: Seconds for server selection and for a new
+            connection.
+        socket_timeout: Seconds to wait for one command reply.
+        max_retry_time: Maximum seconds that a transaction can continue to lose
+            conflicts before the backend raises `BackendBusy`.
         durability: Write acknowledgement mode in use.
     """
 
@@ -234,50 +240,52 @@ class MongoDBBackend:
         verify_transaction_support: bool = True,
         initialize_schema: bool = True,
     ) -> None:
-        """Connect and create, migrate, or validate the Genie collections.
+        """Connect, and create, migrate, or check the Genie collections.
 
-        Construction talks to the server, so a successful construction already
-        proves the deployment is reachable. There is no separate connectivity
-        flag.
+        Construction talks to the server. So a successful construction already
+        proves that the deployment is reachable, and there is no separate
+        connectivity flag.
 
         Args:
             uri: MongoDB connection string, such as
                 `"mongodb://localhost:27017/?replicaSet=rs0"`.
-            auth: Optional `(username, password)` pair that overrides any
+            auth: Optional `(username, password)` pair. It overrides the
                 credentials in `uri`.
-            database: MongoDB database that holds every Genie collection.
-            connect_timeout: Seconds allowed while selecting a server and
-                opening a connection. It must be greater than zero, because
-                server selection needs a budget.
-            socket_timeout: Seconds allowed while waiting for one command
-                reply. `0` disables the timeout.
-            max_retry_time: Maximum seconds a transaction may keep losing
-                conflicts to other writers before `BackendBusy` is raised.
-                `0` disables the retry, so the first conflict reaches the
-                caller.
+            database: MongoDB database that holds all Genie collections.
+            connect_timeout: Seconds for server selection and for a new
+                connection. A value of zero or less raises `ValueError`,
+                because server selection needs a budget.
+            socket_timeout: Seconds to wait for one command reply. `0` turns
+                off the timeout.
+            max_retry_time: Maximum seconds that a transaction can continue to
+                lose conflicts to other writers before the backend raises
+                `BackendBusy`. `0` turns off the retry, so the first conflict
+                gets to the caller as `BackendBusy`.
             durability: Write acknowledgement mode. `"full"` waits for a
                 majority of members and for the journal, and reads
                 majority-committed data. `"normal"` acknowledges on the
-                primary alone, which is faster but lets a failover roll back
-                the most recent commits.
-            verify_server_role: Whether to refuse a connection that lands on a
-                node that does not accept writes, such as a direct connection
-                to a secondary. The check refuses only when the server reports
-                that it is not writable.
+                primary only. It is faster, but a failover can roll back the
+                most recent commits.
+            verify_server_role: Whether to refuse a connection to a node that
+                does not accept writes, such as a direct connection to a
+                secondary. The check refuses only when the server reports that
+                it is not writable.
             verify_transaction_support: Whether to refuse a deployment that
                 cannot run multi-document transactions. The check refuses only
                 when the server reports that it is a standalone `mongod`.
             initialize_schema: Whether to create the missing Genie collections
-                and indexes. Set this to `False` for runtime identities that
-                may use existing data but may not administer collections.
+                and indexes. `False` suits runtime identities that can use
+                existing data but cannot administer collections.
 
         Raises:
             TypeError: If an argument has the wrong type.
-            ValueError: If `uri`, `database`, or a timeout is invalid.
-            UnsupportedOperation: If the driver is unavailable, the connection
-                lands on a node that refuses writes, the deployment cannot run
-                transactions, or the stored schema is incompatible.
-            BackendError: If MongoDB cannot be reached or configured.
+            ValueError: If `uri`, `database`, a timeout, or `durability` is not
+                valid.
+            UnsupportedOperation: If the driver is not available, the
+                connection goes to a node that refuses writes, the deployment
+                cannot run transactions, or the stored schema is not
+                compatible.
+            BackendError: If the backend cannot reach or configure MongoDB.
         """
 
         _validate_nonempty_string(uri, name="uri")
@@ -314,10 +322,10 @@ class MongoDBBackend:
         self._closing = False
         self._client: Any | None = None
 
-        # `"full"` reads only majority-committed data, so nothing it returns
-        # can be rolled back by a failover. `"normal"` acknowledges on the
-        # primary alone, so its reads must use `"local"` to stay
-        # read-your-own-writes consistent.
+        # `"full"` reads only majority-committed data, so a failover cannot roll
+        # back anything that it returns. `"normal"` acknowledges on the primary
+        # only, so its reads use `"local"`. Then each read sees the earlier
+        # writes of the same caller.
         if durability == "full":
             self._write_concern = write_concern_type(w="majority", j=True)
             self._read_concern = read_concern_type("majority")
@@ -395,24 +403,24 @@ class MongoDBBackend:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Close the owned client when leaving a context manager.
+        """Close the owned client at the end of a `with` block.
 
         Args:
-            exc_type: Type of the exception leaving the block, if any.
-            exc: Exception instance leaving the block, if any.
-            traceback: Traceback of the exception leaving the block, if any.
+            exc_type: Type of the exception that leaves the block, if any.
+            exc: Exception instance that leaves the block, if any.
+            traceback: Traceback of the exception that leaves the block, if any.
         """
 
         self.close()
 
     def close(self) -> None:
-        """Wait for active operations and close the owned client safely.
+        """Wait for active operations, then close the owned client safely.
 
-        Calling `close` more than once is safe. Operations after closing raise
+        A second `close` call is safe. An operation after `close` raises
         `RuntimeError`.
 
         Raises:
-            BackendError: If MongoDB fails while closing.
+            BackendError: If MongoDB fails during the close.
         """
 
         with self._lifecycle:
@@ -438,17 +446,19 @@ class MongoDBBackend:
     # Core block storage and ownership traversal
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Persist a new encoded memory block.
+        """Store a new encoded memory block.
 
         Args:
             block: Encoded block to store.
 
         Returns:
-            Stored block reconstructed from MongoDB.
+            Stored block, as read back from MongoDB.
 
         Raises:
-            MemoryConflict: If the id exists or the parent is invalid.
+            MemoryConflict: If the id already exists, or the parent is the block
+                itself or does not exist.
             TypeError: If the encoded value or metadata is not strict JSON.
+            ValueError: If the block version is not a positive integer.
         """
 
         document = _block_document(block)
@@ -469,13 +479,13 @@ class MongoDBBackend:
         return self._write(operation)
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        """Fetch a block by id.
+        """Get a block by id.
 
         Args:
             block_id: Memory block id.
 
         Returns:
-            An isolated block value, or `None` when it does not exist.
+            A new block object, or `None` when the block does not exist.
         """
 
         _validate_id(block_id, name="block_id")
@@ -492,20 +502,23 @@ class MongoDBBackend:
         *,
         expected_version: int | None = None,
     ) -> MemoryBlock:
-        """Replace an existing block, optionally using compare-and-swap.
+        """Replace an existing block, with an optional compare-and-swap check.
 
         Args:
             block: Encoded replacement block.
-            expected_version: Required current version. When supplied, the
-                replacement must have version `expected_version + 1`.
+            expected_version: Current version that the caller expects. If it is
+                given, the replacement has version `expected_version + 1`, or
+                the call raises `MemoryConflict`.
 
         Returns:
-            Stored replacement block reconstructed from MongoDB.
+            Stored replacement block, as read back from MongoDB.
 
         Raises:
-            MemoryConflict: If the block is missing, its version changed, or
-                its parent is invalid.
+            MemoryConflict: If the block does not exist, its version changed,
+                its parent is not valid, or the move puts it under one of its
+                descendants.
             TypeError: If the encoded value or metadata is not strict JSON.
+            ValueError: If the block version is not a positive integer.
         """
 
         document = _block_document(block)
@@ -539,19 +552,22 @@ class MongoDBBackend:
         *,
         expected_versions: Mapping[str, int] | None = None,
     ) -> None:
-        """Delete a subtree, optionally from an exact version snapshot.
+        """Delete a subtree, with an optional check against an exact version snapshot.
 
-        MongoDB has no cascading reference, so the adapter removes the links,
-        key bindings, log entries, and temporal entries of the deleted blocks
-        itself. Every removal lands in the same transaction as the deletion.
+        - **Cleanup:** MongoDB has no cascading reference. So the adapter itself
+          removes the links, key bindings, log entries, log counters, and
+          temporal entries of the deleted blocks.
+        - **One transaction:** each removal is in the same transaction as the
+          delete.
 
         Args:
-            block_id: Root block id to delete. Missing ids are ignored.
-            expected_versions: Exact subtree id-to-version snapshot required
-                for the deletion.
+            block_id: Root block id to delete. An id that does not exist is not
+                an error, unless `expected_versions` names blocks.
+            expected_versions: Exact snapshot of the subtree, as a mapping from
+                id to version, that the delete requires.
 
         Raises:
-            MemoryConflict: If the supplied subtree snapshot is stale.
+            MemoryConflict: If the given subtree snapshot is stale.
         """
 
         _validate_id(block_id, name="block_id")
@@ -596,10 +612,10 @@ class MongoDBBackend:
         """Return ancestors from the nearest parent upward.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
 
         Returns:
-            Ancestor blocks in nearest-parent-first order.
+            Ancestor blocks, nearest parent first.
         """
 
         _validate_id(block_id, name="block_id")
@@ -615,7 +631,7 @@ class MongoDBBackend:
 
         Args:
             block_id: Root block id.
-            include_self: Whether to include `block_id` in the result.
+            include_self: If `True`, the result includes `block_id`.
 
         Returns:
             Descendant blocks in depth-first creation order.
@@ -625,7 +641,7 @@ class MongoDBBackend:
         return self._read(lambda session: [_block_from_document(document) for document in self._descendant_documents(session, block_id, include_self=include_self)])
 
     def contains(self, root_id: str, block_id: str) -> bool:
-        """Return whether `block_id` is equal to or below `root_id`.
+        """Return whether `block_id` is `root_id` or is below it.
 
         Args:
             root_id: Potential subtree root id.
@@ -643,7 +659,7 @@ class MongoDBBackend:
     # Keyed collection
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
-        """Atomically bind an unused namespaced address to a block.
+        """Bind an unused namespaced address to a block, in one atomic step.
 
         Args:
             binding: Key binding to create.
@@ -652,8 +668,8 @@ class MongoDBBackend:
             Stored binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                address is already bound.
+            MemoryConflict: If the collection or the block does not exist, or
+                the address is already bound.
         """
 
         document = _binding_document(binding)
@@ -681,19 +697,21 @@ class MongoDBBackend:
         *,
         expected_block_id: str,
     ) -> KeyBinding:
-        """Atomically replace a binding when its block id still matches.
+        """Replace a binding in one atomic step, if its block id still matches.
 
         Args:
             binding: Replacement binding. Its collection id and address select
-                the existing binding to replace.
-            expected_block_id: Block id the binding must currently point to.
+                the current binding to replace.
+            expected_block_id: Block id that the binding points to now, as the
+                caller expects.
 
         Returns:
             Stored replacement binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, the address
-                is unbound, or it no longer points to `expected_block_id`.
+            MemoryConflict: If the collection or the block does not exist, the
+                address is not bound, or it no longer points to
+                `expected_block_id`.
         """
 
         _validate_id(expected_block_id, name="expected_block_id")
@@ -729,7 +747,7 @@ class MongoDBBackend:
             address: Exact namespace and key to look up.
 
         Returns:
-            Stored binding, or `None` when the address is unused.
+            Stored binding, or `None` when the address is not used.
         """
 
         _validate_id(collection_id, name="collection_id")
@@ -752,17 +770,21 @@ class MongoDBBackend:
     ) -> list[KeyBinding]:
         """Return one bounded page in stable namespace-and-key order.
 
-        Namespaces are stored as JSON text, so the namespace filter and the
-        address ordering are applied in Python. This keeps the result identical
-        to the other shipped adapters.
+        - **Python filter and order:** namespaces are JSON text. So the
+          namespace filter and the address order run in Python.
+        - **Same order:** the order is the same as in the reference
+          `InMemoryBackend`, and the backend contract tests check it.
+        - **Cost:** each page reads all bindings of the collection from
+          MongoDB.
 
         Args:
             collection_id: Id of the collection to list.
-            namespace: Optional exact namespace filter. With `recursive=True`
-                it is treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below `namespace`.
-            after: Optional exclusive start address used to page through
-                results in address order.
+            namespace: Optional exact namespace filter. With `recursive=True`,
+                it is a namespace prefix.
+            recursive: If `True`, the result also includes the nested
+                namespaces below `namespace`.
+            after: Optional exclusive start address, for pages in address
+                order.
             limit: Maximum number of bindings to return.
 
         Returns:
@@ -799,15 +821,16 @@ class MongoDBBackend:
         *,
         expected_block_id: str,
     ) -> None:
-        """Atomically remove a binding when its block id still matches.
+        """Remove a binding in one atomic step, if its block id still matches.
 
         Args:
             collection_id: Id of the collection that owns the key space.
             address: Exact namespace and key to remove.
-            expected_block_id: Block id the binding must currently point to.
+            expected_block_id: Block id that the binding points to now, as the
+                caller expects.
 
         Raises:
-            MemoryConflict: If the address is unbound or it no longer points
+            MemoryConflict: If the address is not bound, or it no longer points
                 to `expected_block_id`.
         """
 
@@ -823,11 +846,11 @@ class MongoDBBackend:
         self._write(operation)
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
-        """Remove bindings owned by or pointing to one deleted block.
+        """Remove the bindings that one deleted block owns or that point to it.
 
         Args:
-            block_id: Id of the deleted block. Bindings whose collection id or
-                target block id match are removed.
+            block_id: Id of the deleted block. The call removes the bindings
+                whose collection id or target block id matches.
         """
 
         _validate_id(block_id, name="block_id")
@@ -837,22 +860,25 @@ class MongoDBBackend:
     # Ordered event log
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:
-        """Atomically allocate a sequence and append a block reference.
+        """Allocate a sequence and append a block reference, in one atomic step.
 
-        The counter document is created or advanced by one update, so the
-        allocation needs no separate read. Sequence numbers stay gapless,
-        because an aborted transaction rolls the counter back with everything
-        else it wrote.
+        - **One update:** one update creates or advances the counter document,
+          so the allocation needs no separate read.
+        - **No gaps from aborts:** an aborted transaction rolls the counter back
+          with all its other changes. So an aborted append leaves no gap.
+        - **Gaps from deletes:** a delete of a member block still removes its
+          entry, and the log does not use that number again.
 
         Args:
             log_id: Id of the ordered log to append to.
             block_id: Id of the memory block to place at the new position.
 
         Returns:
-            Stored entry carrying the allocated sequence number.
+            Stored entry with the allocated sequence number.
 
         Raises:
-            MemoryConflict: If the log or referenced block does not exist.
+            MemoryConflict: If the log block or the referenced block does not
+                exist.
         """
 
         _validate_id(log_id, name="log_id")
@@ -885,10 +911,10 @@ class MongoDBBackend:
 
         Args:
             log_id: Id of the ordered log.
-            sequence: Exact position within the log.
+            sequence: Exact position in the log.
 
         Returns:
-            Stored entry, or `None` when the position holds no entry.
+            Stored entry, or `None` when the position has no entry.
 
         Raises:
             TypeError: If `sequence` is not an integer.
@@ -920,7 +946,7 @@ class MongoDBBackend:
             log_id: Id of the ordered log.
             start: Optional inclusive lower sequence bound.
             stop: Optional exclusive upper sequence bound.
-            reverse: Whether to return entries in descending sequence order.
+            reverse: If `True`, the entries come in descending sequence order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -963,11 +989,12 @@ class MongoDBBackend:
         return self._read_one(operation)
 
     def delete_log_entries_for_block(self, block_id: str) -> None:
-        """Remove a log and entries owned by or pointing to one block.
+        """Remove the log of one block, and the entries that point to the block.
 
         Args:
-            block_id: Id of the deleted block. A log owned by this id is
-                dropped, along with entries pointing to it in any other log.
+            block_id: Id of the deleted block. The call drops the log with this
+                id and its counter, and the entries that point to the block in
+                other logs.
         """
 
         _validate_id(block_id, name="block_id")
@@ -992,8 +1019,8 @@ class MongoDBBackend:
             Stored entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection already contains the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection already contains the block.
         """
 
         document = _temporal_document(entry)
@@ -1020,14 +1047,14 @@ class MongoDBBackend:
 
         Args:
             entry: Replacement entry. Its collection id and block id select
-                the existing entry to replace.
+                the current entry to replace.
 
         Returns:
             Stored replacement entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection does not contain the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection does not contain the block.
         """
 
         document = _temporal_document(entry)
@@ -1083,8 +1110,8 @@ class MongoDBBackend:
 
         Args:
             collection_id: Id of the temporal collection.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1134,11 +1161,11 @@ class MongoDBBackend:
         self._write(operation)
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
-        """Remove temporal entries owned by or pointing to one block.
+        """Remove the temporal entries that one block owns or that point to it.
 
         Args:
-            block_id: Id of the deleted block. Entries whose collection id or
-                target block id match are removed.
+            block_id: Id of the deleted block. The call removes the entries
+                whose collection id or target block id matches.
         """
 
         _validate_id(block_id, name="block_id")
@@ -1156,25 +1183,25 @@ class MongoDBBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one temporal page matching every supplied time filter.
+        """Return one temporal page that matches all given time filters.
 
-        Timestamps are stored as ISO 8601 UTC strings and compared as strings.
-        MongoDB compares strings byte by byte unless a collection declares a
-        locale collation, and Genie refuses a collection that declares one, so
-        the comparison stays the same on every server.
+        - **String comparison:** timestamps are ISO 8601 UTC strings, and the
+          query compares them as strings.
+        - **Same on all servers:** MongoDB compares strings byte by byte unless a
+          collection declares a locale collation. Genie refuses a collection
+          that declares one, so the comparison is the same on all servers.
 
         Args:
             collection_id: Id of the temporal collection.
-            occurred_only: Whether to keep only entries that carry an event
-                time.
+            occurred_only: If `True`, only entries with an event time match.
             occurred_start: Optional inclusive lower bound on event time.
             occurred_stop: Optional exclusive upper bound on event time.
-            valid_at: Optional instant that an entry's validity period must
-                contain.
-            overlaps: Optional validity period an entry's own period must
-                overlap.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            valid_at: Optional instant that the validity period of an entry
+                contains.
+            overlaps: Optional validity period that the period of an entry
+                overlaps.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1240,7 +1267,7 @@ class MongoDBBackend:
     # Typed links and lineage DAG
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
-        """Persist a typed link between existing blocks.
+        """Store a typed link between existing blocks.
 
         Args:
             link: Link to store.
@@ -1249,8 +1276,8 @@ class MongoDBBackend:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, or the relation is protected as an acyclic graph.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, or the relation is protected as an acyclic graph.
         """
 
         def operation(session: Any) -> MemoryLink:
@@ -1262,23 +1289,25 @@ class MongoDBBackend:
         return self._write(operation)
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Atomically add a link unless it would create a directed cycle.
+        """Add a link in one atomic step, unless the link makes a directed cycle.
 
-        Existing links with the same relation are adopted on the first call
-        only when they already form a DAG. The relation is then protected from
-        ordinary link insertion.
+        - **First call:** the current links with the same relation join the
+          protected graph only if they already form a DAG. If they contain a
+          cycle, the call raises `MemoryConflict`, and the relation stays
+          without protection.
+        - **After that:** the relation is protected from ordinary link inserts.
 
         Args:
             link: Link to store. Its relation identifies the protected graph
-                the cycle check applies to.
+                that the cycle check applies to.
 
         Returns:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, the relation already contains a cycle, or the new
-                link would create one.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, the relation already contains a cycle, or the new link
+                makes one.
         """
 
         def operation(session: Any) -> MemoryLink:
@@ -1302,14 +1331,15 @@ class MongoDBBackend:
         """Replace only the metadata of an existing link.
 
         Args:
-            link: Link containing the replacement metadata.
+            link: Link with the replacement metadata.
 
         Returns:
             Stored replacement link.
 
         Raises:
-            MemoryConflict: If the link is missing or any field other than
+            MemoryConflict: If the link does not exist, or a field other than
                 metadata changed.
+            TypeError: If the metadata is not strict JSON.
         """
 
         metadata_json = _dump_json(link.metadata, field_name="link metadata")
@@ -1338,7 +1368,7 @@ class MongoDBBackend:
         """List links connected to one block.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
@@ -1346,7 +1376,7 @@ class MongoDBBackend:
             Matching links.
 
         Raises:
-            ValueError: If `direction` is invalid.
+            ValueError: If `direction` is not valid.
         """
 
         _validate_id(block_id, name="block_id")
@@ -1373,7 +1403,7 @@ class MongoDBBackend:
         """Delete incoming and outgoing links for one block.
 
         Args:
-            block_id: Block id whose connected links should be removed.
+            block_id: Block id whose connected links to remove.
         """
 
         _validate_id(block_id, name="block_id")
@@ -1383,10 +1413,10 @@ class MongoDBBackend:
     # Portable search
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search blocks using the portable in-memory matching behavior.
+        """Search blocks with the portable matching behavior of the reference backend.
 
-        Candidate documents are narrowed by scope in MongoDB, then matched in
-        Python so results stay consistent with the reference backend.
+        MongoDB narrows the candidate documents by scope. Then Python matches
+        them, so the results stay the same as in the reference backend.
 
         Args:
             query: Normalized query from the public API.
@@ -1422,9 +1452,11 @@ class MongoDBBackend:
     def _read_server_description(self) -> Mapping[str, Any] | None:
         """Return one `hello` reply, or `None` when the server does not answer.
 
-        A connection failure is left to reach the caller, because it means the
-        deployment is unreachable rather than unknown. Every other failure
-        leaves the description unknown, and unknown passes both checks.
+        - **Fallback:** if `hello` fails, the method tries `ismaster`.
+        - **Connection failure:** it gets to the caller, because it means that
+          the deployment is unreachable, not unknown.
+        - **Other failures:** they leave the description unknown, and unknown
+          passes both checks.
 
         Returns:
             The server reply, or `None` when it cannot be read.
@@ -1440,20 +1472,20 @@ class MongoDBBackend:
         return None
 
     def _verify_server_role(self, description: Mapping[str, Any] | None) -> None:
-        """Refuse a connection that lands on a node which refuses writes.
+        """Refuse a connection to a node that refuses writes.
 
-        A secondary refuses every write, so a backend opened against one fails
-        on the first `put_block`. With `initialize_schema=False` it can open,
-        never write, and serve data that lags the primary with no signal.
-
-        The check refuses only on proof. A missing field, an unreadable value,
-        and a refused command all leave the role unknown, and unknown passes.
-
-        The role is read once. A failover or a proxy can still move this
-        connection to a secondary later, and that is not detected.
+        - **Why:** a secondary refuses all writes. So a backend on a secondary
+          fails on the first `put_block`. With `initialize_schema=False`, it
+          can open, never write, and serve data that lags the primary with no
+          signal.
+        - **Only on proof:** a missing field, an unreadable value, and a refused
+          command all leave the role unknown, and unknown passes.
+        - **One read:** the check reads the role one time. A failover or a
+          proxy can still move this connection to a secondary later, and the
+          backend does not detect that.
 
         Args:
-            description: Server reply to read the role from.
+            description: Server reply with the role.
 
         Raises:
             UnsupportedOperation: If the server reports that it is not
@@ -1471,15 +1503,16 @@ class MongoDBBackend:
     def _verify_transaction_support(self, description: Mapping[str, Any] | None) -> None:
         """Refuse a deployment that cannot run multi-document transactions.
 
-        Every Genie write is one transaction, so a standalone `mongod` fails on
-        the first write. A replica set and a sharded cluster both support them.
-
-        The check refuses only on proof: the reply must name no replica set,
-        must not come from a `mongos`, and must report a writable server. Any
-        other answer leaves the deployment unknown, and unknown passes.
+        - **Why:** each Genie write is one transaction, so a standalone
+          `mongod` fails on the first write. A replica set and a sharded
+          cluster both support transactions.
+        - **Only on proof:** the check refuses only if the reply names no
+          replica set, does not come from a `mongos`, and reports a writable
+          server. Any other answer leaves the deployment unknown, and unknown
+          passes.
 
         Args:
-            description: Server reply to read the deployment kind from.
+            description: Server reply with the deployment kind.
 
         Raises:
             UnsupportedOperation: If the server reports that it is a standalone
@@ -1501,19 +1534,21 @@ class MongoDBBackend:
         )
 
     def _initialize_schema(self) -> None:
-        """Claim the database, create missing collections and indexes, then validate.
+        """Claim the database, create the missing collections and indexes, then check them.
 
         The order protects constructors that start at the same time on one
         empty database:
 
-        - The schema record is written before any other collection, at
-          version 0. A constructor that sees Genie collections with no record
-          re-reads the record once, because the constructor that created those
-          collections had already written it.
-        - A database that holds collections and still has no record after that
-          re-read belongs to someone else and is refused unchanged.
-        - Every migration step is idempotent, so a constructor that arrives in
-          the middle migrates forward through the same steps.
+        - **Record first:** the constructor writes the schema record at version
+          0, before all other collections. A constructor that sees Genie
+          collections with no record reads the record again one time, because
+          the constructor that made those collections already wrote it.
+        - **Foreign database:** if a database holds collections and still has
+          no record after that second read, it belongs to someone else. The
+          constructor refuses it and does not change it.
+        - **Idempotent steps:** each migration step is idempotent. So a
+          constructor that arrives in the middle migrates forward through the
+          same steps.
         """
 
         state = self._read_schema_identity()
@@ -1530,8 +1565,9 @@ class MongoDBBackend:
             self._apply_schema_migration(target_version)
             self._write_schema_identity(target_version)
 
-        # Repair a missing owned object at the current version. Every step is
-        # idempotent, so an interrupted initialization can be resumed safely.
+        # Repair an owned object that is missing at the current version. Each
+        # step is idempotent, so an interrupted initialization can safely
+        # continue.
         self._ensure_schema_objects()
         self._validate_schema()
 
@@ -1550,7 +1586,7 @@ class MongoDBBackend:
         self._ensure_schema_objects()
 
     def _ensure_schema_objects(self) -> None:
-        """Create every missing collection, index, and control document."""
+        """Create each missing collection, index, and control document."""
 
         existing = self._database_collections()
         for name, indexes in _SCHEMA_COLLECTIONS.items():
@@ -1565,13 +1601,14 @@ class MongoDBBackend:
                 self._guard.insert_one({"_id": _MUTATION_GUARD, "lock_version": 0})
 
     def _write_schema_identity(self, version: int) -> None:
-        """Advance the owned schema record without overwriting another owner.
+        """Advance the owned schema record, but do not overwrite the record of another owner.
 
         Args:
             version: Schema version to record.
 
         Raises:
-            UnsupportedOperation: If the record belongs to another application.
+            UnsupportedOperation: If the record belongs to another application,
+                or the record cannot be created.
         """
 
         state = self._read_schema_identity()
@@ -1589,11 +1626,12 @@ class MongoDBBackend:
         )
 
     def _validate_schema(self) -> None:
-        """Require a matching schema record and the exact owned objects.
+        """Raise an error unless the schema record matches and the exact owned objects exist.
 
         Raises:
-            UnsupportedOperation: If the database is not initialized or holds
-                an incompatible schema.
+            UnsupportedOperation: If the database is not initialized, or holds a
+                schema that is not compatible. An older schema version is also
+                refused, because this check does not migrate.
         """
 
         state = self._read_schema_identity()
@@ -1603,25 +1641,25 @@ class MongoDBBackend:
         self._validate_schema_objects()
 
     def _read_schema_identity(self) -> Mapping[str, Any] | None:
-        """Return the stored Genie schema record, or `None` when absent."""
+        """Return the stored Genie schema record, or `None` if there is none."""
 
         if _SCHEMA_INFO not in self._database_collections():
             return None
         return self._schema_info.find_one({"_id": _SCHEMA_DOCUMENT_ID})
 
     def _schema_version(self, state: Mapping[str, Any], *, allow_older: bool) -> int:
-        """Validate schema ownership and return its supported version.
+        """Check the schema owner, and return the supported version.
 
         Args:
             state: Stored schema record.
-            allow_older: Whether an older version may be migrated forward.
+            allow_older: Whether an older version can migrate forward.
 
         Returns:
             Stored schema version.
 
         Raises:
-            UnsupportedOperation: If the record belongs to another application
-                or holds an unsupported version.
+            UnsupportedOperation: If the record belongs to another application,
+                or holds a version that is not valid or not supported.
         """
 
         application_id = state.get("application_id")
@@ -1637,12 +1675,12 @@ class MongoDBBackend:
         return version
 
     def _validate_schema_objects(self) -> None:
-        """Require the exact collections, indexes, and control documents.
+        """Raise an error unless the exact collections, indexes, and control documents exist.
 
         Raises:
             UnsupportedOperation: If the database holds unexpected collections,
-                an incompatible index, a locale collation, or no guard
-                document.
+                a Genie name that is not a plain collection, an index that is
+                not compatible, a locale collation, or no guard document.
         """
 
         actual_collections = self._database_collections()
@@ -1658,9 +1696,9 @@ class MongoDBBackend:
                 raise UnsupportedOperation(f"The Genie MongoDB name {name!r} is not a plain collection.")
             options = specification.get("options") or {}
             if options.get("collation") is not None:
-                # A locale collation changes both index order and string
-                # comparison, and Genie compares stored timestamps and pages
-                # block ids as plain byte order.
+                # A locale collation changes the index order and the string
+                # comparison. Genie compares stored timestamps and pages block
+                # ids in plain byte order.
                 raise UnsupportedOperation(f"The Genie MongoDB collection {name!r} declares a locale collation, which changes string order; recreate it without one.")
 
         for name, indexes in _SCHEMA_COLLECTIONS.items():
@@ -1678,21 +1716,21 @@ class MongoDBBackend:
             raise UnsupportedOperation("The Genie MongoDB mutation guard document is missing.")
 
     def _database_collections(self) -> set[str]:
-        """Return every non-system collection name in the Genie database."""
+        """Return all non-system collection names in the Genie database."""
 
         return {name for name in self._database_handle.list_collection_names() if not name.startswith("system.")}
 
     def _read_one(self, operation: Callable[[Any], _T]) -> _T:
-        """Run one read that issues a single command, with no transaction.
+        """Run one read that sends a single command, with no transaction.
 
-        MongoDB applies one command atomically, so a read of this shape needs
-        no snapshot and can never retry.
+        MongoDB applies one command atomically. So a read of this shape needs
+        no snapshot, and it never retries.
 
         Args:
-            operation: Callable that receives the session and reads once.
+            operation: Callable that gets the session and reads one time.
 
         Returns:
-            Whatever the callable returns.
+            The return value of the callable.
         """
 
         try:
@@ -1707,10 +1745,10 @@ class MongoDBBackend:
         """Run one multi-command read inside a snapshot transaction.
 
         Args:
-            operation: Callable that receives the session and reads.
+            operation: Callable that gets the session and reads.
 
         Returns:
-            Whatever the callable returns.
+            The return value of the callable.
         """
 
         return self._transaction(operation)
@@ -1718,15 +1756,15 @@ class MongoDBBackend:
     def _write(self, operation: Callable[[Any], _T]) -> _T:
         """Run one serialized write transaction.
 
-        The guard document is taken before the callable reads anything, so a
-        compound "read, check, then write" step is atomic against every other
-        Genie writer.
+        The transaction takes the guard document before the callable reads
+        anything. So a compound "read, check, then write" step is atomic
+        against all other Genie writers.
 
         Args:
-            operation: Callable that receives the session and writes.
+            operation: Callable that gets the session and writes.
 
         Returns:
-            Whatever the callable returns.
+            The return value of the callable.
         """
 
         def guarded(session: Any) -> _T:
@@ -1736,7 +1774,7 @@ class MongoDBBackend:
         return self._transaction(guarded)
 
     def _lock_mutations(self, session: Any) -> None:
-        """Take the database-resident lock shared by every Genie write.
+        """Take the lock in the database that all Genie writes share.
 
         Args:
             session: Session running the write transaction.
@@ -1751,23 +1789,25 @@ class MongoDBBackend:
         )
 
     def _transaction(self, operation: Callable[[Any], _T]) -> _T:
-        """Run one transaction and retry it while it keeps losing conflicts.
+        """Run one transaction, and retry it while it continues to lose conflicts.
 
-        MongoDB has no lock a transaction can wait on, so a writer that loses
-        the guard document is aborted rather than blocked. The loop restarts it
-        until it wins or `max_retry_time` runs out.
+        MongoDB has no lock that a transaction can wait on. So a writer that
+        loses the guard document is aborted, not blocked. The loop starts it
+        again until it wins or `max_retry_time` runs out.
 
         Args:
-            operation: Callable that receives the session.
+            operation: Callable that gets the session.
 
         Returns:
-            Whatever the callable returns.
+            The return value of the callable.
 
         Raises:
-            BackendBusy: If the transaction kept conflicting past
+            BackendBusy: If the transaction continued to conflict after
                 `max_retry_time`.
-            BackendUnavailable: If the commit result stayed unknown past
+            BackendUnavailable: If the commit result stayed unknown after
                 `max_retry_time`.
+            BackendError: If MongoDB fails for another reason. A duplicate key
+                becomes `MemoryConflict`.
         """
 
         deadline = monotonic() + self.max_retry_time
@@ -1801,16 +1841,16 @@ class MongoDBBackend:
                 return result
 
     def _commit(self, session: Any, deadline: float) -> None:
-        """Commit one transaction, retrying an unknown commit result.
+        """Commit one transaction, and retry an unknown commit result.
 
         Args:
-            session: Session holding the open transaction.
-            deadline: Monotonic time the retry budget runs out at.
+            session: Session that holds the open transaction.
+            deadline: Monotonic time at which the retry budget ends.
 
         Raises:
-            _RetryTransaction: If the whole transaction must run again.
-            BackendBusy: If the commit kept conflicting past the budget.
-            BackendUnavailable: If the commit result stayed unknown past the
+            _RetryTransaction: If the whole transaction runs again.
+            BackendBusy: If the commit continued to conflict after the budget.
+            BackendUnavailable: If the commit result stayed unknown after the
                 budget.
         """
 
@@ -1834,10 +1874,10 @@ class MongoDBBackend:
                 raise _translate_mongodb_error(error) from error
 
     def _is_transient(self, error: BaseException) -> bool:
-        """Return whether a failure means the transaction should run again.
+        """Return whether a failure means that the transaction runs again.
 
         Args:
-            error: Failure raised while the transaction ran.
+            error: Failure from the transaction.
 
         Returns:
             `True` when MongoDB labelled the failure as transient.
@@ -1851,10 +1891,10 @@ class MongoDBBackend:
         return bool(failure.has_error_label("TransientTransactionError"))
 
     def _abort_quietly(self, session: Any) -> None:
-        """Abort an open transaction, ignoring a failure while aborting.
+        """Abort an open transaction, and ignore a failure of the abort.
 
         Args:
-            session: Session that may hold an open transaction.
+            session: Session that can hold an open transaction.
         """
 
         if session.in_transaction:
@@ -1863,7 +1903,7 @@ class MongoDBBackend:
 
     @contextmanager
     def _operation_client(self) -> Generator[Any, None, None]:
-        """Lease the client so `close` cannot race an active operation.
+        """Lease the client, so that `close` cannot race an active operation.
 
         Yields:
             The open MongoDB client.
@@ -1886,7 +1926,7 @@ class MongoDBBackend:
                     self._lifecycle.notify_all()
 
     def _discard_client(self) -> None:
-        """Drop the client reference and close it, ignoring failures."""
+        """Drop the client reference and close it, and ignore failures."""
 
         with self._lifecycle:
             client = self._client
@@ -1897,7 +1937,7 @@ class MongoDBBackend:
             client.close()
 
     def _require_client(self) -> Any:
-        """Return the open client or fail after `close`.
+        """Return the open client, or raise `RuntimeError` after `close`.
 
         Returns:
             The open MongoDB client.
@@ -1918,7 +1958,7 @@ class MongoDBBackend:
         """Allocate the next stable storage order value from a counter.
 
         Args:
-            session: Session running the write transaction.
+            session: Session of the write transaction.
             name: Counter name, either `"blocks"` or `"links"`.
 
         Returns:
@@ -1945,15 +1985,15 @@ class MongoDBBackend:
         return self._links.find_one({"_id": link_id}, session=session)
 
     def _validate_parent(self, session: Any, block_id: str, parent_id: str | None) -> None:
-        """Require a valid parent id for a create or move.
+        """Raise `MemoryConflict` if a parent id is not valid for a create or a move.
 
         Args:
-            session: Session running the write transaction.
-            block_id: Block being placed.
+            session: Session of the write transaction.
+            block_id: Block to place.
             parent_id: Requested parent id.
 
         Raises:
-            MemoryConflict: If the parent is the block itself or is missing.
+            MemoryConflict: If the parent is the block itself or does not exist.
         """
 
         if parent_id == block_id:
@@ -1962,10 +2002,11 @@ class MongoDBBackend:
             raise MemoryConflict(f"Parent memory block {parent_id!r} does not exist.")
 
     def _ancestor_documents(self, session: Any, block_id: str) -> list[Mapping[str, Any]]:
-        """Return ancestor documents in nearest-parent-first order.
+        """Return ancestor documents, nearest parent first.
 
-        The walk keeps the ids it has seen, so a corrupt parent chain that
-        loops stops instead of running forever.
+        The walk keeps the ids that it saw. So a corrupt parent chain with a
+        loop stops, and it does not run forever. The walk also stops at a
+        parent that does not exist.
         """
 
         document = self._find_block(session, block_id)
@@ -1986,10 +2027,11 @@ class MongoDBBackend:
     def _descendant_documents(self, session: Any, block_id: str, *, include_self: bool) -> list[Mapping[str, Any]]:
         """Return subtree documents in depth-first creation order.
 
-        The subtree is read one ownership level at a time, then walked
-        depth-first with each level of children in storage order. That gives
-        the same order as the recursive query in `SQLiteBackend` and
-        `PostgresBackend`.
+        - **Read by level:** the walk reads one ownership level at a time, in
+          chunks of `_QUERY_CHUNK` ids. It skips a block that it already saw.
+        - **Order:** then it walks the result depth-first, with each level of
+          children in storage order. This gives the same order as the
+          recursive query in `SQLiteBackend` and `PostgresBackend`.
         """
 
         root = self._find_block(session, block_id)
@@ -2020,10 +2062,11 @@ class MongoDBBackend:
         return ordered if include_self else ordered[1:]
 
     def _contains(self, session: Any, root_id: str, block_id: str) -> bool:
-        """Return whether a block is equal to or below a subtree root.
+        """Return whether a block is a subtree root or is below it.
 
-        The check walks up from the candidate, which reads one document per
-        level instead of the whole subtree.
+        The check walks up from the candidate. So it reads one document for
+        each level, not the whole subtree. A root that does not exist gives
+        `False`.
         """
 
         if self._find_block(session, root_id) is None:
@@ -2050,16 +2093,16 @@ class MongoDBBackend:
         block_id: str,
         container_name: str,
     ) -> None:
-        """Require a structure container and referenced block to exist.
+        """Raise `MemoryConflict` if a structure container or the referenced block does not exist.
 
         Args:
-            session: Session running the write transaction.
+            session: Session of the write transaction.
             container_id: Id of the structure container block.
             block_id: Id of the referenced member block.
             container_name: Human-readable container name for the error.
 
         Raises:
-            MemoryConflict: If either block is missing.
+            MemoryConflict: If a block does not exist.
         """
 
         if self._find_block(session, container_id) is None:
@@ -2068,14 +2111,15 @@ class MongoDBBackend:
             raise MemoryConflict(f"Memory block {block_id!r} does not exist.")
 
     def _validate_new_link(self, session: Any, link: MemoryLink) -> None:
-        """Require a new link id and two stored endpoints.
+        """Raise `MemoryConflict` unless the link id is new and both endpoints are stored.
 
         Args:
-            session: Session running the write transaction.
-            link: Link about to be stored.
+            session: Session of the write transaction.
+            link: Link to store.
 
         Raises:
-            MemoryConflict: If the id exists or an endpoint is missing.
+            MemoryConflict: If the id already exists or an endpoint does not
+                exist.
         """
 
         if self._find_link(session, link.id) is not None:
@@ -2086,14 +2130,14 @@ class MongoDBBackend:
             raise MemoryConflict(f"Target memory block {link.target_id!r} does not exist.")
 
     def _insert_link(self, session: Any, link: MemoryLink) -> MemoryLink:
-        """Insert a validated link inside the caller's transaction.
+        """Insert a checked link inside the transaction of the caller.
 
         Args:
-            session: Session running the write transaction.
-            link: Validated link to store.
+            session: Session of the write transaction.
+            link: Checked link to store.
 
         Returns:
-            Stored link reconstructed from MongoDB.
+            Stored link, as read back from MongoDB.
 
         Raises:
             MemoryConflict: If the link could not be created.
@@ -2145,7 +2189,7 @@ class MongoDBBackend:
         return self._all_block_documents(session)
 
     def _all_block_documents(self, session: Any) -> list[Mapping[str, Any]]:
-        """Return every stored block document in storage order."""
+        """Return all stored block documents in storage order."""
 
         return list(self._blocks.find({}, session=session).sort("storage_order", _ASCENDING))
 
@@ -2182,13 +2226,13 @@ def _block_document(block: MemoryBlock) -> dict[str, Any]:
 
 
 def _block_from_document(document: Mapping[str, Any]) -> MemoryBlock:
-    """Reconstruct a memory block from one stored MongoDB document.
+    """Rebuild a memory block from one stored MongoDB document.
 
     Args:
         document: Stored block document.
 
     Returns:
-        Reconstructed block.
+        Rebuilt block.
 
     Raises:
         BackendCorruption: If the stored document cannot be read.
@@ -2228,13 +2272,13 @@ def _link_document(link: MemoryLink) -> dict[str, Any]:
 
 
 def _link_from_document(document: Mapping[str, Any]) -> MemoryLink:
-    """Reconstruct a typed link from one stored MongoDB document.
+    """Rebuild a typed link from one stored MongoDB document.
 
     Args:
         document: Stored link document.
 
     Returns:
-        Reconstructed link.
+        Rebuilt link.
 
     Raises:
         BackendCorruption: If the stored document cannot be read.
@@ -2256,7 +2300,7 @@ def _link_from_document(document: Mapping[str, Any]) -> MemoryLink:
 
 
 def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
-    """Return whether two links identify the same stored relationship."""
+    """Return whether 2 links identify the same stored relationship."""
 
     return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
 
@@ -2266,12 +2310,12 @@ def _validate_expected_version(
     replacement: MemoryBlock,
     expected_version: int | None,
 ) -> None:
-    """Validate one optional compare-and-swap block replacement.
+    """Check one optional compare-and-swap block replacement.
 
     Args:
-        previous: Stored block being replaced.
+        previous: Stored block to replace.
         replacement: Replacement block.
-        expected_version: Required current version, or `None`.
+        expected_version: Current version that the caller expects, or `None`.
 
     Raises:
         MemoryConflict: If the version moved or the replacement does not
@@ -2300,13 +2344,13 @@ def _binding_document(binding: KeyBinding) -> dict[str, Any]:
 
 
 def _binding_from_document(document: Mapping[str, Any]) -> KeyBinding:
-    """Reconstruct a keyed binding from one stored MongoDB document.
+    """Rebuild a keyed binding from one stored MongoDB document.
 
     Args:
         document: Stored binding document.
 
     Returns:
-        Reconstructed binding.
+        Rebuilt binding.
 
     Raises:
         BackendCorruption: If the stored document cannot be read.
@@ -2327,13 +2371,13 @@ def _binding_from_document(document: Mapping[str, Any]) -> KeyBinding:
 
 
 def _log_entry_from_document(document: Mapping[str, Any]) -> LogEntry:
-    """Reconstruct a log entry from one stored MongoDB document.
+    """Rebuild a log entry from one stored MongoDB document.
 
     Args:
         document: Stored log entry document.
 
     Returns:
-        Reconstructed entry.
+        Rebuilt entry.
 
     Raises:
         BackendCorruption: If the stored document cannot be read.
@@ -2361,13 +2405,13 @@ def _temporal_document(entry: TemporalEntry) -> dict[str, Any]:
 
 
 def _temporal_from_document(document: Mapping[str, Any]) -> TemporalEntry:
-    """Reconstruct one temporal entry from a stored MongoDB document.
+    """Rebuild one temporal entry from a stored MongoDB document.
 
     Args:
         document: Stored temporal entry document.
 
     Returns:
-        Reconstructed entry.
+        Rebuilt entry.
 
     Raises:
         BackendCorruption: If the stored document cannot be read.
@@ -2411,7 +2455,7 @@ def _encode_policy(policy: MemoryPolicy | None) -> str | None:
 
 
 def _decode_policy(value: object) -> MemoryPolicy | None:
-    """Reconstruct a memory policy from its stored JSON text."""
+    """Rebuild a memory policy from its stored JSON text."""
 
     if value is None:
         return None
@@ -2438,7 +2482,7 @@ def _encode_rule(rule: AccessRule) -> dict[str, Any]:
 
 
 def _decode_rule(payload: Mapping[str, Any]) -> AccessRule:
-    """Reconstruct one access rule from stored JSON data."""
+    """Rebuild one access rule from stored JSON data."""
 
     return AccessRule(
         allow_all=payload["allow_all"],
@@ -2449,11 +2493,11 @@ def _decode_rule(payload: Mapping[str, Any]) -> AccessRule:
 
 
 def _dump_json(value: Any, *, field_name: str) -> str:
-    """Encode a strict JSON value without silently changing its type.
+    """Encode a strict JSON value, with no silent change of its type.
 
     Args:
         value: Value to encode.
-        field_name: Field name used in the error message.
+        field_name: Field name for the error message.
 
     Returns:
         Compact, key-sorted JSON text.
@@ -2468,7 +2512,7 @@ def _dump_json(value: Any, *, field_name: str) -> str:
 
 
 def _load_json(value: object) -> Any:
-    """Decode one stored JSON text value into an isolated Python object.
+    """Decode one stored JSON text value into a new Python object.
 
     Args:
         value: Stored JSON text.
@@ -2477,7 +2521,8 @@ def _load_json(value: object) -> Any:
         Decoded strict JSON data.
 
     Raises:
-        BackendCorruption: If the stored text is missing or invalid.
+        BackendCorruption: If the stored value is not a string, is not valid
+            JSON, or is not strict JSON.
     """
 
     if not isinstance(value, str):
@@ -2508,12 +2553,12 @@ def _is_strict_json(value: Any) -> bool:
 def _encode_datetime(value: datetime, *, field_name: str) -> str:
     """Normalize an aware datetime to an ISO 8601 UTC string.
 
-    BSON dates hold milliseconds, so Genie stores the text form instead and
-    keeps the full precision the caller supplied.
+    BSON dates hold milliseconds. So Genie stores the text form instead, and
+    it keeps the full precision that the caller gave.
 
     Args:
         value: Datetime to encode.
-        field_name: Field name used in the error message.
+        field_name: Field name for the error message.
 
     Returns:
         ISO 8601 UTC text.
@@ -2537,10 +2582,11 @@ def _decode_datetime(value: object) -> datetime:
         value: Stored timestamp text.
 
     Returns:
-        Aware UTC datetime.
+        Timezone-aware UTC datetime.
 
     Raises:
-        BackendCorruption: If the stored value is missing or invalid.
+        BackendCorruption: If the stored value is not a string, is not valid
+            ISO 8601 text, or has no timezone.
     """
 
     if not isinstance(value, str):
@@ -2555,7 +2601,7 @@ def _decode_datetime(value: object) -> datetime:
 
 
 def _encode_namespace(namespace: tuple[str, ...]) -> str:
-    """Encode a namespace tuple without losing segment boundaries."""
+    """Encode a namespace tuple, and keep the segment boundaries."""
 
     return _dump_json(list(namespace), field_name="key namespace")
 
@@ -2595,7 +2641,7 @@ def _namespace_matches(
 
 
 def _identity(*parts: object) -> str:
-    """Build one stable composite `_id` from several record fields."""
+    """Build one stable composite `_id` from several record fields, as JSON array text."""
 
     return json.dumps(parts, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
 
@@ -2658,13 +2704,14 @@ def _edge_path_exists(edges: Iterable[tuple[str, str]], start_id: str, target_id
 
 
 def _sleep_backoff(backoff: float) -> float:
-    """Wait once between two transaction attempts and grow the wait.
+    """Wait one time between 2 transaction attempts, and make the next wait longer.
 
     Args:
         backoff: Seconds to wait before the next attempt.
 
     Returns:
-        The wait to use after the next failure.
+        The wait for the next failure: double the current wait, up to
+        `_MAX_BACKOFF_SECONDS`.
     """
 
     sleep(backoff)
@@ -2672,7 +2719,9 @@ def _sleep_backoff(backoff: float) -> float:
 
 
 def _reported_writable(description: Mapping[str, Any] | None) -> bool | None:
-    """Return whether a server reply proves the node accepts writes.
+    """Return whether a server reply proves that the node accepts writes.
+
+    The function reads `isWritablePrimary`, then `ismaster`.
 
     Args:
         description: Server reply, or `None` when it could not be read.
@@ -2691,7 +2740,7 @@ def _reported_writable(description: Mapping[str, Any] | None) -> bool | None:
 
 
 def _validate_sequence(value: object, *, name: str) -> None:
-    """Require a non-negative integer sequence value."""
+    """Raise an error if a sequence value is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -2700,7 +2749,7 @@ def _validate_sequence(value: object, *, name: str) -> None:
 
 
 def _validate_limit(value: object) -> None:
-    """Require a non-negative integer page limit."""
+    """Raise an error if a page limit is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("limit must be an integer.")
@@ -2709,10 +2758,10 @@ def _validate_limit(value: object) -> None:
 
 
 def _validate_id(value: object, *, name: str) -> None:
-    """Require a string id before it reaches a MongoDB filter.
+    """Raise `TypeError` if an id is not a string, before the id gets to a MongoDB filter.
 
-    MongoDB reads a dictionary such as `{"$ne": None}` as a query operator, so
-    a non-string id could match documents it does not name.
+    MongoDB reads a dictionary such as `{"$ne": None}` as a query operator. So
+    a non-string id can match documents that it does not name.
     """
 
     if not isinstance(value, str):
@@ -2720,7 +2769,7 @@ def _validate_id(value: object, *, name: str) -> None:
 
 
 def _validate_nonempty_string(value: object, *, name: str) -> None:
-    """Require a non-empty string configuration value."""
+    """Raise an error if a configuration value is not a non-empty string."""
 
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string.")
@@ -2729,7 +2778,7 @@ def _validate_nonempty_string(value: object, *, name: str) -> None:
 
 
 def _validate_timeout(value: object, *, name: str) -> None:
-    """Require a finite, non-negative timeout in seconds."""
+    """Raise an error if a timeout in seconds is not finite and non-negative."""
 
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TypeError(f"{name} must be a number.")
@@ -2738,13 +2787,13 @@ def _validate_timeout(value: object, *, name: str) -> None:
 
 
 def _validate_positive_timeout(value: object, *, name: str) -> None:
-    """Require a finite timeout greater than zero.
+    """Raise an error if a timeout is not finite and greater than zero.
 
-    Server selection needs a real budget, so this timeout cannot be disabled.
+    Server selection needs a real budget, so this timeout cannot be turned off.
 
     Args:
-        value: Timeout supplied by the caller.
-        name: Argument name used in the error message.
+        value: Timeout from the caller.
+        name: Argument name for the error message.
 
     Raises:
         TypeError: If the value is not a number.
@@ -2758,19 +2807,19 @@ def _validate_positive_timeout(value: object, *, name: str) -> None:
 
 
 def _validate_database_name(value: object) -> None:
-    """Require a database name MongoDB accepts.
+    """Raise an error if MongoDB does not accept a database name.
 
-    MongoDB refuses several characters in a database name, and limits its
-    length. Checking here reports the problem before the driver opens a
+    MongoDB refuses several characters in a database name, and it limits the
+    length. This check reports the problem before the driver opens a
     connection.
 
     Args:
-        value: Database name supplied by the caller.
+        value: Database name from the caller.
 
     Raises:
         TypeError: If the value is not a string.
-        ValueError: If the value is empty, too long, or holds a character
-            MongoDB refuses.
+        ValueError: If the value is empty, is longer than 63 bytes in UTF-8, or
+            holds a character that MongoDB refuses, also a NUL character.
     """
 
     if not isinstance(value, str):
@@ -2784,7 +2833,7 @@ def _validate_database_name(value: object) -> None:
 
 
 def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
-    """Validate and normalize an optional aware datetime to UTC."""
+    """Check an optional timezone-aware datetime, and return it in UTC."""
 
     if value is None:
         return None
@@ -2796,11 +2845,11 @@ def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
 
 
 def _load_pymongo() -> tuple[Any, Any, Any, tuple[type[BaseException], ...]]:
-    """Import the optional driver and return the pieces the backend needs.
+    """Import the optional driver, and return the parts that the backend needs.
 
     Returns:
         The `pymongo` module, its `ReadConcern` type, its `WriteConcern` type,
-        and the exception types the backend translates.
+        and the exception types that the backend translates.
 
     Raises:
         UnsupportedOperation: If `pymongo` is not installed.
@@ -2825,7 +2874,7 @@ def _error_code(error: BaseException) -> int:
 
 
 def _is_connection_failure(error: BaseException) -> bool:
-    """Return whether a driver failure means the deployment is unreachable."""
+    """Return whether a driver failure means that the deployment is unreachable."""
 
     if _error_code(error) in _TRANSPORT_CODES:
         return True
@@ -2836,17 +2885,21 @@ def _is_connection_failure(error: BaseException) -> bool:
 def _translate_mongodb_error(error: BaseException) -> GenieError:
     """Translate driver-specific failures into stable Genie backend errors.
 
-    MongoDB reports a numeric error code for every server-side failure, so the
-    mapping reads that code instead of matching message text. Transport
-    failures carry no code, and they are recognized by their driver exception
-    type instead.
+    - **Codes first:** MongoDB reports a numeric error code for each
+      server-side failure. So the mapping reads that code and the driver
+      exception type first.
+    - **Transport failures:** they have no code, so their driver exception type
+      identifies them.
+    - **Message fallback:** for capacity and corruption, the mapping also
+      matches the message text (`quota`, `no space left`, `corrupt`).
 
     Args:
-        error: Failure raised by `pymongo` or `bson`.
+        error: Failure from `pymongo` or `bson`.
 
     Returns:
-        The matching `BackendError` subclass, or `MemoryConflict` when a
-        uniqueness constraint rejected the write.
+        The matching `BackendError` subclass, `MemoryConflict` when a
+        uniqueness constraint rejected the write, or `BackendError` itself for
+        all other failures.
     """
 
     code = _error_code(error)

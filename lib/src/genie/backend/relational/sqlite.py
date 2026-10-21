@@ -1,4 +1,4 @@
-"""Persistent SQLite backend implementing every Genie storage capability."""
+"""Persistent SQLite backend that implements all Genie storage capabilities."""
 
 from __future__ import annotations
 
@@ -126,18 +126,20 @@ _EXPECTED_FOREIGN_KEYS = {
 
 
 class SQLiteBackend:
-    """Persistent backend backed by Python's standard-library SQLite driver.
+    """Persistent backend on the SQLite driver of the Python standard library.
 
-    The backend implements the required `MemoryBackend` behavior and every
-    optional structure capability. One connection is owned by each instance.
-    An internal reentrant lock protects that connection, while SQLite write
-    transactions coordinate separate backend instances using the same file.
+    - **Capabilities:** the backend implements the required `MemoryBackend`
+      behavior and all optional capabilities.
+    - **One connection:** each instance owns one connection. An internal
+      reentrant lock protects it.
+    - **Several instances:** SQLite write transactions coordinate separate
+      backend instances that use the same file.
 
     Attributes:
-        path: SQLite database path this backend opened.
+        path: SQLite database path that this backend opened.
         timeout: Seconds to wait when another connection holds a database
             lock.
-        durability: SQLite synchronous mode in use.
+        durability: SQLite synchronous mode in use, `"full"` or `"normal"`.
     """
 
     def __init__(
@@ -147,24 +149,30 @@ class SQLiteBackend:
         timeout: float = 5.0,
         durability: Literal["full", "normal"] = "full",
     ) -> None:
-        """Open the database and create the current schema when needed.
+        """Open the database, and create the current schema if necessary.
 
         Args:
-            path: SQLite database path. `":memory:"` creates an isolated
-                in-memory database owned by this backend instance.
+            path: SQLite database path. `":memory:"` creates a separate
+                in-memory database that this backend instance owns. It does not
+                use WAL.
             timeout: Seconds to wait when another connection holds a database
-                lock.
-            durability: SQLite synchronous mode. `"full"` is the
-                production-safe default. `"normal"` allows better write
-                throughput but the most recent commits may be lost after a
-                power or operating-system crash.
+                lock. `0` does not wait.
+            durability: SQLite synchronous mode. `"full"` is the safe default
+                for production. `"normal"` gives better write throughput, but
+                the most recent commits can be lost after a power or
+                operating-system crash.
 
         Raises:
             TypeError: If `timeout` or `durability` has the wrong type.
-            ValueError: If `timeout` or `durability` is invalid.
+            ValueError: If `timeout` is negative or not finite, or
+                `durability` is not `"full"` or `"normal"`.
             UnsupportedOperation: If the database schema is newer than this
-                Genie version supports.
-            BackendError: If SQLite storage cannot be opened or configured.
+                Genie version supports, the database belongs to another
+                application, or its schema is incompatible, unowned, or a
+                partial version-0 schema.
+            BackendBusy: If another connection holds the write lock for longer
+                than `timeout`. Construction also opens a write transaction.
+            BackendError: If SQLite cannot open or configure the storage.
         """
 
         if isinstance(timeout, bool) or not isinstance(timeout, int | float):
@@ -217,12 +225,12 @@ class SQLiteBackend:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Close the owned connection when leaving a context manager.
+        """Close the owned connection when the `with` block ends.
 
         Args:
-            exc_type: Type of the exception leaving the block, if any.
-            exc: Exception instance leaving the block, if any.
-            traceback: Traceback of the exception leaving the block, if any.
+            exc_type: Type of the exception that leaves the block, if any.
+            exc: Exception instance that leaves the block, if any.
+            traceback: Traceback of the exception that leaves the block, if any.
         """
 
         self.close()
@@ -230,11 +238,11 @@ class SQLiteBackend:
     def close(self) -> None:
         """Close the owned SQLite connection.
 
-        Calling `close` more than once is safe. Operations after closing raise
+        A second `close` call is safe. Operations after `close` raise
         `RuntimeError`.
 
         Raises:
-            BackendError: If SQLite fails while rolling back or closing.
+            BackendError: If SQLite fails during the rollback or the close.
         """
 
         with self._lock:
@@ -251,16 +259,17 @@ class SQLiteBackend:
                 self._connection = None
 
     def put_block(self, block: MemoryBlock) -> MemoryBlock:
-        """Persist a new encoded memory block.
+        """Store a new encoded memory block.
 
         Args:
             block: Block to create.
 
         Returns:
-            Stored block reconstructed from SQLite.
+            Stored block, read back from SQLite.
 
         Raises:
-            MemoryConflict: If the id exists or the parent is invalid.
+            MemoryConflict: If the id already exists, or the parent does not
+                exist or is the block itself.
             TypeError: If the encoded value or metadata is not strict JSON.
         """
 
@@ -286,13 +295,13 @@ class SQLiteBackend:
             return _block_from_row(row)
 
     def get_block(self, block_id: str) -> MemoryBlock | None:
-        """Fetch a block by id.
+        """Get a block by id.
 
         Args:
             block_id: Memory block id.
 
         Returns:
-            An isolated block value, or `None` when it does not exist.
+            A new block object, or `None` when the block does not exist.
         """
 
         with self._read_connection() as connection:
@@ -309,14 +318,17 @@ class SQLiteBackend:
 
         Args:
             block: Complete replacement block.
-            expected_version: Required current version for compare-and-swap.
+            expected_version: Current version that the compare-and-swap
+                requires.
 
         Returns:
-            Stored replacement reconstructed from SQLite.
+            Stored replacement, read back from SQLite.
 
         Raises:
-            MemoryConflict: If the block is missing, its version changed, or
-                its parent is invalid.
+            MemoryConflict: If the block does not exist, its version changed,
+                or the new parent does not exist, is the block itself, or is one
+                of its descendants. With `expected_version`, also if the
+                replacement does not increase the version by exactly one.
             TypeError: If the encoded value or metadata is not strict JSON.
         """
 
@@ -379,12 +391,13 @@ class SQLiteBackend:
         """Delete a subtree, optionally from an exact version snapshot.
 
         Args:
-            block_id: Root block id to delete. Missing ids are ignored.
-            expected_versions: Exact subtree id-to-version snapshot required
-                for the deletion.
+            block_id: Root block id to delete. If the id does not exist and
+                `expected_versions` is empty or `None`, nothing happens.
+            expected_versions: Exact snapshot of the subtree, as block id to
+                version, that the delete requires.
 
         Raises:
-            MemoryConflict: If the supplied subtree snapshot is stale.
+            MemoryConflict: If the given subtree snapshot is stale.
         """
 
         with self._write_transaction() as connection:
@@ -421,10 +434,10 @@ class SQLiteBackend:
         """Return ancestors from the nearest parent upward.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
 
         Returns:
-            Ancestor blocks in nearest-parent-first order.
+            Ancestor blocks, nearest parent first.
         """
 
         with self._read_connection() as connection:
@@ -459,10 +472,10 @@ class SQLiteBackend:
 
         Args:
             block_id: Root block id.
-            include_self: Whether to include `block_id` in the result.
+            include_self: If `True`, the result includes `block_id`.
 
         Returns:
-            Descendant blocks in depth-first order.
+            Descendant blocks in depth-first creation order.
         """
 
         with self._read_connection() as connection:
@@ -476,7 +489,7 @@ class SQLiteBackend:
             ]
 
     def contains(self, root_id: str, block_id: str) -> bool:
-        """Return whether `block_id` is equal to or below `root_id`.
+        """Return whether `block_id` is `root_id` or is below it.
 
         Args:
             root_id: Potential subtree root id.
@@ -490,7 +503,7 @@ class SQLiteBackend:
             return self._contains(connection, root_id, block_id)
 
     def bind_key(self, binding: KeyBinding) -> KeyBinding:
-        """Atomically bind an unused namespaced address to a block.
+        """Bind an unused namespaced address to a block, in one atomic step.
 
         Args:
             binding: Key binding to create.
@@ -499,8 +512,8 @@ class SQLiteBackend:
             Stored binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                address is already bound.
+            MemoryConflict: If the collection or the block does not exist, or
+                the address is already bound.
         """
 
         with self._write_transaction() as connection:
@@ -529,19 +542,21 @@ class SQLiteBackend:
         *,
         expected_block_id: str,
     ) -> KeyBinding:
-        """Atomically replace a binding when its block id still matches.
+        """Replace a binding in one atomic step, if its block id still matches.
 
         Args:
             binding: Replacement binding. Its collection id and address select
-                the existing binding to replace.
-            expected_block_id: Block id the binding must currently point to.
+                the current binding to replace.
+            expected_block_id: Block id that the binding points to now, as the
+                caller expects.
 
         Returns:
             Stored replacement binding.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, the address
-                is unbound, or it no longer points to `expected_block_id`.
+            MemoryConflict: If the collection or the block does not exist, the
+                address is not bound, or it no longer points to
+                `expected_block_id`.
         """
 
         with self._write_transaction() as connection:
@@ -582,7 +597,7 @@ class SQLiteBackend:
             address: Exact namespace and key to look up.
 
         Returns:
-            Stored binding, or `None` when the address is unused.
+            Stored binding, or `None` when the address is not bound.
         """
 
         with self._read_connection() as connection:
@@ -607,13 +622,17 @@ class SQLiteBackend:
     ) -> list[KeyBinding]:
         """Return one bounded page in stable namespace-and-key order.
 
+        Each call reads all bindings of the collection, then filters and sorts
+        them in Python.
+
         Args:
             collection_id: Id of the collection to list.
-            namespace: Optional exact namespace filter. With `recursive=True`
-                it is treated as a namespace prefix.
-            recursive: Whether to include nested namespaces below `namespace`.
-            after: Optional exclusive start address used to page through
-                results in address order.
+            namespace: Optional exact namespace filter. With `recursive=True`,
+                it is a namespace prefix.
+            recursive: If `True`, the result also includes the nested
+                namespaces below `namespace`.
+            after: Optional exclusive start address, for pages in address
+                order.
             limit: Maximum number of bindings to return.
 
         Returns:
@@ -659,15 +678,16 @@ class SQLiteBackend:
         *,
         expected_block_id: str,
     ) -> None:
-        """Atomically remove a binding when its block id still matches.
+        """Remove a binding in one atomic step, if its block id still matches.
 
         Args:
             collection_id: Id of the collection that owns the key space.
             address: Exact namespace and key to remove.
-            expected_block_id: Block id the binding must currently point to.
+            expected_block_id: Block id that the binding points to now, as the
+                caller expects.
 
         Raises:
-            MemoryConflict: If the address is unbound or it no longer points
+            MemoryConflict: If the address is not bound, or it no longer points
                 to `expected_block_id`.
         """
 
@@ -689,11 +709,11 @@ class SQLiteBackend:
                 raise MemoryConflict(f"Key address {address!r} in collection {collection_id!r} " f"no longer points to expected block {expected_block_id!r}.")
 
     def delete_key_bindings_for_block(self, block_id: str) -> None:
-        """Remove bindings owned by or pointing to one deleted block.
+        """Remove the bindings that one deleted block owns, and the bindings that point to it.
 
         Args:
-            block_id: Id of the deleted block. Bindings whose collection id or
-                target block id match are removed.
+            block_id: Id of the deleted block. The call removes the bindings
+                whose collection id or target block id matches.
         """
 
         with self._write_transaction() as connection:
@@ -706,14 +726,14 @@ class SQLiteBackend:
             )
 
     def append_log_entry(self, log_id: str, block_id: str) -> LogEntry:
-        """Atomically allocate a sequence and append a block reference.
+        """Allocate a sequence and append a block reference, in one atomic step.
 
         Args:
             log_id: Id of the ordered log to append to.
             block_id: Id of the memory block to place at the new position.
 
         Returns:
-            Stored entry carrying the allocated sequence number.
+            Stored entry with the allocated sequence number.
 
         Raises:
             MemoryConflict: If the log or referenced block does not exist.
@@ -772,10 +792,10 @@ class SQLiteBackend:
 
         Args:
             log_id: Id of the ordered log.
-            sequence: Exact position within the log.
+            sequence: Exact position in the log.
 
         Returns:
-            Stored entry, or `None` when the position holds no entry.
+            Stored entry, or `None` when the position has no entry.
 
         Raises:
             TypeError: If `sequence` is not an integer.
@@ -809,7 +829,7 @@ class SQLiteBackend:
             log_id: Id of the ordered log.
             start: Optional inclusive lower sequence bound.
             stop: Optional exclusive upper sequence bound.
-            reverse: Whether to return entries in descending sequence order.
+            reverse: If `True`, entries come in descending sequence order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -856,11 +876,12 @@ class SQLiteBackend:
             return [_log_entry_from_row(row) for row in rows]
 
     def delete_log_entries_for_block(self, block_id: str) -> None:
-        """Remove a log and entries owned by or pointing to one block.
+        """Remove the log that one deleted block owns, and the entries that point to the block.
 
         Args:
-            block_id: Id of the deleted block. A log owned by this id is
-                dropped, along with entries pointing to it in any other log.
+            block_id: Id of the deleted block. The call drops the log of this
+                id with its counter, and the entries that point to the block in
+                any log.
         """
 
         with self._write_transaction() as connection:
@@ -887,8 +908,8 @@ class SQLiteBackend:
             Stored entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection already contains the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection already contains the block.
         """
 
         with self._write_transaction() as connection:
@@ -916,14 +937,14 @@ class SQLiteBackend:
 
         Args:
             entry: Replacement entry. Its collection id and block id select
-                the existing entry to replace.
+                the current entry to replace.
 
         Returns:
             Stored replacement entry.
 
         Raises:
-            MemoryConflict: If the collection or block is missing, or the
-                collection does not contain the block.
+            MemoryConflict: If the collection or the block does not exist, or
+                the collection does not contain the block.
         """
 
         with self._write_transaction() as connection:
@@ -984,8 +1005,8 @@ class SQLiteBackend:
 
         Args:
             collection_id: Id of the temporal collection.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1039,11 +1060,11 @@ class SQLiteBackend:
                 raise MemoryConflict(f"Memory block {block_id!r} is not in temporal collection " f"{collection_id!r}.")
 
     def delete_temporal_entries_for_block(self, block_id: str) -> None:
-        """Remove temporal entries owned by or pointing to one block.
+        """Remove the temporal entries that one deleted block owns, and the entries that point to it.
 
         Args:
-            block_id: Id of the deleted block. Entries whose collection id or
-                target block id match are removed.
+            block_id: Id of the deleted block. The call removes the entries
+                whose collection id or target block id matches.
         """
 
         with self._write_transaction() as connection:
@@ -1067,20 +1088,19 @@ class SQLiteBackend:
         after_block_id: str | None = None,
         limit: int = 100,
     ) -> list[TemporalEntry]:
-        """Return one temporal page matching every supplied time filter.
+        """Return one temporal page that matches all given time filters.
 
         Args:
             collection_id: Id of the temporal collection.
-            occurred_only: Whether to keep only entries that carry an event
-                time.
+            occurred_only: If `True`, only entries with an event time match.
             occurred_start: Optional inclusive lower bound on event time.
             occurred_stop: Optional exclusive upper bound on event time.
-            valid_at: Optional instant that an entry's validity period must
-                contain.
-            overlaps: Optional validity period an entry's own period must
-                overlap.
-            after_block_id: Optional exclusive start block id used to page
-                through results in block-id order.
+            valid_at: Optional instant that the validity period of an entry
+                contains.
+            overlaps: Optional validity period that the period of an entry
+                overlaps.
+            after_block_id: Optional exclusive start block id, for pages in
+                block-id order.
             limit: Maximum number of entries to return.
 
         Returns:
@@ -1167,7 +1187,7 @@ class SQLiteBackend:
             return [_temporal_from_row(row) for row in rows]
 
     def add_link(self, link: MemoryLink) -> MemoryLink:
-        """Persist a typed link between existing blocks.
+        """Store a typed link between existing blocks.
 
         Args:
             link: Link to store.
@@ -1176,8 +1196,8 @@ class SQLiteBackend:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, or the relation is protected as an acyclic graph.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, or the relation is protected as an acyclic graph.
         """
 
         with self._write_transaction() as connection:
@@ -1187,23 +1207,24 @@ class SQLiteBackend:
             return self._insert_link(connection, link)
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Atomically add a link unless it would create a directed cycle.
+        """Add a link in one atomic step, unless the link makes a directed cycle.
 
-        Existing links with the same relation are adopted on the first call
-        only when they already form a DAG. The relation is then protected from
-        ordinary link insertion.
+        - **First call:** the current links with the same relation stay. The
+          first call accepts them only if they already form a DAG.
+        - **Protection:** after a successful call, a plain `add_link` with the
+          relation raises `MemoryConflict`.
 
         Args:
-            link: Link to store. Its relation identifies the protected graph
-                the cycle check applies to.
+            link: Link to store. Its relation identifies the protected graph of
+                the cycle check.
 
         Returns:
             Stored link.
 
         Raises:
-            MemoryConflict: If the link id already exists, either endpoint is
-                missing, the relation already contains a cycle, or the new
-                link would create one.
+            MemoryConflict: If the link id already exists, an endpoint does not
+                exist, the relation already contains a cycle, or the new link
+                makes one. A self-link is a cycle.
         """
 
         with self._write_transaction() as connection:
@@ -1234,13 +1255,13 @@ class SQLiteBackend:
         """Replace only the metadata of an existing link.
 
         Args:
-            link: Link containing the replacement metadata.
+            link: Link with the replacement metadata.
 
         Returns:
             Stored replacement link.
 
         Raises:
-            MemoryConflict: If the link is missing or any field other than
+            MemoryConflict: If the link does not exist, or a field other than
                 metadata changed.
         """
 
@@ -1276,7 +1297,7 @@ class SQLiteBackend:
         """List links connected to one block.
 
         Args:
-            block_id: Block id to inspect.
+            block_id: Block id to examine.
             relation: Optional relation type filter.
             direction: Link direction relative to `block_id`.
 
@@ -1284,7 +1305,7 @@ class SQLiteBackend:
             Matching links.
 
         Raises:
-            ValueError: If `direction` is invalid.
+            ValueError: If `direction` is not `"out"`, `"in"`, or `"both"`.
         """
 
         if direction not in {"out", "in", "both"}:
@@ -1318,7 +1339,7 @@ class SQLiteBackend:
         """Delete incoming and outgoing links for one block.
 
         Args:
-            block_id: Block id whose connected links should be removed.
+            block_id: Block id whose connected links to remove.
         """
 
         with self._write_transaction() as connection:
@@ -1331,18 +1352,18 @@ class SQLiteBackend:
             )
 
     def search(self, query: MemoryQuery) -> list[SearchResult]:
-        """Search blocks using the portable in-memory matching behavior.
+        """Search blocks with the portable matching behavior of the in-memory backend.
 
-        Candidate rows are narrowed in SQL by scope and block type, then
-        matched in Python so results stay consistent with the reference
-        backend.
+        - **SQL step:** SQL selects the candidate rows by scope only.
+        - **Python step:** Python then matches the types, filters, and text. So
+          the results stay the same as in the reference backend.
 
         Args:
             query: Normalized query from the public API.
 
         Returns:
-            Search results ordered by descending score, limited to
-            `query.limit`.
+            Search results in descending score order, at most `query.limit`
+            results.
         """
 
         with self._read_connection() as connection:
@@ -1367,7 +1388,7 @@ class SQLiteBackend:
         return results[: query.limit]
 
     def _configure_connection(self) -> None:
-        """Enable SQLite behavior required by the backend."""
+        """Turn on the SQLite settings that the backend needs, and check them, or raise `BackendUnavailable`."""
 
         connection = self._require_connection()
         connection.execute("PRAGMA foreign_keys = ON")
@@ -1388,13 +1409,15 @@ class SQLiteBackend:
             raise BackendUnavailable(f"SQLite synchronous={synchronous} could not be enabled.")
 
     def _enable_wal(self, connection: sqlite3.Connection) -> str:
-        """Switch the database file to WAL mode and return the active mode.
+        """Switch the database file to WAL mode, and return the active mode.
 
-        SQLite answers this pragma with "database is locked" at once when
-        another connection holds a lock, without calling the busy handler that
-        every other statement waits on. That happens when several connections
-        open one fresh file at the same time, so the pragma is retried for up
-        to `timeout` seconds, like any other busy statement.
+        - **No busy handler:** when another connection holds a lock, SQLite
+          answers this pragma with "database is locked" at once. It does not
+          call the busy handler that the other statements wait on.
+        - **When:** this happens when several connections open one new file at
+          the same time.
+        - **Retry:** so the backend runs the pragma again for up to `timeout`
+          seconds, as for any other busy statement.
         """
 
         deadline = monotonic() + self.timeout
@@ -1411,10 +1434,16 @@ class SQLiteBackend:
     def _initialize_schema(self) -> None:
         """Identify, migrate, and validate the Genie SQLite schema.
 
-        The version, the application id, and the object listing are read in
-        one read transaction, so they describe one state. Another constructor
-        commits its tables and both pragmas together, and separate reads could
-        see the version from before that commit and the tables from after it.
+        - **One snapshot:** one read transaction reads the version, the
+          application id, and the object list, so they describe one state.
+          Another constructor commits its tables and both pragmas together.
+          Separate reads could see the version from before that commit and the
+          tables from after it.
+        - **Adoption:** a database with application id 0 and the exact current
+          schema gets the Genie application id.
+        - **Refusals:** a newer version, another application id, an unowned or
+          incompatible schema, or a partial version-0 schema raises
+          `UnsupportedOperation`.
         """
 
         connection = self._require_connection()
@@ -1578,7 +1607,7 @@ class SQLiteBackend:
                 raise
 
     def _discard_connection(self) -> None:
-        """Best-effort cleanup after constructor failure."""
+        """Clean up after a constructor failure, as far as possible."""
 
         connection = self._connection
         self._connection = None
@@ -1592,7 +1621,7 @@ class SQLiteBackend:
             pass
 
     def _require_connection(self) -> sqlite3.Connection:
-        """Return the open connection or fail after `close`."""
+        """Return the open connection, or raise `RuntimeError` after `close`."""
 
         if self._connection is None:
             raise RuntimeError("SQLiteBackend is closed.")
@@ -1628,7 +1657,7 @@ class SQLiteBackend:
         block_id: str,
         parent_id: str | None,
     ) -> None:
-        """Require a valid parent id for a create or move."""
+        """Raise `MemoryConflict` if the parent id is not valid for a create or a move."""
 
         if parent_id == block_id:
             raise MemoryConflict("A memory block cannot be its own parent.")
@@ -1671,7 +1700,7 @@ class SQLiteBackend:
         connection: sqlite3.Connection,
         rows: list[sqlite3.Row],
     ) -> None:
-        """Delete a subtree without recursive foreign-key trigger cascades."""
+        """Delete a subtree from the leaves up, so no foreign-key cascade recurses."""
 
         connection.executemany(
             "DELETE FROM blocks WHERE id = ?",
@@ -1684,7 +1713,7 @@ class SQLiteBackend:
         root_id: str,
         block_id: str,
     ) -> bool:
-        """Check ownership containment using one recursive query."""
+        """Check ownership containment with one recursive query."""
 
         row = connection.execute(
             """
@@ -1714,7 +1743,7 @@ class SQLiteBackend:
         block_id: str,
         container_name: str,
     ) -> None:
-        """Require a structure container and referenced block to exist."""
+        """Raise `MemoryConflict` if the structure container or the referenced block does not exist."""
 
         if self._block_row(connection, container_id) is None:
             raise MemoryConflict(f"{container_name} block {container_id!r} does not exist.")
@@ -1726,7 +1755,7 @@ class SQLiteBackend:
         connection: sqlite3.Connection,
         link: MemoryLink,
     ) -> None:
-        """Require a new link id and two stored endpoints."""
+        """Raise `MemoryConflict` if the link id already exists or an endpoint is not stored."""
 
         if self._link_row(connection, link.id) is not None:
             raise MemoryConflict(f"Memory link {link.id!r} already exists.")
@@ -1740,7 +1769,7 @@ class SQLiteBackend:
         connection: sqlite3.Connection,
         link: MemoryLink,
     ) -> MemoryLink:
-        """Insert a validated link inside the caller's transaction."""
+        """Insert a checked link inside the transaction of the caller."""
 
         try:
             connection.execute(
@@ -1787,7 +1816,7 @@ class SQLiteBackend:
         *,
         relation: str,
     ) -> bool:
-        """Return whether one relation has a directed path between two blocks."""
+        """Return whether one relation has a directed path between 2 blocks."""
 
         row = connection.execute(
             """
@@ -1908,7 +1937,7 @@ class SQLiteBackend:
 
 
 def _qualified_columns(table: str, columns: str) -> str:
-    """Qualify a comma-separated constant column list for joined queries."""
+    """Add the table name to each column of a constant comma-separated column list, for joined queries."""
 
     return ", ".join(f"{table}.{column.strip()}" for column in columns.replace("\n", " ").split(",") if column.strip())
 
@@ -1983,7 +2012,7 @@ def _validate_expected_version(
     replacement: MemoryBlock,
     expected_version: int | None,
 ) -> None:
-    """Validate one optional compare-and-swap block replacement."""
+    """Raise `MemoryConflict` if an optional compare-and-swap replacement does not match `expected_version` or does not increase the version by exactly one."""
 
     if expected_version is None:
         return
@@ -2127,7 +2156,7 @@ def _decode_rule(payload: dict[str, Any]) -> AccessRule:
 
 
 def _dump_json(value: Any, *, field_name: str) -> str:
-    """Encode a strict JSON value without silently changing its type."""
+    """Encode a strict JSON value, with no silent type change, or raise `TypeError`."""
 
     if not _is_strict_json(value):
         raise TypeError(f"SQLiteBackend {field_name} must be strict JSON data.")
@@ -2141,7 +2170,7 @@ def _dump_json(value: Any, *, field_name: str) -> str:
 
 
 def _load_json(value: object) -> Any:
-    """Decode one JSON text value into an isolated Python object."""
+    """Decode one JSON text value into a new Python object, or raise `BackendCorruption`."""
 
     if not isinstance(value, str):
         raise BackendCorruption("Stored SQLite JSON values must be strings.")
@@ -2193,7 +2222,7 @@ def _decode_datetime(value: object) -> datetime:
 
 
 def _encode_namespace(namespace: tuple[str, ...]) -> str:
-    """Encode a namespace tuple without losing segment boundaries."""
+    """Encode a namespace tuple, and keep the segment boundaries."""
 
     return _dump_json(list(namespace), field_name="key namespace")
 
@@ -2223,7 +2252,7 @@ def _namespace_matches(
 
 
 def _validate_sequence(value: object, *, name: str) -> None:
-    """Require a non-negative integer sequence value."""
+    """Raise an error if a sequence value is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer.")
@@ -2232,7 +2261,7 @@ def _validate_sequence(value: object, *, name: str) -> None:
 
 
 def _validate_limit(value: object) -> None:
-    """Require a non-negative integer page limit."""
+    """Raise an error if a page limit is not a non-negative integer."""
 
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("limit must be an integer.")
@@ -2257,7 +2286,7 @@ def _validate_schema(
     *,
     expected_statements: tuple[str, ...],
 ) -> None:
-    """Require the exact tables, columns, indexes, and foreign keys Genie owns."""
+    """Raise `UnsupportedOperation` if the tables, columns, indexes, foreign keys, or schema SQL do not match the Genie schema exactly."""
 
     table_rows = connection.execute("""
         SELECT name
@@ -2320,7 +2349,7 @@ def _normalize_schema_sql(statement: str) -> str:
 
 
 def _rollback_quietly(connection: sqlite3.Connection) -> None:
-    """Roll back without hiding the operation's original failure."""
+    """Roll back, and do not hide the original failure of the operation."""
 
     if not connection.in_transaction:
         return
@@ -2331,7 +2360,7 @@ def _rollback_quietly(connection: sqlite3.Connection) -> None:
 
 
 def _is_busy_error(error: sqlite3.Error) -> bool:
-    """Return whether a driver error reports a lock another connection holds."""
+    """Return whether a driver error reports a lock that another connection holds."""
 
     code = getattr(error, "sqlite_errorcode", None)
     primary_code = code & 0xFF if isinstance(code, int) else None
@@ -2366,7 +2395,7 @@ def _translate_sqlite_error(error: sqlite3.Error) -> BackendError:
 
 
 def _normalize_optional_time(value: object, *, name: str) -> datetime | None:
-    """Validate and normalize an optional aware datetime to UTC."""
+    """Check an optional timezone-aware datetime, and return it in UTC."""
 
     if value is None:
         return None

@@ -1,9 +1,10 @@
 """Immutable records shared by optional memory structures.
 
-The records in this module describe where an existing memory block participates
-in a structure. They contain block ids instead of block payloads, so one block
-can be addressed, ordered, timed, traversed, and versioned without copying its
-value.
+- **Membership by id:** the records in this module tell where an existing
+  memory block is in a structure.
+- **No payload copies:** they hold block ids, not block payloads. So one block
+  can have an address, an order, a time, graph paths, and versions, with no
+  copy of its value.
 """
 
 from __future__ import annotations
@@ -21,21 +22,22 @@ class MemoryAddress:
     """Stable key address inside a namespaced collection.
 
     Attributes:
-        namespace: Ordered namespace segments. An empty tuple represents the
-            collection root.
-        key: Unique key within the namespace.
+        namespace: Ordered namespace segments. An empty tuple is the
+            collection root. The address stores the segments as a tuple.
+        key: Unique key in the namespace.
 
     Raises:
-        TypeError: If `namespace` is not a tuple of strings or `key` is not a
-            string.
-        ValueError: If a namespace segment or `key` is empty.
+        TypeError: If `namespace` is a `str` or is not iterable, a namespace
+            segment is not a string, or `key` is not a string.
+        ValueError: If a namespace segment or `key` is empty or contains only
+            whitespace.
     """
 
     namespace: tuple[str, ...]
     key: str
 
     def __post_init__(self) -> None:
-        """Validate and freeze the namespace and key."""
+        """Check the namespace and the key, and freeze the namespace as a tuple."""
 
         if isinstance(self.namespace, str):
             raise TypeError("MemoryAddress namespace must be a tuple of strings.")
@@ -55,13 +57,13 @@ class KeyBinding:
 
     Attributes:
         collection_id: Id of the collection that owns the key space.
-        address: Namespace and key used to find the block.
-        block_id: Id of the addressed memory block.
+        address: Namespace and key that find the block.
+        block_id: Id of the memory block at the address.
 
     Raises:
         TypeError: If an id is not a string or `address` is not a
             `MemoryAddress`.
-        ValueError: If an id is empty.
+        ValueError: If an id is empty or contains only whitespace.
     """
 
     collection_id: str
@@ -69,7 +71,7 @@ class KeyBinding:
     block_id: str
 
     def __post_init__(self) -> None:
-        """Validate binding identifiers and address type."""
+        """Check the binding ids and the address type."""
 
         _require_id(self.collection_id, field_name="collection_id")
         if not isinstance(self.address, MemoryAddress):
@@ -83,7 +85,7 @@ class KeyedItem:
 
     Attributes:
         binding: Structural key binding for the block.
-        block: Visible memory block resolved through normal memory access.
+        block: Visible memory block that normal memory access resolved.
 
     Raises:
         TypeError: If `binding` is not a `KeyBinding` or `block` is not a
@@ -95,7 +97,7 @@ class KeyedItem:
     block: MemoryBlock
 
     def __post_init__(self) -> None:
-        """Validate that the binding and block refer to the same id."""
+        """Check that the binding and the block refer to the same id."""
 
         if not isinstance(self.binding, KeyBinding):
             raise TypeError("KeyedItem binding must be a KeyBinding.")
@@ -109,18 +111,19 @@ class KeyedItem:
 class LogEntry:
     """Place a memory block at a stable position in an ordered log.
 
-    Sequence numbers are non-negative and unique within one log. A later log
-    facade and backend capability will define how positions are allocated
-    atomically.
+    - **Sequence numbers:** they are non-negative and unique in one log.
+    - **Allocation:** the `SequenceStore` capability allocates positions
+      atomically, and `EventLog` uses it.
 
     Attributes:
         log_id: Id of the ordered log.
-        sequence: Stable, non-negative position within the log.
+        sequence: Stable, non-negative position in the log.
         block_id: Id of the memory block at this position.
 
     Raises:
         TypeError: If an id is not a string or `sequence` is not an integer.
-        ValueError: If an id is empty or `sequence` is negative.
+        ValueError: If an id is empty or contains only whitespace, or
+            `sequence` is negative.
     """
 
     log_id: str
@@ -128,7 +131,7 @@ class LogEntry:
     block_id: str
 
     def __post_init__(self) -> None:
-        """Validate the log identifier, sequence, and block identifier."""
+        """Check the log id, the sequence, and the block id."""
 
         _require_id(self.log_id, field_name="log_id")
         if isinstance(self.sequence, bool) or not isinstance(self.sequence, int):
@@ -144,7 +147,7 @@ class LogItem:
 
     Attributes:
         entry: Structural position of the block in a log.
-        block: Visible memory block resolved through normal memory access.
+        block: Visible memory block that normal memory access resolved.
 
     Raises:
         TypeError: If `entry` is not a `LogEntry` or `block` is not a
@@ -156,7 +159,7 @@ class LogItem:
     block: MemoryBlock
 
     def __post_init__(self) -> None:
-        """Validate that the entry and block refer to the same id."""
+        """Check that the entry and the block refer to the same id."""
 
         if not isinstance(self.entry, LogEntry):
             raise TypeError("LogItem entry must be a LogEntry.")
@@ -168,11 +171,12 @@ class LogItem:
 
 @dataclass(frozen=True, slots=True)
 class ValidityInterval:
-    """Half-open period during which information is valid.
+    """Half-open period in which information is valid.
 
-    The interval includes `valid_at` and excludes `invalid_at`. A missing
-    `invalid_at` means that the interval is open-ended. Timestamps must be
-    timezone-aware and are normalized to UTC.
+    - **Half-open:** the interval includes `valid_at` and excludes `invalid_at`.
+    - **Open end:** with no `invalid_at`, the interval has no end.
+    - **Time zones:** both timestamps are timezone-aware. The interval stores
+      them in UTC.
 
     Attributes:
         valid_at: Inclusive start of the validity period.
@@ -188,7 +192,7 @@ class ValidityInterval:
     invalid_at: datetime | None = None
 
     def __post_init__(self) -> None:
-        """Validate interval bounds and normalize them to UTC."""
+        """Check the interval bounds, and normalize them to UTC."""
 
         valid_at = _utc_datetime(self.valid_at, field_name="valid_at")
         invalid_at = (
@@ -206,21 +210,23 @@ class ValidityInterval:
 class TemporalEntry:
     """Attach event time or a validity period to a memory block.
 
-    At least one of `occurred_at` or `validity` must be present. Event time
-    and validity are separate because an event may happen once while a fact
-    remains valid for a longer period.
+    - **At least one time:** an entry has `occurred_at`, `validity`, or both.
+    - **Two separate times:** an event can happen once, but a fact can stay
+      valid for a longer period. So event time and validity are separate.
 
     Attributes:
         collection_id: Id of the temporal collection.
         block_id: Id of the timed memory block.
-        occurred_at: Optional time when an event happened.
-        validity: Optional period during which information is valid.
+        occurred_at: Optional time when an event happened. The entry stores it
+            in UTC.
+        validity: Optional period in which the information is valid.
 
     Raises:
         TypeError: If an id is not a string, `occurred_at` is not a datetime,
             or `validity` is not a `ValidityInterval`.
-        ValueError: If an id is empty, `occurred_at` is naive, or neither
-            `occurred_at` nor `validity` is supplied.
+        ValueError: If an id is empty or contains only whitespace,
+            `occurred_at` is naive, or neither `occurred_at` nor `validity` is
+            given.
     """
 
     collection_id: str
@@ -229,7 +235,7 @@ class TemporalEntry:
     validity: ValidityInterval | None = None
 
     def __post_init__(self) -> None:
-        """Validate identifiers, time fields, and temporal membership."""
+        """Check the ids, the time fields, and that the entry has at least one time."""
 
         _require_id(self.collection_id, field_name="collection_id")
         _require_id(self.block_id, field_name="block_id")
@@ -251,7 +257,7 @@ class TemporalItem:
 
     Attributes:
         entry: Event time or validity period attached to the block.
-        block: Visible memory block resolved through normal memory access.
+        block: Visible memory block that normal memory access resolved.
 
     Raises:
         TypeError: If `entry` is not a `TemporalEntry` or `block` is not a
@@ -263,7 +269,7 @@ class TemporalItem:
     block: MemoryBlock
 
     def __post_init__(self) -> None:
-        """Validate that the entry and block refer to the same id."""
+        """Check that the entry and the block refer to the same id."""
 
         if not isinstance(self.entry, TemporalEntry):
             raise TypeError("TemporalItem entry must be a TemporalEntry.")
@@ -277,27 +283,29 @@ class TemporalItem:
 class GraphPath:
     """An ordered path through memory blocks and typed links.
 
-    A path contains one more block id than link. Each link must connect its two
-    neighboring block ids in either direction. A one-block path with no links
-    is valid.
+    - **Counts:** a path has one more block id than links.
+    - **Continuity:** each link connects its 2 adjacent block ids, in either
+      direction.
+    - **Zero links:** a path with one block and no links is valid.
 
     Attributes:
         block_ids: Block ids in traversal order.
-        links: Links followed between neighboring blocks.
+        links: Links that the path follows between adjacent blocks.
 
     Raises:
-        TypeError: If `block_ids` or `links` is not a tuple, a block id is not
-            a string, or a link is not a `MemoryLink`.
+        TypeError: If `block_ids` is a `str`, `block_ids` or `links` is not
+            iterable, a block id is not a string, or a link is not a
+            `MemoryLink`.
         ValueError: If `block_ids` is empty, a block id is empty, the counts
             do not differ by exactly one, or a link does not connect its
-            neighboring blocks.
+            adjacent blocks.
     """
 
     block_ids: tuple[str, ...]
     links: tuple[MemoryLink, ...] = ()
 
     def __post_init__(self) -> None:
-        """Freeze and validate the path contents and continuity."""
+        """Freeze the path contents as tuples, and check them and the continuity."""
 
         if isinstance(self.block_ids, str):
             raise TypeError("GraphPath block_ids must be a tuple of strings.")
@@ -348,15 +356,16 @@ class GraphPath:
 
 @dataclass(frozen=True, slots=True)
 class GraphNeighbor:
-    """A neighboring block reached through one typed link.
+    """A neighbor block that one typed link reaches.
 
-    `direction` is relative to the block from which the caller requested
-    neighbors. An outgoing step reaches the link target; an incoming step
-    reaches the link source. Parallel links produce separate neighbor records.
+    - **Direction:** `direction` is relative to the block whose neighbors the
+      caller requested. An outgoing step gets to the link target. An incoming
+      step gets to the link source.
+    - **Parallel links:** each parallel link gives a separate neighbor record.
 
     Attributes:
-        block: Visible neighboring memory block.
-        link: Link used to reach the neighboring block.
+        block: Visible neighbor memory block.
+        link: Link that reaches the neighbor block.
         direction: Link direction relative to the starting block.
 
     Raises:
@@ -371,7 +380,7 @@ class GraphNeighbor:
     direction: Literal["out", "in"]
 
     def __post_init__(self) -> None:
-        """Validate the neighbor block, link, and relative direction."""
+        """Check the neighbor block, the link, and the relative direction."""
 
         if not isinstance(self.block, MemoryBlock):
             raise TypeError("GraphNeighbor block must be a MemoryBlock.")
@@ -393,18 +402,22 @@ class GraphNeighbor:
 class RevisionEntry:
     """Place an immutable block revision under a stable logical record id.
 
-    `revision` is separate from `MemoryBlock.version`. A block version is
-    the update counter for one stored block, while a revision identifies one
-    preserved block in a logical record's history.
+    - **Two counters:** `revision` is separate from `MemoryBlock.version`. A
+      block version counts the updates of one stored block. A revision
+      identifies one kept block in the history of a logical record.
+    - **Numbers:** `VersionedRecords` sets `revision` to the log sequence plus
+      one. So the first revision is 1, and a deleted revision block leaves a
+      gap.
 
     Attributes:
-        record_id: Stable logical identity shared by all revisions.
+        record_id: Stable logical identity that all revisions share.
         revision: Positive revision number.
-        block_id: Id of the memory block holding this revision's value.
+        block_id: Id of the memory block that holds the value of this revision.
 
     Raises:
         TypeError: If an id is not a string or `revision` is not an integer.
-        ValueError: If an id is empty or `revision` is less than one.
+        ValueError: If an id is empty or contains only whitespace, or
+            `revision` is less than one.
     """
 
     record_id: str
@@ -412,7 +425,7 @@ class RevisionEntry:
     block_id: str
 
     def __post_init__(self) -> None:
-        """Validate the record identifier, revision, and block identifier."""
+        """Check the record id, the revision, and the block id."""
 
         _require_id(self.record_id, field_name="record_id")
         if isinstance(self.revision, bool) or not isinstance(self.revision, int):
@@ -428,7 +441,7 @@ class RevisionItem:
 
     Attributes:
         entry: Stable record id and positive logical revision number.
-        block: Visible memory block holding the revision value.
+        block: Visible memory block that holds the revision value.
 
     Raises:
         TypeError: If `entry` is not a `RevisionEntry` or `block` is not a
@@ -440,7 +453,7 @@ class RevisionItem:
     block: MemoryBlock
 
     def __post_init__(self) -> None:
-        """Validate that the entry and block refer to the same id."""
+        """Check that the entry and the block refer to the same id."""
 
         if not isinstance(self.entry, RevisionEntry):
             raise TypeError("RevisionItem entry must be a RevisionEntry.")
@@ -451,7 +464,7 @@ class RevisionItem:
 
 
 def _require_name(value: object, *, field_name: str) -> None:
-    """Require a non-empty string used as a structural name."""
+    """Raise an error if a structural name is not a string, or is empty or only whitespace."""
 
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
@@ -460,13 +473,13 @@ def _require_name(value: object, *, field_name: str) -> None:
 
 
 def _require_id(value: object, *, field_name: str) -> None:
-    """Require a non-empty string used as a structural identifier."""
+    """Raise an error if a structural id is not a string, or is empty or only whitespace."""
 
     _require_name(value, field_name=field_name)
 
 
 def _utc_datetime(value: object, *, field_name: str) -> datetime:
-    """Require a timezone-aware datetime and normalize it to UTC."""
+    """Check that a value is a timezone-aware datetime, and return it in UTC."""
 
     if not isinstance(value, datetime):
         raise TypeError(f"{field_name} must be a datetime.")

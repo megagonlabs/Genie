@@ -1,9 +1,9 @@
 """Memory block model.
 
-This module contains the memory unit used throughout Genie. `MemoryBlock` is
-backend-neutral: adapters may persist it in SQL, documents, graph nodes, object
-stores, or another representation. Applications decide what each block type and
-value mean.
+- **Memory unit:** this module holds the memory unit that all of Genie uses.
+- **Backend-neutral:** adapters can store `MemoryBlock` in SQL, documents,
+  graph nodes, object stores, or another form.
+- **Meaning:** applications decide what each block type and value mean.
 """
 
 from __future__ import annotations
@@ -39,32 +39,35 @@ def utc_now() -> datetime:
 
 @dataclass(frozen=True, slots=True)
 class MemoryBlock:
-    """The smallest memory unit Genie stores and retrieves.
+    """The smallest memory unit that Genie stores and gets back.
 
-    A block is the unit where Genie tracks identity, parent placement,
-    metadata, source information, access policy, and version history. Genie
-    enforces the block shape and parent/child ownership model; applications
-    decide what block types and values mean.
+    - **What Genie tracks:** a block is the unit for identity, parent placement,
+      metadata, source information, access policy, and the version number.
+    - **What Genie enforces:** the block shape and the parent and child
+      ownership model. Applications decide what block types and values mean.
 
     Attributes:
-        type: Application-defined category such as `"note"` or `"task"`.
+        type: Application-defined category, such as `"note"` or `"task"`.
         value: Encoded memory payload. Public `Memory` methods return decoded
-            values; backends store encoded values.
-        id: Stable block identifier.
-        parent_id: Optional parent block id for ownership placement.
-        content_type: Codec content type used to decode `value`.
-        metadata: Arbitrary JSON-compatible metadata used for filtering and
-            adapter-specific indexing.
-        policy: Optional access policy attached directly to this block.
-        created_at: UTC timestamp for initial creation.
-        updated_at: UTC timestamp for the latest update.
-        created_by: Principal id that created the block, when known.
-        version: Increasing version number managed by `Memory`.
+            values, and backends store encoded values.
+        id: Stable block id.
+        parent_id: Optional parent block id, for ownership placement.
+        content_type: Codec content type that decodes `value`.
+        metadata: Any JSON-compatible metadata, for filters and
+            adapter-specific indexes.
+        policy: Optional access policy attached directly to this block. With
+            `None`, the policy engine uses `MemoryPolicy.owner_private()`.
+        created_at: UTC timestamp of the first creation.
+        updated_at: UTC timestamp of the latest update.
+        created_by: Principal id that created the block, if known.
+        version: Version number. It starts at 1, and `Memory` increases it on
+            each update.
 
     Raises:
         TypeError: If `id`, `type`, or `parent_id` is not a string. A
             `parent_id` of `None` is allowed.
-        ValueError: If `id`, `type`, or `parent_id` is empty.
+        ValueError: If `id`, `type`, or `parent_id` is empty or contains only
+            whitespace.
     """
 
     type: str
@@ -80,7 +83,7 @@ class MemoryBlock:
     version: int = 1
 
     def __post_init__(self) -> None:
-        """Validate the identity, type, and parent fields."""
+        """Check the id, type, and parent fields."""
 
         require_non_empty_str(self.id, field_name="MemoryBlock id")
         require_non_empty_str(self.type, field_name="MemoryBlock type")
@@ -89,6 +92,8 @@ class MemoryBlock:
 
     def with_updates(self, **changes: Any) -> MemoryBlock:
         """Return a copy of the block with selected fields replaced.
+
+        A `metadata` of `None` becomes an empty dictionary.
 
         Args:
             **changes: Dataclass fields to replace.

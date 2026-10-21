@@ -1,4 +1,4 @@
-"""Principal identities used for policy decisions."""
+"""Principal identities for policy decisions."""
 
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ class Principal:
 
     Attributes:
         id: Stable principal id, for example `"user:alice"` or
-            `"agent:planner"`.
-        roles: Role names granted to this principal.
-        metadata: Optional application metadata about the principal.
+            `"agent:planner"`. Defaults to `"system"`.
+        roles: Role names that this principal has.
+        metadata: Optional application metadata about the principal. The
+            principal keeps a deep copy.
 
     Raises:
         TypeError: If `id` is not a string, `roles` is not a set of strings,
@@ -28,7 +29,7 @@ class Principal:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate identity fields and isolate caller-owned containers."""
+        """Check the identity fields, and copy the containers that the caller owns."""
 
         if not isinstance(self.id, str):
             raise TypeError("Principal id must be a string.")
@@ -41,17 +42,18 @@ class Principal:
 
     @classmethod
     def coerce(cls, value: Principal | str | None) -> Principal:
-        """Convert common principal representations into a `Principal`.
+        """Change a common principal form into a `Principal`.
 
         Args:
-            value: Existing principal, principal id string, or `None`.
+            value: A `Principal`, a principal id string, or `None`.
 
         Returns:
-            The provided principal, a new principal with the provided id, or the
-            default system principal.
+            The same principal, a new principal with the given id, or the
+            default `system` principal.
 
         Raises:
             TypeError: If `value` is not a principal, string, or `None`.
+            ValueError: If `value` is an empty string.
         """
 
         if isinstance(value, Principal):
@@ -68,7 +70,7 @@ def _normalize_names(
     *,
     field_name: str,
 ) -> frozenset[str]:
-    """Return validated principal role names as an immutable set."""
+    """Check principal role names, and return them as a `frozenset`."""
 
     if not isinstance(values, set | frozenset):
         raise TypeError(f"Principal {field_name} must be a set of strings.")
