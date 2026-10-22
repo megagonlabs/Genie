@@ -432,6 +432,31 @@ def test_handle_require_access_checks_the_boundary_before_the_policy() -> None:
         memory.get_unbounded_handle().require_access(Operation.READ, "missing")
 
 
+def test_handle_contains_checks_the_root_against_the_boundary() -> None:
+    """A handle refuses a `contains` root outside its boundary, and gives `False` for a candidate outside the root."""
+
+    memory = Memory(principal="owner")
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    branch = memory.put(parent=root, type="branch", value="branch", policy=MemoryPolicy.public())
+    leaf = memory.put(parent=branch, type="leaf", value="leaf", policy=MemoryPolicy.public())
+    hidden = memory.put(parent=branch, type="leaf", value="hidden")
+    sibling = memory.put(parent=root, type="branch", value="sibling", policy=MemoryPolicy.public())
+    outside = memory.put(type="other", value="outside", policy=MemoryPolicy.public())
+    handle = memory.get_handle(root=branch, principal="agent:reader")
+
+    assert handle.contains(branch, leaf) is True
+    assert handle.contains(leaf.id, leaf.id) is True
+    assert handle.contains(branch, hidden) is False
+    assert handle.contains(branch, sibling) is False
+    assert handle.contains(branch, outside) is False
+    assert handle.contains(branch, "missing") is False
+    for refused in (root, sibling, outside, "missing"):
+        with pytest.raises(AccessDenied, match="outside memory handle root"):
+            handle.contains(refused, leaf)
+    with pytest.raises(MemoryNotFound):
+        memory.get_unbounded_handle().contains("missing", leaf)
+
+
 def test_handle_delete_and_unbounded_ancestor_lookup_keep_explicit_boundaries() -> None:
     """A scoped handle can delete a block in its subtree, but an unbounded handle cannot infer an ancestor root."""
 
@@ -460,6 +485,8 @@ def test_handle_rejects_bad_block_references_before_boundary_checks() -> None:
         "update": lambda ref: handle.update(ref, metadata={}),
         "delete": lambda ref: handle.delete(ref),
         "children": lambda ref: handle.children(ref),
+        "contains root": lambda ref: handle.contains(ref, root),
+        "contains block": lambda ref: handle.contains(root, ref),
         "list_links": lambda ref: handle.list_links(ref),
         "list_mounts": lambda ref: handle.list_mounts(ref),
         "discover_mounts": lambda ref: handle.discover_mounts(ref),

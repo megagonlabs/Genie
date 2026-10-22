@@ -233,7 +233,7 @@ ownership, link, mount, and search methods as `Memory`, with these differences:
 | **Optional root argument** | `children()`, `ancestors()`, and `discover_mounts()` use the handle root by default. On an unbounded handle, a call without this argument raises `AccessDenied` |
 | **Search** | `scope=None` uses `default_scope`. A `root` is accepted only inside the handle. The handle builds the query again, so a prebuilt `MemoryQuery` cannot widen it. The handle checks a query that `before_search` rewrote against the handle again |
 | **Explicit policy** | `put(policy=...)` needs `allow_policy_override` |
-| **No `contains`** | The handle surface does not include it |
+| **`contains` candidate** | The handle checks only `root` against the boundary. A candidate outside the handle is also outside `root`, so it gives `False` |
 | **`attributes`** | A read-only property with the hook attributes that this handle reports |
 
 | Flag | `HandleCapability` | What it allows |
@@ -382,13 +382,20 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `root` (property) | `MemoryBlock` |
 | `create_child(*, type, value, parent=None, metadata=None, policy=None, content_type=None, id=None)` | `MemoryBlock`. `parent=None` means the tree root |
 | `children(block=None)` | `list[MemoryBlock]` |
-| `parent(block)` | `MemoryBlock \| None`. `None` at the tree root |
+| `parent(block)` | `MemoryBlock \| None`. `None` at the tree root, or when the principal cannot read the parent |
 | `ancestors(block, *, include_self=False)` | `list[MemoryBlock]`, never above the tree root |
 | `descendants(block=None, *, include_self=False)` | `list[MemoryBlock]`, depth-first pre-order |
 | `contains(block)` | `bool` |
 | `delete_subtree(block)` | `None` |
 
 - **A block outside the tree raises `AccessDenied`.**
+- **A member check calls `contains` and `get` on the access object.** It
+  needs `traverse_down` on the tree root and `read` on the member. The tree
+  root itself needs only `read`. The policies of other blocks have no effect
+  on the check, and it does not walk the tree.
+- **`descendants` skips a closed branch.** A block that denies
+  `traverse_down` is in the result, but its descendants are not. A denied
+  `traverse_down` on the selected block raises `AccessDenied`.
 
 ### `PropertyGraph` and `LineageDAG`
 
@@ -505,7 +512,7 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 | `BlockReader` | `get` |
 | `BlockWriter` | `put`, `set`, `update`, `delete` |
 | `AccessChecker` | `require_access` |
-| `TreeReader` | `children`, `ancestors` |
+| `TreeReader` | `children`, `ancestors`, `contains` |
 | `LinkReader` | `list_links` |
 | `LinkWriter` | `add_link`, `update_link` |
 | `AcyclicLinkWriter` | `add_acyclic_link` |

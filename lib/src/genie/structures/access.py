@@ -180,6 +180,24 @@ class TreeReader(Protocol):
 
         ...
 
+    def contains(self, root: BlockRef, block_id: BlockRef) -> bool:
+        """Return whether a readable block is inside a traversable subtree.
+
+        Args:
+            root: Potential subtree root block or id.
+            block_id: Candidate block or id.
+
+        Returns:
+            `True` when the candidate is the root or is below it, and the
+            principal can read it.
+
+        Raises:
+            AccessDenied: If downward traversal from the root is denied, or a
+                handle boundary refuses the root.
+        """
+
+        ...
+
 
 @runtime_checkable
 class LinkReader(Protocol):

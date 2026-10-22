@@ -180,6 +180,96 @@ def test_tree_returns_only_visible_children_and_descendants() -> None:
     assert not tree.contains(hidden)
 
 
+def test_tree_ignores_the_traversal_policy_of_other_branches() -> None:
+    """A branch that denies `traverse_down` does not block other branches, and `descendants` skips only its children.
+
+    Policies do not inherit. So a readable block below that branch is still a member.
+    """
+
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    closed = owner.put(
+        parent=root,
+        type="branch",
+        value="closed",
+        policy=MemoryPolicy(
+            read=AccessRule.allow(),
+            write=AccessRule.owner(),
+            search=AccessRule.allow(),
+            traverse_up=AccessRule.allow(),
+            traverse_down=AccessRule.owner(),
+        ),
+    )
+    closed_child = owner.put(parent=closed, type="node", value="closed child", policy=MemoryPolicy.public())
+    other = Memory(backend=owner.backend, principal="other")
+    branch = other.put(parent=root, type="branch", value="open", policy=MemoryPolicy.public())
+    tree = OwnershipTree(other, root=root)
+
+    leaf = tree.create_child(parent=branch, type="node", value="leaf")
+
+    assert tree.children(branch) == [leaf]
+    assert tree.parent(leaf) == branch
+    assert tree.ancestors(leaf) == [branch, root]
+    assert tree.descendants(branch) == [leaf]
+    assert tree.descendants() == [closed, branch, leaf]
+    assert tree.contains(leaf)
+    assert tree.contains(closed_child)
+    with pytest.raises(AccessDenied, match="cannot 'traverse_down'"):
+        tree.children(closed)
+    with pytest.raises(AccessDenied, match="cannot 'traverse_down'"):
+        tree.descendants(closed)
+
+    tree.delete_subtree(leaf)
+
+    assert tree.children(branch) == []
+
+
+def test_tree_member_below_an_unreadable_block_has_no_visible_parent() -> None:
+    """A readable block below an unreadable block is a member, but `parent` gives `None` and `descendants` does not reach it."""
+
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    hidden = owner.put(parent=root, type="node", value="hidden")
+    visible = owner.put(parent=hidden, type="node", value="visible", policy=MemoryPolicy.public())
+    tree = OwnershipTree(Memory(backend=owner.backend, principal="reader"), root=root)
+
+    assert tree.contains(visible)
+    assert not tree.contains(hidden)
+    assert tree.parent(visible) is None
+    assert tree.ancestors(visible) == [root]
+    assert tree.descendants() == []
+
+
+def test_tree_member_checks_do_not_walk_the_tree() -> None:
+    """A member check asks the access object for `contains`, so its cost does not grow with the tree size."""
+
+    class CountingBackend(InMemoryBackend):
+        """Count the child lookups."""
+
+        children_calls = 0
+
+        def children(self, block_id: str) -> list[MemoryBlock]:
+            """Count one child lookup."""
+
+            self.children_calls += 1
+            return super().children(block_id)
+
+    backend = CountingBackend()
+    memory = Memory(backend=backend)
+    root = memory.put(type="root", value="root")
+    nodes = [memory.put(parent=root, type="node", value=index) for index in range(20)]
+    tree = OwnershipTree(memory, root=root)
+    backend.children_calls = 0
+
+    note = tree.create_child(parent=nodes[-1], type="note", value="note")
+    assert tree.parent(note) == nodes[-1]
+    assert tree.ancestors(note) == [nodes[-1], root]
+    assert tree.contains(note)
+    assert tree.children(nodes[-1]) == [note]
+
+    assert backend.children_calls == 1
+
+
 def test_tree_does_not_follow_normal_links() -> None:
     """A normal link does not make a block a member of the ownership tree."""
 

@@ -72,6 +72,8 @@ note = tree.create_child(parent=task, type="note", value="Keep it short")
 ```
 
 - **It never goes above its `root`.**
+- **A member check reads only the root and the member.** It calls `contains` on the access object. So the policies of other branches have no effect on it.
+- **`descendants` skips a closed branch.** A block that denies `traverse_down` is in the result, but its descendants are not.
 - **Ownership controls lifecycle.** So a delete of a parent deletes its descendants.
 
 **`PropertyGraph`** treats blocks as nodes and `MemoryLink` values as directed,

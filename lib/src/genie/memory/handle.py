@@ -924,6 +924,42 @@ class MemoryHandle:
             allow_policy_override=allow_policy_override,
         )
 
+    def contains(self, root: str | MemoryBlock, block_id: str | MemoryBlock) -> bool:
+        """Return whether a readable block is inside a traversable subtree of this handle.
+
+        - **Boundary:** `root` is inside the handle boundary. So each block
+          below `root` is also inside it, and the handle does not check the
+          candidate against the boundary.
+        - **Policy:** the underlying `Memory` object checks `traverse_down` on
+          `root` and `read` on the candidate.
+
+        Args:
+            root: Potential subtree root block or id inside the handle
+                boundary.
+            block_id: Candidate block or id.
+
+        Returns:
+            `True` when the candidate is the root or is below it, and its read
+            policy allows the principal of the handle. A candidate that does
+            not exist, that the principal cannot read, or that is outside
+            `root` gives `False`.
+
+        Raises:
+            AccessDenied: If `root` is outside the handle boundary, or a policy
+                denies downward traversal from it. A rooted handle treats an
+                unknown root id as outside the handle, before the underlying
+                lookup.
+            MemoryNotFound: If an unbounded handle gets a root id that does not
+                exist.
+            TypeError: If `root` or `block_id` is not a block or string id.
+            ValueError: If `root` or `block_id` is empty.
+        """
+
+        root_id = _block_id(root)
+        candidate_id = _block_id(block_id)
+        self._require_in_subtree(HookOperation.CONTAINS, root_id)
+        return self._as_principal().contains(root_id, candidate_id)
+
     def _as_principal(self) -> Memory:
         """Create a `Memory` object that shares the state of the memory, but uses the principal and the attributes of this handle."""
 

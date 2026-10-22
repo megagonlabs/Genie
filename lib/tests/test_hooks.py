@@ -2635,6 +2635,7 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
         "add_mount": lambda: handle.add_mount(outside, inside),
         "search": lambda: handle.search("x", root=outside),
         "require_access": lambda: handle.require_access("read", outside),
+        "contains": lambda: handle.contains(outside, inside),
     }
     denied: list[str] = []
     for label, attempt in attempts.items():
@@ -2656,6 +2657,7 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
         HookOperation.ADD_MOUNT,
         HookOperation.SEARCH,
         HookOperation.REQUIRE_ACCESS,
+        HookOperation.CONTAINS,
     ]
     assert {check for _, check, _ in hook.denials} == {HandleCapability.SUBTREE}
     assert {subject for _, _, subject in hook.denials} == {outside.id}

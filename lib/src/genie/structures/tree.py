@@ -61,8 +61,11 @@ class OwnershipTree:
     - **Root boundary:** it keeps each operation inside its root.
     - **Access object does the work:** reads, writes, traversal, policy checks,
       and recursive delete go to the `Memory` or `MemoryHandle` access object.
-    - **Member checks:** each method that takes a member walks the tree from
-      the root to find it. A block outside the tree raises `AccessDenied`.
+    - **Member checks:** each method that takes a member asks the access
+      object whether the root `contains` it, then gets the member. The tree
+      root itself needs only a `get`. The check does not walk the tree. So
+      the policies of other branches do not affect it. A block outside the
+      tree, or a block that the principal cannot read, raises `AccessDenied`.
     """
 
     __slots__ = ("_access", "root_id")
@@ -174,7 +177,8 @@ class OwnershipTree:
             block: Tree member whose parent to return.
 
         Returns:
-            Visible direct parent, or `None` for the facade root.
+            Visible direct parent. `None` for the facade root, or when the
+            principal cannot read the direct parent.
 
         Raises:
             AccessDenied: If the block is outside this tree, or upward traversal
@@ -227,6 +231,11 @@ class OwnershipTree:
     ) -> list[MemoryBlock]:
         """Return visible descendants in depth-first pre-order.
 
+        - **Closed branches:** a block below the selected block that denies
+          `traverse_down` is in the result, but its descendants are not.
+        - **Selected block:** a denied `traverse_down` on the selected block
+          raises `AccessDenied`.
+
         Args:
             block: Optional tree member that is the traversal root. Defaults
                 to the root of this facade.
@@ -238,8 +247,8 @@ class OwnershipTree:
             the child order that the access object returns.
 
         Raises:
-            AccessDenied: If the block is outside this tree or downward
-                traversal is denied.
+            AccessDenied: If the block is outside this tree, or downward
+                traversal from the selected block is denied.
             MemoryConflict: If backend data repeats a block inside the tree.
         """
 
@@ -250,8 +259,10 @@ class OwnershipTree:
         """Return whether a block id is visible inside this tree.
 
         - **`False` cases:** a block id that does not exist, that the principal
-          cannot read, or that is outside the tree gives `False`. The exception
-          is a denied traversal, which raises.
+          cannot read, or that is outside the tree gives `False`.
+        - **Policy checks:** the access object checks `traverse_down` on the
+          tree root and `read` on the candidate. It does not check the blocks
+          between them.
         - **Ownership only:** the check does not cross links or mounts.
 
         Args:
@@ -261,15 +272,11 @@ class OwnershipTree:
             `True` when the candidate is the root or a visible descendant.
 
         Raises:
-            AccessDenied: If downward traversal needed for the check is denied.
+            AccessDenied: If downward traversal from the tree root is denied.
             MemoryNotFound: If the tree root no longer exists.
         """
 
-        candidate_id = _block_id(block)
-        return any(
-            member.id == candidate_id
-            for member in self._walk(self.root, include_self=True)
-        )
+        return self._access.contains(self.root_id, block)
 
     def delete_subtree(self, block: BlockRef) -> None:
         """Delete a tree member and its owned descendants.
@@ -295,12 +302,14 @@ class OwnershipTree:
         """Return a visible member, or raise `AccessDenied` for a block outside the facade root."""
 
         block_id = _block_id(block)
-        for member in self._walk(self.root, include_self=True):
-            if member.id == block_id:
-                return member
-        raise AccessDenied(
-            f"Memory block {block_id!r} is outside ownership tree root {self.root_id!r}."
-        )
+        if block_id == self.root_id:
+            return self.root
+        member = self._access.get(block_id) if self._access.contains(self.root_id, block_id) else None
+        if member is None:
+            raise AccessDenied(
+                f"Memory block {block_id!r} is outside ownership tree root {self.root_id!r}."
+            )
+        return member
 
     def _bounded_ancestors(self, member: MemoryBlock) -> list[MemoryBlock]:
         """Return visible ancestors up to the root of this facade, and no higher."""
@@ -323,7 +332,12 @@ class OwnershipTree:
         *,
         include_self: bool,
     ) -> Iterator[MemoryBlock]:
-        """Yield the blocks of a checked depth-first pre-order traversal from one member."""
+        """Yield the blocks of a checked depth-first pre-order traversal from one member.
+
+        - **Start:** a denied `traverse_down` on `start` raises `AccessDenied`.
+        - **Below the start:** the walk yields a block that denies
+          `traverse_down`, but it does not walk its children.
+        """
 
         seen: set[str] = set()
         stack = [start]
@@ -336,7 +350,13 @@ class OwnershipTree:
             seen.add(current.id)
             if include_self or current.id != start.id:
                 yield current
-            stack.extend(reversed(self._access.children(current)))
+            try:
+                children = self._access.children(current)
+            except AccessDenied:
+                if current.id == start.id:
+                    raise
+                continue
+            stack.extend(reversed(children))
 
 
 def _block_id(block: BlockRef) -> str:
