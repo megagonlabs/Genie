@@ -33,7 +33,7 @@ place where a test checks it.
 | **Scoped access cannot become wider.** A child handle cannot go outside its parent, change its principal, or widen global or ancestor access | `test_memory_handle.py`, `test_structure_policy.py` |
 | **Genie checks policy on each read path.** Genie filters `children`, `ancestors`, search results, and results that a hook rewrote | `test_policy.py`, `test_hooks.py` |
 | **Hooks cannot bypass authorization.** A `before_*` hook cannot change a parent, a policy, or a query after Genie authorized it | `test_hooks.py` |
-| **A write does not lose changes silently.** A stale `expected_version` raises `MemoryConflict` | `BlockStoreContract`, `test_sqlite_backend.py` |
+| **A write does not lose changes silently.** A stale `expected_version` raises `MemoryConflict`. So does a write or a delete made from a block that another writer deleted and created again with the same id | `BlockStoreContract`, `test_sqlite_backend.py`, `test_memory_crud.py` |
 | **Atomic operations are atomic.** Only one of many concurrent writers can claim a key, append a position, or close a cycle | The `*_is_atomic` contract tests, `test_structure_concurrency.py` |
 | **Recursive delete is all or nothing.** If another writer changes the subtree, the delete does not remove only a part of it | `BlockStoreContract`, adapter tests |
 | **One block id has one route.** `RoutedBackend` instances that share a `route_catalog` cannot store one id in 2 routes, and a stale route cache does not hide a block | `RouteCatalogContract`, `test_routed_backend.py` |

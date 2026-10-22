@@ -28,10 +28,11 @@ one backend object.
 ### Conditional writes
 
 - **`update_block(..., expected_version=...)`** succeeds only when the stored version matches. The contract requires a replacement version that is one higher.
-- **`delete_block(..., expected_versions=...)`** succeeds only when the mapping matches the current subtree exactly.
+- **`update_block` keeps the block identity.** A replacement that changes the `type`, `created_at`, `created_by`, or `policy` of the stored block raises `MemoryConflict`, with or without `expected_version`. So a replacement made from a deleted block cannot change a new block with the same id and version.
+- **`delete_block(..., expected_blocks=...)`** succeeds only when the given blocks match the current subtree exactly: the same ids, versions, and identity fields.
 - **`Memory.set`, `Memory.update`, and `Memory.delete`** give these expectations after they authorize the request.
 - **The contract requires atomicity.** A backend checks and changes state in one atomic step. So no other writer can come in between the check and the change.
-- **`None` skips the check.** So trusted backend-level administration can make an unconditional change.
+- **`None` skips the version check.** So trusted backend-level administration can make an unconditional change. The identity check still runs.
 
 ### Retried commits
 

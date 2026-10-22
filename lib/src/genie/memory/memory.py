@@ -23,7 +23,7 @@ from genie.hooks import (
 )
 from genie.memory._validation import require_non_empty_str
 from genie.memory.block import MemoryBlock, new_memory_id, utc_now
-from genie.memory.errors import HookRecursionError, MemoryNotFound, UnsupportedOperation
+from genie.memory.errors import HookRecursionError, MemoryConflict, MemoryNotFound, UnsupportedOperation
 from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import AccessDenied, Operation, PolicyEngine
 from genie.policy.policy import MemoryPolicy
@@ -249,7 +249,9 @@ class Memory:
             AccessDenied: If the principal cannot write and read the block.
                 The `write` check runs first. `read` is also needed, because
                 the call returns the stored block.
-            MemoryConflict: If another writer changes the block before commit.
+            MemoryConflict: If another writer changes the block before
+                commit, or deletes it and creates a new block with the same
+                id.
             MemoryNotFound: If the block does not exist.
             TypeError: If `block_id` is not a block or string id, or no codec
                 can encode the value.
@@ -299,7 +301,9 @@ class Memory:
             AccessDenied: If the principal cannot write and read the block.
                 The `write` check runs first. `read` is also needed, because
                 the call returns the stored block.
-            MemoryConflict: If another writer changes the block before commit.
+            MemoryConflict: If another writer changes the block before
+                commit, or deletes it and creates a new block with the same
+                id.
             MemoryNotFound: If the block does not exist.
             TypeError: If `block_id` is not a block or string id, `value` is
                 provided and the existing decoded value is not a dictionary,
@@ -358,7 +362,9 @@ class Memory:
 
         Raises:
             AccessDenied: If the target block denies write access.
-            MemoryConflict: If the checked subtree changes before commit.
+            MemoryConflict: If the target or the checked subtree changes
+                before commit, also if another writer deletes a block and
+                creates a new block with the same id.
             MemoryNotFound: If the block does not exist.
             TypeError: If `block_id` is not a block or string id, or no
                 registered codec can decode a block in the subtree.
@@ -369,13 +375,12 @@ class Memory:
             block = self._require_raw(_block_id(block_id))
             self._require_access(context, Operation.WRITE, block)
             blocks_to_delete = self.backend.descendants(block.id, include_self=True)
+            if not any(_same_block_version(candidate, block) for candidate in blocks_to_delete):
+                raise MemoryConflict(f"Memory block {block.id!r} changed before it could be deleted.")
             decoded_blocks = [self._decode_block(candidate) for candidate in blocks_to_delete]
             for decoded_block in decoded_blocks:
                 self.hooks.before_delete(context, decoded_block)
-            self.backend.delete_block(
-                block.id,
-                expected_versions={candidate.id: candidate.version for candidate in blocks_to_delete},
-            )
+            self.backend.delete_block(block.id, expected_blocks=blocks_to_delete)
             self.hooks.after_delete(context, *decoded_blocks)
 
     def children(self, block_id: str | MemoryBlock) -> list[MemoryBlock]:
@@ -1571,6 +1576,26 @@ def _require_link_hook_invariants(
             f"{callback} hooks may change only metadata; changed protected "
             f"fields: {names}."
         )
+
+
+def _same_block_version(left: MemoryBlock, right: MemoryBlock) -> bool:
+    """Return whether two reads show the same block at the same version.
+
+    - **Identity:** a block that is deleted and then created again with the
+      same id gets a new `created_at`. Its `created_by` and `policy` can also
+      be different. So the id and the version alone do not identify a block.
+    - **Same rule as the backends:** `BlockStore.delete_block` compares a
+      snapshot with these fields.
+    """
+
+    return (
+        left.id == right.id
+        and left.version == right.version
+        and left.type == right.type
+        and left.created_at == right.created_at
+        and left.created_by == right.created_by
+        and left.policy == right.policy
+    )
 
 
 def _block_id(block: str | MemoryBlock) -> str:

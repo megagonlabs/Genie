@@ -639,7 +639,7 @@ A direct call skips handles, policies, hooks, and codecs.
 
 | Protocol | Methods |
 | --- | --- |
-| `BlockStore` | `put_block(block)`, `get_block(block_id)`, `update_block(block, *, expected_version=None)`, `delete_block(block_id, *, expected_versions=None)` |
+| `BlockStore` | `put_block(block)`, `get_block(block_id)`, `update_block(block, *, expected_version=None)`, `delete_block(block_id, *, expected_blocks=None)` |
 | `TraversalIndex` | `children(block_id)`, `ancestors(block_id)`, `descendants(block_id, *, include_self=False)`, `contains(root_id, block_id)` |
 | `LinkStore` | `add_link(link)`, `update_link(link)`, `list_links(block_id, *, relation=None, direction="out")`, `delete_links_for_block(block_id)` |
 | `SearchIndex` | `search(query)` |
@@ -660,9 +660,10 @@ A direct call skips handles, policies, hooks, and codecs.
   facade that needs one of them raises `UnsupportedOperation` if the store does
   not have it.
 - **Conditional and uniqueness checks occur inside one store call:**
-  `expected_version`, `expected_versions`, `expected_block_id`, address
-  uniqueness, cycle checks, sequence allocation, temporal membership, and
-  route catalog claims. A failed check raises `MemoryConflict`.
+  `expected_version`, `expected_blocks`, the block identity check of
+  `update_block`, `expected_block_id`, address uniqueness, cycle checks,
+  sequence allocation, temporal membership, and route catalog claims. A
+  failed check raises `MemoryConflict`.
 - **`delete_block` cascades** to links, key bindings, log entries, and temporal
   entries in the same atomic step.
 - **The shared contract tests** in

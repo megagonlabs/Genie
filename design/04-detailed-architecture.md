@@ -113,11 +113,15 @@ with self._operation(HookOperation.X) as context:   # 1 open a context
 ### Deletion
 
 1. **Read the target** and check `write`.
-2. **Ask the traversal index** for `descendants(id, include_self=True)`.
+2. **Ask the traversal index** for `descendants(id, include_self=True)`. If
+   the target in that snapshot is not the block that step 1 authorized, at
+   the same version, `Memory` raises `MemoryConflict`.
 3. **Dispatch `before_delete` one time for each block** in that snapshot.
-4. **Call `delete_block(id, expected_versions={id: version, ...})`** with the
-   exact snapshot. If the subtree gets a new block, loses a block, or has a
-   changed block after step 2, the adapter fails with `MemoryConflict`.
+4. **Call `delete_block(id, expected_blocks=[...])`** with the exact
+   snapshot. If the subtree gets a new block, loses a block, or has a
+   changed block after step 2, the adapter fails with `MemoryConflict`. A
+   block that is deleted and created again with the same id is a changed
+   block.
 5. **Dispatch `after_delete(*blocks)`** with all removed blocks in one call.
 
 - **`Memory` does not remove dependent state.** The adapter removes the links,
@@ -479,11 +483,15 @@ loop:
 - **Each read and write holds the lock.** Each returned block or link is a deep
   copy. So no caller can change the store through a value that the store
   returned.
+- **Block identity on update:** check that the replacement has the same
+  `type`, `created_at`, `created_by`, and `policy` as the stored block. This
+  check runs with and without `expected_version`.
 - **Conditional update:** compare the stored version with `expected_version`.
   Then check that the version of the replacement is exactly 1 higher.
-- **Conditional delete:** build `{id: version}` again for the subtree, and
-  compare all of it with the snapshot of the caller. So an added or removed
-  descendant fails in the same way as a changed version.
+- **Conditional delete:** read the subtree again, and compare it with the
+  snapshot blocks of the caller: the same ids, versions, and identity fields.
+  So an added or removed descendant, or a block that is deleted and created
+  again with the same id, fails in the same way as a changed version.
 - **Cascade on delete:** delete the children first, with recursion. Then
   remove the block from the parent index. Remove the block, its links, its key
   bindings, its log entries, and its temporal entries.
@@ -556,7 +564,8 @@ same tasks:
 | Concern | Where it is handled |
 | --- | --- |
 | Lost update on a block | `expected_version` compare-and-swap in `BlockStore.update_block` |
-| Subtree change during a delete | `expected_versions` snapshot in `BlockStore.delete_block` |
+| Block deleted and created again with the same id | Identity check in `BlockStore.update_block` and in the `delete_block` snapshot |
+| Subtree change during a delete | `expected_blocks` snapshot in `BlockStore.delete_block` |
 | 2 writers bind one key | `KeyedStore.bind_key` and `rebind_key` |
 | 2 writers append to one log | `SequenceStore.append_log_entry` allocates the sequence |
 | 2 edges close a cycle | `AcyclicLinkStore.add_acyclic_link` checks and inserts in one step |
@@ -565,6 +574,16 @@ same tasks:
 
 - **`MemoryConflict` means "try again with fresh state".** It is not a bug
   report. It is the refusal that stops stale work.
+- **A version does not identify a block.** A block that is deleted and then
+  created again with the same id starts again at version 1. So the backend
+  also compares the `type`, `created_at`, `created_by`, and `policy`. These
+  fields do not change during the life of a block. A write made from the
+  old block cannot change the access or the value of the new block.
+- **Limit: the clock resolution.** `created_at` comes from the system clock.
+  If the old block and the new block get the same `created_at`, and also
+  have the same `type`, `created_by`, and `policy`, the check sees one
+  block. Access stays the same, because these fields decide access. But a
+  stale write can then replace the value of the new block.
 - **Hooks are not transactional.** They run synchronously on the thread of the
   caller. Their external side effects are not part of a backend transaction.
   So an `after_*` hook can see work that a later failure does not undo.

@@ -121,6 +121,10 @@ The table shows the stored records and the question that each record answers:
 - **`version`** starts at `1` and increases by exactly `1` for each update. An
   update compares it with `expected_version`, so a writer with a stale version
   gets `MemoryConflict`.
+- **A version alone does not identify a block.** A block that is deleted and
+  then created again with the same id starts again at `1`. So an update also
+  checks that the `type`, `created_at`, `created_by`, and `policy` did not
+  change.
 
 ### `MemoryLink`
 
@@ -212,9 +216,10 @@ The table shows the stored records and the question that each record answers:
   removes the subtree. In the same atomic step, it removes each link to or from
   those blocks. It also removes each key binding, log entry, and temporal entry
   that names those blocks as the container or as the target.
-- **A stale subtree stops the delete.** The caller gives the `{id: version}`
+- **A stale subtree stops the delete.** The caller gives the blocks of the
   snapshot that it authorized. The backend raises `MemoryConflict` if a block
-  was added, removed, or changed after that snapshot.
+  was added, removed, or changed after that snapshot. A block that was
+  deleted and created again with the same id is a changed block.
 - **The store does the atomic steps.** The store checks these cases inside one
   store call. It refuses a bind to an address that is in use. It refuses a link
   that closes a cycle in an acyclic relation. It refuses a second add of a block

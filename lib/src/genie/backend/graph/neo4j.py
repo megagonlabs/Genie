@@ -335,8 +335,10 @@ class Neo4jBackend:
 
         Raises:
             MemoryConflict: If the block does not exist, its version changed,
-                the replacement version is not `expected_version + 1`, or the
-                new parent does not exist or makes an ownership cycle.
+                the replacement version is not `expected_version + 1`, the
+                replacement changes its `type`, `created_at`, `created_by`,
+                or `policy`, or the new parent does not exist or makes an
+                ownership cycle.
             BackendError: If the Neo4j write fails.
         """
 
@@ -347,6 +349,7 @@ class Neo4jBackend:
             if previous_record is None:
                 raise MemoryConflict(f"Memory block {block.id!r} does not exist.")
             previous = _block_from_record(previous_record)
+            _validate_block_identity(previous, block)
             _validate_expected_version(previous, block, expected_version)
             if previous.parent_id != block.parent_id:
                 self._validate_parent(tx, block.id, block.parent_id)
@@ -386,29 +389,29 @@ class Neo4jBackend:
         self,
         block_id: str,
         *,
-        expected_versions: Mapping[str, int] | None = None,
+        expected_blocks: Sequence[MemoryBlock] | None = None,
     ) -> None:
-        """Delete a subtree, with an optional exact version snapshot.
+        """Delete a subtree, with an optional exact snapshot.
 
         Args:
-            block_id: Memory block id. With no `expected_versions`, an id that
+            block_id: Memory block id. With no `expected_blocks`, an id that
                 does not exist does nothing.
-            expected_versions: Exact id-to-version snapshot of the subtree to
-                delete. With a value, the delete fails if the subtree
-                membership or a version changed.
+            expected_blocks: Exact snapshot of the subtree to delete, as the
+                blocks that the caller read. With a value, the delete fails if
+                the subtree membership changed, or if the version or the
+                identity of a block changed.
 
         Raises:
-            MemoryConflict: If `expected_versions` no longer describes the
+            MemoryConflict: If `expected_blocks` no longer describes the
                 complete subtree.
             BackendError: If the Neo4j write fails.
         """
 
         def operation(tx: Any) -> None:
             records = self._descendant_records(tx, block_id, include_self=True)
-            current = {str(record["block"]["id"]): int(record["block"]["version"]) for record in records}
-            if expected_versions is not None and current != dict(expected_versions):
+            if expected_blocks is not None and not _matches_snapshot([_block_from_record(record) for record in records], expected_blocks):
                 raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
-            block_ids = list(current)
+            block_ids = [str(record["block"]["id"]) for record in records]
             if not block_ids:
                 return
             _consume(
@@ -1993,6 +1996,29 @@ def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
     """Return whether two links identify the same relationship."""
 
     return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
+
+
+def _same_block_identity(left: MemoryBlock, right: MemoryBlock) -> bool:
+    """Return whether two blocks are the same stored block, apart from the fields that an update changes."""
+
+    return left.id == right.id and left.type == right.type and left.created_at == right.created_at and left.created_by == right.created_by and left.policy == right.policy
+
+
+def _validate_block_identity(previous: MemoryBlock, replacement: MemoryBlock) -> None:
+    """Raise `MemoryConflict` if a replacement is not made from the stored block."""
+
+    if not _same_block_identity(previous, replacement):
+        raise MemoryConflict(f"Memory block {previous.id!r} is not the block that the replacement was made from. A replacement cannot change the type, created_at, created_by, or policy.")
+
+
+def _matches_snapshot(current: Sequence[MemoryBlock], expected: Sequence[MemoryBlock]) -> bool:
+    """Return whether a subtree has exactly the expected blocks, with the same versions and identities."""
+
+    current_by_id = {block.id: block for block in current}
+    expected_by_id = {block.id: block for block in expected}
+    if len(expected_by_id) != len(expected) or current_by_id.keys() != expected_by_id.keys():
+        return False
+    return all(block.version == expected_by_id[block.id].version and _same_block_identity(block, expected_by_id[block.id]) for block in current_by_id.values())
 
 
 def _validate_expected_version(previous: MemoryBlock, replacement: MemoryBlock, expected_version: int | None) -> None:

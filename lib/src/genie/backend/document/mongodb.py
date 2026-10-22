@@ -519,8 +519,9 @@ class MongoDBBackend:
 
         Raises:
             MemoryConflict: If the block does not exist, its version changed,
-                its parent is not valid, or the move puts it under one of its
-                descendants.
+                the replacement changes its `type`, `created_at`,
+                `created_by`, or `policy`, its parent is not valid, or the move
+                puts it under one of its descendants.
             TypeError: If the encoded value or metadata is not strict JSON.
             ValueError: If the block version is not a positive integer.
         """
@@ -532,6 +533,7 @@ class MongoDBBackend:
             if previous_document is None:
                 raise MemoryConflict(f"Memory block {block.id!r} does not exist.")
             previous = _block_from_document(previous_document)
+            _validate_block_identity(previous, block)
             _validate_expected_version(previous, block, expected_version)
             if previous.parent_id != block.parent_id:
                 self._validate_parent(session, block.id, block.parent_id)
@@ -554,9 +556,9 @@ class MongoDBBackend:
         self,
         block_id: str,
         *,
-        expected_versions: Mapping[str, int] | None = None,
+        expected_blocks: Sequence[MemoryBlock] | None = None,
     ) -> None:
-        """Delete a subtree, with an optional check against an exact version snapshot.
+        """Delete a subtree, with an optional check against an exact snapshot.
 
         - **Cleanup:** MongoDB has no cascading reference. So the adapter itself
           removes the links, key bindings, log entries, log counters, and
@@ -566,9 +568,9 @@ class MongoDBBackend:
 
         Args:
             block_id: Root block id to delete. An id that does not exist is not
-                an error, unless `expected_versions` names blocks.
-            expected_versions: Exact snapshot of the subtree, as a mapping from
-                id to version, that the delete requires.
+                an error, unless `expected_blocks` names blocks.
+            expected_blocks: Exact snapshot of the subtree, as the blocks that
+                the caller read, that the delete requires.
 
         Raises:
             MemoryConflict: If the given subtree snapshot is stale.
@@ -578,12 +580,11 @@ class MongoDBBackend:
 
         def operation(session: Any) -> None:
             documents = self._descendant_documents(session, block_id, include_self=True)
-            current = {str(document["_id"]): int(document["version"]) for document in documents}
-            if expected_versions is not None and current != dict(expected_versions):
+            if expected_blocks is not None and not _matches_snapshot([_block_from_document(document) for document in documents], expected_blocks):
                 raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
-            if not current:
+            block_ids = [str(document["_id"]) for document in documents]
+            if not block_ids:
                 return
-            block_ids = list(current)
             for chunk in _chunked(block_ids, _QUERY_CHUNK):
                 self._links.delete_many({"$or": [{"source_id": {"$in": chunk}}, {"target_id": {"$in": chunk}}]}, session=session)
                 self._key_bindings.delete_many({"$or": [{"collection_id": {"$in": chunk}}, {"block_id": {"$in": chunk}}]}, session=session)
@@ -2370,6 +2371,29 @@ def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
     """Return whether 2 links identify the same stored relationship."""
 
     return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
+
+
+def _same_block_identity(left: MemoryBlock, right: MemoryBlock) -> bool:
+    """Return whether two blocks are the same stored block, apart from the fields that an update changes."""
+
+    return left.id == right.id and left.type == right.type and left.created_at == right.created_at and left.created_by == right.created_by and left.policy == right.policy
+
+
+def _validate_block_identity(previous: MemoryBlock, replacement: MemoryBlock) -> None:
+    """Raise `MemoryConflict` if a replacement is not made from the stored block."""
+
+    if not _same_block_identity(previous, replacement):
+        raise MemoryConflict(f"Memory block {previous.id!r} is not the block that the replacement was made from. A replacement cannot change the type, created_at, created_by, or policy.")
+
+
+def _matches_snapshot(current: Sequence[MemoryBlock], expected: Sequence[MemoryBlock]) -> bool:
+    """Return whether a subtree has exactly the expected blocks, with the same versions and identities."""
+
+    current_by_id = {block.id: block for block in current}
+    expected_by_id = {block.id: block for block in expected}
+    if len(expected_by_id) != len(expected) or current_by_id.keys() != expected_by_id.keys():
+        return False
+    return all(block.version == expected_by_id[block.id].version and _same_block_identity(block, expected_by_id[block.id]) for block in current_by_id.values())
 
 
 def _validate_expected_version(

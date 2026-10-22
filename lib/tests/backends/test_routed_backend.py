@@ -751,7 +751,11 @@ def test_routed_backend_rejects_invalid_routes_and_duplicate_ids() -> None:
 
 
 def test_routed_backend_missing_read_paths_are_empty_and_mutations_are_safe_noops() -> None:
-    """For an unknown id, reads return empty results, and `delete_block` and `delete_links_for_block` do nothing."""
+    """For an unknown id, reads return empty results, and `delete_block` and `delete_links_for_block` do nothing.
+
+    A `delete_block` with a snapshot that is not empty raises `MemoryConflict`,
+    because the snapshot names a block that is gone.
+    """
 
     backend = RoutedBackend({"a": InMemoryBackend()}, default_route="a")
 
@@ -765,6 +769,9 @@ def test_routed_backend_missing_read_paths_are_empty_and_mutations_are_safe_noop
         MemoryQuery(root_id="missing", scope="subtree")
     ) == []
     backend.delete_block("missing")
+    backend.delete_block("missing", expected_blocks=[])
+    with pytest.raises(MemoryConflict):
+        backend.delete_block("missing", expected_blocks=[MemoryBlock(id="missing", type="note", value={})])
     backend.delete_links_for_block("missing")
 
 

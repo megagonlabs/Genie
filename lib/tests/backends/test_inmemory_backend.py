@@ -105,13 +105,13 @@ def test_backend_rejects_a_stale_conditional_subtree_delete() -> None:
 
     backend = InMemoryBackend()
     root = backend.put_block(MemoryBlock(id="root", type="root", value={}))
-    snapshot = {root.id: root.version}
+    snapshot = [root]
     child = backend.put_block(
         MemoryBlock(id="child", parent_id=root.id, type="child", value={})
     )
 
     with pytest.raises(MemoryConflict, match="changed"):
-        backend.delete_block(root.id, expected_versions=snapshot)
+        backend.delete_block(root.id, expected_blocks=snapshot)
 
     assert backend.get_block(root.id) is not None
     assert backend.get_block(child.id) is not None

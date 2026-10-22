@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Literal, Protocol, runtime_checkable
 
 from genie.memory.block import MemoryBlock
@@ -55,6 +55,13 @@ class BlockStore(Protocol):
     ) -> MemoryBlock:
         """Replace an existing block, with an optional compare-and-swap.
 
+        - **Fixed identity:** the replacement keeps the `type`, `created_at`,
+          `created_by`, and `policy` of the stored block. These fields do not
+          change during the life of a block.
+        - **Same id, new block:** a block that is deleted and then created
+          again with the same id is a different block. A replacement made from
+          the old block fails, also when the versions are equal.
+
         Args:
             block: Encoded replacement block.
             expected_version: Expected current version. With a value, the
@@ -67,7 +74,9 @@ class BlockStore(Protocol):
 
         Raises:
             MemoryConflict: If the block does not exist, its version changed,
-                or the change breaks a structure rule.
+                the replacement changes its `type`, `created_at`,
+                `created_by`, or `policy`, or the change breaks a structure
+                rule.
         """
 
         ...
@@ -76,7 +85,7 @@ class BlockStore(Protocol):
         self,
         block_id: str,
         *,
-        expected_versions: Mapping[str, int] | None = None,
+        expected_blocks: Sequence[MemoryBlock] | None = None,
     ) -> None:
         """Delete a block and backend-owned dependent state.
 
@@ -97,12 +106,15 @@ class BlockStore(Protocol):
 
         Args:
             block_id: Memory block id.
-            expected_versions: Exact id-to-version snapshot of the subtree to
-                delete. With a value, the delete is atomic, and it fails if the
-                subtree membership or a version changed.
+            expected_blocks: Exact snapshot of the subtree to delete, as the
+                blocks that the caller read. With a value, the delete is
+                atomic. It fails if the subtree membership changed, or if the
+                `version`, `type`, `created_at`, `created_by`, or `policy` of a
+                block changed. So a block that is deleted and then created
+                again with the same id and version does not match.
 
         Raises:
-            MemoryConflict: If `expected_versions` no longer describes the
+            MemoryConflict: If `expected_blocks` no longer describes the
                 complete subtree.
         """
 

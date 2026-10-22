@@ -3036,7 +3036,7 @@ def test_live_redis_backend_rejects_stale_writes_across_instances() -> None:
         assert current is not None
         child = second.put_block(MemoryBlock(id="child", parent_id=root.id, type="child", value={}))
         with pytest.raises(MemoryConflict, match="changed"):
-            first.delete_block(root.id, expected_versions={root.id: current.version})
+            first.delete_block(root.id, expected_blocks=[current])
         assert first.get_block(child.id) == child
     finally:
         _clear_live_data(first)

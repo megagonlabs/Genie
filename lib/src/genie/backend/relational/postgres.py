@@ -476,9 +476,11 @@ class PostgresBackend:
 
         Raises:
             MemoryConflict: If the block does not exist, its version changed,
-                or the new parent does not exist, is the block itself, or is one
-                of its descendants. With `expected_version`, also if the
-                replacement does not increase the version by exactly one.
+                the replacement changes its `type`, `created_at`,
+                `created_by`, or `policy`, or the new parent does not exist,
+                is the block itself, or is one of its descendants. With
+                `expected_version`, also if the replacement does not increase
+                the version by exactly one.
             TypeError: If the encoded value or metadata is not strict JSON.
         """
 
@@ -487,6 +489,7 @@ class PostgresBackend:
             if previous_row is None:
                 raise MemoryConflict(f"Memory block {block.id!r} does not exist.")
             previous = _block_from_row(previous_row)
+            _validate_block_identity(previous, block)
             _validate_expected_version(previous, block, expected_version)
             if previous.parent_id != block.parent_id:
                 self._validate_parent(connection, block.id, block.parent_id)
@@ -533,18 +536,18 @@ class PostgresBackend:
         self,
         block_id: str,
         *,
-        expected_versions: Mapping[str, int] | None = None,
+        expected_blocks: Sequence[MemoryBlock] | None = None,
     ) -> None:
-        """Delete a subtree, optionally from an exact version snapshot.
+        """Delete a subtree, optionally from an exact snapshot.
 
         In the same transaction, cascading foreign keys remove the links, key
         bindings, log entries, and temporal entries of the deleted blocks.
 
         Args:
             block_id: Root block id to delete. If the id does not exist and
-                `expected_versions` is empty or `None`, nothing happens.
-            expected_versions: Exact snapshot of the subtree, as block id to
-                version, that the delete requires.
+                `expected_blocks` is empty or `None`, nothing happens.
+            expected_blocks: Exact snapshot of the subtree, as the blocks that
+                the caller read, that the delete requires.
 
         Raises:
             MemoryConflict: If the given subtree snapshot is stale.
@@ -552,14 +555,14 @@ class PostgresBackend:
 
         with self._write_transaction() as connection:
             rows = self._descendant_rows(connection, block_id, include_self=True)
-            current = {str(row["id"]): int(row["version"]) for row in rows}
-            if expected_versions is not None and current != dict(expected_versions):
+            if expected_blocks is not None and not _matches_snapshot([_block_from_row(row) for row in rows], expected_blocks):
                 raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
-            if not current:
+            block_ids = [str(row["id"]) for row in rows]
+            if not block_ids:
                 return
             connection.execute(
                 f"DELETE FROM {self._blocks} WHERE id = ANY(%s)",
-                (list(current),),
+                (block_ids,),
             )
 
     def children(self, block_id: str) -> list[MemoryBlock]:
@@ -2312,6 +2315,29 @@ def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
     """Return whether two links identify the same stored relationship."""
 
     return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
+
+
+def _same_block_identity(left: MemoryBlock, right: MemoryBlock) -> bool:
+    """Return whether two blocks are the same stored block, apart from the fields that an update changes."""
+
+    return left.id == right.id and left.type == right.type and left.created_at == right.created_at and left.created_by == right.created_by and left.policy == right.policy
+
+
+def _validate_block_identity(previous: MemoryBlock, replacement: MemoryBlock) -> None:
+    """Raise `MemoryConflict` if a replacement is not made from the stored block."""
+
+    if not _same_block_identity(previous, replacement):
+        raise MemoryConflict(f"Memory block {previous.id!r} is not the block that the replacement was made from. A replacement cannot change the type, created_at, created_by, or policy.")
+
+
+def _matches_snapshot(current: Sequence[MemoryBlock], expected: Sequence[MemoryBlock]) -> bool:
+    """Return whether a subtree has exactly the expected blocks, with the same versions and identities."""
+
+    current_by_id = {block.id: block for block in current}
+    expected_by_id = {block.id: block for block in expected}
+    if len(expected_by_id) != len(expected) or current_by_id.keys() != expected_by_id.keys():
+        return False
+    return all(block.version == expected_by_id[block.id].version and _same_block_identity(block, expected_by_id[block.id]) for block in current_by_id.values())
 
 
 def _validate_expected_version(

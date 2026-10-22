@@ -709,9 +709,10 @@ class RedisBackend:
 
         Raises:
             MemoryConflict: If the block does not exist, its version changed,
-                the replacement does not raise the version by exactly one, or
-                the new parent does not exist, is the block itself, or makes an
-                ownership cycle.
+                the replacement does not raise the version by exactly one, the
+                replacement changes its `type`, `created_at`, `created_by`, or
+                `policy`, or the new parent does not exist, is the block
+                itself, or makes an ownership cycle.
             TypeError: If the encoded value or metadata is not strict JSON.
             ValueError: If the block version is less than one.
             BackendError: If the Redis write fails.
@@ -724,6 +725,7 @@ class RedisBackend:
             if previous_document is None:
                 raise MemoryConflict(f"Memory block {block.id!r} does not exist.")
             previous = _block_from_document(previous_document)
+            _validate_block_identity(previous, block)
             _validate_expected_version(previous, block, expected_version)
             if previous.parent_id != block.parent_id:
                 self._validate_parent(transaction.client, block.id, block.parent_id)
@@ -745,28 +747,26 @@ class RedisBackend:
         self,
         block_id: str,
         *,
-        expected_versions: Mapping[str, int] | None = None,
+        expected_blocks: Sequence[MemoryBlock] | None = None,
     ) -> None:
-        """Delete a subtree, optionally from an exact version snapshot.
+        """Delete a subtree, optionally from an exact snapshot.
 
         Args:
             block_id: Root block id to delete. If it does not exist, the call
-                does nothing, unless `expected_versions` names blocks.
-            expected_versions: Exact snapshot of the subtree, from block id to
-                version, that the delete requires.
+                does nothing, unless `expected_blocks` names blocks.
+            expected_blocks: Exact snapshot of the subtree, as the blocks that
+                the caller read, that the delete requires.
 
         Raises:
-            MemoryConflict: If `expected_versions` no longer describes the
+            MemoryConflict: If `expected_blocks` no longer describes the
                 complete subtree.
             BackendError: If the Redis write fails.
         """
 
         def operation(transaction: _RedisTransaction) -> None:
             documents = self._descendant_documents(transaction.client, block_id, include_self=True)
-            if expected_versions is not None:
-                current = {str(document["id"]): _stored_int(document.get("version"), field_name="block version") for document in documents}
-                if current != dict(expected_versions):
-                    raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
+            if expected_blocks is not None and not _matches_snapshot([_block_from_document(document) for document in documents], expected_blocks):
+                raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
             if not documents:
                 return
             block_ids = {str(document["id"]) for document in documents}
@@ -2978,6 +2978,29 @@ def _same_link_identity(left: MemoryLink, right: MemoryLink) -> bool:
     """Return whether two links identify the same stored relationship."""
 
     return left.id == right.id and left.source_id == right.source_id and left.target_id == right.target_id and left.relation == right.relation and left.created_at == right.created_at
+
+
+def _same_block_identity(left: MemoryBlock, right: MemoryBlock) -> bool:
+    """Return whether two blocks are the same stored block, apart from the fields that an update changes."""
+
+    return left.id == right.id and left.type == right.type and left.created_at == right.created_at and left.created_by == right.created_by and left.policy == right.policy
+
+
+def _validate_block_identity(previous: MemoryBlock, replacement: MemoryBlock) -> None:
+    """Raise `MemoryConflict` if a replacement is not made from the stored block."""
+
+    if not _same_block_identity(previous, replacement):
+        raise MemoryConflict(f"Memory block {previous.id!r} is not the block that the replacement was made from. A replacement cannot change the type, created_at, created_by, or policy.")
+
+
+def _matches_snapshot(current: Sequence[MemoryBlock], expected: Sequence[MemoryBlock]) -> bool:
+    """Return whether a subtree has exactly the expected blocks, with the same versions and identities."""
+
+    current_by_id = {block.id: block for block in current}
+    expected_by_id = {block.id: block for block in expected}
+    if len(expected_by_id) != len(expected) or current_by_id.keys() != expected_by_id.keys():
+        return False
+    return all(block.version == expected_by_id[block.id].version and _same_block_identity(block, expected_by_id[block.id]) for block in current_by_id.values())
 
 
 def _validate_expected_version(previous: MemoryBlock, replacement: MemoryBlock, expected_version: int | None) -> None:

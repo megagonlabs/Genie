@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import pytest
 
-from genie import AccessDenied, AccessRule, Memory, MemoryBlock, MemoryPolicy, Operation, PolicyEngine
+from genie import AccessDenied, AccessRule, InMemoryBackend, Memory, MemoryBlock, MemoryPolicy, Operation, PolicyEngine, Principal
 from genie.codecs import MAX_NESTING_DEPTH
 from genie.memory.errors import MemoryConflict, MemoryNotFound
 
@@ -162,6 +163,99 @@ def test_missing_blocks_and_conflicting_ids_raise_clear_errors() -> None:
         memory.put(type="note", value="duplicate", id=block.id)
     with pytest.raises(MemoryNotFound):
         memory.put(type="note", value="orphan", parent="missing")
+
+
+class _InterleavedBackend(InMemoryBackend):
+    """`InMemoryBackend` that runs a callback once, just before a selected backend call.
+
+    The tests use it to put the work of a second writer at a fixed point inside
+    one `Memory` operation, with no threads.
+    """
+
+    def __init__(self) -> None:
+        """Start with no callbacks."""
+
+        super().__init__()
+        self.before: dict[str, Callable[[], None]] = {}
+
+    def _run_before(self, method: str) -> None:
+        """Remove the callback for one method, then run it, if it exists."""
+
+        callback = self.before.pop(method, None)
+        if callback is not None:
+            callback()
+
+    def update_block(self, block: MemoryBlock, *, expected_version: int | None = None) -> MemoryBlock:
+        """Run the `update_block` callback, then update the block."""
+
+        self._run_before("update_block")
+        return super().update_block(block, expected_version=expected_version)
+
+    def descendants(self, block_id: str, *, include_self: bool = False) -> list[MemoryBlock]:
+        """Run the `descendants` callback, then read the subtree."""
+
+        self._run_before("descendants")
+        return super().descendants(block_id, include_self=include_self)
+
+    def delete_block(self, block_id: str, *, expected_blocks: Sequence[MemoryBlock] | None = None) -> None:
+        """Run the `delete_block` callback, then delete the subtree."""
+
+        self._run_before("delete_block")
+        super().delete_block(block_id, expected_blocks=expected_blocks)
+
+
+def _shared_block_and_bob_creates_again(backend: _InterleavedBackend) -> tuple[Memory, Callable[[], None]]:
+    """Return the memory of alice, who owns a block that bob can write, and a callback.
+
+    In the callback, bob deletes that block. Then he creates his own
+    `owner_private` block with the same id, and it also has version 1.
+    """
+
+    alice = Memory(backend=backend, principal="alice")
+    bob = Memory(backend=backend, principal="bob")
+    alice.put(type="doc", value={"text": "alice"}, id="shared", policy=MemoryPolicy.owner_or(principals={"bob"}))
+
+    def bob_creates_again() -> None:
+        bob.delete("shared")
+        bob.put(type="doc", value={"text": "bob"}, id="shared")
+
+    return alice, bob_creates_again
+
+
+@pytest.mark.parametrize("operation", ["set", "update"])
+def test_set_and_update_reject_a_block_created_again_with_the_same_id(operation: str) -> None:
+    """If another principal replaces the block with a new block that has the same id and version before the write, the write raises `MemoryConflict` and the new block does not change."""
+
+    backend = _InterleavedBackend()
+    alice, bob_creates_again = _shared_block_and_bob_creates_again(backend)
+    backend.before["update_block"] = bob_creates_again
+
+    with pytest.raises(MemoryConflict):
+        if operation == "set":
+            alice.set("shared", {"text": "stale"})
+        else:
+            alice.update("shared", value={"text": "stale"})
+
+    stored = backend.get_block("shared")
+    assert stored is not None
+    assert (stored.value, stored.created_by, stored.version) == ({"text": "bob"}, "bob", 1)
+    assert not PolicyEngine().allows(Operation.READ, stored, Principal("alice"))
+
+
+@pytest.mark.parametrize("step", ["descendants", "delete_block"])
+def test_delete_rejects_a_block_created_again_with_the_same_id(step: str) -> None:
+    """`delete` authorizes one block. If another principal replaces that block before the subtree read or before the commit, the delete raises `MemoryConflict` and the new block stays."""
+
+    backend = _InterleavedBackend()
+    alice, bob_creates_again = _shared_block_and_bob_creates_again(backend)
+    backend.before[step] = bob_creates_again
+
+    with pytest.raises(MemoryConflict):
+        alice.delete("shared")
+
+    stored = backend.get_block("shared")
+    assert stored is not None
+    assert (stored.value, stored.created_by) == ({"text": "bob"}, "bob")
 
 
 def test_contains_enforces_root_traversal_and_candidate_read_policy() -> None:

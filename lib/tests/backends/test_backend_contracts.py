@@ -20,6 +20,7 @@ from genie import (
     MemoryBlock,
     MemoryConflict,
     MemoryLink,
+    MemoryPolicy,
     MemoryQuery,
     RouteCatalog,
     RouteInfo,
@@ -123,6 +124,14 @@ def _key_order(value: object) -> object:
     return value
 
 
+# Fixed creation times. A block that is deleted and created again gets a
+# later `created_at`, and fixed values keep that difference independent of
+# the clock resolution.
+_FIRST_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+_SECOND_CREATED_AT = datetime(2026, 1, 2, tzinfo=UTC)
+_THIRD_CREATED_AT = datetime(2026, 1, 3, tzinfo=UTC)
+
+
 class BlockStoreContract(StructureBackendContract):
     """Contract tests for conditional writes and deletes of core blocks."""
 
@@ -151,6 +160,54 @@ class BlockStoreContract(StructureBackendContract):
                 current.with_updates(version=current.version + 2),
                 expected_version=current.version,
             )
+
+    def test_block_update_keeps_the_block_identity_contract(self) -> None:
+        """A replacement cannot change the `type`, `created_at`, `created_by`, or `policy` of a block, with or without `expected_version`."""
+
+        backend = self.make_backend()
+        stored = backend.put_block(
+            MemoryBlock(id="mem_note", type="note", value={}, policy=MemoryPolicy.owner_private(), created_by="alice", created_at=_FIRST_CREATED_AT)
+        )
+        changes: list[dict[str, object]] = [
+            {"type": "task"},
+            {"created_at": _SECOND_CREATED_AT},
+            {"created_by": "bob"},
+            {"policy": MemoryPolicy.public()},
+        ]
+
+        for change in changes:
+            with pytest.raises(MemoryConflict):
+                backend.update_block(stored.with_updates(**change, version=2), expected_version=1)
+            with pytest.raises(MemoryConflict):
+                backend.update_block(stored.with_updates(**change))
+
+        assert backend.get_block(stored.id) == stored
+
+    def test_block_update_rejects_a_block_created_again_with_the_same_id_contract(self) -> None:
+        """A replacement made from a deleted block does not change a new block with the same id and version.
+
+        - **Other creator:** the new block has another `created_by` and
+          `policy`, so a write made from the old block would change access.
+        - **Same creator:** only `created_at` is different. The write would
+          still replace the value of the new block with stale work.
+        """
+
+        backend = self.make_backend()
+        old = backend.put_block(
+            MemoryBlock(id="mem_note", type="note", value={"text": "old"}, policy=MemoryPolicy.owner_or(principals={"bob"}), created_by="alice", created_at=_FIRST_CREATED_AT)
+        )
+        new_blocks = [
+            MemoryBlock(id="mem_note", type="note", value={"text": "bob"}, policy=MemoryPolicy.owner_private(), created_by="bob", created_at=_SECOND_CREATED_AT),
+            replace(old, value={"text": "new"}, created_at=_SECOND_CREATED_AT),
+        ]
+
+        for new_block in new_blocks:
+            backend.delete_block(old.id)
+            new = backend.put_block(new_block)
+            assert new.version == old.version
+            with pytest.raises(MemoryConflict):
+                backend.update_block(old.with_updates(value={"text": "stale"}, version=2), expected_version=1)
+            assert backend.get_block(new.id) == new
 
     def test_block_reference_integrity_contract(self) -> None:
         """The backend rejects duplicate ids and invalid parent references on core writes."""
@@ -219,10 +276,40 @@ class BlockStoreContract(StructureBackendContract):
         child = backend.update_block(child.with_updates(parent_id=root.id))
 
         with pytest.raises(MemoryConflict):
-            backend.delete_block(root.id, expected_versions={root.id: root.version})
+            backend.delete_block(root.id, expected_blocks=[root])
+        with pytest.raises(MemoryConflict):
+            backend.delete_block(root.id, expected_blocks=[root, root])
+        with pytest.raises(MemoryConflict):
+            backend.delete_block("mem_missing", expected_blocks=[root])
 
         assert backend.get_block(root.id) is not None
         assert backend.get_block(child.id) is not None
+
+    def test_conditional_subtree_delete_rejects_blocks_created_again_with_the_same_id_contract(self) -> None:
+        """A snapshot does not match a new block with the same id and version, for the root or for a descendant."""
+
+        backend = self.make_backend()
+        old_root = backend.put_block(MemoryBlock(id="mem_root", type="root", value={}, created_by="alice", created_at=_FIRST_CREATED_AT))
+        old_child = backend.put_block(MemoryBlock(id="mem_child", parent_id=old_root.id, type="child", value={}, created_by="alice", created_at=_FIRST_CREATED_AT))
+        backend.delete_block(old_root.id)
+        new_root = backend.put_block(replace(old_root, created_by="bob", created_at=_SECOND_CREATED_AT))
+        new_child = backend.put_block(replace(old_child, created_by="bob", created_at=_SECOND_CREATED_AT))
+
+        with pytest.raises(MemoryConflict):
+            backend.delete_block(old_root.id, expected_blocks=[old_root, old_child])
+        assert backend.get_block(new_root.id) == new_root
+        assert backend.get_block(new_child.id) == new_child
+
+        backend.delete_block(new_child.id)
+        newest_child = backend.put_block(replace(new_child, created_at=_THIRD_CREATED_AT))
+        with pytest.raises(MemoryConflict):
+            backend.delete_block(new_root.id, expected_blocks=[new_root, new_child])
+        assert backend.get_block(new_root.id) == new_root
+        assert backend.get_block(newest_child.id) == newest_child
+
+        backend.delete_block(new_root.id, expected_blocks=[newest_child, new_root])
+        assert backend.get_block(new_root.id) is None
+        assert backend.get_block(newest_child.id) is None
 
 
 # Two separate trees. One tree is 3 levels deep and has a fork. The shape gives

@@ -452,7 +452,9 @@ class RoutedBackend:
 
         Raises:
             MemoryConflict: If the block does not exist, its version changed,
-                or the new parent is in another route.
+                the owning route refuses a change of the `type`, `created_at`,
+                `created_by`, or `policy`, or the new parent is in another
+                route.
         """
 
         with self._lock:
@@ -472,7 +474,7 @@ class RoutedBackend:
         self,
         block_id: str,
         *,
-        expected_versions: Mapping[str, int] | None = None,
+        expected_blocks: Sequence[MemoryBlock] | None = None,
     ) -> None:
         """Delete a block from its owning route and remove catalog state.
 
@@ -480,38 +482,42 @@ class RoutedBackend:
           link-store links of the block and of each descendant that the owning
           route deleted with it.
         - **Route catalog:** after the delete commits, the `route_catalog`
-          releases the entries of the deleted blocks. With `expected_versions`,
+          releases the entries of the deleted blocks. With `expected_blocks`,
           those are exactly the snapshot ids. If the release fails, the delete
           still succeeds, and a warning goes to the logger of this module. The
           entries stay until `release_routes` removes them, so until then a
           put of those ids raises `MemoryConflict`.
 
         Args:
-            block_id: Memory block id. An unknown id is ignored.
-            expected_versions: Exact id-to-version snapshot of the subtree to
-                delete. With a value, the owning route applies the
-                compare-and-swap.
+            block_id: Memory block id. An unknown id is ignored, unless
+                `expected_blocks` is not empty.
+            expected_blocks: Exact snapshot of the subtree to delete, as the
+                blocks that the caller read. With a value, the owning route
+                applies the compare-and-swap.
 
         Raises:
-            MemoryConflict: If `expected_versions` no longer describes the
-                complete subtree.
+            MemoryConflict: If `expected_blocks` no longer describes the
+                complete subtree. For an unknown id, a snapshot that is not
+                empty is stale.
         """
 
         with self._lock:
             backend = self.backend_for_block(block_id)
             if backend is None:
+                if expected_blocks:
+                    raise MemoryConflict(f"Memory subtree {block_id!r} changed before it could be deleted.")
                 return
             descendants = self.descendants(block_id, include_self=True)
             backend.delete_block(
                 block_id,
-                expected_versions=expected_versions,
+                expected_blocks=expected_blocks,
             )
             for block in descendants:
                 self._route_cache.pop(block.id, None)
                 if self.link_store is not None:
                     self.link_store.delete_links_for_block(block.id)
             if self.route_catalog is not None:
-                deleted_ids = list(expected_versions) if expected_versions is not None else [block.id for block in descendants]
+                deleted_ids = [block.id for block in expected_blocks] if expected_blocks is not None else [block.id for block in descendants]
                 self._release_deleted_claims(deleted_ids)
 
     def children(self, block_id: str) -> list[MemoryBlock]:
