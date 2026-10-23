@@ -207,7 +207,7 @@ def test_search_counts_a_block_once_when_it_moves_past_the_cursor() -> None:
         def __init__(self) -> None:
             super().__init__()
             self.calls = 0
-            self.change: Callable[[], None] | None = None
+            self.change: Callable[[], object] | None = None
 
         def search(self, query: MemoryQuery) -> list[SearchResult]:
             self.calls += 1
