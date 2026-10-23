@@ -47,6 +47,7 @@ from tests.backends.test_backend_contracts import (
     KeyedStoreContract,
     LinkStoreContract,
     RouteCatalogContract,
+    SearchIndexContract,
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
@@ -1664,7 +1665,7 @@ def test_redis_subtree_scope_search_runs_as_one_read_only_script() -> None:
     client = ScriptedClient()
     backend = _detached_backend(client, readonly_scripts=True)
 
-    assert [result.block.id for result in backend.search(MemoryQuery(root_id="root", scope=Scope.SUBTREE))] == ["root", "child"]
+    assert sorted(result.block.id for result in backend.search(MemoryQuery(root_id="root", scope=Scope.SUBTREE))) == ["child", "root"]
     assert client.calls == [(redis_module._LUA_DIGESTS["descendants"], 2, "genie:block:root", "genie:children:root", "genie", "root")]
 
 
@@ -1691,7 +1692,7 @@ def test_redis_ancestors_scope_search_keeps_the_starting_block() -> None:
     client = ScriptedClient()
     backend = _detached_backend(client, readonly_scripts=True)
 
-    assert [result.block.id for result in backend.search(MemoryQuery(root_id="leaf", scope=Scope.ANCESTORS))] == ["leaf", "root"]
+    assert sorted(result.block.id for result in backend.search(MemoryQuery(root_id="leaf", scope=Scope.ANCESTORS))) == ["leaf", "root"]
     assert client.calls == [(redis_module._LUA_DIGESTS["ancestors"], 1, "genie:block:leaf", "genie", "leaf")]
 
 
@@ -1718,7 +1719,7 @@ def test_redis_ancestors_scope_search_falls_back_to_the_guard() -> None:
     client = GuardedClient()
     backend = _detached_backend(client)
 
-    assert [result.block.id for result in backend.search(MemoryQuery(root_id="leaf", scope=Scope.ANCESTORS))] == ["leaf", "root"]
+    assert sorted(result.block.id for result in backend.search(MemoryQuery(root_id="leaf", scope=Scope.ANCESTORS))) == ["leaf", "root"]
     assert backend.search(MemoryQuery(root_id="missing", scope=Scope.ANCESTORS)) == []
     assert client.guard_reads == 4
 
@@ -2441,6 +2442,7 @@ class TestRedisStructureBackendContracts(
     SequenceStoreContract,
     TemporalStoreContract,
     TemporalIndexContract,
+    SearchIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
     RouteCatalogContract,
@@ -2625,7 +2627,7 @@ def test_live_redis_backend_searches_every_scope_and_filters_candidates() -> Non
         leaf = backend.put_block(MemoryBlock(id="leaf", parent_id=child.id, type="leaf", value={"text": "gamma"}))
 
         assert [result.block.id for result in backend.search(MemoryQuery(root_id=child.id, scope=Scope.SELF))] == [child.id]
-        assert [result.block.id for result in backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS))] == [leaf.id, child.id, root.id]
+        assert sorted(result.block.id for result in backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS))) == sorted([leaf.id, child.id, root.id])
         assert backend.search(MemoryQuery(root_id="missing", scope=Scope.SELF)) == []
         assert backend.search(MemoryQuery(types=["missing-type"])) == []
         assert backend.search(MemoryQuery("missing text")) == []
@@ -2684,7 +2686,7 @@ def test_live_redis_depth_reads_are_atomic_under_concurrent_writes() -> None:
                     assert [block.id for block in backend.descendants(deepest.id, include_self=True)] == [deepest.id]
                     assert [result.block.id for result in backend.search(MemoryQuery(root_id=deepest.id, scope=Scope.SELF))] == [deepest.id]
                     assert [result.block.id for result in backend.search(MemoryQuery(root_id=root.id, scope=Scope.SUBTREE))] == [root.id, *reversed(chain), deepest.id]
-                    assert [result.block.id for result in backend.search(MemoryQuery(root_id=deepest.id, scope=Scope.ANCESTORS))] == [deepest.id, *chain, root.id]
+                    assert sorted(result.block.id for result in backend.search(MemoryQuery(root_id=deepest.id, scope=Scope.ANCESTORS))) == sorted([deepest.id, *chain, root.id])
             finally:
                 stop.set()
             assert writer.result(timeout=30) > 0

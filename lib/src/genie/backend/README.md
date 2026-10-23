@@ -155,7 +155,8 @@ A production adapter does these things:
 - **Enforces atomically:** block versions, subtree snapshots, keyed updates, sequences, DAG inserts, and route catalog claims.
 - **Documents what a retried commit repeats,** if it retries at all.
 - **Maps operational failures** to `BackendError`.
-- **Returns normalized `SearchResult` values.**
+- **Returns normalized `SearchResult` values** in the search order: `score` from high to low, then `created_at`, then block id. It returns only the results after `query.after`, and at most `query.limit`. `page_results` does this for a list of scored results.
+- **Gives a block the same search score on each call,** and computes it from the block and the query only. A changing score makes a cursor skip or repeat results. A score from other blocks lets hidden blocks change the order of visible results.
 
 The reusable [backend
 contracts](../../../tests/backends/test_backend_contracts.py) cover the optional

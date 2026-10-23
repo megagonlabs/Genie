@@ -588,7 +588,7 @@ ben = memory.put(type="traveler", value={"name": "Ben Okafor"}, metadata={"regio
 | What occurs if the PostgreSQL driver is not installed? | `PostgresBackend(...)` | `UnsupportedOperation`: `PostgresBackend requires the optional 'psycopg' package; install 'genie[postgres]'.` |
 | Where is the trip of Ana stored? | `backend.route_for_block(trip.id)` | `eu`, the route of its parent, although the trip has no `region` |
 | Can the application send a child of Ana to the US store? | `memory.put(parent=ana, ..., metadata={"region": "us"})` | `MemoryConflict`: `Child route 'us' does not match parent route 'eu'.` |
-| Does one search still see both stores? | `memory.search(types=["traveler"])` | Yes: Ana and Ben, in an order that the backend chooses |
+| Does one search still see both stores? | `memory.search(types=["traveler"])` | Yes: Ana, then Ben. They have the same score, so they come in creation order |
 
 **What this shows about the design**
 

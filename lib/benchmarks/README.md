@@ -478,7 +478,7 @@ The `contention` group has 3 rules of its own:
 | `--sections` | Blocks in the chain between the corpus root and its leaves |
 | `--value-size` | Padding characters that the generator adds to each value |
 | `--links-per-block` | Outgoing links on the corpus hub block |
-| `--search-limit` | Candidate budget for search |
+| `--search-limit` | Result limit for search |
 | `--seed` | Seed for the corpus generator |
 | `--workers` | Callers that run one case at the same time. You can repeat this flag. The run always measures level 1 |
 | `--workload` | Measure the mixed read/write scenario instead of the cases. Needs a `--workers` level above 1. A level of 4 or more gives the 3 to 1 split |
@@ -608,10 +608,11 @@ With more than one worker, 4 more decisions apply:
   different case.
 - **Compare targets only on the same case and the same settings.** The
   `settings` line shows those settings.
-- **`search_limit` is a candidate budget, not a result count.** The backend
-  applies it before `Memory` filters the results by policy and scope. So a
-  search can return fewer blocks than the budget. For this reason, each search
-  case records `returned` together with `candidate_budget`.
+- **`search_limit` is the `limit` of each search.** The `backend` layer
+  returns at most this number of candidates. The `memory` layer counts only
+  the results that the principal can see. If hidden blocks match, it calls the
+  backend again, so it can do more backend work than the `backend` layer.
+  Each search case records `returned` together with `limit`.
 - **`in_memory` is not always the fastest target.** It is the reference
   implementation, and its code is written for clarity. So an operation can
   cost more there than on a persistent adapter. An unexpected number is a

@@ -150,17 +150,18 @@ A search through a bounded handle shows how the 2 checks work together:
    scope. Through a handle, the rewritten query also goes through the handle
    checks from step 1 again. The handle refuses a scope that it does not
    permit.
-4. **The backend searches** and applies `query.limit`.
-5. **`Memory` decodes and filters the results.** It decodes each result. Then
-   it filters the results against block policies and checks the query scope
-   again.
+4. **The backend returns one page** of results in the search order.
+5. **`Memory` filters and decodes the page.** It filters the results against
+   block policies and checks the query scope again. Then it decodes the
+   results that it keeps. It gets the next page until it has `limit` visible
+   results, or until the backend has no more results.
 6. **`after_search` can change the list.** Then the same filter runs a second
    time over the list that the hooks returned. `Memory` keeps one verdict for
    each block id, so it reads a block once for both passes.
 
-- **The limit is a candidate budget, not a result count.** The filter runs
-  after the backend uses the limit. So a visible result page can be shorter
-  than the limit that the caller asked for.
+- **The limit counts visible results.** The filter runs before the count.
+  So blocks that the caller cannot see do not change which visible results
+  the caller gets.
 - **A filtered read returns less and does not refuse.** The caller learns
   nothing about the blocks that it cannot see.
 - **The right that each operation checks** is in

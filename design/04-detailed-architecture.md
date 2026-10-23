@@ -341,11 +341,13 @@ order:
 3. **Run `before_search`.** Then normalize the filters again and **authorize
    again**, because a hook can return a new query. For a handle search, the
    `boundary` check of the handle runs first on the changed query.
-4. **Call `backend.search(query)`.** The backend resolves the scope, finds the
-   matches, and applies `query.limit`.
-5. **Decode** each result block.
-6. **Filter** with `_filter_visible_results`.
-7. **Run `after_search`**, then **filter again** with the same verdict cache.
+4. **Get backend pages** in `_collect_visible_results`. The backend
+   resolves the scope, finds the matches, and returns at most the batch size
+   of results after the cursor, in search order.
+5. **Filter** each result with `_is_visible_result`, and **decode** only the
+   results that it keeps. Continue until there are `query.limit` visible
+   results.
+6. **Run `after_search`**, then **filter again** with the same verdict cache.
 
 `_can_return_search_result` reads the stored block again by id. It checks
 `search`, then `read`, then scope membership:
@@ -358,15 +360,30 @@ order:
 | `ancestors` | `block_id == root_id` or `backend.contains(block_id, root_id)` |
 | `links` | `block_id == root_id`, or a stored link in either direction connects them |
 
-- **One verdict for each block id in each call.** The 2 filter passes share a
-  dict, so `Memory` reads each block one time. A verdict depends only on the
-  id and the stored block, never on the other results. So a reused verdict is
-  as strict as a new check.
+- **A handle adds one check.** `MemoryHandle` gives a `keep` check that
+  removes `self`, `subtree`, and `links` results outside the handle root. It
+  runs before the count, so these results do not use part of the limit.
+- **One verdict for each block id in each call.** The backend pages and the
+  filter after `after_search` share a dict, so `Memory` reads each block one
+  time. A verdict depends only on the id and the stored block, never on the
+  other results. So a reused verdict is as strict as a new check.
 - **A side effect:** if a hook deletes a block inside `after_search`, the
   result for that block stays on the current page.
-- **`limit` is a candidate budget.** The backend uses it before the policy and
-  scope filters, so a visible page can be shorter. A caller that needs a full
-  page asks for more results and truncates the list.
+- **`limit` counts visible results.** So blocks that the caller cannot see
+  do not change which visible results it gets.
+- **Search order:** `score` from high to low, then `created_at` from old to
+  new, then block id. `page_results` applies it in each shipped adapter.
+- **Page size:** the first backend page asks for `query.limit` results. Each
+  next page starts after the `cursor` of the last result and asks for 2 times
+  as many. So the number of backend calls grows with the log of the number of
+  hidden matches.
+- **End:** the loop stops at `query.limit` visible results, or when a page is
+  shorter than its size. There is no cap, because a cap would let hidden
+  blocks change the results again.
+- **Duplicates:** a block that changes between 2 pages can move past the
+  cursor and come back. Only its first result counts.
+- **A backend that ignores the cursor** still lets the loop end, because each
+  page is larger than the one before. It costs more calls.
 
 ## Query normalization
 
@@ -442,8 +459,8 @@ loop:
   raise `AccessDenied` and the entries for blocks that do not exist.
 - **Continue until the loop has `limit` visible items,** or until the store
   has no more entries.
-- **So a structure limit counts visible items.** A search limit counts
-  candidates. The cost is more round trips if most entries are hidden.
+- **So a structure limit counts visible items,** as a search limit does.
+  The cost is more round trips if most entries are hidden.
 - **An exact lookup hides nothing.** If an entry refers to a block that does
   not exist, `_resolve_exact` raises `MemoryNotFound`. It does not return
   `None`, because an entry without its block is an integrity problem, not a

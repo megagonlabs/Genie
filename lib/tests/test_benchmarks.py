@@ -144,7 +144,7 @@ def test_the_two_layers_of_one_case_see_an_identical_corpus() -> None:
 
 
 def test_search_cases_report_what_one_call_returned() -> None:
-    """The notes show the `returned` count next to the `candidate_budget` that produced it, so a short page is visible."""
+    """The notes show the `returned` count next to the `limit` of the search, so a short page is visible."""
 
     cases = select(default_cases(), names=("search",))
     result = runner.run(settings=TINY, cases=cases, progress=_quiet())
@@ -152,7 +152,7 @@ def test_search_cases_report_what_one_call_returned() -> None:
     for section in result["sections"]:
         for case in section["cases"]:
             for variant in case["variants"].values():
-                assert variant["notes"]["candidate_budget"] == TINY.search_limit
+                assert variant["notes"]["limit"] == TINY.search_limit
                 assert variant["notes"]["returned"] <= TINY.search_limit
 
 

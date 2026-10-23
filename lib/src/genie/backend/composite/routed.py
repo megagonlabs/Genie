@@ -27,6 +27,7 @@ from genie.memory.block import MemoryBlock
 from genie.memory.errors import BackendCorruption, MemoryConflict, UnsupportedOperation
 from genie.memory.links import MemoryLink
 from genie.query.filters import matches_filters
+from genie.query.paging import page_results
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
 from genie.query.scope import Scope
@@ -718,15 +719,16 @@ class RoutedBackend:
         - **`links` scope:** with a shared link store, the composite matches
           the root and the blocks that a link connects to it.
         - **Other scoped searches:** the route of the root answers.
-        - **Global search:** each route returns up to `limit` results. The
-          composite merges them by score and keeps the first `limit`.
+        - **Global search:** each route returns up to `limit` results after
+          `query.after`. The composite merges them in search order and keeps
+          the first `limit`.
 
         Args:
             query: Normalized memory query.
 
         Returns:
             Search results from the shared index, the scoped route, or the
-            merged routes.
+            merged routes, in the search order of `page_results`.
         """
 
         if self.search_index is not None:
@@ -739,8 +741,7 @@ class RoutedBackend:
         results: list[SearchResult] = []
         for backend in self._routes.values():
             results.extend(backend.search(query))
-        results.sort(key=lambda result: result.score, reverse=True)
-        return results[: query.limit]
+        return page_results(results, query)
 
     def backend_for_block(self, block_id: str) -> MemoryBackend | None:
         """Return the backend that owns a block id.
@@ -965,8 +966,7 @@ def _search_blocks(query: MemoryQuery, blocks: list[MemoryBlock]) -> list[Search
             score = float(haystack.count(text) or 1)
             reason = "matched text"
         results.append(SearchResult(block=_copy_block(block), score=score, reason=reason))
-    results.sort(key=lambda result: result.score, reverse=True)
-    return results[: query.limit]
+    return page_results(results, query)
 
 
 def _copy_block(block: MemoryBlock) -> MemoryBlock:

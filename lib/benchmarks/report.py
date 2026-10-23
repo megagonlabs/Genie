@@ -77,7 +77,7 @@ WORKLOAD_UNUSED_SETTINGS = ("iterations", "search_limit", "links_per_block")
 
 - **Why:** a mixed worker stops at the end of the write sweep or at a repeated
   call count, never at `iterations`. No stream searches or follows a link, so
-  the search budget and the hub links also have no effect.
+  the search limit and the hub links also have no effect.
 - **Effect:** the header line does not show these settings. So it cannot show
   a value as if that value changed the result. The JSON file still records all
   settings.

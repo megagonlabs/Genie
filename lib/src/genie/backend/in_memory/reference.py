@@ -19,6 +19,7 @@ from genie.memory.block import MemoryBlock
 from genie.memory.errors import MemoryConflict
 from genie.memory.links import MemoryLink
 from genie.query.filters import matches_filters
+from genie.query.paging import page_results
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
 from genie.query.scope import Scope
@@ -1009,7 +1010,8 @@ class InMemoryBackend:
             query: Normalized memory query.
 
         Returns:
-            Search results sorted by descending score.
+            Search results in the search order of `page_results`: at most
+            `query.limit` results after `query.after`.
         """
 
         with self._structure_lock:
@@ -1030,8 +1032,7 @@ class InMemoryBackend:
                     score = float(haystack.count(text) or 1)
                     reason = "matched text"
                 results.append(SearchResult(block=_copy_block(block), score=score, reason=reason))
-            results.sort(key=lambda result: result.score, reverse=True)
-            return results[: query.limit]
+            return page_results(results, query)
 
     def _scope_candidates(self, query: MemoryQuery) -> list[MemoryBlock]:
         """Return the candidate blocks before the text, type, and filter matching."""

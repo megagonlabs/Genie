@@ -48,9 +48,9 @@ class BenchmarkSettings:
         value_size: The padding characters that the generator adds to each
             value.
         links_per_block: The outgoing links on the corpus hub block.
-        search_limit: The candidate budget for search. The backend applies it
-            before the policy and scope filters. So a search can return fewer
-            blocks than this number.
+        search_limit: The `limit` of each search. A backend search returns
+            at most this number of candidates. A `Memory` search returns at
+            most this number of visible results.
         seed: The seed for the corpus generator. The same seed always writes
             the same blocks.
         workers: The caller counts to measure, smallest first. Each level runs

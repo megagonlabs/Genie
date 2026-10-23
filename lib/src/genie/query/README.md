@@ -16,15 +16,25 @@ results = memory.search(
 )
 ```
 
-- **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. The query has optional `text`, an optional `root_id`, one `Scope`, optional `types` and `filters`, and a `limit` that cannot be negative.
-- **Results are ranked `SearchResult` values.** Each one holds a `block`, a finite numeric `score`, and an optional `reason`.
+- **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. The query has optional `text`, an optional `root_id`, one `Scope`, optional `types` and `filters`, a `limit` that cannot be negative, and an optional `after` cursor.
+- **Results are ranked `SearchResult` values.** Each one holds a `block`, a finite numeric `score`, and an optional `reason`. Its `cursor` property gives the position after it.
 - **A new query checks runtime types.** It also copies the type lists and the nested filter operands that the caller owns.
 
-### `limit` is a backend budget, not a result count
+### Search order, `limit`, and `after`
 
-- **The backend applies `limit` first.** Then `Memory` removes the results that the principal cannot `search` or `read`, and the results outside the query `Scope`.
-- **So a search can return fewer results than the `limit`,** also when more blocks match. This is expected behavior.
-- **There is no result cursor.** A caller that needs a full page asks for a larger `limit` and cuts the list itself. The caller also decides how much extra backend work that is worth.
+- **Search order:** results sort by `score` from high to low, then by `created_at` from old to new, then by block id. So results with the same score come in creation order.
+- **`limit` counts visible results.** `Memory` removes the results that the principal cannot `search` or `read`, and the results outside the query `Scope`, before it counts. So blocks that the caller cannot see do not change which visible results it gets.
+- **`Memory` gets backend pages.** The first page has at most `limit` results. Each next page starts after the last result and is 2 times larger. `Memory` stops when it has `limit` visible results, or when the backend has no more results. There is no cap, because a cap would let hidden blocks change the results again.
+- **The cost:** if the caller can see only a few of many matching blocks, one search calls the backend many times.
+- **Next page:** set `after` to the `cursor` of the last result.
+
+```python
+first = memory.search("concise", limit=20)
+second = memory.search(MemoryQuery("concise", limit=20, after=first[-1].cursor))
+```
+
+- **A cursor is only a position.** A `SearchCursor` holds a `score`, a `created_at`, and a block id. It can name a block that the caller cannot see, and it shows nothing about that block.
+- **Pages are not a snapshot.** A block that changes between 2 calls can move in the order. One search counts each block one time. But a block can be missing from a later page, or it can be on 2 pages.
 
 | Scope | Search area |
 | --- | --- |
@@ -56,16 +66,17 @@ results = memory.search(
 | `<`, `<=` | `$lt`, `$lte` |
 | `in` | `$in` |
 
-- **Same matcher:** each shipped adapter uses the same portable matcher, `matches_filters`. The persistent adapters scan the candidates inside the requested scope.
-- **Other adapters:** an adapter can use richer indexes, if the public meaning of a query stays the same.
+- **Same matcher:** each shipped adapter uses the same portable matcher, `matches_filters`, and the same order helper, `page_results`. The persistent adapters scan the candidates inside the requested scope on each call.
+- **Other adapters:** an adapter can use richer indexes, if the public meaning of a query stays the same. It returns results in the search order, after `after`, and it gives a block the same score on each call.
+- **A score uses only the block and the query.** A score that uses data from other blocks, such as corpus statistics, lets blocks that the caller cannot see change the order of the visible results.
 
 ## Authorization flow
 
 1. Genie checks the requested root and scope: `search` on the root, and also `traverse_down` for `subtree`, `traverse_up` for `ancestors`, or `read` for `links`.
 2. `before_search` can change the normalized query.
 3. Genie authorizes the changed query again. For a handle search, it also checks the changed query against the root, `allow_global`, and `allow_up` of the handle.
-4. The backend searches.
-5. Genie decodes the results, and it filters them by policy and by scope.
+4. The backend returns one page.
+5. Genie filters the page by policy and by scope, and it decodes only the results that it keeps. It gets the next page until it has `limit` visible results.
 6. `after_search` can filter or reorder them.
 7. Genie applies the scope and policy filters one more time.
 

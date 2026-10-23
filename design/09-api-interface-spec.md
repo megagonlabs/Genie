@@ -48,7 +48,7 @@ keys.get(MemoryAddress(("tickets",), "T-4471")).value     # {"number": "T-4471",
 | --- | --- | --- |
 | **Memory** | `Memory`, `MemoryHandle` | All applications |
 | **Records** | `MemoryBlock`, `MemoryLink`, `LinkRelations` | All applications |
-| **Query** | `MemoryQuery`, `Scope`, `SearchResult`, `matches_filters`, `normalize_filters` | Search callers and search adapters |
+| **Query** | `MemoryQuery`, `Scope`, `SearchCursor`, `SearchResult`, `matches_filters`, `normalize_filters`, `page_results` | Search callers and search adapters |
 | **Policy** | `MemoryPolicy`, `AccessRule`, `Principal`, `PolicyEngine`, `Operation` | Applications that share blocks |
 | **Structures** | `OwnershipTree`, `PropertyGraph`, `LineageDAG`, `KeyedCollection`, `EventLog`, `TemporalCollection`, `VersionedRecords` | Applications that organize blocks |
 | **Hooks** | `MemoryHook`, `HookRegistry`, `HookContext`, and their enums | Audit, metrics, and validation |
@@ -200,8 +200,12 @@ search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filter
   arguments. Genie changes each form into one `MemoryQuery`.
 - **Returns** `list[SearchResult]`. Each result is inside the scope, and the
   principal can `search` and `read` it.
-- **`limit` is a candidate budget.** The backend uses it before the policy
-  filter, so the visible page can be shorter than `limit`.
+- **`limit` counts visible results.** Hidden results do not use part of it.
+  If many matching blocks are hidden, `Memory` calls the backend again. There
+  is no cap.
+- **Order:** `score` from high to low, then `created_at` from old to new, then
+  block id.
+- **Next page:** a `MemoryQuery` with `after=results[-1].cursor`.
 - **Genie filters before it decodes.** It decodes only the results that the
   policy and scope filters keep. So a hidden block with a content type that
   this `Memory` cannot decode does not change the results.
@@ -274,12 +278,13 @@ ownership, link, mount, and search methods as `Memory`, with these differences:
 ### `MemoryQuery`
 
 ```python
-MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None, limit=20)
+MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None, limit=20, after=None)
 ```
 
 - **A `MemoryQuery` is frozen after `__init__`.** The scope becomes a `Scope`,
   `types` becomes a tuple, and the filters are normalized.
 - **`limit`:** `0` is permitted. A negative value raises `ValueError`.
+- **`after`:** a `SearchCursor` or `None`. Another type raises `TypeError`.
 - **The backend decides the meaning of `text`.** `InMemoryBackend` matches a
   case-insensitive substring. A search adapter can rank with its own method.
 
@@ -311,8 +316,33 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 
 - **Fields:** `block` (`MemoryBlock`), `score` (`float`, default `1.0`),
   `reason` (`str | None`).
+- **`cursor` property:** the `SearchCursor` directly after this result.
 - **The backend decides the meaning of a score.** Genie does not compare
-  scores across backends.
+  scores across backends. A score uses only the block and the query, and it
+  is the same on each call.
+
+### `SearchCursor`
+
+```python
+SearchCursor(score, created_at, block_id)
+```
+
+- **A position in the search order.** A search with `after=cursor` returns
+  only the results after it.
+- **Checks:** `score` is a finite number, `created_at` is a timezone-aware
+  `datetime`, and `block_id` is a non-empty string. Otherwise `TypeError` or
+  `ValueError`.
+- **No access check.** A cursor can name a block that the caller cannot see.
+
+### `page_results`
+
+```python
+page_results(results, query)
+```
+
+- **Sorts** scored results in the search order, drops the results at or
+  before `query.after`, and keeps the first `query.limit`.
+- **Each shipped adapter uses it** after it scores its candidates.
 
 ## Policy
 
@@ -362,7 +392,7 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
   resolves the container block through the access object. So a container that
   the caller cannot see raises `MemoryNotFound`.
 - **`hooks=None`** uses the registry of the access object.
-- **A paged `limit` counts visible items,** unlike search. The default is
+- **A paged `limit` counts visible items,** as in search. The default is
   `100`. `EventLog.tail` uses `20`.
 
 | Facade | Constructor | Store capability |
@@ -673,6 +703,8 @@ A direct call skips handles, policies, hooks, and codecs.
   failed check raises `MemoryConflict`.
 - **`delete_block` cascades** to links, key bindings, log entries, and temporal
   entries in the same atomic step.
+- **`search` returns one page in the search order:** at most `query.limit`
+  results after `query.after`.
 - **The shared contract tests** in
   `lib/tests/backends/test_backend_contracts.py` define the expected behavior.
   Refer to [Testing strategy](11-testing-strategy.md).

@@ -96,9 +96,11 @@ from genie.policy.principal import Principal
 from genie.query import (
     MemoryQuery,
     Scope,
+    SearchCursor,
     SearchResult,
     matches_filters,
     normalize_filters,
+    page_results,
 )
 from genie.structures import (
     AccessChecker,
@@ -228,6 +230,7 @@ __all__ = [
     "SQLiteBackend",
     "Scope",
     "SearchAccess",
+    "SearchCursor",
     "SearchIndex",
     "SearchResult",
     "SequenceAccess",
@@ -256,4 +259,5 @@ __all__ = [
     "freeze_attributes",
     "matches_filters",
     "normalize_filters",
+    "page_results",
 ]

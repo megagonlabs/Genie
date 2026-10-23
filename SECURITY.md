@@ -53,8 +53,10 @@ so the application around it owns the rest.
 - **A block's policy is chosen when the block is created and never changes.**
   That is deliberate. Requests to add a policy mutation path are a feature
   discussion, not a vulnerability.
-- **`MemoryQuery.limit` is a backend candidate budget,** applied before policy
-  filtering. A page shorter than `limit` is expected behavior.
+- **Search timing.** `MemoryQuery.limit` counts visible results, so blocks
+  that the caller cannot see do not change the results. But when many hidden
+  blocks match, a search calls the backend more times. So the time of a search
+  can show that hidden matches exist.
 - **Stored values are the application's concern.** Genie does not inspect,
   validate, or sanitize what you store, and a codec you register runs with the
   privileges of your process.

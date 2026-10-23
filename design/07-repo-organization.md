@@ -63,7 +63,8 @@ lib/src/genie/
 ├── query/                      # portable search vocabulary
 │   ├── query.py                # `MemoryQuery`, shared by APIs and adapters
 │   ├── filters.py              # filter normalization and match helpers
-│   ├── result.py               # search result model
+│   ├── result.py               # search result and search cursor models
+│   ├── paging.py               # search order and cursor paging for adapters
 │   └── scope.py                # supported search scopes
 ├── hooks/                      # lifecycle observation and customization
 │   ├── base.py                 # the hook interface

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -384,13 +385,13 @@ def test_inmemory_backend_read_paths_return_defensive_copies() -> None:
     assert child_after_search.value == {"items": ["child"]}
 
 
-def test_inmemory_link_scope_search_has_deterministic_tie_order() -> None:
-    """A search with the `links` scope keeps the order in which link endpoints first appear, so ties are deterministic."""
+def test_inmemory_link_scope_search_orders_ties_by_creation_time() -> None:
+    """Results with the same score come in `created_at` order, not in link order or block id order."""
 
     backend = InMemoryBackend()
-    root = backend.put_block(MemoryBlock(id="root", type="node", value={}))
-    first = backend.put_block(MemoryBlock(id="first", type="node", value={}))
-    second = backend.put_block(MemoryBlock(id="second", type="node", value={}))
+    root = backend.put_block(MemoryBlock(id="root", type="node", value={}, created_at=datetime(2026, 1, 1, tzinfo=UTC)))
+    first = backend.put_block(MemoryBlock(id="first", type="node", value={}, created_at=datetime(2026, 1, 3, tzinfo=UTC)))
+    second = backend.put_block(MemoryBlock(id="second", type="node", value={}, created_at=datetime(2026, 1, 2, tzinfo=UTC)))
     backend.add_link(MemoryLink(root.id, second.id, "related", id="first-link"))
     backend.add_link(MemoryLink(first.id, root.id, "related", id="second-link"))
 

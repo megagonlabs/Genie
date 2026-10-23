@@ -72,6 +72,7 @@ from genie.memory.errors import (
 from genie.memory.links import MemoryLink
 from genie.policy.policy import AccessRule, MemoryPolicy
 from genie.query.filters import matches_filters
+from genie.query.paging import page_results
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
 from genie.query.scope import Scope
@@ -1616,8 +1617,8 @@ class RedisBackend:
             query: Normalized query from the public API.
 
         Returns:
-            Search results ordered by descending score, limited to
-            `query.limit`.
+            Search results in the search order of `page_results`: at most
+            `query.limit` results after `query.after`.
         """
 
         candidates = self._scope_candidate_blocks(query)
@@ -1637,8 +1638,7 @@ class RedisBackend:
                 score = float(haystack.count(text) or 1)
                 reason = "matched text"
             results.append(SearchResult(block=block, score=score, reason=reason))
-        results.sort(key=lambda result: result.score, reverse=True)
-        return results[: query.limit]
+        return page_results(results, query)
 
     # ------------------------------------------------------------------
     # Key namespace

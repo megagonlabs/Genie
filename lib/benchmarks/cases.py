@@ -605,10 +605,10 @@ def _global_filter_query(settings: BenchmarkSettings) -> MemoryQuery:
 
 
 def _search_notes(settings: BenchmarkSettings) -> Callable[[Any], Mapping[str, Any]]:
-    """Record what a search returned, together with its budget."""
+    """Record what a search returned, together with its limit."""
 
     def describe(result: Any) -> Mapping[str, Any]:
-        return {"returned": len(result), "candidate_budget": settings.search_limit}
+        return {"returned": len(result), "limit": settings.search_limit}
 
     return describe
 

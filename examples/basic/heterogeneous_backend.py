@@ -47,7 +47,7 @@ from genie import (
     SearchResult,
     SQLiteBackend,
 )
-from genie.query import matches_filters
+from genie.query import matches_filters, page_results
 
 DIMENSIONS = 256
 """Number of components in each example embedding vector."""
@@ -352,9 +352,10 @@ class VectorIndex:
             query: Normalized query from the public API.
 
         Returns:
-            In-scope blocks that match `query.types` and `query.filters`, at
-            most `query.limit`. The order is by similarity, highest first, and
-            then by block id. The index drops blocks with a similarity of `0.0`
+            In-scope blocks that match `query.types` and `query.filters`.
+            `page_results` puts them in the search order of the `SearchIndex`
+            contract and keeps at most `query.limit` results after
+            `query.after`. The index drops blocks with a similarity of `0.0`
             or less. A query with no text returns each of these blocks with a
             score of `1.0`.
         """
@@ -382,8 +383,7 @@ class VectorIndex:
                     reason=f"cosine {similarity:.3f}",
                 )
             )
-        results.sort(key=lambda result: (-result.score, result.block.id))
-        return results[: query.limit]
+        return page_results(results, query)
 
     def _scope_candidate_ids(self, query: MemoryQuery) -> list[str]:
         """Find the candidate ids for one query scope with the graph index."""

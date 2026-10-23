@@ -72,6 +72,7 @@ from genie.memory.errors import (
 from genie.memory.links import MemoryLink
 from genie.policy.policy import AccessRule, MemoryPolicy
 from genie.query.filters import matches_filters
+from genie.query.paging import page_results
 from genie.query.query import MemoryQuery
 from genie.query.result import SearchResult
 from genie.query.scope import Scope
@@ -1492,8 +1493,8 @@ class MongoDBBackend:
             query: Normalized query from the public API.
 
         Returns:
-            Search results ordered by descending score, limited to
-            `query.limit`.
+            Search results in the search order of `page_results`: at most
+            `query.limit` results after `query.after`.
         """
 
         candidates = self._read(lambda session: [_block_from_document(document) for document in self._scope_candidate_documents(session, query)])
@@ -1513,8 +1514,7 @@ class MongoDBBackend:
                 score = float(haystack.count(text) or 1)
                 reason = "matched text"
             results.append(SearchResult(block=block, score=score, reason=reason))
-        results.sort(key=lambda result: result.score, reverse=True)
-        return results[: query.limit]
+        return page_results(results, query)
 
     # ------------------------------------------------------------------
     # Client, schema, and transaction helpers

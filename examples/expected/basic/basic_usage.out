@@ -10,8 +10,8 @@ writer wrote note: Use three sections: problem, approach, next steps.
 writer recalled 1 block(s) for 'sections'
 - note: Use three sections: problem, approach, next steps.
 writer recalled 2 block(s) for 'draft'
-- task: {'title': 'Draft outline', 'status': 'open'}
 - project: {'name': 'Proposal draft', 'deadline': 'Friday'}
+- task: {'title': 'Draft outline', 'status': 'open'}
 planner's filtered search results:
 - requirement: Keep the proposal concise and database-agnostic.
 

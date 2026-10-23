@@ -164,7 +164,7 @@ The repository uses the other 3 layers to keep Genie details out of agent code.
 - **A backend that holds a connection closes explicitly.** `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, and `RedisBackend` have `close()`, and each one works as a context manager. After `close`, their calls raise `RuntimeError`. `InMemoryBackend` has nothing to close. `RoutedBackend` does not close its routed backends. The application closes each one.
 - **Server checks run at construction.** For example, `PostgresBackend`, `MongoDBBackend`, and `RedisBackend` refuse a server that reports that it does not accept writes, for example a replica. Each `verify_*` flag disables one check. On the server adapters, `initialize_schema=False` uses the layout that is already in the store and does not create it.
 - **The application finds data again by id.** The application keeps a generated `mem_` id in its own configuration, or it gives a stable id to `put(id=...)`. A second `put` with the same id raises `MemoryConflict`.
-- **A search page can be short.** `MemoryQuery.limit` is a candidate budget. Genie uses this budget before the policy filter. A caller that needs a full page asks for a larger limit and slices the result.
+- **A search can call the backend more than one time.** `MemoryQuery.limit` counts visible results. If many matching blocks are hidden, `Memory` asks the backend for more pages until it has `limit` visible results. There is no cap.
 
 ### Errors a caller handles
 

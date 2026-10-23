@@ -208,15 +208,27 @@ class SearchIndex(Protocol):
         - **No state of its own:** an index that holds neither ownership nor
           link state needs access to a `TraversalIndex` and a `LinkStore` for
           this.
+        - **Search order:** results sort by `score` from high to low, then by
+          `created_at` from old to new, then by block id in ascending order.
+          `page_results` applies this order.
+        - **Cursor:** the index returns only the results after `query.after`.
+          `Memory.search` calls the index again with the last result as the
+          cursor until it has `query.limit` visible results.
+        - **Same score on each call:** the score of a block does not change
+          between 2 calls with the same query, unless the block changes.
+          Otherwise a cursor can skip or repeat results.
+        - **Score from the block and the query only:** a score that uses data
+          from other blocks, such as corpus statistics, lets blocks that the
+          caller cannot see change the order of the visible results.
 
         Args:
             query: Normalized query from the public API.
 
         Returns:
-            Search results. After the backend search, the public `Memory` layer
-            applies the policy filter and the query scope again. So a block
-            outside the scope is safe to return, but it uses part of
-            `query.limit` for a result that the caller never gets.
+            At most `query.limit` results after `query.after`, in search order.
+            After the backend search, the public `Memory` layer applies the
+            policy filter and the query scope again. So a block outside the
+            scope is safe to return. `Memory` skips it.
         """
 
         ...

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from genie.query.filters import normalize_filters
+from genie.query.result import SearchCursor
 from genie.query.scope import Scope
 
 
@@ -20,9 +21,12 @@ class MemoryQuery:
         types: Optional block types, as a tuple.
         filters: Metadata or block-field filters. Friendly operators change to
             canonical `$...` operator names.
-        limit: Maximum number of results from the backend. It is a candidate
-            budget, not a result count. The value `0` is allowed, and a
-            negative value raises `ValueError`.
+        limit: Maximum number of results. A backend returns at most `limit`
+            results. `Memory.search` counts only the results that the caller
+            can see. The value `0` is allowed, and a negative value raises
+            `ValueError`.
+        after: Optional `SearchCursor`. The search returns only the results
+            that come after this position in the search order.
     """
 
     text: str | None = None
@@ -31,6 +35,7 @@ class MemoryQuery:
     types: tuple[str, ...] = ()
     filters: dict[str, Any] = field(default_factory=dict)
     limit: int = 20
+    after: SearchCursor | None = None
 
     def __init__(
         self,
@@ -40,6 +45,7 @@ class MemoryQuery:
         types: list[str] | tuple[str, ...] = (),
         filters: dict[str, Any] | None = None,
         limit: int = 20,
+        after: SearchCursor | None = None,
     ) -> None:
         """Check the inputs, and store them in canonical form.
 
@@ -50,10 +56,12 @@ class MemoryQuery:
             types: Optional block types, as a list or a tuple.
             filters: Metadata or block-field filters.
             limit: Maximum number of results.
+            after: Optional position. The search returns only the results
+                after it.
 
         Raises:
-            TypeError: If text, root, types, filters, or limit have runtime
-                types that are not valid.
+            TypeError: If text, root, types, filters, limit, or after have
+                runtime types that are not valid.
             ValueError: If `scope` is not a known scope, `limit` is negative,
                 or a filter uses an unknown operator.
         """
@@ -73,9 +81,12 @@ class MemoryQuery:
             raise TypeError("MemoryQuery limit must be an integer.")
         if limit < 0:
             raise ValueError("MemoryQuery limit must be greater than or equal to zero.")
+        if after is not None and not isinstance(after, SearchCursor):
+            raise TypeError("MemoryQuery after must be a SearchCursor or None.")
         object.__setattr__(self, "text", text)
         object.__setattr__(self, "root_id", root_id)
         object.__setattr__(self, "scope", normalized_scope)
         object.__setattr__(self, "types", normalized_types)
         object.__setattr__(self, "filters", normalized_filters)
         object.__setattr__(self, "limit", limit)
+        object.__setattr__(self, "after", after)

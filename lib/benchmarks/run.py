@@ -115,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sections", type=int, default=defaults.sections, help="Blocks in the chain between the corpus root and its leaves")
     parser.add_argument("--value-size", type=int, default=defaults.value_size, help="Padding characters added to each generated value")
     parser.add_argument("--links-per-block", type=int, default=defaults.links_per_block, help="Outgoing links attached to the corpus hub block")
-    parser.add_argument("--search-limit", type=int, default=defaults.search_limit, help="Candidate budget passed to search")
+    parser.add_argument("--search-limit", type=int, default=defaults.search_limit, help="Result limit passed to search")
     parser.add_argument("--seed", type=int, default=defaults.seed, help="Seed for the corpus generator")
     parser.add_argument("--workers", type=int, action="append", default=None, help="Callers running one case at the same time. Repeatable. Level 1 is always measured")
     parser.add_argument(

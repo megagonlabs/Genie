@@ -46,6 +46,7 @@ from tests.backends.test_backend_contracts import (
     KeyedStoreContract,
     LinkStoreContract,
     RouteCatalogContract,
+    SearchIndexContract,
     SequenceStoreContract,
     TemporalIndexContract,
     TemporalStoreContract,
@@ -571,6 +572,7 @@ class TestNeo4jStructureBackendContracts(
     SequenceStoreContract,
     TemporalStoreContract,
     TemporalIndexContract,
+    SearchIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
     RouteCatalogContract,
@@ -740,7 +742,7 @@ def test_live_neo4j_backend_searches_every_scope_and_filters_candidates() -> Non
         )
 
         assert [result.block.id for result in backend.search(MemoryQuery(root_id=child.id, scope=Scope.SELF))] == [child.id]
-        assert [result.block.id for result in backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS))] == [leaf.id, child.id, root.id]
+        assert sorted(result.block.id for result in backend.search(MemoryQuery(root_id=leaf.id, scope=Scope.ANCESTORS))) == sorted([leaf.id, child.id, root.id])
         assert backend.search(MemoryQuery(root_id="missing", scope=Scope.SELF)) == []
         assert backend.search(MemoryQuery(types=["missing-type"])) == []
         assert backend.search(MemoryQuery("missing text")) == []

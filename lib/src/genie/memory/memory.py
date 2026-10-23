@@ -918,6 +918,15 @@ class Memory:
     ) -> list[SearchResult]:
         """Search memory blocks.
 
+        - **`limit` counts visible results.** Blocks that the principal
+          cannot see do not use part of the limit. So they do not change which
+          visible results the search returns.
+        - **More backend calls:** when many matching blocks are hidden, the
+          search calls the backend again until it has `limit` visible results
+          or the backend has no more results. There is no cap.
+        - **Next page:** a `MemoryQuery` with `after` set to the `cursor` of
+          the last result returns the results that come after it.
+
         Args:
             query: Optional `MemoryQuery` or text query string.
             text: Text query when `query` is not a string.
@@ -925,15 +934,11 @@ class Memory:
             scope: Search scope.
             types: Optional block types to include.
             filters: Optional metadata or block-field filters.
-            limit: Maximum result count. The backend applies this limit before
-                the policy and scope filters run. So a search can return fewer
-                results than the limit, also when more visible blocks match. A
-                caller that needs a full page asks for a larger limit and cuts
-                the result itself.
+            limit: Maximum number of visible results.
 
         Returns:
-            Search results with decoded blocks. Genie decodes a result only
-            after the policy and scope filters keep it.
+            Search results with decoded blocks, in search order. Genie decodes
+            a result only after the policy and scope filters keep it.
 
         Raises:
             AccessDenied: If the principal cannot search or traverse from the
@@ -947,7 +952,7 @@ class Memory:
                 uses an unknown operator.
         """
 
-        _, results = self._search(
+        return self._search(
             query,
             text=text,
             root=root,
@@ -956,7 +961,6 @@ class Memory:
             filters=filters,
             limit=limit,
         )
-        return results
 
     def _search(
         self,
@@ -969,8 +973,9 @@ class Memory:
         filters: dict[str, Any] | None,
         limit: int,
         boundary: Callable[[HookContext, MemoryQuery], None] | None = None,
-    ) -> tuple[MemoryQuery, list[SearchResult]]:
-        """Run `search`, and also return the query that the backend ran.
+        keep: Callable[[MemoryQuery, str], bool] | None = None,
+    ) -> list[SearchResult]:
+        """Run `search` with the optional checks of a `MemoryHandle`.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
@@ -985,9 +990,13 @@ class Memory:
                 is authorized again, and it raises `AccessDenied` to refuse.
                 `MemoryHandle` gives one, so a hook cannot widen a search past
                 the root or the capabilities of the handle.
+            keep: Optional extra visibility check. It gets the query after
+                `before_search` hooks and the block id of a result. A result
+                that it refuses does not use part of the limit. `MemoryHandle`
+                gives one that keeps results inside the handle root.
 
         Returns:
-            The query after `before_search` hooks, and the visible results.
+            The visible results.
         """
 
         with self._operation(HookOperation.SEARCH) as context:
@@ -1009,22 +1018,72 @@ class Memory:
             if boundary is not None:
                 boundary(context, memory_query)
             self._authorize_query(context, memory_query)
-            raw_results = self.backend.search(memory_query)
-            # One visibility verdict for each block id for the whole call. Both
-            # filter passes share it, so each block is read only once.
+            # One visibility verdict for each block id for the whole call. The
+            # backend pages and the filter after the hooks share it, so each
+            # block is read only once.
             verdicts: dict[str, bool] = {}
-            # Filter before decode. So a hidden block with a codec that this
-            # `Memory` does not have cannot make the search fail.
-            visible_results = [
-                replace(result, block=self._decode_block(result.block))
-                for result in self._filter_visible_results(memory_query, raw_results, verdicts)
-            ]
+            visible_results = self._collect_visible_results(memory_query, verdicts, keep)
             hooked_results = self.hooks.after_search(
                 context,
                 memory_query,
                 visible_results,
             )
-            return memory_query, self._filter_visible_results(memory_query, hooked_results, verdicts)
+            return self._filter_visible_results(memory_query, hooked_results, verdicts, keep)
+
+    def _collect_visible_results(
+        self,
+        query: MemoryQuery,
+        verdicts: dict[str, bool],
+        keep: Callable[[MemoryQuery, str], bool] | None,
+    ) -> list[SearchResult]:
+        """Get backend pages until there are `query.limit` visible results.
+
+        - **Filter before count:** the policy, scope, and `keep` checks run on
+          each backend result before it counts. So hidden blocks do not change
+          which visible results the caller gets.
+        - **Cursor:** the next page starts after the last backend result of
+          the page before. The first page starts at `query.after`.
+        - **Batch size:** the first page asks for `query.limit` results, and
+          each next page asks for 2 times as many. So the number of backend
+          calls grows with the log of the number of hidden matches.
+        - **End:** the loop stops at `query.limit` visible results, or when a
+          page is shorter than its batch size.
+        - **No cap:** a cap would let hidden blocks change the result again.
+        - **Duplicates:** a block that changes between 2 pages can move past
+          the cursor and come back. Only its first result counts.
+        - **Decode after the filter:** so a hidden block with a codec that
+          this `Memory` does not have cannot make the search fail.
+
+        Args:
+            query: Query after `before_search` hooks.
+            verdicts: Visibility decisions of this operation, by block id.
+            keep: Optional extra visibility check.
+
+        Returns:
+            At most `query.limit` visible results with decoded blocks, in
+            search order.
+        """
+
+        visible: list[SearchResult] = []
+        seen: set[str] = set()
+        after = query.after
+        batch = query.limit
+        while len(visible) < query.limit:
+            page = self.backend.search(replace(query, after=after, limit=batch))
+            for result in page:
+                block_id = result.block.id
+                if block_id in seen:
+                    continue
+                seen.add(block_id)
+                if self._is_visible_result(query, result, verdicts, keep):
+                    visible.append(replace(result, block=self._decode_block(result.block)))
+                    if len(visible) == query.limit:
+                        break
+            if len(page) < batch:
+                break
+            after = page[-1].cursor
+            batch *= 2
+        return visible
 
     def require_access(self, operation: Operation | str, block_id: str | MemoryBlock) -> None:
         """Raise `AccessDenied` if this principal cannot perform an operation on a block.
@@ -1442,38 +1501,57 @@ class Memory:
         self,
         query: MemoryQuery,
         results: list[SearchResult],
-        verdicts: dict[str, bool] | None = None,
+        verdicts: dict[str, bool],
+        keep: Callable[[MemoryQuery, str], bool] | None,
     ) -> list[SearchResult]:
-        """Filter search results by stored block visibility and query scope.
-
-        - **Shared verdicts:** `search` gives one `verdicts` mapping to both of
-          its filter passes. So the pass after `after_search` does not read
-          each block a second time.
-        - **Same strictness:** a reused verdict is as strict as a new check.
-          Each decision in `_can_return_search_result` comes from the block id
-          and the stored block that it names, never from the rest of a result.
-        - **Consequence:** if a hook deletes the block of a result inside
-          `after_search`, that result stays on the page.
+        """Filter search results by stored block visibility, query scope, and `keep`.
 
         Args:
             query: Query that gave the results.
             results: Results to filter.
             verdicts: Visibility decisions from earlier in this operation, by
                 block id.
+            keep: Optional extra visibility check.
 
         Returns:
             The results that the acting principal can get.
         """
 
-        decisions = {} if verdicts is None else verdicts
-        visible: list[SearchResult] = []
-        for result in results:
-            block_id = result.block.id
-            if block_id not in decisions:
-                decisions[block_id] = self._can_return_search_result(query, result)
-            if decisions[block_id]:
-                visible.append(result)
-        return visible
+        return [result for result in results if self._is_visible_result(query, result, verdicts, keep)]
+
+    def _is_visible_result(
+        self,
+        query: MemoryQuery,
+        result: SearchResult,
+        verdicts: dict[str, bool],
+        keep: Callable[[MemoryQuery, str], bool] | None,
+    ) -> bool:
+        """Return whether the acting principal can get a search result.
+
+        - **Shared verdicts:** `search` gives one `verdicts` mapping to the
+          backend pages and to the filter after `after_search`. So no block is
+          read a second time.
+        - **Same strictness:** a reused verdict is as strict as a new check.
+          Each decision comes from the block id and the stored block that it
+          names, never from the rest of a result.
+        - **Consequence:** if a hook deletes the block of a result inside
+          `after_search`, that result stays on the page.
+
+        Args:
+            query: Query that gave the result.
+            result: Result to check.
+            verdicts: Visibility decisions from earlier in this operation, by
+                block id. This call adds its decision.
+            keep: Optional extra visibility check.
+
+        Returns:
+            `True` if the result is visible.
+        """
+
+        block_id = result.block.id
+        if block_id not in verdicts:
+            verdicts[block_id] = self._can_return_search_result(query, result) and (keep is None or keep(query, block_id))
+        return verdicts[block_id]
 
     def _can_return_search_result(self, query: MemoryQuery, result: SearchResult) -> bool:
         """Return whether a result is visible for the current query and principal."""

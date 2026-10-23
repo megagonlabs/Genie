@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from threading import Barrier
 from typing import Any, Literal, cast
 
@@ -29,6 +30,7 @@ from genie import (
     RouteCatalog,
     RoutedBackend,
     RouteInfo,
+    SearchCursor,
     SearchResult,
     SQLiteBackend,
 )
@@ -47,6 +49,7 @@ from tests.backends.test_backend_contracts import (
     AcyclicLinkStoreContract,
     CoreOnlyBackend,
     LinkStoreContract,
+    SearchIndexContract,
 )
 
 
@@ -408,6 +411,40 @@ def test_routed_backend_merges_global_search_and_routes_scoped_search() -> None:
 
     assert {result.block.id for result in global_results} == {note_a.id, note_b.id}
     assert [result.block.id for result in scoped_results] == [note_a.id]
+
+
+def test_routed_backend_global_search_pages_across_routes() -> None:
+    """A global search merges the routes in search order, and a cursor continues the merged order with no gap or repeat."""
+
+    backend = RoutedBackend(
+        {"a": InMemoryBackend(), "b": InMemoryBackend()},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    # Scores 3, 2, and 1 in each route. Equal scores sort by `created_at`.
+    for index, (route, value) in enumerate(
+        [("a", "zz zz zz"), ("b", "zz zz zz"), ("b", "zz zz"), ("a", "zz zz"), ("a", "zz"), ("b", "zz")]
+    ):
+        backend.put_block(
+            MemoryBlock(
+                id=f"mem_{index}",
+                type="note",
+                value=value,
+                metadata={"route": route},
+                created_at=datetime(2026, 1, 1 + index, tzinfo=UTC),
+            )
+        )
+
+    pages: list[list[str]] = []
+    after: SearchCursor | None = None
+    while True:
+        page = backend.search(MemoryQuery("zz", limit=4, after=after))
+        if not page:
+            break
+        pages.append([result.block.id for result in page])
+        after = page[-1].cursor
+
+    assert pages == [["mem_0", "mem_1", "mem_2", "mem_3"], ["mem_4", "mem_5"]]
 
 
 def test_routed_backend_uses_shared_search_index() -> None:
@@ -1479,8 +1516,8 @@ def test_a_failed_catalog_release_does_not_undo_a_committed_delete(caplog: pytes
         memory.put(id="root", type="project", value="again")
 
 
-class TestRoutedStructureBackendContracts(LinkStoreContract, AcyclicLinkStoreContract):
-    """Run the link contracts against a composite with route-local links."""
+class TestRoutedStructureBackendContracts(SearchIndexContract, LinkStoreContract, AcyclicLinkStoreContract):
+    """Run the search and link contracts against a composite with route-local links."""
 
     def make_backend(self) -> RoutedBackend:
         """Return a composite with two routes, where new root blocks go to route `a`."""

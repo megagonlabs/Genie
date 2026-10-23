@@ -25,12 +25,13 @@ from genie import (
     RouteCatalog,
     RouteInfo,
     Scope,
+    SearchCursor,
     SequenceStore,
     SQLiteBackend,
     TemporalIndex,
     TemporalStore,
 )
-from genie.backend.capabilities import BlockStore, LinkStore, TraversalIndex
+from genie.backend.capabilities import BlockStore, LinkStore, SearchIndex, TraversalIndex
 from genie.structures import (
     KeyBinding,
     MemoryAddress,
@@ -1087,6 +1088,62 @@ class TemporalIndexContract(StructureBackendContract):
         ] == [second.id]
 
 
+class SearchIndexContract(StructureBackendContract):
+    """Reusable contract tests for the search order, the cursor, and the limit of `SearchIndex.search`."""
+
+    # Block id, value, and `created_at`. The value has the text "zz" 1 or 2
+    # times, so the portable matcher gives a score of 1 or 2. The write order
+    # is not the search order.
+    _RANKED_BLOCKS = (
+        ("mem_e", "zz", _SECOND_CREATED_AT),
+        ("mem_d", "zz zz", _THIRD_CREATED_AT),
+        ("mem_x", "no match", _FIRST_CREATED_AT),
+        ("mem_a", "zz", _SECOND_CREATED_AT),
+        ("mem_c", "zz", _FIRST_CREATED_AT),
+        ("mem_b", "zz zz", _THIRD_CREATED_AT),
+    )
+    # Score from high to low, then `created_at` from old to new, then block id.
+    _SEARCH_ORDER = ("mem_b", "mem_d", "mem_c", "mem_a", "mem_e")
+
+    def put_ranked_blocks(self, backend: MemoryBackend) -> None:
+        """Write the blocks of `_RANKED_BLOCKS`."""
+
+        for block_id, value, created_at in self._RANKED_BLOCKS:
+            backend.put_block(MemoryBlock(id=block_id, type="test", value=value, created_at=created_at))
+
+    def test_search_order_contract(self) -> None:
+        """Results sort by score from high to low, then by `created_at` from old to new, then by block id."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, SearchIndex)
+        self.put_ranked_blocks(backend)
+
+        assert [result.block.id for result in backend.search(MemoryQuery("zz"))] == list(self._SEARCH_ORDER)
+        assert [result.block.id for result in backend.search(MemoryQuery("zz", limit=3))] == list(self._SEARCH_ORDER[:3])
+        assert backend.search(MemoryQuery("zz", limit=0)) == []
+
+    def test_search_cursor_contract(self) -> None:
+        """Pages that each start after the last result of the page before give the full order, with no gap and no repeat."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, SearchIndex)
+        self.put_ranked_blocks(backend)
+
+        pages: list[list[str]] = []
+        after: SearchCursor | None = None
+        while True:
+            page = backend.search(MemoryQuery("zz", limit=2, after=after))
+            if not page:
+                break
+            pages.append([result.block.id for result in page])
+            after = page[-1].cursor
+
+        assert pages == [["mem_b", "mem_d"], ["mem_c", "mem_a"], ["mem_e"]]
+        # A cursor is only a position. It does not have to name a stored block.
+        between = SearchCursor(score=1.5, created_at=_FIRST_CREATED_AT, block_id="mem_missing")
+        assert [result.block.id for result in backend.search(MemoryQuery("zz", after=between))] == ["mem_c", "mem_a", "mem_e"]
+
+
 class LinkStoreContract(StructureBackendContract):
     """Reusable contract tests for backends that implement `LinkStore`."""
 
@@ -1379,6 +1436,7 @@ class TestInMemoryStructureBackendContracts(
     SequenceStoreContract,
     TemporalStoreContract,
     TemporalIndexContract,
+    SearchIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
     RouteCatalogContract,
@@ -1398,6 +1456,7 @@ class TestSQLiteStructureBackendContracts(
     SequenceStoreContract,
     TemporalStoreContract,
     TemporalIndexContract,
+    SearchIndexContract,
     LinkStoreContract,
     AcyclicLinkStoreContract,
     RouteCatalogContract,

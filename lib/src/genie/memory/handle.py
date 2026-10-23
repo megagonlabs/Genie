@@ -721,6 +721,8 @@ class MemoryHandle:
           `subtree`, or `links` search stay inside the handle root. So a
           `links` search drops linked blocks outside the root. The handle root
           does not filter `global` and `ancestors` results.
+        - **`limit` counts results that the handle returns.** A dropped result
+          does not use part of the limit.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
@@ -729,7 +731,7 @@ class MemoryHandle:
             root: Optional root inside this handle.
             types: Optional block types to include.
             filters: Optional metadata or block-field filters.
-            limit: Maximum result count.
+            limit: Maximum number of visible results.
 
         Returns:
             Search results that the handle can see.
@@ -770,8 +772,8 @@ class MemoryHandle:
         #   prebuilt `MemoryQuery`.
         # - `before_search` hooks can still replace the query. So the handle
         #   checks the query that they return again.
-        # - The final filter below follows the scope that actually ran.
-        executed, results = self._as_principal()._search(
+        # - The result filter follows the scope that actually ran.
+        return self._as_principal()._search(
             query,
             text=text,
             root=root_id,
@@ -780,14 +782,8 @@ class MemoryHandle:
             filters=filters,
             limit=limit,
             boundary=self._require_hooked_search_inside,
+            keep=self._search_result_inside,
         )
-        if self.root_id is None or executed.scope in {Scope.GLOBAL, Scope.ANCESTORS}:
-            return results
-        return [
-            result
-            for result in results
-            if self._memory._contains_raw(self.root_id, result.block.id)
-        ]
 
     def require_access(self, operation: Operation | str, block_id: str | MemoryBlock) -> None:
         """Raise `AccessDenied` if this handle cannot perform an operation on a block.
@@ -1094,6 +1090,26 @@ class MemoryHandle:
         denied = AccessDenied(message)
         self._hooks.on_denied(context, capability, subject_id, message, error=denied)
         raise denied
+
+    def _search_result_inside(self, query: MemoryQuery, block_id: str) -> bool:
+        """Return whether a search result stays inside this handle.
+
+        - **Filtered scopes:** the handle keeps only the `self`, `subtree`,
+          and `links` results inside the handle root.
+        - **Not filtered:** an unbounded handle, and `global` and `ancestors`
+          results. The capabilities of the handle control those scopes.
+
+        Args:
+            query: Query after `before_search` hooks.
+            block_id: Block id of the result.
+
+        Returns:
+            `True` if the handle can return the result.
+        """
+
+        if self.root_id is None or query.scope in {Scope.GLOBAL, Scope.ANCESTORS}:
+            return True
+        return self._memory._contains_raw(self.root_id, block_id)
 
     def _require_in_subtree(self, hook_operation: HookOperation, block_id: str | None) -> None:
         """Raise `AccessDenied` if a block id is outside the handle root. An unbounded handle or a `None` id passes."""

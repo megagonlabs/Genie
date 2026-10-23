@@ -32,6 +32,7 @@ place where a test checks it.
 | --- | --- |
 | **Scoped access cannot become wider.** A child handle cannot go outside its parent, change its principal, or widen global or ancestor access | `test_memory_handle.py`, `test_structure_policy.py` |
 | **Genie checks policy on each read path.** Genie filters `children`, `ancestors`, search results, and results that a hook rewrote | `test_policy.py`, `test_hooks.py` |
+| **Hidden blocks do not change search results.** A search gives the same visible results with or without matching blocks that the caller cannot see, for text and for filters on any field | `test_search_paging.py`, `SearchIndexContract` |
 | **Hooks cannot bypass authorization.** A `before_*` hook cannot change a parent, a policy, or a query after Genie authorized it | `test_hooks.py` |
 | **A write does not lose changes silently.** A stale `expected_version` raises `MemoryConflict`. So does a write or a delete made from a block that another writer deleted and created again with the same id | `BlockStoreContract`, `test_sqlite_backend.py`, `test_memory_crud.py` |
 | **Atomic operations are atomic.** Only one of many concurrent writers can claim a key, append a position, or close a cycle | The `*_is_atomic` contract tests, `test_structure_concurrency.py` |
@@ -46,21 +47,23 @@ place where a test checks it.
 - **One suite for each capability protocol.** `test_backend_contracts.py`
   defines `BlockStoreContract`, `TraversalIndexContract`, `KeyedStoreContract`,
   `SequenceStoreContract`, `TemporalStoreContract`, `TemporalIndexContract`,
-  `LinkStoreContract`, `AcyclicLinkStoreContract`, and `RouteCatalogContract`.
+  `SearchIndexContract`, `LinkStoreContract`, `AcyclicLinkStoreContract`, and
+  `RouteCatalogContract`.
 - **An adapter selects its suites through a subclass.** A test class inherits
   the contracts for the capabilities that the adapter claims. The class
   implements `make_backend()`. It does not copy the tests.
 - **The suites do not test an adapter for a capability that it does not
   claim.** The suites follow the capability protocols, so they do not expect
-  each adapter to implement all protocols. `RoutedBackend` routes links, so it
-  runs `LinkStoreContract` and `AcyclicLinkStoreContract`, with and without a
-  `route_catalog`. A separate test checks that it claims no record-store
+  each adapter to implement all protocols. `RoutedBackend` routes links and
+  merges searches, so it runs `SearchIndexContract`, `LinkStoreContract`, and
+  `AcyclicLinkStoreContract`, with and without a `route_catalog`. A separate test checks that it claims no record-store
   capability of its own.
 - **The contracts check relationships, not strategy.** `TraversalIndexContract`
   compares `children` and `descendants` as sets, because the backend defines
   their order. It checks order only for `ancestors`, because there the protocol
-  promises the nearest parent first. Each adapter chooses how it gets the
-  answer.
+  promises the nearest parent first. `SearchIndexContract` checks the search
+  order and the cursor, because the protocol promises them. Each adapter
+  chooses how it gets the answer.
 - **The reference and local backends always run the suites.**
   `TestInMemoryStructureBackendContracts` and
   `TestSQLiteStructureBackendContracts` need no server, so each plain run
