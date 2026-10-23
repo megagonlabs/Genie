@@ -319,9 +319,13 @@ MemoryQuery(text=None, root_id=None, scope=Scope.GLOBAL, types=(), filters=None,
 - **Fields:** `block` (`MemoryBlock`), `score` (`float`, default `1.0`),
   `reason` (`str | None`).
 - **`cursor` property:** the `SearchCursor` directly after this result.
-- **The backend decides the meaning of a score.** Genie does not compare
-  scores across backends. A score uses only the block and the query, and it
-  is the same on each call.
+- **The backend decides the meaning of a score.** A score uses only the block
+  and the query, and it is the same on each call.
+- **`RoutedBackend` compares raw scores across routes.** Without a shared
+  `search_index`, a global search sorts the results of all routes together by
+  `score`. Genie does not normalize or fuse scores. So the merged order has a
+  meaning only if all routes use the same score scale. For routes with
+  different scales, a shared `search_index` gives one scale.
 
 ### `SearchCursor`
 

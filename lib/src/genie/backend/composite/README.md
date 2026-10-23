@@ -68,6 +68,7 @@ backend = RoutedBackend(
 - **Mounts do not change ownership.** Mount discovery does not go into a target route, and it does not index it.
 - **A shared link store is a store.** So `RoutedBackend` sends all link writes, reads, and cleanups to it.
 - **`RoutedBackend` only reads a shared traversal or search index.** The application refreshes it after each committed write, usually from a hook.
+- **A global search without a shared search index compares raw scores across routes.** Each route returns up to `limit` results after `query.after`. `RoutedBackend` sorts them together in the search order and keeps the first `limit`. It does not normalize or fuse scores. So the order has a meaning only if all routes use the same score scale. For routes with different scales, give a `search_index` that scores all blocks with one method.
 - **A shared traversal index answers traversal reads from one place,** and no call resolves a route. It does not change where a block goes. So it does not let a parent and a child be in different routes.
 
 ## Acyclic links

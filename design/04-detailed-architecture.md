@@ -575,6 +575,11 @@ same tasks:
   stored state.
 - **Links and search can be route-local or shared.** A shared link store does
   not validate endpoints, so `RoutedBackend` checks them before the write.
+- **A global search without a shared search index merges the routes.** Each
+  route returns one page after the cursor. `RoutedBackend` sorts the pages
+  together by raw `score` with `page_results`, and keeps the first `limit`.
+  Paging stays exact. But the order has a meaning only if all routes use the
+  same score scale, because the composite does not normalize scores.
 - **Acyclic links use the same store as the other links.** `RoutedBackend`
   implements `AcyclicLinkStore`. It sends the call to the shared link store.
   If there is no shared link store, it sends the call to the route that owns

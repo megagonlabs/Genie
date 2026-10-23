@@ -722,6 +722,9 @@ class RoutedBackend:
         - **Global search:** each route returns up to `limit` results after
           `query.after`. The composite merges them in search order and keeps
           the first `limit`.
+        - **Raw scores:** the global merge does not normalize the scores of
+          the routes. The order has a meaning only if all routes use the same
+          score scale. A shared search index gives one scale.
 
         Args:
             query: Normalized memory query.
