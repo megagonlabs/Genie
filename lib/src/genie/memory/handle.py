@@ -47,6 +47,7 @@ class MemoryHandle:
         allow_global: Whether global search is allowed.
         allow_mounts: Whether symbolic mount operations are allowed.
         allow_policy_override: Whether `put` accepts an explicit block policy.
+        allow_custom_ids: Whether `put` accepts a caller-provided block id.
     """
 
     def __init__(
@@ -60,6 +61,7 @@ class MemoryHandle:
         allow_global: bool = False,
         allow_mounts: bool = False,
         allow_policy_override: bool = False,
+        allow_custom_ids: bool = False,
     ) -> None:
         """Create a restricted memory handle.
 
@@ -77,6 +79,8 @@ class MemoryHandle:
             allow_policy_override: Whether this handle can give an explicit
                 block policy to `put`. When false, new blocks use the default
                 policy of the memory.
+            allow_custom_ids: Whether this handle can give a caller-provided
+                block `id` to `put`. When false, new blocks get generated ids.
 
         Raises:
             ValueError: If `default_scope` is not a known scope name, or it
@@ -99,6 +103,7 @@ class MemoryHandle:
         self.allow_global = allow_global
         self.allow_mounts = allow_mounts
         self.allow_policy_override = allow_policy_override
+        self.allow_custom_ids = allow_custom_ids
         self._boundary_attributes = freeze_attributes(
             _boundary_attributes(
                 handle_id=self.id,
@@ -107,6 +112,7 @@ class MemoryHandle:
                 allow_global=allow_global,
                 allow_mounts=allow_mounts,
                 allow_policy_override=allow_policy_override,
+                allow_custom_ids=allow_custom_ids,
             )
         )
 
@@ -119,7 +125,7 @@ class MemoryHandle:
         - **Boundary attributes:** it adds `handle.id`, `handle.capabilities`,
           and `handle.root` for a rooted handle. `handle.capabilities` is a
           comma-separated list of the enabled `ancestors`, `global_search`,
-          `mounts`, and `policy_override` capabilities.
+          `mounts`, `policy_override`, and `custom_ids` capabilities.
         - **Conflicts:** boundary attributes win on conflict.
         - **Unbounded handles:** an unbounded handle reports no root.
         """
@@ -151,7 +157,8 @@ class MemoryHandle:
                 explicit policy, unless it was created with
                 `allow_policy_override=True`.
             content_type: Optional explicit codec content type.
-            id: Optional caller-provided block id.
+            id: Optional caller-provided block id. A handle rejects it,
+                unless it was created with `allow_custom_ids=True`.
 
         Returns:
             Stored block with decoded value.
@@ -159,9 +166,16 @@ class MemoryHandle:
         Raises:
             AccessDenied: If the parent is outside the handle boundary, the
                 call gives a `policy` and the handle does not allow policy
-                overrides, or a policy denies the write. A rooted handle treats
-                an unknown parent id as outside the handle, before the
-                underlying lookup.
+                overrides, the call gives an `id` and the handle does not
+                allow custom ids, or a policy denies the write. A rooted
+                handle treats an unknown parent id as outside the handle,
+                before the underlying lookup. Without `allow_custom_ids`, a
+                handle refuses an `id` before any lookup. So a free id and a
+                taken id get the same refusal.
+            MemoryConflict: If the handle allows custom ids and a block
+                with the same `id` already exists. Block ids are unique in
+                the whole backend, so the existing block can be outside the
+                handle root.
             MemoryNotFound: If an unbounded handle gets a parent id that does
                 not exist.
             TypeError: If `type` or `id` is not a string, `parent` is not a
@@ -185,6 +199,13 @@ class MemoryHandle:
                 HandleCapability.POLICY_OVERRIDE,
                 parent_id,
                 "This memory handle does not allow explicit block policies.",
+            )
+        if id is not None and not self.allow_custom_ids:
+            self._deny(
+                HookOperation.PUT,
+                HandleCapability.CUSTOM_IDS,
+                parent_id,
+                "This memory handle does not allow caller-provided block ids.",
             )
         return self._as_principal().put(
             type=type,
@@ -823,6 +844,7 @@ class MemoryHandle:
         allow_global: bool = False,
         allow_mounts: bool = False,
         allow_policy_override: bool = False,
+        allow_custom_ids: bool = False,
     ) -> MemoryHandle:
         """Create a narrower child handle.
 
@@ -846,6 +868,9 @@ class MemoryHandle:
             allow_policy_override: Whether the child handle can give explicit
                 block policies to `put`. A child handle can enable it only if
                 this handle already allows it.
+            allow_custom_ids: Whether the child handle can give a
+                caller-provided block `id` to `put`. A child handle can enable
+                it only if this handle already allows it.
 
         Returns:
             A new `MemoryHandle` with the same or less access.
@@ -898,6 +923,13 @@ class MemoryHandle:
                 self.root_id,
                 "A child memory handle cannot add policy override access.",
             )
+        if allow_custom_ids and not self.allow_custom_ids:
+            self._deny(
+                HookOperation.CREATE_HANDLE,
+                HandleCapability.CUSTOM_IDS,
+                self.root_id,
+                "A child memory handle cannot add custom id access.",
+            )
         root_id = _block_id(root) if root is not None else self.root_id
         if root_id is not None:
             self._require_in_subtree(HookOperation.CREATE_HANDLE, root_id)
@@ -909,6 +941,7 @@ class MemoryHandle:
                 allow_global=allow_global,
                 allow_mounts=allow_mounts,
                 allow_policy_override=allow_policy_override,
+                allow_custom_ids=allow_custom_ids,
             )
         return self._as_principal().get_handle(
             root=root_id,
@@ -918,6 +951,7 @@ class MemoryHandle:
             allow_global=allow_global,
             allow_mounts=allow_mounts,
             allow_policy_override=allow_policy_override,
+            allow_custom_ids=allow_custom_ids,
         )
 
     def contains(self, root: str | MemoryBlock, block_id: str | MemoryBlock) -> bool:
@@ -1133,6 +1167,7 @@ def _boundary_attributes(
     allow_global: bool,
     allow_mounts: bool,
     allow_policy_override: bool,
+    allow_custom_ids: bool,
 ) -> dict[str, str]:
     """Describe one handle boundary as hook context attributes.
 
@@ -1148,6 +1183,7 @@ def _boundary_attributes(
         allow_global: Whether global search is enabled.
         allow_mounts: Whether mount access is enabled.
         allow_policy_override: Whether explicit block policies are allowed.
+        allow_custom_ids: Whether caller-provided block ids are allowed.
 
     Returns:
         Attributes describing the handle. `handle.root` is omitted for an
@@ -1161,6 +1197,7 @@ def _boundary_attributes(
             ("global_search", allow_global),
             ("mounts", allow_mounts),
             ("policy_override", allow_policy_override),
+            ("custom_ids", allow_custom_ids),
         )
         if enabled
     )

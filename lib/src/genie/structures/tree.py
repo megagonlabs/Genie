@@ -126,7 +126,8 @@ class OwnershipTree:
             policy: Optional block policy. The rules of the access object apply
                 to it.
             content_type: Optional explicit codec content type.
-            id: Optional caller-provided block id.
+            id: Optional caller-provided block id. The rules of the access
+                object apply to it.
 
         Returns:
             Created memory block.

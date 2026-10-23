@@ -79,9 +79,9 @@ class GraphitiStructures:
         - **Reuse:** the method scans the children of each tier to find the
           existing anchors. So a second call returns the same structures and
           does not make duplicates.
-        - **Why a scan:** a bounded handle refuses ids outside its root. So the
-          method scans the tier and does not read the derived anchor id
-          directly.
+        - **Why a scan:** the anchors have generated ids, because a handle
+          without `allow_custom_ids` refuses a caller-provided id. So the
+          method finds each anchor by its type and its tier value.
 
         Args:
             memory: Handle rooted at the block that owns the whole graph.
@@ -112,7 +112,6 @@ class GraphitiStructures:
             if existing is not None:
                 return existing
             return tiers.create_child(
-                id=f"{tiers.root_id}:graphiti:{name}",
                 type=ANCHOR_TYPE,
                 value={"tier": name},
                 metadata={"tier": name},

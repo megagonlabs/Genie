@@ -256,6 +256,7 @@ order:
 | `GLOBAL_SEARCH` | `allow_global` | `scope="global"` |
 | `MOUNTS` | `allow_mounts` | Calls that create, list, or resolve mounts |
 | `POLICY_OVERRIDE` | `allow_policy_override` | An explicit `policy` argument to `put` |
+| `CUSTOM_IDS` | `allow_custom_ids` | An explicit `id` argument to `put`. Block ids are unique in the whole backend, so a taken id shows that a block exists outside the root |
 | `ROOT_REQUIRED` | unbounded handles | Refuses a call if Genie needs to infer its root |
 | `PRINCIPAL` | child handles | Refuses a change of principal |
 

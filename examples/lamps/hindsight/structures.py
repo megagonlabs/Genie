@@ -94,10 +94,9 @@ class HindsightStructures:
         - **Reopen:** the method finds the anchors that already exist in the
           children of the root. So a second call returns the same structures and does not make
           duplicates.
-        - **Why a scan:** a bounded handle treats an unknown id as outside its
-          root and raises `AccessDenied`. So a direct read of the derived
-          anchor id fails before the anchor exists, and the method scans the
-          children instead.
+        - **Why a scan:** the anchors have generated ids, because a handle
+          without `allow_custom_ids` refuses a caller-provided id. So the
+          method finds each anchor by its type and its tier metadata.
 
         Args:
             memory: Handle with its root at the block that owns the whole bank.
@@ -171,7 +170,6 @@ def _anchor(tiers: OwnershipTree, name: str) -> MemoryBlock:
     if existing is not None:
         return existing
     return tiers.create_child(
-        id=f"{tiers.root_id}:hindsight:{name}",
         type=ANCHOR_TYPE,
         value={"tier": name},
         metadata={"tier": name},

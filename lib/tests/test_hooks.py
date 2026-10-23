@@ -2678,6 +2678,7 @@ def test_on_denied_reports_handle_capability_refusals() -> None:
         "ancestors": lambda: handle.ancestors(),
         "mounts": lambda: handle.add_mount(root, root),
         "policy_override": lambda: handle.put(type="note", value="x", policy=MemoryPolicy.public()),
+        "custom_ids": lambda: handle.put(type="note", value="x", id="chosen"),
         "unbounded_children": lambda: unbounded.children(),
         "unbounded_search": lambda: unbounded.search("x", scope="subtree"),
     }
@@ -2695,6 +2696,7 @@ def test_on_denied_reports_handle_capability_refusals() -> None:
         (HookOperation.ANCESTORS, HandleCapability.ANCESTORS, root.id),
         (HookOperation.ADD_MOUNT, HandleCapability.MOUNTS, root.id),
         (HookOperation.PUT, HandleCapability.POLICY_OVERRIDE, root.id),
+        (HookOperation.PUT, HandleCapability.CUSTOM_IDS, root.id),
         (HookOperation.CHILDREN, HandleCapability.ROOT_REQUIRED, None),
         (HookOperation.SEARCH, HandleCapability.ROOT_REQUIRED, None),
     ]
@@ -2714,6 +2716,7 @@ def test_on_denied_reports_child_handle_escalation_attempts() -> None:
         "allow_global": lambda: handle.get_handle(allow_global=True),
         "allow_mounts": lambda: handle.get_handle(allow_mounts=True),
         "allow_policy_override": lambda: handle.get_handle(allow_policy_override=True),
+        "allow_custom_ids": lambda: handle.get_handle(allow_custom_ids=True),
     }
     denied: list[str] = []
     for label, attempt in attempts.items():
@@ -2729,6 +2732,7 @@ def test_on_denied_reports_child_handle_escalation_attempts() -> None:
         (HookOperation.CREATE_HANDLE, HandleCapability.GLOBAL_SEARCH, root.id),
         (HookOperation.CREATE_HANDLE, HandleCapability.MOUNTS, root.id),
         (HookOperation.CREATE_HANDLE, HandleCapability.POLICY_OVERRIDE, root.id),
+        (HookOperation.CREATE_HANDLE, HandleCapability.CUSTOM_IDS, root.id),
     ]
 
 
@@ -3326,7 +3330,7 @@ def test_handle_attributes_describe_unbounded_and_narrowed_handles() -> None:
     hook = RecordingContextHook()
     memory = Memory(hooks=[hook])
     root = memory.put(type="root", value="root")
-    unbounded = memory.get_unbounded_handle(allow_mounts=True, allow_policy_override=True)
+    unbounded = memory.get_unbounded_handle(allow_mounts=True, allow_policy_override=True, allow_custom_ids=True)
     child = memory.get_handle(root=root, allow_up=True, allow_mounts=True).get_handle(
         root=root,
         allow_mounts=True,
@@ -3334,7 +3338,7 @@ def test_handle_attributes_describe_unbounded_and_narrowed_handles() -> None:
 
     assert dict(unbounded.attributes) == {
         "handle.id": unbounded.id,
-        "handle.capabilities": "mounts,policy_override",
+        "handle.capabilities": "mounts,policy_override,custom_ids",
     }
     assert dict(child.attributes) == {
         "handle.id": child.id,

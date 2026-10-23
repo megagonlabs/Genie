@@ -69,6 +69,7 @@ with SQLiteBackend("helpdesk.db") as backend:  # a later run of the same service
 
 - **The second run finds the same desk.** `_open` gets each container by a stable id (`desk:billing`, `desk:billing/tickets`, `desk:billing/notes`). It creates a container only if the container does not exist. Genie has no call that lists all roots, so the application keeps the ids that it needs.
 - **The stable ids come from application constants.** For ids that come from untrusted input, the [policy guide](../lib/src/genie/policy/README.md#security-guidance) prefers generated `mem_` ids.
+- **`_open` returns any block with that id.** An agent handle cannot create the id first, because a handle refuses a caller-provided `id` without `allow_custom_ids=True`. When other code can write the same backend with chosen ids, `_open` can compare `parent_id` and `created_by` with the expected values.
 - **`DeskMemory` hides all Genie details.** A caller gives a ticket number and gets a `dict`, a `list[str]`, or `None`. Block ids, `MemoryAddress`, and the 2 facades stay inside the class.
 - **Ownership and membership are 2 separate steps.** `open_ticket` creates the ticket under the `tickets` container (ownership). Then it binds the ticket number in `KeyedCollection` (membership). Without `parent`, a `scope="subtree"` search with its root at `desk:billing` does not find the ticket.
 - **The class makes no decisions.** The caller decides if an open ticket now waits for the customer. `set_status` only stores the answer.

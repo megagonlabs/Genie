@@ -87,6 +87,7 @@ target = memory.resolve_mount(mount)
 - **Links are hidden** when an endpoint does not allow `read`.
 - **A bounded handle** rejects references outside its scope.
 - **A policy choice** from a handle needs `allow_policy_override=True`.
+- **A caller-provided `id`** from a handle needs `allow_custom_ids=True`. Block ids are unique in the whole backend. So a handle with this flag can find out if an id exists outside its root, and it can take an id before trusted code does.
 - **Ids, block types, and relations** are non-empty strings. A wrong type raises `TypeError`, and an empty string or a string with only whitespace raises `ValueError`. A bad value never gets to the backend.
 - **Metadata** on blocks and links is a strict JSON dictionary. Other metadata raises `TypeError`.
 - **JSON values and metadata nest at most `MAX_NESTING_DEPTH` (100) levels.** Deeper data raises `ValueError` before the backend runs.

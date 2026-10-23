@@ -120,6 +120,7 @@ class SecurityHook(MemoryHook):
 | `handle.global_search` | The handle has `allow_global=False`. |
 | `handle.mounts` | The handle has `allow_mounts=False`. |
 | `handle.policy_override` | The call gave an explicit `policy`, and the handle does not have `allow_policy_override=True`. |
+| `handle.custom_ids` | The call gave an `id`, and the handle does not have `allow_custom_ids=True`. |
 | `handle.root_required` | An unbounded handle has no `root` to infer. |
 | `handle.principal` | A child handle tried to change `principal`. |
 
@@ -262,7 +263,7 @@ A `MemoryHandle` adds its own boundary to those attributes:
 | --- | --- |
 | `handle.id` | Stable id of the handle that performed the operation. |
 | `handle.root` | Handle root. An unbounded handle does not have this attribute. |
-| `handle.capabilities` | The enabled `ancestors`, `global_search`, `mounts`, and `policy_override` capabilities, separated by commas. An empty string if no capability is on. |
+| `handle.capabilities` | The enabled `ancestors`, `global_search`, `mounts`, `policy_override`, and `custom_ids` capabilities, separated by commas. An empty string if no capability is on. |
 
 - **So the trail can tell apart 2 handles with the same principal.** This includes the refusal that Genie reports when one handle tries to leave its sandbox.
 - **Attributes describe the causal chain, not only the acting object.** A derived write that a hook performs inside a handle operation inherits the labels of that handle. `origin` and `depth` tell work that the caller started apart from work that a hook caused.

@@ -113,7 +113,7 @@ engine.require("export", block, principal)
 - **Trusted parts:** `Memory`, backends, policy engines, hooks, and codecs.
 - **What agents get:** rooted handles, or tools for one purpose.
 - **Explicit principals** suit shared systems.
-- **Generated block ids** are safer for untrusted input.
+- **Generated block ids** are safer for untrusted input. A handle refuses a caller-provided `id`, unless it was created with `allow_custom_ids=True`.
 - **A recursive delete** needs `write` on the target block only. It stops with `MemoryConflict` if the checked subtree changes.
 - **A change of a block in place** with `set` or `update` needs `read` and `write`, because both return the stored block. A write-only inbox uses `put`: a new block under a container needs `write` and `traverse_down` on the container, not `read`.
 - **Links that a read returns** need `read` on both endpoints. `update_link` returns the stored link, so it needs `read` and `write` on the source and `read` on the target, if the target still exists. `add_link` and `add_mount` need `write` on the source and `read` on the target.

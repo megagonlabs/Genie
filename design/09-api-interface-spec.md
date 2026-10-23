@@ -124,7 +124,7 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 
 | Method | Returns | Checked | Raises |
 | --- | --- | --- | --- |
-| `put(*, type, value, parent=None, metadata=None, policy=None, content_type=None, id=None)` | `MemoryBlock` | `write` and `traverse_down` on the parent | `AccessDenied`, `MemoryNotFound` (parent), `TypeError`, `ValueError` |
+| `put(*, type, value, parent=None, metadata=None, policy=None, content_type=None, id=None)` | `MemoryBlock` | `write` and `traverse_down` on the parent | `AccessDenied`, `MemoryConflict` (taken `id`), `MemoryNotFound` (parent), `TypeError`, `ValueError` |
 | `get(block_id)` | `MemoryBlock \| None` | `read` | `AccessDenied`, `TypeError` (bad id or no codec), `ValueError` (empty id) |
 | `set(block_id, value, *, content_type=None)` | `MemoryBlock` | `write`, then `read` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `update(block_id, *, value=None, metadata=None)` | `MemoryBlock` | `write`, then `read` | `AccessDenied`, `MemoryConflict`, `MemoryNotFound`, `TypeError`, `ValueError` |
@@ -218,7 +218,7 @@ search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filter
 
 | Method | Returns | Raises |
 | --- | --- | --- |
-| `get_handle(*, root, principal=None, default_scope=Scope.SUBTREE, allow_up=False, allow_global=False, allow_mounts=False, allow_policy_override=False)` | `MemoryHandle` bounded to `root` | `AccessDenied` (the handle principal cannot `read` the root), `MemoryNotFound`, `TypeError`, `ValueError` |
+| `get_handle(*, root, principal=None, default_scope=Scope.SUBTREE, allow_up=False, allow_global=False, allow_mounts=False, allow_policy_override=False, allow_custom_ids=False)` | `MemoryHandle` bounded to `root` | `AccessDenied` (the handle principal cannot `read` the root), `MemoryNotFound`, `TypeError`, `ValueError` |
 | `get_unbounded_handle(*, principal=None, default_scope=Scope.SUBTREE, ...same flags)` | `MemoryHandle` with no root | `TypeError`, `ValueError` |
 
 - **`principal=None` keeps the principal of this memory.**
@@ -237,6 +237,7 @@ ownership, link, mount, and search methods as `Memory`, with these differences:
 | **Optional root argument** | `children()`, `ancestors()`, and `discover_mounts()` use the handle root by default. On an unbounded handle, a call without this argument raises `AccessDenied` |
 | **Search** | `scope=None` uses `default_scope`. A `root` is accepted only inside the handle. The handle builds the query again, so a prebuilt `MemoryQuery` cannot widen it. The handle checks a query that `before_search` rewrote against the handle again |
 | **Explicit policy** | `put(policy=...)` needs `allow_policy_override` |
+| **Caller-provided id** | `put(id=...)` needs `allow_custom_ids`. Without it, the handle refuses the id before any lookup. With it, a taken id raises `MemoryConflict`, also when the block is outside the root |
 | **`contains` candidate** | The handle checks only `root` against the boundary. A candidate outside the handle is also outside `root`, so it gives `False` |
 | **`attributes`** | A read-only property with the hook attributes that this handle reports |
 
@@ -247,6 +248,7 @@ ownership, link, mount, and search methods as `Memory`, with these differences:
 | `allow_global` | `GLOBAL_SEARCH` | `scope="global"` |
 | `allow_mounts` | `MOUNTS` | `add_mount`, `list_mounts`, `discover_mounts`, `resolve_mount` |
 | `allow_policy_override` | `POLICY_OVERRIDE` | `put(policy=...)` |
+| `allow_custom_ids` | `CUSTOM_IDS` | `put(id=...)` |
 | unbounded handle | `ROOT_REQUIRED` | Refuses a call that needs a root that the handle cannot infer |
 | child handle | `PRINCIPAL` | Refuses a different principal |
 

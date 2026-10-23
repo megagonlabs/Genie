@@ -155,7 +155,8 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot `write` or `traverse_down`
                 the parent.
-            MemoryConflict: If a block with the same `id` already exists.
+            MemoryConflict: If a block with the same `id` already exists
+                anywhere in the backend.
             MemoryNotFound: If the parent id does not exist.
             TypeError: If `type` or `id` is not a string, `parent` is not a
                 block or string id, `policy` is not a `MemoryPolicy`, metadata
@@ -1121,6 +1122,7 @@ class Memory:
         allow_global: bool = False,
         allow_mounts: bool = False,
         allow_policy_override: bool = False,
+        allow_custom_ids: bool = False,
     ) -> MemoryHandle:
         """Create a bounded memory handle to give to agents.
 
@@ -1136,6 +1138,11 @@ class Memory:
                 symbolic mounts whose source is inside the handle.
             allow_policy_override: Whether the handle can give explicit block
                 policies to `put`. For untrusted agent code, it stays `False`.
+            allow_custom_ids: Whether the handle can give a caller-provided
+                block `id` to `put`. Block ids are unique in the whole backend.
+                So such a handle can find out if an id exists outside its
+                root, and it can take an id before trusted code does. For
+                untrusted agent code, it stays `False`.
 
         Returns:
             A `MemoryHandle` backed by this memory system.
@@ -1172,6 +1179,7 @@ class Memory:
             allow_global=allow_global,
             allow_mounts=allow_mounts,
             allow_policy_override=allow_policy_override,
+            allow_custom_ids=allow_custom_ids,
         )
 
     def get_unbounded_handle(
@@ -1183,6 +1191,7 @@ class Memory:
         allow_global: bool = False,
         allow_mounts: bool = False,
         allow_policy_override: bool = False,
+        allow_custom_ids: bool = False,
     ) -> MemoryHandle:
         """Create an explicit unbounded memory handle.
 
@@ -1203,6 +1212,11 @@ class Memory:
                 symbolic mounts whose source is visible through the handle.
             allow_policy_override: Whether the handle can give explicit block
                 policies to `put`. For untrusted agent code, it stays `False`.
+            allow_custom_ids: Whether the handle can give a caller-provided
+                block `id` to `put`. Block ids are unique in the whole backend.
+                So such a handle can find out if an id exists outside its
+                root, and it can take an id before trusted code does. For
+                untrusted agent code, it stays `False`.
 
         Returns:
             An unbounded `MemoryHandle` backed by this memory system.
@@ -1221,6 +1235,7 @@ class Memory:
             allow_global=allow_global,
             allow_mounts=allow_mounts,
             allow_policy_override=allow_policy_override,
+            allow_custom_ids=allow_custom_ids,
         )
 
     def contains(self, root: str | MemoryBlock, block_id: str | MemoryBlock) -> bool:
@@ -1277,6 +1292,7 @@ class Memory:
         allow_global: bool,
         allow_mounts: bool,
         allow_policy_override: bool,
+        allow_custom_ids: bool,
     ) -> MemoryHandle:
         """Create a `MemoryHandle` after the root check is complete."""
 
@@ -1291,6 +1307,7 @@ class Memory:
             allow_global=allow_global,
             allow_mounts=allow_mounts,
             allow_policy_override=allow_policy_override,
+            allow_custom_ids=allow_custom_ids,
         )
 
     def _coerce_query(

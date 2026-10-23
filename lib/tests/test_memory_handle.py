@@ -10,12 +10,14 @@ from genie import (
     AccessDenied,
     AccessRule,
     Memory,
+    MemoryConflict,
     MemoryNotFound,
     MemoryPolicy,
     MemoryQuery,
     Operation,
     Scope,
 )
+from genie.structures import OwnershipTree
 
 
 def test_subtree_scope_limits_search_scope() -> None:
@@ -81,7 +83,7 @@ def test_scope_put_and_set_forward_codec_options() -> None:
 
     memory = Memory()
     root = memory.put(type="root", value="root")
-    scope = memory.get_handle(root=root)
+    scope = memory.get_handle(root=root, allow_custom_ids=True)
 
     child = scope.put(
         type="note",
@@ -164,6 +166,71 @@ def test_child_handles_cannot_add_policy_override_access() -> None:
     narrowed = privileged.get_handle(root=child, allow_policy_override=True)
 
     assert narrowed.allow_policy_override is True
+
+
+def test_handle_put_refuses_a_custom_id_without_showing_if_it_exists() -> None:
+    """Without `allow_custom_ids`, a handle refuses a taken id and a free id in the same way."""
+
+    memory = Memory(principal="svc")
+    root = memory.put(type="sandbox", value="sandbox", policy=MemoryPolicy.public())
+    memory.put(type="secret", value="outside", id="tenant-b-record")
+    agent = memory.get_handle(root=root, principal="agent")
+
+    refusals = []
+    for block_id in ("tenant-b-record", "no-such-record"):
+        with pytest.raises(AccessDenied) as caught:
+            agent.put(type="note", value="x", id=block_id)
+        refusals.append(str(caught.value))
+
+    assert refusals[0] == refusals[1]
+    assert memory.get("no-such-record") is None
+    assert agent.put(type="note", value="x").id.startswith("mem_")
+
+
+def test_handle_put_refuses_a_custom_id_through_a_tree() -> None:
+    """`OwnershipTree.create_child` over a handle follows the custom id rule of the handle."""
+
+    memory = Memory(principal="svc")
+    root = memory.put(type="sandbox", value="sandbox", policy=MemoryPolicy.public())
+    tree = OwnershipTree(memory.get_handle(root=root, principal="agent"), root=root)
+
+    with pytest.raises(AccessDenied):
+        tree.create_child(type="note", value="x", id="desk:billing")
+    assert memory.get("desk:billing") is None
+
+
+def test_handle_put_forwards_a_custom_id_when_allowed() -> None:
+    """A handle with `allow_custom_ids=True` gives the id to `Memory.put`, and a taken id raises `MemoryConflict`."""
+
+    memory = Memory(principal="svc")
+    root = memory.put(type="sandbox", value="sandbox", policy=MemoryPolicy.public())
+    memory.put(type="secret", value="outside", id="tenant-b-record")
+    agent = memory.get_handle(root=root, principal="agent", allow_custom_ids=True)
+
+    created = agent.put(type="note", value="x", id="agent-note")
+
+    assert created.id == "agent-note"
+    assert created.parent_id == root.id
+    with pytest.raises(MemoryConflict):
+        agent.put(type="note", value="x", id="tenant-b-record")
+
+
+def test_child_handles_cannot_add_custom_id_access() -> None:
+    """Child handles cannot gain custom ids unless the parent has them."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    child = memory.put(parent=root, type="task", value="task", policy=MemoryPolicy.public())
+    restricted = memory.get_handle(root=root, principal="agent:writer")
+
+    with pytest.raises(AccessDenied):
+        restricted.get_handle(root=child, allow_custom_ids=True)
+
+    privileged = memory.get_handle(root=root, principal="agent:writer", allow_custom_ids=True)
+    narrowed = privileged.get_handle(root=child, allow_custom_ids=True)
+
+    assert narrowed.allow_custom_ids is True
+    assert privileged.get_handle(root=child).allow_custom_ids is False
 
 
 def test_scope_search_accepts_full_search_arguments() -> None:

@@ -86,6 +86,7 @@ class HandleCapability(StrEnum):
     GLOBAL_SEARCH = "handle.global_search"
     MOUNTS = "handle.mounts"
     POLICY_OVERRIDE = "handle.policy_override"
+    CUSTOM_IDS = "handle.custom_ids"
     ROOT_REQUIRED = "handle.root_required"
     PRINCIPAL = "handle.principal"
 
