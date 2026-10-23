@@ -47,8 +47,10 @@ class TemporalCollection:
     - **Changes:** `add`, `replace`, and `remove` also need `write` on the
       collection block. The access object checks it. So a principal that can
       only read the collection cannot change its membership.
-    - **Unreadable members:** `get` raises `AccessDenied`. The scan methods skip
-      them.
+    - **Unreadable blocks:** `get` raises `AccessDenied` for a block that the
+      principal cannot read, also when the block is not a member. So `get`
+      does not show the membership of a hidden block. The scan methods skip
+      unreadable members.
     """
 
     __slots__ = (
@@ -251,16 +253,21 @@ class TemporalCollection:
 
         Raises:
             AccessDenied: If the principal cannot read the collection or the
-                member block.
+                block. This check comes before the membership lookup. So the
+                call does not show if a hidden block is a member. A rooted
+                handle treats an unknown block id as outside the handle.
             MemoryNotFound: If the entry refers to a block that no longer
                 exists.
         """
 
         self._require_collection()
+        stored_block = self._access.get(block)
         entry = self._store.get_temporal_entry(self.collection_id, _block_id(block))
         if entry is None:
             return None
-        return self._resolve_exact(entry)
+        if stored_block is None:
+            raise MemoryNotFound(f"Temporal entry in {entry.collection_id!r} references missing " f"memory block {entry.block_id!r}.")
+        return TemporalItem(entry=entry, block=stored_block)
 
     def remove(self, block: BlockRef) -> None:
         """Remove temporal membership. The memory block stays.
@@ -516,14 +523,6 @@ class TemporalCollection:
             if len(entries) < batch_limit:
                 break
         return items
-
-    def _resolve_exact(self, entry: TemporalEntry) -> TemporalItem:
-        """Resolve one exact entry, and do not hide access or integrity errors."""
-
-        block = self._access.get(entry.block_id)
-        if block is None:
-            raise MemoryNotFound(f"Temporal entry in {entry.collection_id!r} references missing " f"memory block {entry.block_id!r}.")
-        return TemporalItem(entry=entry, block=block)
 
     def _require_collection(self) -> MemoryBlock:
         """Return the visible collection block, or raise `MemoryNotFound` if it was deleted."""

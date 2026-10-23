@@ -438,6 +438,7 @@ def test_before_search_hook_cannot_widen_handle_search() -> None:
     unbounded = memory.get_unbounded_handle()
     upward = memory.get_handle(root=task, allow_up=True)
     rooted = memory.get_handle(root=task)
+    global_rooted = memory.get_handle(root=task, allow_global=True)
 
     def to_ancestors(query: MemoryQuery) -> MemoryQuery:
         return MemoryQuery(text=query.text, root_id=query.root_id, scope=Scope.ANCESTORS, limit=query.limit)
@@ -445,11 +446,15 @@ def test_before_search_hook_cannot_widen_handle_search() -> None:
     def to_outside_root(query: MemoryQuery) -> MemoryQuery:
         return MemoryQuery(text=query.text, root_id=outside.id, scope=Scope.SUBTREE, limit=query.limit)
 
+    def to_global_outside_root(query: MemoryQuery) -> MemoryQuery:
+        return MemoryQuery(text=query.text, root_id=outside.id, scope=Scope.GLOBAL, limit=query.limit)
+
     attempts = [
         (unbounded, {"root": task, "scope": "subtree"}, _rewrite_to_global),
         (upward, {"scope": "ancestors"}, _rewrite_to_global),
         (rooted, {}, to_ancestors),
         (rooted, {}, to_outside_root),
+        (global_rooted, {"scope": "global"}, to_global_outside_root),
     ]
     for handle, arguments, rewrite in attempts:
         rewriting.rewrite = rewrite
@@ -460,6 +465,7 @@ def test_before_search_hook_cannot_widen_handle_search() -> None:
         (HookOperation.SEARCH, HandleCapability.GLOBAL_SEARCH, None),
         (HookOperation.SEARCH, HandleCapability.GLOBAL_SEARCH, task.id),
         (HookOperation.SEARCH, HandleCapability.ANCESTORS, task.id),
+        (HookOperation.SEARCH, HandleCapability.SUBTREE, outside.id),
         (HookOperation.SEARCH, HandleCapability.SUBTREE, outside.id),
     ]
     assert rewriting.outcomes == [HookOutcome.DENIED] * len(attempts)
@@ -2621,6 +2627,7 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
     root = memory.put(type="root", value="root")
     inside = memory.put(parent=root, type="note", value="inside")
     outside = memory.put(type="other-tenant", value="outside")
+    outside_link = memory.add_link(outside, root, "related")
     handle = memory.get_handle(root=inside, allow_mounts=True)
 
     attempts = {
@@ -2632,6 +2639,7 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
         "children": lambda: handle.children(outside),
         "list_links": lambda: handle.list_links(outside),
         "add_link": lambda: handle.add_link(outside, inside, "related"),
+        "update_link": lambda: handle.update_link(outside_link, metadata={"x": 1}),
         "add_mount": lambda: handle.add_mount(outside, inside),
         "search": lambda: handle.search("x", root=outside),
         "require_access": lambda: handle.require_access("read", outside),
@@ -2654,6 +2662,7 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
         HookOperation.CHILDREN,
         HookOperation.LIST_LINKS,
         HookOperation.ADD_LINK,
+        HookOperation.UPDATE_LINK,
         HookOperation.ADD_MOUNT,
         HookOperation.SEARCH,
         HookOperation.REQUIRE_ACCESS,
@@ -2661,6 +2670,29 @@ def test_on_denied_reports_handle_boundary_escapes() -> None:
     ]
     assert {check for _, check, _ in hook.denials} == {HandleCapability.SUBTREE}
     assert {subject for _, _, subject in hook.denials} == {outside.id}
+
+
+def test_on_denied_reports_a_hidden_mount_target_as_outside_the_root() -> None:
+    """A missing mount target and an unreadable one both report the subtree boundary, not a policy refusal."""
+
+    hook = RecordingDenialHook()
+    memory = Memory(principal="owner", hooks=[hook])
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    hidden = memory.put(type="other-tenant", value="outside")
+    handle = memory.get_handle(root=root, principal="agent", allow_mounts=True)
+
+    for target in (hidden.id, "missing"):
+        with pytest.raises(AccessDenied):
+            handle.add_mount(root, target)
+
+    assert hook.denials == [
+        (HookOperation.ADD_MOUNT, HandleCapability.SUBTREE, hidden.id),
+        (HookOperation.ADD_MOUNT, HandleCapability.SUBTREE, "missing"),
+    ]
+    assert hook.reasons == [
+        f"Memory block {hidden.id!r} is outside memory handle root {root.id!r}.",
+        f"Memory block 'missing' is outside memory handle root {root.id!r}.",
+    ]
 
 
 def test_on_denied_reports_handle_capability_refusals() -> None:

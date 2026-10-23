@@ -342,6 +342,29 @@ def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
     assert [result.block.id for result in results] == [outside.id]
 
 
+def test_global_search_accepts_only_a_root_inside_the_handle() -> None:
+    """With `allow_global`, a search root outside the handle is refused, and it does not matter if the root exists."""
+
+    memory = Memory(principal="svc")
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    child = memory.put(parent=root, type="child", value="child", policy=MemoryPolicy.public())
+    hidden = memory.put(type="secret", value="outside, owner only")
+    readable = memory.put(type="note", value="outside needle", policy=MemoryPolicy.public())
+    agent = memory.get_handle(root=root, principal="agent", allow_global=True)
+
+    for outside_root in (hidden.id, "missing", readable.id):
+        with pytest.raises(AccessDenied, match="outside memory handle root"):
+            agent.search("needle", scope="global", root=outside_root)
+        with pytest.raises(AccessDenied, match="outside memory handle root"):
+            agent.search(MemoryQuery(text="needle", root_id=outside_root, scope=Scope.GLOBAL))
+
+    results = agent.search("needle", scope="global", root=child)
+
+    assert [result.block.id for result in results] == [readable.id]
+    with pytest.raises(MemoryNotFound):
+        memory.get_unbounded_handle(allow_global=True).search("needle", scope="global", root="missing")
+
+
 def test_child_handles_cannot_change_principal_identity() -> None:
     """A child handle cannot replace the principal of its parent handle."""
 

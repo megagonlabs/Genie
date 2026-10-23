@@ -231,6 +231,13 @@ order:
   policy check. So a rooted handle refuses an unknown id as "outside the
   handle". This refusal occurs before a lookup, so it does not show if the
   block exists.
+- **A mount target can be outside the root.** For such a target,
+  `_require_readable_mount_target` reads the block and checks `read` without
+  a report. A missing target and an unreadable target get the same `SUBTREE`
+  refusal. So `add_mount` does not show if the target exists.
+- **Other ids get the boundary check before the lookup.** A search root must
+  be inside the root for each scope, also `global`. `update_link` checks the
+  source id of the link before the link lookup.
 - **`_deny` opens its own operation.** A handle refusal occurs before the
   `Memory` operation starts. So the handle opens one context and sends
   `on_denied` with the `HandleCapability` that refused. Then the terminal event
@@ -254,7 +261,7 @@ order:
 | `SUBTREE` | always on for a rooted handle | Refuses each id outside the root |
 | `ANCESTORS` | `allow_up` | `ancestors()` and `scope="ancestors"` |
 | `GLOBAL_SEARCH` | `allow_global` | `scope="global"` |
-| `MOUNTS` | `allow_mounts` | Calls that create, list, or resolve mounts |
+| `MOUNTS` | `allow_mounts` | Calls that create, list, or resolve mounts. A mount target can be outside the root if the principal can read it. So the handle can read each block that its principal can read, if it knows the id |
 | `POLICY_OVERRIDE` | `allow_policy_override` | An explicit `policy` argument to `put` |
 | `CUSTOM_IDS` | `allow_custom_ids` | An explicit `id` argument to `put`. Block ids are unique in the whole backend, so a taken id shows that a block exists outside the root |
 | `ROOT_REQUIRED` | unbounded handles | Refuses a call if Genie needs to infer its root |

@@ -26,7 +26,7 @@ from genie import OwnershipTree
 
 - **Access object:** a facade takes a `Memory` or a `MemoryHandle`. A handle keeps its usual subtree and policy limits.
 - **A membership change needs `write` on the container.** `bind`, `rebind`, `unbind`, `append`, `add`, `replace`, and `remove` call `require_access` on the access object before they touch the store. So a principal that can only read a container cannot change what it holds. A refusal gets to `on_denied` under the `access.require` operation.
-- **A read needs `read` on the container and on each member.** An exact lookup raises `AccessDenied` for a member that the principal cannot read. A listing skips that member.
+- **A read needs `read` on the container and on each member.** An exact lookup raises `AccessDenied` for a member that the principal cannot read. A listing skips that member. `TemporalCollection.get` takes a block id, so it checks that block before the membership lookup. It also raises `AccessDenied` for an unreadable block that is not a member, so it does not show the membership of a hidden block.
 - **`VersionedRecords` splits the rule.** `register` needs `write` on the collection block. `append` needs `write` on the identity block, because the identity is the anchor of the revision log.
 - **Hook reuse:** key, log, and temporal changes through a facade use the hook registry, the principal, and the hook context attributes of the access object, if it has them. A `hooks=` argument replaces the registry. With no registry, the facade sends no structure events.
 

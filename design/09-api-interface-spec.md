@@ -235,7 +235,7 @@ ownership, link, mount, and search methods as `Memory`, with these differences:
 | --- | --- |
 | **Boundary** | The handle accepts only ids inside the root. It refuses an unknown id as "outside the handle" before any lookup, so it does not show if that block exists |
 | **Optional root argument** | `children()`, `ancestors()`, and `discover_mounts()` use the handle root by default. On an unbounded handle, a call without this argument raises `AccessDenied` |
-| **Search** | `scope=None` uses `default_scope`. A `root` is accepted only inside the handle. The handle builds the query again, so a prebuilt `MemoryQuery` cannot widen it. The handle checks a query that `before_search` rewrote against the handle again |
+| **Search** | `scope=None` uses `default_scope`. A `root` is accepted only inside the handle, for each scope, also `global`. The handle builds the query again, so a prebuilt `MemoryQuery` cannot widen it. The handle checks a query that `before_search` rewrote against the handle again |
 | **Explicit policy** | `put(policy=...)` needs `allow_policy_override` |
 | **Caller-provided id** | `put(id=...)` needs `allow_custom_ids`. Without it, the handle refuses the id before any lookup. With it, a taken id raises `MemoryConflict`, also when the block is outside the root |
 | **`contains` candidate** | The handle checks only `root` against the boundary. A candidate outside the handle is also outside `root`, so it gives `False` |
@@ -246,7 +246,7 @@ ownership, link, mount, and search methods as `Memory`, with these differences:
 | rooted handle | `SUBTREE` | No access outside the root |
 | `allow_up` | `ANCESTORS` | `ancestors()` and `scope="ancestors"` |
 | `allow_global` | `GLOBAL_SEARCH` | `scope="global"` |
-| `allow_mounts` | `MOUNTS` | `add_mount`, `list_mounts`, `discover_mounts`, `resolve_mount` |
+| `allow_mounts` | `MOUNTS` | `add_mount`, `list_mounts`, `discover_mounts`, `resolve_mount`. A mount target can be outside the root if the principal can read it. So the handle can read each block that its principal can read, if it knows the id. A missing target and an unreadable target outside the root get the same `AccessDenied` |
 | `allow_policy_override` | `POLICY_OVERRIDE` | `put(policy=...)` |
 | `allow_custom_ids` | `CUSTOM_IDS` | `put(id=...)` |
 | unbounded handle | `ROOT_REQUIRED` | Refuses a call that needs a root that the handle cannot infer |
@@ -495,7 +495,7 @@ page_results(results, query)
 | `add(block, *, occurred_at=None, validity=None)` | `TemporalItem` | `MemoryConflict` (already a member) |
 | `replace(block, *, occurred_at=None, validity=None)` | `TemporalItem` | `MemoryConflict` (not a member) |
 | `remove(block)` | `None`. The block stays | `MemoryConflict` (not a member) |
-| `get(block)` | `TemporalItem \| None` | `MemoryNotFound` (the entry refers to a block that does not exist) |
+| `get(block)` | `TemporalItem \| None` | `AccessDenied` (the principal cannot read the block, also when it is not a member), `MemoryNotFound` (the entry refers to a block that does not exist) |
 | `events(*, start=None, stop=None, limit=100)` | `list[TemporalItem]` with `occurred_at` in `[start, stop)` | `TypeError`, `ValueError` (naive time) |
 | `valid_at(when, *, limit=100)` | `list[TemporalItem]` | `TypeError`, `ValueError` |
 | `overlapping(interval, *, limit=100)` | `list[TemporalItem]` | `TypeError`, `ValueError` |

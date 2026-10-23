@@ -76,6 +76,8 @@ target = memory.resolve_mount(mount)
 - **`links` search:** a `links` search counts a mount as a link. So it finds the mount target itself, but not the blocks below the target.
 - **Discovery** finds mount links, but it does not go into their targets.
 - **Handle access** needs `allow_mounts=True`.
+- **A mount target can be outside the handle root,** if the principal of the handle can read it. So `allow_mounts` lets a handle read each block that its principal can read, if it knows the block id and can write a block inside its root.
+- **A hidden target stays hidden.** A rooted handle refuses a missing target and an unreadable target outside its root with the same `AccessDenied`. So `add_mount` does not show if that block exists.
 
 ## Safety rules
 

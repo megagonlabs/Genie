@@ -76,6 +76,9 @@ class MemoryHandle:
             allow_global: Whether global search is allowed.
             allow_mounts: Whether this handle can create, list, discover,
                 resolve, and update symbolic mounts from local source blocks.
+                A mount target can be outside the root. So the handle can
+                read each block that its principal can read, if it knows the
+                block id and can write a block inside its root.
             allow_policy_override: Whether this handle can give an explicit
                 block policy to `put`. When false, new blocks use the default
                 policy of the memory.
@@ -468,7 +471,9 @@ class MemoryHandle:
         Raises:
             AccessDenied: If the link is outside the handle boundary, the link
                 is a mount and mount access is off, or a policy denies the
-                operation.
+                operation. A rooted handle checks the source id of `link`
+                before the link lookup. So a missing link and a stored link
+                with a source outside the root get the same refusal.
             MemoryNotFound: If the link or a required endpoint is missing.
             TypeError: If `link` is not a `MemoryLink`, or metadata is not a
                 strict JSON dictionary.
@@ -477,8 +482,12 @@ class MemoryHandle:
                 changes link identity or topology.
         """
 
+        if not isinstance(link, MemoryLink):
+            raise TypeError("link must be a MemoryLink.")
+        # The link lookup lists the links of `link.source_id`. So the stored
+        # link has the same source, and the boundary check can come first.
+        self._require_in_subtree(HookOperation.UPDATE_LINK, link.source_id)
         stored = self._memory._require_stored_link(link)
-        self._require_in_subtree(HookOperation.UPDATE_LINK, stored.source_id)
         if stored.relation == LinkRelations.MOUNT:
             self._require_mounts_allowed(HookOperation.UPDATE_LINK)
         else:
@@ -588,7 +597,11 @@ class MemoryHandle:
         """Create a symbolic mount from a source inside this handle.
 
         - **Outside targets:** the mount target can be outside the handle
-          boundary.
+          boundary, if the principal can read it. So the handle can mount, and
+          then resolve, each block that its principal can read.
+        - **Hidden targets:** a rooted handle refuses a missing target and an
+          unreadable target outside the boundary in the same way. So the call
+          does not show if that block exists.
         - **No subtree change:** the target does not become part of the subtree
           of this handle. A caller gets the target only through an explicit
           `resolve_mount`.
@@ -603,10 +616,12 @@ class MemoryHandle:
 
         Raises:
             AccessDenied: If mount access is off, the source is outside the
-                handle boundary, or a policy denies `write` on the source or
-                `read` on the target.
-            MemoryNotFound: If an endpoint does not exist. A rooted handle
-                raises `AccessDenied` for an unknown source id.
+                handle boundary, the target is outside the boundary and the
+                principal cannot read it, or a policy denies `write` on the
+                source or `read` on the target. A rooted handle treats an
+                unknown source or target id as outside the handle.
+            MemoryNotFound: If an unbounded handle gets an endpoint id that
+                does not exist.
             TypeError: If `source` or `target` is not a block or string id, or
                 metadata is not a strict JSON dictionary.
             ValueError: If an endpoint id is empty, metadata nests lists and
@@ -616,6 +631,7 @@ class MemoryHandle:
 
         self._require_mounts_allowed(HookOperation.ADD_MOUNT)
         self._require_in_subtree(HookOperation.ADD_MOUNT, _block_id(source))
+        self._require_readable_mount_target(HookOperation.ADD_MOUNT, _block_id(target))
         return self._as_principal().add_mount(source, target, metadata=metadata)
 
     def list_mounts(self, source: str | MemoryBlock) -> list[MemoryLink]:
@@ -737,7 +753,8 @@ class MemoryHandle:
         - **Scope:** `scope` wins. Without it, a `MemoryQuery` keeps its own
           scope, and other calls use `default_scope`.
         - **Root:** `root` wins. Without it, the root of a `MemoryQuery`, then
-          the handle root.
+          the handle root. A rooted handle accepts only a root inside the
+          handle, for each scope. This includes `global`.
         - **Result filter:** for a rooted handle, the results of a `self`,
           `subtree`, or `links` search stay inside the handle root. So a
           `links` search drops linked blocks outside the root. The handle root
@@ -761,8 +778,10 @@ class MemoryHandle:
             AccessDenied: If the requested root or search mode goes outside
                 the access of the handle, a `before_search` hook changes the
                 query to do so, or an unbounded handle cannot infer a
-                non-global search root.
-            MemoryNotFound: If the query root does not exist.
+                non-global search root. A rooted handle treats an unknown
+                root id as outside the handle.
+            MemoryNotFound: If an unbounded handle gets a query root that does
+                not exist.
             TypeError: If `root` is not a block or string id, the text, types,
                 filters, or limit arguments have the wrong type, or no
                 registered codec can decode a visible result.
@@ -1058,6 +1077,29 @@ class MemoryHandle:
                 "This memory handle does not allow mount access.",
             )
 
+    def _require_readable_mount_target(self, hook_operation: HookOperation, target_id: str) -> None:
+        """Raise `AccessDenied` if a mount target is outside the handle root and the principal cannot read it.
+
+        - **Same refusal:** a missing target and an unreadable target get the
+          `SUBTREE` refusal of each other id outside the root. So the call does
+          not show if the target exists.
+        - **Silent policy check:** the check does not report a `read` refusal.
+          The handle reports its own refusal. For a readable target,
+          `Memory.add_mount` checks and reports the policies again.
+        - **No check:** an unbounded handle, or a target inside the root.
+        """
+
+        if self.root_id is None or self._memory._contains_raw(self.root_id, target_id):
+            return
+        target = self._memory.backend.get_block(target_id)
+        if target is None or not self._memory.policy_engine.allows(Operation.READ, target, self.principal):
+            self._deny(
+                hook_operation,
+                HandleCapability.SUBTREE,
+                target_id,
+                f"Memory block {target_id!r} is outside memory handle root {self.root_id!r}.",
+            )
+
     def _search_refusal(
         self,
         scope: Scope,
@@ -1080,9 +1122,7 @@ class MemoryHandle:
             to, and the refusal message, or `None` when the search is allowed.
         """
 
-        if scope == Scope.GLOBAL:
-            if self.allow_global:
-                return None
+        if scope == Scope.GLOBAL and not self.allow_global:
             return (
                 HandleCapability.GLOBAL_SEARCH,
                 self.root_id,
@@ -1094,6 +1134,9 @@ class MemoryHandle:
                 self.root_id,
                 "This memory handle does not allow ancestor search.",
             )
+        # `Memory` looks up the root for each scope, also `global`. So the
+        # boundary check runs first for each scope, and an unknown root gets
+        # the same refusal as a root outside the handle.
         if self.root_id is not None and root_id is not None and not self._memory._contains_raw(self.root_id, root_id):
             return (
                 HandleCapability.SUBTREE,

@@ -250,6 +250,27 @@ def test_scope_update_link_stays_inside_scope() -> None:
         scope.update_link(outside_link, metadata={"status": "reviewed"})
 
 
+def test_scope_update_link_checks_the_source_before_the_link_lookup() -> None:
+    """A stored link and a missing link with a source outside the root get the same refusal."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root")
+    inside = memory.put(parent=root, type="note", value="inside")
+    outside = memory.put(type="note", value="outside")
+    other = memory.put(type="note", value="other")
+    stored = memory.add_link(outside, other, "related")
+    never_stored = MemoryLink(source_id=outside.id, target_id=other.id, relation="related")
+    unknown_source = MemoryLink(source_id="missing", target_id=other.id, relation="related")
+    scope = memory.get_handle(root=root)
+
+    for link in (stored, never_stored, unknown_source):
+        with pytest.raises(AccessDenied, match="outside memory handle root"):
+            scope.update_link(link, metadata={"status": "reviewed"})
+    assert memory.list_links(outside) == [stored]
+    with pytest.raises(MemoryNotFound):
+        scope.update_link(MemoryLink(source_id=inside.id, target_id=other.id, relation="related"), metadata={})
+
+
 def test_list_links_hides_links_to_unreadable_endpoints() -> None:
     """`list_links` hides a link if the caller cannot read one of its endpoints."""
 
@@ -428,6 +449,29 @@ def test_scope_mounts_require_explicit_mount_access() -> None:
         plain_scope.resolve_mount(mount)
 
 
+def test_scope_add_mount_does_not_show_if_an_outside_target_exists() -> None:
+    """A missing target and an unreadable target outside the root get the same refusal. A readable one can be mounted."""
+
+    memory = Memory(principal="svc")
+    root = memory.put(type="root", value="root", policy=MemoryPolicy.public())
+    hidden = memory.put(type="secret", value="outside, owner only")
+    readable = memory.put(type="docs", value="outside, public", policy=MemoryPolicy.public())
+    agent = memory.get_handle(root=root, principal="agent", allow_mounts=True)
+
+    for target in (hidden.id, "missing"):
+        with pytest.raises(AccessDenied, match="outside memory handle root"):
+            agent.add_mount(root, target)
+    assert memory.list_mounts(root) == []
+
+    mount = agent.add_mount(root, readable)
+    resolved = agent.resolve_mount(mount)
+
+    assert resolved is not None
+    assert resolved.id == readable.id
+    with pytest.raises(MemoryNotFound):
+        memory.get_unbounded_handle(allow_mounts=True).add_mount(root, "missing")
+
+
 def test_scope_add_link_cannot_create_a_mount() -> None:
     """A handle without mount access cannot create a mount through `add_link`."""
 
@@ -591,11 +635,12 @@ def test_link_arguments_must_be_memory_links() -> None:
 
     memory = Memory()
     scope = memory.get_unbounded_handle(allow_mounts=True)
+    rooted = memory.get_handle(root=memory.put(type="root", value="root"), allow_mounts=True)
 
-    for update_link in (memory.update_link, scope.update_link):
+    for update_link in (memory.update_link, scope.update_link, rooted.update_link):
         with pytest.raises(TypeError, match="link must be a MemoryLink"):
             update_link(cast(MemoryLink, "link_missing"), metadata={})
-    for resolve_mount in (memory.resolve_mount, scope.resolve_mount):
+    for resolve_mount in (memory.resolve_mount, scope.resolve_mount, rooted.resolve_mount):
         with pytest.raises(TypeError, match="mount must be a MemoryLink"):
             resolve_mount(cast(MemoryLink, "link_missing"))
 

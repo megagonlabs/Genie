@@ -1135,7 +1135,10 @@ class Memory:
                 allowed.
             allow_global: Whether global search is allowed.
             allow_mounts: Whether the handle can create, list, and resolve
-                symbolic mounts whose source is inside the handle.
+                symbolic mounts whose source is inside the handle. A mount
+                target can be outside the root. So such a handle can read each
+                block that its principal can read, if it knows the block id and
+                can write a block inside its root.
             allow_policy_override: Whether the handle can give explicit block
                 policies to `put`. For untrusted agent code, it stays `False`.
             allow_custom_ids: Whether the handle can give a caller-provided

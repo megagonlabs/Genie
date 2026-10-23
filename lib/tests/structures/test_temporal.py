@@ -283,6 +283,31 @@ def test_temporal_collection_preserves_handle_scope_and_policy() -> None:
         scoped.add(outside, occurred_at=_time(4))
 
 
+def test_temporal_get_checks_the_block_before_the_membership_lookup() -> None:
+    """`get` refuses a hidden block in the same way if it is a member or not, so it does not show membership."""
+
+    backend = InMemoryBackend()
+    owner = Memory(backend=backend, principal="agent:owner")
+    root = owner.put(type="temporal_collection", value="timeline", policy=MemoryPolicy.public())
+    private = owner.put(parent=root, type="event", value="private, not a member")
+    outside_member = owner.put(type="event", value="outside member", policy=MemoryPolicy.public())
+    outside_other = owner.put(type="event", value="outside other", policy=MemoryPolicy.public())
+    TemporalCollection(owner, backend, collection=root).add(outside_member, occurred_at=_time(1))
+    scoped = TemporalCollection(owner.get_handle(root=root, principal="agent:viewer"), backend, collection=root)
+    viewer = TemporalCollection(Memory(backend=backend, principal="agent:viewer"), backend, collection=root)
+
+    for block in (outside_member.id, outside_other.id, "missing"):
+        with pytest.raises(AccessDenied, match="outside memory handle root"):
+            scoped.get(block)
+    with pytest.raises(AccessDenied):
+        viewer.get(private)
+    assert viewer.get(outside_other) is None
+    assert viewer.get("missing") is None
+    member = viewer.get(outside_member)
+    assert member is not None
+    assert member.block.id == outside_member.id
+
+
 def test_temporal_entries_are_cleaned_when_blocks_are_deleted() -> None:
     """A delete of a target block or of the collection block removes the temporal state that depends on it."""
 
