@@ -93,7 +93,7 @@ class Neo4jBackend:
     """Persistent backend on the official Neo4j Python driver.
 
     - **Optional driver:** the `neo4j` package is an optional dependency.
-      `pip install 'genie[neo4j]'` installs it.
+      `python -m pip install -e ".[neo4j]"` in the Genie clone installs it.
     - **No driver:** without it, the constructor raises
       `UnsupportedOperation`.
 
@@ -2377,7 +2377,7 @@ def _load_neo4j_driver() -> tuple[Any, tuple[type[BaseException], ...]]:
     try:
         import neo4j
     except ImportError as error:
-        raise UnsupportedOperation("Neo4jBackend requires the optional 'neo4j' package; install 'genie[neo4j]'.") from error
+        raise UnsupportedOperation("Neo4jBackend requires the optional 'neo4j' package. In the Genie clone, run: python -m pip install -e '.[neo4j]'") from error
     exception_types = tuple(
         dict.fromkeys(
             exception_type

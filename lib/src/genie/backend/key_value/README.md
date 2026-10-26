@@ -5,7 +5,7 @@ client, with no other layer. It implements the core backend contract, all
 optional structure capabilities, and `RouteCatalog`.
 
 ```bash
-pip install "genie[redis]"
+python -m pip install -e ".[redis]"
 ```
 
 ```python

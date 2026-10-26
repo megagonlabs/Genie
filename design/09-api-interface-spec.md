@@ -747,8 +747,8 @@ A direct call skips handles, policies, hooks, and codecs.
   store that holds its links. `InMemoryLinkStore` is a standalone
   `LinkStore`.
 - **If a driver is not installed, the constructor raises
-  `UnsupportedOperation`.** The error names the extra to install (for example
-  `genie[postgres]`).
+  `UnsupportedOperation`.** The error gives the command that installs the extra (for
+  example `python -m pip install -e '.[postgres]'`).
 - **Each `verify_*` flag controls one server check at construction.** `False`
   disables that check. **`initialize_schema=False`** uses the current layout and
   does not create it.

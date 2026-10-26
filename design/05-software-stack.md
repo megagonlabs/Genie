@@ -59,8 +59,8 @@ also lists the ones that Genie leaves out on purpose.
 
 Each server adapter is an extra. The adapter imports its driver inside the
 function that needs it. If the driver is not installed, the call raises
-`UnsupportedOperation` with the name of the extra, for example
-`install 'genie[redis]'`.
+`UnsupportedOperation` with the command that installs the extra, for example
+`python -m pip install -e '.[redis]'`.
 
 | Backend | Extra | Driver range | Server requirement | Image used by `test_full.sh` |
 | --- | --- | --- | --- | --- |

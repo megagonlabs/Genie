@@ -205,7 +205,7 @@ class MongoDBBackend:
     """Persistent document backend on the official `pymongo` driver.
 
     - **Optional driver:** `pymongo` is an optional dependency.
-      `pip install 'genie[mongodb]'` installs it.
+      `python -m pip install -e ".[mongodb]"` in the Genie clone installs it.
     - **Capabilities:** the backend implements the required `MemoryBackend`
       behavior and all optional structure capabilities.
     - **One client:** each instance owns one client.
@@ -3002,7 +3002,7 @@ def _load_pymongo() -> tuple[Any, Any, Any, tuple[type[BaseException], ...]]:
         from pymongo.read_concern import ReadConcern
         from pymongo.write_concern import WriteConcern
     except ImportError as error:
-        raise UnsupportedOperation("MongoDBBackend requires the optional 'pymongo' package; install 'genie[mongodb]'.") from error
+        raise UnsupportedOperation("MongoDBBackend requires the optional 'pymongo' package. In the Genie clone, run: python -m pip install -e '.[mongodb]'") from error
     return pymongo, ReadConcern, WriteConcern, (pymongo.errors.PyMongoError, bson.errors.BSONError)
 
 

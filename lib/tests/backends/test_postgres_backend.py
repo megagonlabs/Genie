@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -109,15 +110,15 @@ def test_postgres_backend_rejects_invalid_configuration_before_loading_driver(
 def test_postgres_backend_explains_its_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If the environment does not have the driver, `PostgresBackend` raises `UnsupportedOperation` that names the `genie[postgres]` extra."""
+    """If the `psycopg` package is not installed, `PostgresBackend` raises `UnsupportedOperation` with the command that installs the `postgres` extra."""
 
-    def missing() -> tuple[Any, Any, tuple[type[BaseException], ...], tuple[type[BaseException], ...]]:
-        raise UnsupportedOperation("install 'genie[postgres]'")
+    # A `None` entry in `sys.modules` makes the import fail, also when the driver is installed.
+    monkeypatch.setitem(sys.modules, "psycopg", None)
 
-    monkeypatch.setattr(postgres_module, "_load_psycopg", missing)
-
-    with pytest.raises(UnsupportedOperation, match=r"genie\[postgres\]"):
+    with pytest.raises(UnsupportedOperation) as caught:
         PostgresBackend("postgresql:///app")
+
+    assert str(caught.value) == "PostgresBackend requires the optional 'psycopg' package. In the Genie clone, run: python -m pip install -e '.[postgres]'"
 
 
 def test_postgres_serialization_is_strict_and_defensive() -> None:

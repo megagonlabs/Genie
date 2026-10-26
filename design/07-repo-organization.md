@@ -221,7 +221,7 @@ examples/lamps/<name>/
 
 | File | Reason it cannot move into `lib/` |
 | --- | --- |
-| `pyproject.toml` | `readme` and `license-files` resolve in its directory and cannot refer to a path outside it. Also, `pip install` from a git URL looks only at the repository root |
+| `pyproject.toml` | `readme` and `license-files` resolve in its directory and cannot refer to a path outside it |
 | `pytest.ini` | It covers `examples/` and `lib/`. It sets `pythonpath` to `lib/src`, `lib`, and `.` |
 | `ruff.toml` | Ruff looks for settings in the folder of each file and then in each parent folder. So a config inside `lib/` never applies to `examples/` |
 

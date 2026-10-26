@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier, Event
@@ -111,15 +112,15 @@ def test_mongodb_backend_rejects_invalid_configuration_before_loading_driver(
 def test_mongodb_backend_explains_its_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If the environment does not have the driver, `MongoDBBackend` raises `UnsupportedOperation` that names the `genie[mongodb]` extra."""
+    """If the `pymongo` package is not installed, `MongoDBBackend` raises `UnsupportedOperation` with the command that installs the `mongodb` extra."""
 
-    def missing() -> tuple[Any, Any, Any, tuple[type[BaseException], ...]]:
-        raise UnsupportedOperation("install 'genie[mongodb]'")
+    # A `None` entry in `sys.modules` makes the import fail, also when the driver is installed.
+    monkeypatch.setitem(sys.modules, "pymongo", None)
 
-    monkeypatch.setattr(mongodb_module, "_load_pymongo", missing)
-
-    with pytest.raises(UnsupportedOperation, match=r"genie\[mongodb\]"):
+    with pytest.raises(UnsupportedOperation) as caught:
         MongoDBBackend("mongodb:///app")
+
+    assert str(caught.value) == "MongoDBBackend requires the optional 'pymongo' package. In the Genie clone, run: python -m pip install -e '.[mongodb]'"
 
 
 def test_mongodb_serialization_is_strict_and_defensive() -> None:

@@ -563,7 +563,7 @@ from genie import InMemoryBackend, Memory, PostgresBackend, SQLiteBackend
 
 backend = InMemoryBackend()                                        # tests
 backend = SQLiteBackend("trips.db")                                # a laptop, no extra package
-backend = PostgresBackend("postgresql://trips@db.internal/trips")  # production, needs genie[postgres]
+backend = PostgresBackend("postgresql://trips@db.internal/trips")  # production, needs the postgres extra
 
 memory = Memory(backend=backend, principal="service:trips")        # the same line in each case
 ```
@@ -590,7 +590,7 @@ ben = memory.put(type="traveler", value={"name": "Ben Okafor"}, metadata={"regio
 | Question | Call | Answer |
 | --- | --- | --- |
 | Do blocks stay after a restart on SQLite? | Close the first `SQLiteBackend`, open a new `SQLiteBackend("trips.db")`, then call `memory.get(ana_id)` | Yes: `{"name": "Ana Souza"}`, with its preference as a child |
-| What occurs if the PostgreSQL driver is not installed? | `PostgresBackend(...)` | `UnsupportedOperation`: `PostgresBackend requires the optional 'psycopg' package; install 'genie[postgres]'.` |
+| What occurs if the PostgreSQL driver is not installed? | `PostgresBackend(...)` | `UnsupportedOperation`: `PostgresBackend requires the optional 'psycopg' package. In the Genie clone, run: python -m pip install -e '.[postgres]'` |
 | Where is the trip of Ana stored? | `backend.route_for_block(trip.id)` | `eu`, the route of its parent, although the trip has no `region` |
 | Can the application send a child of Ana to the US store? | `memory.put(parent=ana, ..., metadata={"region": "us"})` | `MemoryConflict`: `Child route 'us' does not match parent route 'eu'.` |
 | Does one search still see both stores? | `memory.search(types=["traveler"])` | Yes: Ana, then Ben. They have the same score, so they come in creation order |

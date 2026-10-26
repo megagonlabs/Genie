@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -146,15 +147,15 @@ def test_redis_backend_rejects_invalid_configuration_before_loading_client(
 def test_redis_backend_explains_its_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If the `redis` client package is absent, the constructor raises an `UnsupportedOperation` that names the `genie[redis]` extra."""
+    """If the `redis` package is not installed, `RedisBackend` raises `UnsupportedOperation` with the command that installs the `redis` extra."""
 
-    def missing() -> tuple[Any, tuple[type[BaseException], ...], type[BaseException], type[BaseException]]:
-        raise UnsupportedOperation("install 'genie[redis]'")
+    # A `None` entry in `sys.modules` makes the import fail, also when the driver is installed.
+    monkeypatch.setitem(sys.modules, "redis", None)
 
-    monkeypatch.setattr(redis_module, "_load_redis_client", missing)
-
-    with pytest.raises(UnsupportedOperation, match=r"genie\[redis\]"):
+    with pytest.raises(UnsupportedOperation) as caught:
         RedisBackend("redis://example")
+
+    assert str(caught.value) == "RedisBackend requires the optional 'redis' package. In the Genie clone, run: python -m pip install -e '.[redis]'"
 
 
 def test_redis_serialization_is_strict_and_defensive() -> None:

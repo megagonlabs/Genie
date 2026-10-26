@@ -38,7 +38,7 @@ command-line program and extra Python packages are not necessary.
 ## `PostgresBackend`
 
 ```bash
-pip install "genie[postgres]"
+python -m pip install -e ".[postgres]"
 ```
 
 ```python

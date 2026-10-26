@@ -141,8 +141,7 @@ Apply these in proportion to the size and user-facing impact of the change.
   the `genie` package and points at the source with
   `[tool.setuptools.packages.find] where = ["lib/src"]`. It has to be at the
   root, because `readme` and `license-files` are resolved next to it and cannot
-  point outside its directory, and because `pip install` from a git URL only
-  looks at the repository root. `pytest.ini` and `ruff.toml` are there for their
+  point outside its directory. `pytest.ini` and `ruff.toml` are there for their
   own reasons: they cover `examples/` as well as `lib/`, and `ruff` finds its
   settings by walking up from each file. Install the package with
   `python -m pip install -e .`, and run `pytest` and `ruff` from the repository

@@ -218,8 +218,8 @@ class PostgresBackend:
     """Persistent backend on the official `psycopg` PostgreSQL driver.
 
     - **Optional driver:** the `psycopg` package is an optional dependency.
-      `pip install 'genie[postgres]'` installs it. The constructor raises
-      `UnsupportedOperation` without it.
+      `python -m pip install -e ".[postgres]"` in the Genie clone installs it.
+      The constructor raises `UnsupportedOperation` without it.
     - **Capabilities:** the backend implements the required `MemoryBackend`
       behavior and all optional capabilities.
     - **One connection:** each instance owns one connection. An internal
@@ -2723,7 +2723,7 @@ def _load_psycopg() -> tuple[Any, Any, tuple[type[BaseException], ...], tuple[ty
         import psycopg
         from psycopg.rows import dict_row
     except ImportError as error:
-        raise UnsupportedOperation("PostgresBackend requires the optional 'psycopg' package; install 'genie[postgres]'.") from error
+        raise UnsupportedOperation("PostgresBackend requires the optional 'psycopg' package. In the Genie clone, run: python -m pip install -e '.[postgres]'") from error
     return psycopg, dict_row, (psycopg.Error,), (psycopg.IntegrityError,)
 
 

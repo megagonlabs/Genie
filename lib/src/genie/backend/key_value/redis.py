@@ -360,8 +360,8 @@ class RedisBackend:
     """Persistent backend on the official `redis` Python client.
 
     - **Optional dependency:** the `redis` package is optional.
-      `pip install 'genie[redis]'` installs it. Without it, construction raises
-      `UnsupportedOperation`.
+      `python -m pip install -e ".[redis]"` in the Genie clone installs it.
+      Without it, construction raises `UnsupportedOperation`.
 
     Capabilities:
         - Implements the required `MemoryBackend` behavior and all optional
@@ -3576,7 +3576,7 @@ def _load_redis_client() -> tuple[Any, tuple[type[BaseException], ...], type[Bas
         import redis.exceptions
         import redis.retry
     except ImportError as error:
-        raise UnsupportedOperation("RedisBackend requires the optional 'redis' package; install 'genie[redis]'.") from error
+        raise UnsupportedOperation("RedisBackend requires the optional 'redis' package. In the Genie clone, run: python -m pip install -e '.[redis]'") from error
     exception_types = tuple(
         dict.fromkeys(
             exception_type

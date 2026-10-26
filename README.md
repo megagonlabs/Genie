@@ -63,7 +63,7 @@ assert results[0].block.id == requirement.id
 
 - **`InMemoryBackend`** is the reference backend. No extra packages, so it suits tests, examples, and prototypes.
 - **`SQLiteBackend`** adds local persistent storage through the driver that ships with Python. You do not need the SQLite command-line program.
-- **Optional adapters** need their extra: `genie[postgres]`, `genie[neo4j]`, `genie[mongodb]`, or `genie[redis]`.
+- **Optional adapters** need their extra: `postgres`, `neo4j`, `mongodb`, or `redis`.
 - **Every persistent adapter** supports all seven structure facades.
 
 ```python

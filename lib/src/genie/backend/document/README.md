@@ -5,7 +5,7 @@
 optional structure capabilities, and `RouteCatalog`.
 
 ```bash
-pip install "genie[mongodb]"
+python -m pip install -e ".[mongodb]"
 ```
 
 ```python

@@ -181,7 +181,7 @@ The repository uses the other 3 layers to keep Genie details out of agent code.
 - **Underscore modules are private.** Genie does not re-export `genie.structures._hooks` and `genie.structures._routing`.
 - **The package is typed.** The package contains `py.typed`, so a type checker in the application reads the Genie annotations.
 - **The version is `1.0.0`.**
-- **The application installs Genie from the repository.** It uses `pip install -e .` from a clone, or `pip install` with a git URL. Adapter drivers come from extras, for example `genie[postgres]`.
+- **The application installs Genie from a clone of the repository.** It uses `pip install -e .` in the clone. Adapter drivers come from extras, for example `pip install -e ".[postgres]"`.
 - **The module guides are part of the package.** Each subpackage `README.md` is package data. So an installed version contains the guide that matches it.
 
 ## Left out on purpose

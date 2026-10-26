@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -104,15 +105,15 @@ def test_neo4j_backend_rejects_invalid_configuration_before_loading_driver(
 def test_neo4j_backend_explains_its_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If the environment does not have the driver, `Neo4jBackend` raises `UnsupportedOperation` that names the `genie[neo4j]` extra."""
+    """If the `neo4j` package is not installed, `Neo4jBackend` raises `UnsupportedOperation` with the command that installs the `neo4j` extra."""
 
-    def missing() -> tuple[Any, tuple[type[BaseException], ...]]:
-        raise UnsupportedOperation("install 'genie[neo4j]'")
+    # A `None` entry in `sys.modules` makes the import fail, also when the driver is installed.
+    monkeypatch.setitem(sys.modules, "neo4j", None)
 
-    monkeypatch.setattr(neo4j_module, "_load_neo4j_driver", missing)
-
-    with pytest.raises(UnsupportedOperation, match=r"genie\[neo4j\]"):
+    with pytest.raises(UnsupportedOperation) as caught:
         Neo4jBackend("neo4j://example")
+
+    assert str(caught.value) == "Neo4jBackend requires the optional 'neo4j' package. In the Genie clone, run: python -m pip install -e '.[neo4j]'"
 
 
 def test_neo4j_serialization_is_strict_and_defensive() -> None:

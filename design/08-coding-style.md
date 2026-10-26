@@ -206,8 +206,8 @@ def get_block(self, block_id: str) -> MemoryBlock | None:
   `retryable` attribute, and its `Attributes:` section documents it.
 - **The code chains the original failure** with `raise ... from error`, so the
   driver traceback stays available.
-- **A missing driver raises `UnsupportedOperation` and names the extra:**
-  `"RedisBackend requires the optional 'redis' package; install 'genie[redis]'."`
+- **A missing driver raises `UnsupportedOperation` with the command that installs the extra:**
+  `"RedisBackend requires the optional 'redis' package. In the Genie clone, run: python -m pip install -e '.[redis]'"`
 
 ## Naming
 
