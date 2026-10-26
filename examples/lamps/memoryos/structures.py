@@ -92,9 +92,11 @@ class MemoryOSStructures:
     def create(cls, memory: MemoryHandle, store: MemoryOSStore) -> MemoryOSStructures:
         """Build or reopen each structure anchor below one bounded root.
 
-        The method finds the current anchors in the children of the root. So a
-        second call for the same memory returns the same structures and does
-        not make duplicates.
+        - **Reopen:** the method finds the current anchors in the children of
+          the root. So a second call for the same memory returns the same
+          structures and does not make duplicates.
+        - **Chain protection:** the method protects `NEXT_PAGE` through
+          `store`, because a handle cannot. A repeated call changes nothing.
 
         Args:
             memory: Handle whose root is the block that owns the memory of one
@@ -106,11 +108,13 @@ class MemoryOSStructures:
             The structure bundle for that memory.
 
         Raises:
+            MemoryConflict: If the stored links of `NEXT_PAGE` contain a cycle.
             ValueError: If the handle is unbounded.
         """
 
         if memory.root_id is None:
             raise ValueError("MemoryOSStructures requires a bounded MemoryHandle.")
+        store.protect_relation(NEXT_PAGE)
         tiers = OwnershipTree(memory, root=memory.root_id)
         anchors = {name: _anchor(tiers, name) for name in TIERS}
         mid_term = anchors["mid_term"]

@@ -92,13 +92,17 @@ paths = graph.walk(note, relation="supports", max_depth=3)
 of cycles:
 
 ```python
+memory.protect_relation("derived_into")  # trusted setup code, before handles exist
 lineage = LineageDAG(handle, relation="derived_into")
 lineage.add(source, summary)
 ```
 
+- **Trusted code protects the relation first.** Only `Memory.protect_relation` starts the protection. `MemoryHandle` has no such method. Before the protection, `lineage.add` raises `MemoryConflict`. So code with a handle cannot lock a relation name that other callers use.
+- **Protect before handles get write access.** After the protection, a plain `add_link` with that relation raises `MemoryConflict` for all blocks and principals. So no caller can add a cycle with plain links.
+- **Plain links that exist before the protection stay.** If they form a DAG, the protection includes them. If they contain a cycle, `protect_relation` raises `MemoryConflict`, and the relation stays without protection.
 - **The backend checks reachability and inserts the edge in one atomic step.** A read followed by a write is not safe when several writers run at the same time.
-- **Protection covers the whole backend,** not one handle, subtree, or tenant. After the first `lineage.add`, a plain `add_link` with that relation raises `MemoryConflict` for all blocks. The protection stays, also after all links of the relation are deleted. `RoutedBackend` without a shared link store protects each route separately. See the [composite guide](../backend/composite/README.md#acyclic-links).
-- **Only `LineageDAG` and `add_acyclic_link` write the relation safely.** Plain links that exist before the first lineage edge stay. If they form a DAG, the protection includes them. If they contain a cycle, each `lineage.add` raises `MemoryConflict`, and the relation stays without protection.
+- **Protection covers the whole backend,** not one handle, subtree, or tenant. The protection stays, also after all links of the relation are deleted. Genie has no call that removes it. `RoutedBackend` without a shared link store protects each route separately. See the [composite guide](../backend/composite/README.md#acyclic-links).
+- **The cycle check reads links that the caller cannot read.** A refusal can show a caller that a path exists through blocks outside its handle or its policies. So when tenants must not learn about each other's paths, give each tenant its own relation name, chosen by trusted code.
 - **A prefixed relation name for each lineage graph,** such as `"billing.derived_from"`, makes sure that another component or tenant does not choose the same name by accident.
 
 ## Keys, logs, and time
@@ -154,7 +158,7 @@ records.append(address, second_revision)
 | `TemporalStore` | `TemporalCollection` |
 | `TemporalIndex` | Optional temporal optimization |
 
-- **A capability that the store does not have raises `UnsupportedOperation`** when the facade is built. The exception is `LineageDAG`: it checks nothing when it is built, and its first `add` raises `UnsupportedOperation`.
+- **A capability that the store does not have raises `UnsupportedOperation`** when the facade is built. The exception is `LineageDAG`: it checks nothing when it is built. `Memory.protect_relation` and the first `add` raise `UnsupportedOperation`.
 - **The store is a separate argument from the access object,** because an access object does not expose a backend. A `MemoryHandle` hides its backend on purpose: with the backend, a caller can go around the scope of the handle.
 
 ### Composite backends

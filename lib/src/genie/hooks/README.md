@@ -16,6 +16,7 @@ and index updates.
 | `before_delete` | `after_delete` | Each block in a recursive delete |
 | `before_add_link` | `after_add_link` | Regular, acyclic, and mount link creation |
 | `before_update_link` | `after_update_link` | Link metadata update |
+| `before_protect_relation` | `after_protect_relation` | `Memory.protect_relation` |
 | `before_structure_change` | `after_structure_change` | Keys, log appends, and temporal membership |
 
 3 callbacks have no before and after pair, and no one of them is tied to one
@@ -28,6 +29,7 @@ kind of operation:
 Other notes:
 
 - **Structure events use immutable `StructureChange` values.** `kind` tells keyed collections, event logs, and temporal collections apart, and `action` names the exact change. Versioned records reuse the key and log events and send no duplicates.
+- **Relation protection events use immutable `RelationProtection` values.** `relation` names the protected relation. The protection changes link writes for the whole backend, so an audit trail can record which principal protected which relation. The relation is not in `attributes`, because nested operations inherit attributes. `after_protect_relation` also runs for a relation that was already protected.
 - **No paired callbacks** for mount resolution, facade reads, handle creation, and direct backend calls.
 - **Some operations start only to report a refusal.** Mount resolution, handle creation, and `require_access` open an operation only when they refuse. So hooks get `on_denied` and a `denied` terminal event for a refusal, and nothing for an allowed call. An allowed mount resolution reports at most the `get` of the target block.
 - **`get` hooks are block lookups, not facade reads.** A facade can run ordinary `get` calls while it resolves blocks. So one high-level facade read is not one event.

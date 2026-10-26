@@ -293,7 +293,8 @@ class AcyclicLinkWriter(Protocol):
             Stored link.
 
         Raises:
-            MemoryConflict: If the link makes a cycle.
+            MemoryConflict: If the relation is not protected, or the link
+                makes a cycle.
         """
 
         ...

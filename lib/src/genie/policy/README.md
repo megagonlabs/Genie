@@ -117,6 +117,8 @@ engine.require("export", block, principal)
 - **A recursive delete** needs `write` on the target block only. It stops with `MemoryConflict` if the checked subtree changes.
 - **A change of a block in place** with `set` or `update` needs `read` and `write`, because both return the stored block. A write-only inbox uses `put`: a new block under a container needs `write` and `traverse_down` on the container, not `read`.
 - **Links that a read returns** need `read` on both endpoints. `update_link` returns the stored link, so it needs `read` and `write` on the source and `read` on the target, if the target still exists. `add_link` and `add_mount` need `write` on the source and `read` on the target.
+- **Acyclic relations belong to trusted code.** Only `Memory.protect_relation` protects a relation, and it has no policy check, because the protection covers the whole backend. Protect each DAG relation before handles can write links with it.
+- **The cycle check of `add_acyclic_link` reads all links of the relation,** also links that the principal cannot read. So a refusal can show that a path exists through hidden blocks. Give each tenant its own DAG relation when tenants must not learn about each other's paths.
 
 ### A missing grant fails in two ways, and only one is loud
 

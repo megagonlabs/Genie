@@ -71,8 +71,9 @@ triage.search("export")          # case, message, finding
 - **`MemoryPolicy.owner_private()` is the default** for new blocks. With this policy, only the creator can `read`, `write`, `search`, `traverse_up`, and `traverse_down` the block.
 - **`MemoryHandle` limits what a caller can reach.** A handle has a root block, a principal, and a set of `HandleCapability` values. Child handles only narrow. They cannot change the principal or restore a disabled capability.
 - **Policies do not inherit** through ownership. But `write` on a block gives authority over the existence of all blocks that it owns. So `write` on the target block alone authorizes a recursive delete.
-- **Filtered reads return fewer results** and do not refuse. So a caller learns nothing about blocks that it cannot see.
+- **Filtered reads return fewer results** and do not refuse. So a caller learns nothing about blocks that it cannot see. One exception: the cycle check of `add_acyclic_link` reads all links of the relation. So its refusal can show a path through blocks that the caller cannot see.
 - **Trust boundary:** `Memory`, backends, policy engines, hooks, and codec registries stay in trusted code. Agents get rooted handles, or smaller tools that the application defines.
+- **Relation protection belongs to trusted code.** Only `Memory.protect_relation` makes a relation acyclic. The protection covers the whole backend, so a handle cannot start it.
 
 ### Optional structures
 

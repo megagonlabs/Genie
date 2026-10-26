@@ -22,7 +22,11 @@ from genie.codecs import MAX_NESTING_DEPTH
 
 
 def test_public_link_api_uses_explicit_operation_names() -> None:
-    """`Memory` and its handles expose explicit link and mount method names, without the old `link` and `links` aliases."""
+    """`Memory` and its handles expose explicit link and mount method names, without the old `link` and `links` aliases.
+
+    Only `Memory` has `protect_relation`, so code with a handle cannot protect
+    a relation that all callers share.
+    """
 
     memory = Memory()
     scope = memory.get_unbounded_handle()
@@ -34,6 +38,7 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
     assert callable(memory.list_mounts)
     assert callable(memory.discover_mounts)
     assert callable(memory.resolve_mount)
+    assert callable(memory.protect_relation)
     assert callable(scope.add_link)
     assert callable(scope.update_link)
     assert callable(scope.list_links)
@@ -45,6 +50,7 @@ def test_public_link_api_uses_explicit_operation_names() -> None:
     assert not hasattr(memory, "links")
     assert not hasattr(scope, "link")
     assert not hasattr(scope, "links")
+    assert not hasattr(scope, "protect_relation")
 
 
 def test_links_support_direction_filters_and_link_scope_search() -> None:
@@ -578,6 +584,8 @@ def test_reserved_mount_relation_is_rejected_by_non_mount_operations() -> None:
         memory.add_link(source, target, LinkRelations.MOUNT)
     with pytest.raises(ValueError, match="reserved mount relation"):
         memory.add_acyclic_link(source, target, LinkRelations.MOUNT)
+    with pytest.raises(ValueError, match="reserved mount relation"):
+        memory.protect_relation(LinkRelations.MOUNT)
     with pytest.raises(ValueError, match="Expected mount relation"):
         memory.resolve_mount(ordinary)
     assert memory.list_mounts(source) == []
@@ -618,6 +626,11 @@ def test_link_relations_and_endpoints_must_be_non_empty_strings() -> None:
             add(source, target, "")
         with pytest.raises(TypeError, match="MemoryBlock or a string id"):
             add(source, cast(str, {"$ne": None}), "related")
+    with pytest.raises(TypeError, match="relation must be a string"):
+        memory.protect_relation(cast(str, None))
+    for relation in ("", "   "):
+        with pytest.raises(ValueError, match="relation must not be empty"):
+            memory.protect_relation(relation)
     for add_mount in (memory.add_mount, scope.add_mount):
         with pytest.raises(TypeError, match="MemoryBlock or a string id"):
             add_mount(source, cast(str, 123))

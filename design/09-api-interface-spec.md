@@ -172,7 +172,8 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 | Method | Returns | Checked | Raises |
 | --- | --- | --- | --- |
 | `add_link(source, target, relation, *, metadata=None)` | `MemoryLink` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
-| `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | the same as `add_link` | also `MemoryConflict` (cycle), `UnsupportedOperation` (no `AcyclicLinkStore`) |
+| `protect_relation(relation)` | `None` | none. Only `Memory` has it | `MemoryConflict` (the links already contain a cycle), `TypeError`, `UnsupportedOperation` (no `AcyclicLinkStore`), `ValueError` (empty or mount relation) |
+| `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | the same as `add_link` | also `MemoryConflict` (relation not protected, or cycle), `UnsupportedOperation` (no `AcyclicLinkStore`) |
 | `update_link(link, *, metadata)` | `MemoryLink` | `write` then `read` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `list_links(block_id, *, relation=None, direction="out")` | `list[MemoryLink]` | `read` on the block and on the 2 ends of each link | `AccessDenied`, `MemoryNotFound`, `ValueError` (direction) |
 | `add_mount(source, target, *, metadata=None)` | `MemoryLink` with relation `"genie.mount"` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
@@ -184,9 +185,15 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 - **`update_link` merges metadata only.** The source, target, and relation
   never change. It returns the stored link, so it also needs `read` on the
   source.
-- **Only `add_mount` creates `"genie.mount"` links.** `add_link` and
-  `add_acyclic_link` refuse that relation with `ValueError`. So a handle
-  without `allow_mounts` cannot create a mount.
+- **Only `add_mount` creates `"genie.mount"` links.** `add_link`,
+  `add_acyclic_link`, and `protect_relation` refuse that relation with
+  `ValueError`. So a handle without `allow_mounts` cannot create a mount.
+- **`protect_relation` is the only call that protects a relation.** It
+  adopts the current links only when they form a DAG. A repeated call changes
+  nothing. No call removes a protection. After it, `add_link` with the
+  relation raises `MemoryConflict`.
+- **The cycle check of `add_acyclic_link` reads all links of the relation,**
+  also links that the principal cannot read.
 - **Links do not imply ownership.** Recursive delete and subtree search do not
   follow them.
 
@@ -456,9 +463,11 @@ page_results(results, query)
 - **`LineageDAG` works on one relation.** An empty relation or `"genie.mount"`
   raises `ValueError`.
 - **Relation names are shared across the whole backend.** The protection starts
-  with the first acyclic insert. After that, it covers each block with that
-  relation, across handles and tenants. Applications prefix lineage relations,
-  for example `"billing.derived_from"`, to prevent accidental name clashes.
+  with `Memory.protect_relation`, in trusted code. `add` raises
+  `MemoryConflict` before it. After it, the protection covers each block with
+  that relation, across handles and tenants. Applications prefix lineage
+  relations, for example `"billing.derived_from"`, to prevent accidental name
+  clashes.
 - **`GraphNeighbor`:** `block`, `link`, `direction` (`"out"` or `"in"`).
   **`GraphPath`:** `block_ids`, `links`.
 
@@ -578,6 +587,7 @@ page_results(results, query)
 | `before_traverse(context, traversal)` | mutating | `None` |
 | `before_add_link(context, link)` | mutating | `MemoryLink` |
 | `before_update_link(context, current, proposed)` | mutating | `MemoryLink` |
+| `before_protect_relation(context, protection)` | mutating | `None` |
 | `before_structure_change(context, change)` | mutating | `None` |
 | `before_delete(context, block)` | mutating | `None`. Once for each block in the subtree |
 | `after_put(context, block)` | observing | `None` |
@@ -586,6 +596,7 @@ page_results(results, query)
 | `after_traverse(context, traversal)` | observing | `None` |
 | `after_add_link(context, link)` | observing | `None` |
 | `after_update_link(context, previous, stored)` | observing | `None` |
+| `after_protect_relation(context, protection)` | observing | `None` |
 | `after_structure_change(context, change)` | observing | `None` |
 | `after_delete(context, block)` | observing | `None`. Once for each removed block |
 | `on_denied(context, operation, subject_id, reason)` | observing | `None` |
@@ -632,7 +643,7 @@ page_results(results, query)
 | Type | Fields or values |
 | --- | --- |
 | `HookContext` | `operation_id`, `parent_operation_id`, `operation`, `origin`, `depth`, `principal_id`, `attributes`, `started_at`, `scope_name`, and the `is_scope` property |
-| `HookOperation` | `put`, `get`, `set`, `update`, `delete`, `search`, `children`, `ancestors`, `contains`, `link.add`, `link.add_acyclic`, `link.update`, `link.list`, `mount.add`, `mount.list`, `mount.discover`, `mount.resolve`, `handle.create`, `access.require`, `key.bind`, `key.rebind`, `key.unbind`, `log.append`, `temporal.add`, `temporal.replace`, `temporal.remove`, `hooks.suppress`, `scope` |
+| `HookOperation` | `put`, `get`, `set`, `update`, `delete`, `search`, `children`, `ancestors`, `contains`, `link.add`, `link.add_acyclic`, `link.protect_relation`, `link.update`, `link.list`, `mount.add`, `mount.list`, `mount.discover`, `mount.resolve`, `handle.create`, `access.require`, `key.bind`, `key.rebind`, `key.unbind`, `log.append`, `temporal.add`, `temporal.replace`, `temporal.remove`, `hooks.suppress`, `scope` |
 | `HookOrigin` | `"caller"`, `"hook"` |
 | `HookOutcome` | `SUCCESS`, `DENIED`, `ERROR` |
 | `Traversal` | `kind`, `origin_id`, `target_id`, `relation`, `direction`, `blocks`, `links`, `contained` |
@@ -640,6 +651,7 @@ page_results(results, query)
 | `StructureChange` | `kind`, `action`, `container_id`, `block_id`, `before`, `after` |
 | `StructureKind` | `KEYED_COLLECTION`, `EVENT_LOG`, `TEMPORAL_COLLECTION` |
 | `StructureAction` | `BIND`, `REBIND`, `UNBIND`, `APPEND`, `ADD`, `REPLACE`, `REMOVE` |
+| `RelationProtection` | `relation` |
 | `Suppression` | `scope` (`SuppressionScope.SELECTED` or `REGISTRY`), `hooks`, `mandatory` |
 | `HandleCapability` | refer to [`MemoryHandle`](#memoryhandle) |
 
@@ -687,7 +699,7 @@ A direct call skips handles, policies, hooks, and codecs.
 | `LinkStore` | `add_link(link)`, `update_link(link)`, `list_links(block_id, *, relation=None, direction="out")`, `delete_links_for_block(block_id)` |
 | `SearchIndex` | `search(query)` |
 | `MemoryBackend` | `BlockStore` + `TraversalIndex` + `SearchIndex` + `LinkStore` |
-| `AcyclicLinkStore` | `add_acyclic_link(link)` |
+| `AcyclicLinkStore` | `protect_relation(relation)`, `add_acyclic_link(link)` |
 | `KeyedStore` | `bind_key`, `rebind_key(..., *, expected_block_id)`, `get_key`, `list_keys(..., *, namespace, recursive, after, limit)`, `unbind_key(..., *, expected_block_id)`, `delete_key_bindings_for_block` |
 | `SequenceStore` | `append_log_entry(log_id, block_id)`, `get_log_entry`, `list_log_entries(..., *, start, stop, reverse, limit)`, `delete_log_entries_for_block` |
 | `TemporalStore` | `add_temporal_entry`, `replace_temporal_entry`, `get_temporal_entry`, `list_temporal_entries(..., *, after_block_id, limit)`, `remove_temporal_entry`, `delete_temporal_entries_for_block` |

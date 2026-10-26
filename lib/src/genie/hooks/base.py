@@ -8,6 +8,7 @@ from genie.hooks.events import (
     HandleCapability,
     HookContext,
     HookOutcome,
+    RelationProtection,
     StructureChange,
     Suppression,
     Traversal,
@@ -261,6 +262,42 @@ class MemoryHook:
             context: Operation context that the paired before callback shares.
             previous: Stored link before the update.
             stored: Replacement link that the backend stored.
+        """
+
+        return
+
+    def before_protect_relation(
+        self,
+        context: HookContext,
+        protection: RelationProtection,
+    ) -> None:
+        """Run before the backend protects a link relation as an acyclic graph.
+
+        - **Observe only:** the relation identifies the protected graph. So
+          this callback does not change it.
+        - **Refusal:** a hook that raises stops the protection before the
+          backend runs it.
+
+        Args:
+            context: Operation context that the paired after callback shares.
+            protection: Requested protection.
+        """
+
+        return
+
+    def after_protect_relation(
+        self,
+        context: HookContext,
+        protection: RelationProtection,
+    ) -> None:
+        """Run after the protection of a link relation commits.
+
+        It also runs when the relation was already protected, because that
+        call also succeeds.
+
+        Args:
+            context: Operation context that the paired before callback shares.
+            protection: Committed protection.
         """
 
         return

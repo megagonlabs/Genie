@@ -1359,14 +1359,34 @@ class MongoDBBackend:
 
         return self._write(operation)
 
-    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Add a link in one atomic step, unless the link makes a directed cycle.
+    def protect_relation(self, relation: str) -> None:
+        """Protect a relation as an acyclic graph, in one atomic step.
 
-        - **First call:** the current links with the same relation join the
-          protected graph only if they already form a DAG. If they contain a
-          cycle, the call raises `MemoryConflict`, and the relation stays
-          without protection.
+        - **Current links:** they join the protected graph only if they
+          already form a DAG. If they contain a cycle, the call raises
+          `MemoryConflict`, and the relation stays without protection.
         - **After that:** the relation is protected from ordinary link inserts.
+        - **Repeated call:** a call for a protected relation changes nothing.
+
+        Args:
+            relation: Relation that identifies the protected graph.
+
+        Raises:
+            MemoryConflict: If the current links of the relation contain a
+                cycle.
+        """
+
+        def operation(session: Any) -> None:
+            if self._relation_is_protected(session, relation):
+                return
+            if _edges_have_cycle(self._relation_edges(session, relation)):
+                raise MemoryConflict(f"Link relation {relation!r} already contains a cycle.")
+            self._acyclic_relations.insert_one({"_id": relation}, session=session)
+
+        self._write(operation)
+
+    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
+        """Add a link to a protected relation in one atomic step, unless the link makes a directed cycle.
 
         Args:
             link: Link to store. Its relation identifies the protected graph
@@ -1377,23 +1397,17 @@ class MongoDBBackend:
 
         Raises:
             MemoryConflict: If the link id already exists, an endpoint does not
-                exist, the relation already contains a cycle, or the new link
-                makes one.
+                exist, the relation is not protected, or the new link makes a
+                cycle.
         """
 
         def operation(session: Any) -> MemoryLink:
             self._validate_new_link(session, link)
-            edges = [
-                (str(document["source_id"]), str(document["target_id"]))
-                for document in self._links.find({"relation": link.relation}, {"source_id": 1, "target_id": 1}, session=session)
-            ]
-            protected = self._relation_is_protected(session, link.relation)
-            if not protected and _edges_have_cycle(edges):
-                raise MemoryConflict(f"Link relation {link.relation!r} already contains a cycle.")
+            if not self._relation_is_protected(session, link.relation):
+                raise MemoryConflict(f"Link relation {link.relation!r} is not protected as an acyclic graph; call protect_relation first.")
+            edges = self._relation_edges(session, link.relation)
             if link.source_id == link.target_id or _edge_path_exists(edges, link.target_id, link.source_id):
                 raise MemoryConflict(f"Link {link.source_id!r} -> {link.target_id!r} would create a cycle in relation {link.relation!r}.")
-            if not protected:
-                self._acyclic_relations.insert_one({"_id": link.relation}, session=session)
             return self._insert_link(session, link)
 
         return self._write(operation)
@@ -2227,6 +2241,14 @@ class MongoDBBackend:
         """Return whether a relation is protected as an acyclic graph."""
 
         return self._acyclic_relations.find_one({"_id": relation}, session=session) is not None
+
+    def _relation_edges(self, session: Any, relation: str) -> list[tuple[str, str]]:
+        """Return the source and target ids of each stored link of one relation."""
+
+        return [
+            (str(document["source_id"]), str(document["target_id"]))
+            for document in self._links.find({"relation": relation}, {"source_id": 1, "target_id": 1}, session=session)
+        ]
 
     def _scope_candidate_documents(self, session: Any, query: MemoryQuery) -> list[Mapping[str, Any]]:
         """Return raw candidate block documents for one normalized search scope."""

@@ -20,6 +20,8 @@ class LineageDAG:
     """A directed acyclic lineage view over existing typed links.
 
     - **One relation:** one exact link relation identifies the DAG.
+    - **Protection first:** trusted code calls `Memory.protect_relation` for
+      the relation before the first `add`. The facade does not protect it.
     - **Direction:** edges point from a predecessor to a successor.
     - **Reads and updates:** reads and metadata updates use `PropertyGraph`.
     - **Inserts:** inserts use the atomic acyclic-link operation of the access
@@ -37,7 +39,8 @@ class LineageDAG:
             relation: Exact link relation that identifies this DAG. The whole
                 backend shares relation names. A distinct prefixed name for
                 each lineage graph, such as `"billing.derived_from"`, keeps the
-                graphs apart.
+                graphs apart. `Memory.protect_relation` protects it before the
+                first `add`.
 
         Raises:
             TypeError: If `relation` is not a string.
@@ -69,7 +72,9 @@ class LineageDAG:
 
         Raises:
             AccessDenied: If the scope or a policy rejects an endpoint.
-            MemoryConflict: If the edge makes a directed cycle.
+            MemoryConflict: If the relation is not protected, or the edge
+                makes a directed cycle. The cycle check includes edges that
+                the access object cannot read.
             MemoryNotFound: If an endpoint does not exist.
             UnsupportedOperation: If the backend cannot insert atomically.
         """

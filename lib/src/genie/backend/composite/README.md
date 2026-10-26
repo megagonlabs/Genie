@@ -76,9 +76,10 @@ backend = RoutedBackend(
 - **`RoutedBackend` implements `AcyclicLinkStore`.** So `LineageDAG` and `Memory.add_acyclic_link` work over it. Links are part of the core contract, so the composite already routes them. `add_acyclic_link` goes to the same place as `add_link`.
 - **Without a shared link store,** the route that owns both endpoints checks for cycles. Links never cross routes in this mode. So a cycle can form only inside one route, and the route-local check is exact.
 - **A cross-route acyclic link raises `MemoryConflict`,** the same as a plain cross-route link.
-- **Each route protects a relation alone.** A route rejects plain `add_link` calls for a relation only after its own first acyclic insert, not after one in another route. A relation stays acyclic in all routes only if all its writes go through `LineageDAG` or `add_acyclic_link`.
-- **With a shared link store,** that store checks cycles across all routes. So it needs `AcyclicLinkStore`. `InMemoryLinkStore` does not implement it, so an acyclic insert with it raises `UnsupportedOperation`.
-- **A route without `AcyclicLinkStore` raises `UnsupportedOperation`,** and it stores no link.
+- **Each route stores its own protection.** Without a shared link store, `protect_relation` protects the relation in each route, also in a route with no links yet.
+- **The protection is not atomic across routes.** If the links of one route contain a cycle, `protect_relation` raises `MemoryConflict`, and the routes before it stay protected. A repeated call after the cycle is removed protects the other routes.
+- **With a shared link store,** that store protects the relation and checks cycles across all routes. So it needs `AcyclicLinkStore`. `InMemoryLinkStore` does not implement it, so `protect_relation` and an acyclic insert with it raise `UnsupportedOperation`.
+- **A route without `AcyclicLinkStore` raises `UnsupportedOperation`.** `protect_relation` checks all routes first, so it protects no route. An acyclic insert in that route stores no link.
 
 ## Structure facades
 

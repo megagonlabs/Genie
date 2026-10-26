@@ -44,7 +44,7 @@ and their boundaries.
   `Memory.update_link` builds the link again with the merged metadata. The
   backend rejects a change to any other field.
 - **`LinkRelations.MOUNT` (`"genie.mount"`) is reserved.** It marks a mount.
-  `add_acyclic_link` refuses it.
+  `add_acyclic_link` and `protect_relation` refuse it.
 
 ## The `Memory` operation template
 
@@ -86,6 +86,7 @@ with self._operation(HookOperation.X) as context:   # 1 open a context
 | `contains` | the root | `traverse_down`, and `read` on the candidate |
 | `add_link`, `add_acyclic_link`, `add_mount` | both endpoints | `write` on the source, `read` on the target |
 | `update_link` | both endpoints | `write` and then `read` on the source, and `read` on the target |
+| `protect_relation` | none | No policy check. Only `Memory` has it, and the protection covers the whole backend |
 | `list_links`, `list_mounts` | the block | `read`, and `read` on both endpoints of each link |
 | `discover_mounts` | the subtree root | `search` and `traverse_down`, and `read` for each source block |
 | `resolve_mount` | the mount source | `read`, then `get` checks the target |
@@ -300,7 +301,7 @@ order:
 | Kind | Callbacks | Behavior on failure |
 | --- | --- | --- |
 | Mutating, fail-fast | every `before_*`, `after_search` | Stop at the first failure. `fail_open` has no effect |
-| Observing, isolated | `after_put`, `after_update`, `after_get`, `after_traverse`, `after_add_link`, `after_update_link`, `after_structure_change`, `after_delete`, `on_denied`, `on_suppressed`, `on_operation_end` | Run all hooks, then report the failures |
+| Observing, isolated | `after_put`, `after_update`, `after_get`, `after_traverse`, `after_add_link`, `after_update_link`, `after_protect_relation`, `after_structure_change`, `after_delete`, `on_denied`, `on_suppressed`, `on_operation_end` | Run all hooks, then report the failures |
 
 - **Mutating callbacks form a chain.** Each hook receives the return value of
   the previous hook. The registry checks the return type (`MemoryBlock`,
@@ -520,9 +521,11 @@ loop:
 - **Cascade on delete:** delete the children first, with recursion. Then
   remove the block from the parent index. Remove the block, its links, its key
   bindings, its log entries, and its temporal entries.
-- **Acyclic insert:** validate the endpoints. On first use, adopt the relation
-  only if it is already acyclic. Refuse a self-edge. Then, before the insert,
-  test if the source is reachable from the target.
+- **Relation protection:** a protected relation changes nothing. Otherwise,
+  adopt the current links of the relation only if they are already acyclic.
+- **Acyclic insert:** validate the endpoints. Refuse a relation that is not
+  protected. Refuse a self-edge. Then, before the insert, test if the source
+  is reachable from the target.
 - **`update_block` guards a change of parent:** a parent that does not exist,
   a block as its own parent, and a move under a descendant all raise
   `MemoryConflict`. No
@@ -584,7 +587,8 @@ same tasks:
   implements `AcyclicLinkStore`. It sends the call to the shared link store.
   If there is no shared link store, it sends the call to the route that owns
   both endpoints. Route-local links never cross routes, so a route-local cycle
-  check is exact. Each route protects a relation independently.
+  check is exact. Each route stores its own protection. `protect_relation`
+  protects the relation in the shared link store, or else in each route.
 - **`BlockRouter` does not claim storage.** A composite that implements
   `BlockRouter` states only that it knows which backend owns a block. It still
   advertises only the capabilities that it implements itself.
@@ -599,6 +603,7 @@ same tasks:
 | 2 writers bind one key | `KeyedStore.bind_key` and `rebind_key` |
 | 2 writers append to one log | `SequenceStore.append_log_entry` allocates the sequence |
 | 2 edges close a cycle | `AcyclicLinkStore.add_acyclic_link` checks and inserts in one step |
+| A plain link closes a cycle while the relation becomes protected | `AcyclicLinkStore.protect_relation` checks the relation and stores the protection in one step |
 | Duplicate temporal membership | `TemporalStore.add_temporal_entry` |
 | 2 composite instances store one id in 2 routes | `RouteCatalog.claim_route` in the shared `route_catalog` of `RoutedBackend` |
 

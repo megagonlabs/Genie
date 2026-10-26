@@ -124,7 +124,7 @@ The repository uses the other 3 layers to keep Genie details out of agent code.
 | What did this record say before? | `VersionedRecords` | `VersionedStore` (`KeyedStore` + `SequenceStore`) |
 
 - **Any subset of facades works on the same blocks.** `DeskMemory` uses `KeyedCollection` and `EventLog`. `TaskMemory` uses `OwnershipTree`, `KeyedCollection`, `EventLog`, and `PropertyGraph`.
-- **Each shipped adapter supports all 7 facades.** If a facade gets a `RoutedBackend`, the facade binds to the route that owns its container block. `LineageDAG` writes through `Memory`. `RoutedBackend` sends each acyclic link to the store that holds the links.
+- **Each shipped adapter supports all 7 facades.** If a facade gets a `RoutedBackend`, the facade binds to the route that owns its container block. `LineageDAG` writes through `Memory`. Trusted code calls `Memory.protect_relation` for its relation first. `RoutedBackend` sends each acyclic link to the store that holds the links.
 - **A missing capability fails at facade construction.** The facade constructor raises `UnsupportedOperation`. The failure does not wait for the first write.
 
 ### Backend by deployment

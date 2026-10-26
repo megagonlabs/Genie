@@ -121,7 +121,7 @@ schema checks, all the optional structure capabilities, and `RouteCatalog`.
 
 | Capability | Required behavior |
 | --- | --- |
-| `AcyclicLinkStore` | Check for cycles and insert the edge in one atomic step |
+| `AcyclicLinkStore` | Protect a relation only if its links form a DAG. Then check for cycles and insert the edge in one atomic step |
 | `KeyedStore` | Unique bindings and compare-and-swap updates |
 | `SequenceStore` | Allocate increasing sequence numbers atomically |
 | `TemporalStore` | Temporal membership and stable paging |

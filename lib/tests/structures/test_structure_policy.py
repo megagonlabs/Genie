@@ -72,6 +72,7 @@ def test_compound_facades_apply_one_handle_scope_and_block_policy() -> None:
     graph.add_edge(visible, graph_target, "related")
     graph.add_edge(visible, hidden, "related")
     graph.add_edge(visible, outside, "related")
+    owner.protect_relation("derived_into")
     lineage = LineageDAG(owner, relation="derived_into")
     lineage.add(visible, graph_target)
     lineage.add(visible, hidden)
@@ -139,6 +140,7 @@ def test_compound_structural_writes_cannot_escape_a_handle() -> None:
     identity = memory.put(parent=root, type="identity", value="record")
     address = MemoryAddress((), "record")
     VersionedRecords(memory, backend, collection=versions_root).register(address, identity)
+    memory.protect_relation("derived_into")
     handle = memory.get_handle(root=root)
 
     tree = OwnershipTree(handle, root=root)

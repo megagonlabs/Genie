@@ -499,6 +499,7 @@ def test_live_postgres_backend_persists_and_coordinates_instances() -> None:
 
         source = left.put_block(MemoryBlock(id="source", type="node", value={}))
         destination = left.put_block(MemoryBlock(id="destination", type="node", value={}))
+        left.protect_relation("lineage")
 
         def add(backend: PostgresBackend, link: MemoryLink) -> bool:
             try:
@@ -518,6 +519,10 @@ def test_live_postgres_backend_persists_and_coordinates_instances() -> None:
                 )
             )
         assert sorted(outcomes) == [False, True]
+        # The protection is stored in the database, so the other instance
+        # refuses a plain link with the relation.
+        with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+            right.add_link(MemoryLink(source.id, destination.id, "lineage"))
     finally:
         _clear_live_data(left)
         left.close()

@@ -1483,13 +1483,34 @@ class RedisBackend:
 
         return self._transact(operation)
 
-    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Add a link in one atomic step, unless the link makes a directed cycle.
+    def protect_relation(self, relation: str) -> None:
+        """Protect a relation as an acyclic graph, in one atomic step.
 
-        - **First call:** the call adopts the current links with the same
-          relation only if they already form a DAG.
+        - **Current links:** the call adopts them only if they already form a
+          DAG.
         - **Protection:** after that, the relation is protected from ordinary
           link inserts.
+        - **Repeated call:** a call for a protected relation changes nothing.
+
+        Args:
+            relation: Relation that identifies the protected graph.
+
+        Raises:
+            MemoryConflict: If the current links of the relation contain a
+                cycle.
+        """
+
+        def operation(transaction: _RedisTransaction) -> None:
+            if transaction.client.sismember(self._acyclic_key(), relation):
+                return
+            if _edges_have_cycle(self._relation_edges(transaction.client, relation)):
+                raise MemoryConflict(f"Link relation {relation!r} already contains a cycle.")
+            transaction.stage(lambda pipeline: pipeline.sadd(self._acyclic_key(), relation))
+
+        self._transact(operation)
+
+    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
+        """Add a link to a protected relation in one atomic step, unless the link makes a directed cycle.
 
         Args:
             link: Link to store. Its relation identifies the protected graph
@@ -1500,8 +1521,8 @@ class RedisBackend:
 
         Raises:
             MemoryConflict: If the link id already exists, an endpoint does not
-                exist, the relation already contains a cycle, or the new link
-                makes one. A self-link also makes one.
+                exist, the relation is not protected, or the new link makes a
+                cycle. A self-link also makes one.
             TypeError: If the link metadata is not strict JSON.
         """
 
@@ -1509,13 +1530,11 @@ class RedisBackend:
 
         def operation(transaction: _RedisTransaction) -> MemoryLink:
             self._validate_new_link(transaction.client, link)
+            if not transaction.client.sismember(self._acyclic_key(), link.relation):
+                raise MemoryConflict(f"Link relation {link.relation!r} is not protected as an acyclic graph; call protect_relation first.")
             edges = self._relation_edges(transaction.client, link.relation)
-            protected = bool(transaction.client.sismember(self._acyclic_key(), link.relation))
-            if not protected and _edges_have_cycle(edges):
-                raise MemoryConflict(f"Link relation {link.relation!r} already contains a cycle.")
             if link.source_id == link.target_id or _edge_path_exists(edges, link.target_id, link.source_id):
                 raise MemoryConflict(f"Link {link.source_id!r} -> {link.target_id!r} would create a cycle in relation {link.relation!r}.")
-            transaction.stage(lambda pipeline: pipeline.sadd(self._acyclic_key(), link.relation))
             return self._stage_link(transaction, document)
 
         return self._transact(operation)

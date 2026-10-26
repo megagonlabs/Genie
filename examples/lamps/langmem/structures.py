@@ -116,9 +116,12 @@ class LangMemStructures:
     ) -> LangMemStructures:
         """Build or reopen all structure anchors below one bounded root.
 
-        The method finds the anchors that exist in the children of the root.
-        So when a caller reopens a store, it gets the same structures and no
-        duplicates.
+        - **Reopen:** the method finds the anchors that exist in the children
+          of the root. So when a caller reopens a store, it gets the same
+          structures and no duplicates.
+        - **Lineage protection:** the method protects
+          `DERIVED_FROM_RELATION` through `store`, because a handle cannot.
+          A repeated call changes nothing.
 
         Args:
             memory: Handle whose root is the block that owns the whole store.
@@ -129,11 +132,14 @@ class LangMemStructures:
             The structure bundle for that store.
 
         Raises:
+            MemoryConflict: If the stored links of `DERIVED_FROM_RELATION`
+                contain a cycle.
             ValueError: If the handle is not bounded.
         """
 
         if memory.root_id is None:
             raise ValueError("LangMemStructures requires a bounded MemoryHandle.")
+        store.protect_relation(DERIVED_FROM_RELATION)
         tiers = OwnershipTree(memory, root=memory.root_id)
         anchors = {name: _anchor(tiers, name) for name in TIERS}
         return cls(

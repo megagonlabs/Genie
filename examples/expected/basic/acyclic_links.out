@@ -1,6 +1,8 @@
 == Acyclic links ==
+acyclic insert before protect_relation: refused
 closing the derivation loop: refused
 a block deriving from itself: refused
+plain link in the protected relation: refused
 cycle allowed in an ordinary relation: mentions
 acyclic insert of the reserved mount relation: refused
 derivation edges touching the clean set: 2

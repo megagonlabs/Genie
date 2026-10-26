@@ -1390,13 +1390,36 @@ class PostgresBackend:
             self._validate_new_link(connection, link)
             return self._insert_link(connection, link)
 
-    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Add a link in one atomic step, unless the link makes a directed cycle.
+    def protect_relation(self, relation: str) -> None:
+        """Protect a relation as an acyclic graph, in one atomic step.
 
-        - **First call:** the current links with the same relation stay. The
-          first call accepts them only if they already form a DAG.
+        - **Current links:** they stay. The call accepts them only if they
+          already form a DAG.
         - **Protection:** after a successful call, a plain `add_link` with the
-          relation raises `MemoryConflict`.
+          relation raises `MemoryConflict`. The protection is stored in the
+          database.
+        - **Repeated call:** a call for a protected relation changes nothing.
+
+        Args:
+            relation: Relation that identifies the protected graph.
+
+        Raises:
+            MemoryConflict: If the current links of the relation contain a
+                cycle.
+        """
+
+        with self._write_transaction() as connection:
+            if self._relation_is_protected(connection, relation):
+                return
+            if self._relation_has_cycle(connection, relation):
+                raise MemoryConflict(f"Link relation {relation!r} already contains a cycle.")
+            connection.execute(
+                f"INSERT INTO {self._acyclic_relations} (relation) VALUES (%s)",
+                (relation,),
+            )
+
+    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
+        """Add a link to a protected relation in one atomic step, unless the link makes a directed cycle.
 
         Args:
             link: Link to store. Its relation identifies the protected graph of
@@ -1407,14 +1430,14 @@ class PostgresBackend:
 
         Raises:
             MemoryConflict: If the link id already exists, an endpoint does not
-                exist, the relation already contains a cycle, or the new link
-                makes one. A self-link is a cycle.
+                exist, the relation is not protected, or the new link makes a
+                cycle. A self-link is a cycle.
         """
 
         with self._write_transaction() as connection:
             self._validate_new_link(connection, link)
-            if not self._relation_is_protected(connection, link.relation) and self._relation_has_cycle(connection, link.relation):
-                raise MemoryConflict(f"Link relation {link.relation!r} already contains a cycle.")
+            if not self._relation_is_protected(connection, link.relation):
+                raise MemoryConflict(f"Link relation {link.relation!r} is not protected as an acyclic graph; call protect_relation first.")
             if link.source_id == link.target_id or self._link_path_exists(
                 connection,
                 link.target_id,
@@ -1422,14 +1445,6 @@ class PostgresBackend:
                 relation=link.relation,
             ):
                 raise MemoryConflict(f"Link {link.source_id!r} -> {link.target_id!r} would create a cycle in relation {link.relation!r}.")
-            connection.execute(
-                f"""
-                INSERT INTO {self._acyclic_relations} (relation)
-                VALUES (%s)
-                ON CONFLICT (relation) DO NOTHING
-                """,
-                (link.relation,),
-            )
             return self._insert_link(connection, link)
 
     def update_link(self, link: MemoryLink) -> MemoryLink:

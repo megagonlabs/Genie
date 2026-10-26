@@ -186,6 +186,10 @@ A search through a bounded handle shows how the 2 checks work together:
   reason that the backend object stays in trusted code.
 - **Child handles only narrow.** A child cannot change the principal, widen the
   root, or restore a capability that its parent disabled.
+- **State for the whole backend stays above the handle.** A protected DAG
+  relation changes link writes for all callers. So only
+  `Memory.protect_relation` starts the protection, and `MemoryHandle` has no
+  such method.
 
 ## Extension seams
 

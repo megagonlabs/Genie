@@ -611,8 +611,44 @@ class RoutedBackend:
                 raise MemoryConflict("Cross-route links require a shared link_store.")
             return self._routes[source_route].add_link(link)
 
+    def protect_relation(self, relation: str) -> None:
+        """Protect a relation as an acyclic graph in each store that holds links.
+
+        - **Shared link store:** that store protects the relation across all
+          routes.
+        - **No shared link store:** each route protects the relation alone. The
+          call checks that all routes support `AcyclicLinkStore` before it
+          changes one route.
+        - **Not atomic across routes:** if one route raises `MemoryConflict`,
+          the routes before it stay protected. A repeated call after the cycle
+          is removed protects the other routes.
+
+        Args:
+            relation: Relation that identifies the protected graph.
+
+        Raises:
+            MemoryConflict: If the links of the relation in one store contain a
+                cycle.
+            UnsupportedOperation: If the shared link store or a route does not
+                support atomic acyclic links.
+        """
+
+        with self._lock:
+            if self.link_store is not None:
+                if not isinstance(self.link_store, AcyclicLinkStore):
+                    raise UnsupportedOperation("The shared link store does not support atomic acyclic links.")
+                self.link_store.protect_relation(relation)
+                return
+            stores: list[AcyclicLinkStore] = []
+            for route, backend in self._routes.items():
+                if not isinstance(backend, AcyclicLinkStore):
+                    raise UnsupportedOperation(f"Route {route!r} does not support atomic acyclic links.")
+                stores.append(backend)
+            for store in stores:
+                store.protect_relation(relation)
+
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Store a link only when its relation stays acyclic.
+        """Store a link only when its relation is protected and stays acyclic.
 
         The cycle check runs in the store that holds the links:
 
@@ -622,9 +658,7 @@ class RoutedBackend:
           it. Links never cross routes in this mode. So a cycle can form only
           inside one route, and the route-local check is exact.
         - **Protection for each route:** without a shared link store, each route
-          protects a relation alone. A route rejects ordinary `add_link` calls
-          for the relation only after its own first acyclic insert, not after
-          one in another route.
+          stores its own protection. `protect_relation` protects all routes.
 
         Args:
             link: Link to store. Its relation identifies the protected graph.
@@ -634,8 +668,8 @@ class RoutedBackend:
 
         Raises:
             MemoryConflict: If the link id already exists, an endpoint does not
-                exist, the link closes a cycle, or a cross-route link has no
-                shared link store.
+                exist, the relation is not protected in the store, the link
+                closes a cycle, or a cross-route link has no shared link store.
             UnsupportedOperation: If the store for the link does not support
                 atomic acyclic links.
         """

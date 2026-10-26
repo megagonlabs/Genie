@@ -45,6 +45,8 @@ def main() -> None:
     features = memory.put(type="dataset", value="encoded features")
     ranker = memory.put(type="model", value="candidate ranker")
 
+    # Trusted code protects the relation once, before the first lineage edge.
+    memory.protect_relation(DERIVES)
     lineage = LineageDAG(memory, relation=DERIVES)
     first = lineage.add(raw, cleaned)
     lineage.add(cleaned, features)

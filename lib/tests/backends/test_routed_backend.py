@@ -160,7 +160,7 @@ class AcyclicRecordingLinkStore(InMemoryLinkStore):
     """Shared link store that claims `AcyclicLinkStore` and records its calls.
 
     It does not check for cycles, and it only shows that the composite sends
-    acyclic inserts to a shared store and not to a route.
+    protections and acyclic inserts to a shared store and not to a route.
     """
 
     def __init__(self) -> None:
@@ -168,6 +168,12 @@ class AcyclicRecordingLinkStore(InMemoryLinkStore):
 
         super().__init__()
         self.acyclic_link_ids: list[str] = []
+        self.protected_relations: list[str] = []
+
+    def protect_relation(self, relation: str) -> None:
+        """Record the call."""
+
+        self.protected_relations.append(relation)
 
     def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
         """Record the call and store the link."""
@@ -698,6 +704,7 @@ def test_lineage_dag_checks_cycles_in_the_route_that_owns_the_links() -> None:
         default_route="a",
     )
     memory = Memory(backend=backend)
+    memory.protect_relation("derived_from")
     lineage = LineageDAG(memory, relation="derived_from")
     raw = memory.put(type="dataset", value="raw", metadata={"route": "a"})
     clean = memory.put(type="dataset", value="clean", metadata={"route": "a"})
@@ -715,16 +722,87 @@ def test_lineage_dag_checks_cycles_in_the_route_that_owns_the_links() -> None:
     assert route_b.list_links(model.id, relation="derived_from") == [model_edge]
 
 
+def test_routed_protect_relation_protects_each_route() -> None:
+    """Without a shared link store, one protection reaches all routes, also a route with no links yet."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend)
+    first = memory.put(type="dataset", value="first", metadata={"route": "a"})
+    second = memory.put(type="dataset", value="second", metadata={"route": "a"})
+    third = memory.put(type="dataset", value="third", metadata={"route": "b"})
+    fourth = memory.put(type="dataset", value="fourth", metadata={"route": "b"})
+    memory.add_link(first, second, "derived_from")
+
+    memory.protect_relation("derived_from")
+
+    with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+        memory.add_link(second, first, "derived_from")
+    with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+        memory.add_link(third, fourth, "derived_from")
+
+
+def test_routed_protect_relation_keeps_earlier_routes_after_a_cycle() -> None:
+    """A cycle in one route stops the call, routes before it stay protected, and a repeated call after the cleanup protects the rest."""
+
+    route_a = InMemoryBackend()
+    route_b = InMemoryBackend()
+    backend = RoutedBackend(
+        {"a": route_a, "b": route_b},
+        route_selector=route_by_metadata,
+        default_route="a",
+    )
+    memory = Memory(backend=backend)
+    first = memory.put(type="dataset", value="first", metadata={"route": "a"})
+    second = memory.put(type="dataset", value="second", metadata={"route": "a"})
+    third = memory.put(type="dataset", value="third", metadata={"route": "b"})
+    fourth = memory.put(type="dataset", value="fourth", metadata={"route": "b"})
+    memory.add_link(third, fourth, "derived_from")
+    memory.add_link(fourth, third, "derived_from")
+
+    with pytest.raises(MemoryConflict, match="already contains a cycle"):
+        memory.protect_relation("derived_from")
+
+    with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+        memory.add_link(first, second, "derived_from")
+    memory.delete(fourth)
+    memory.protect_relation("derived_from")
+    fifth = memory.put(type="dataset", value="fifth", metadata={"route": "b"})
+    with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+        memory.add_link(third, fifth, "derived_from")
+
+
 def test_routed_acyclic_links_need_a_capable_route() -> None:
-    """If the route does not support `AcyclicLinkStore`, the composite raises `UnsupportedOperation` and writes no link."""
+    """If a route does not support `AcyclicLinkStore`, the composite raises `UnsupportedOperation`, protects no route, and writes no link."""
 
     memory = Memory(backend=RoutedBackend({"plain": CoreOnlyBackend()}))
     first = memory.put(type="artifact", value="first")
     second = memory.put(type="artifact", value="second")
 
     with pytest.raises(UnsupportedOperation, match="Route 'plain' does not support atomic acyclic links"):
+        memory.protect_relation("derived_from")
+    with pytest.raises(UnsupportedOperation, match="Route 'plain' does not support atomic acyclic links"):
         LineageDAG(memory, relation="derived_from").add(first, second)
     assert memory.list_links(first) == []
+
+    mixed = Memory(
+        backend=RoutedBackend(
+            {"a": InMemoryBackend(), "plain": CoreOnlyBackend()},
+            route_selector=route_by_metadata,
+            default_route="a",
+        )
+    )
+    source = mixed.put(type="artifact", value="source", metadata={"route": "a"})
+    target = mixed.put(type="artifact", value="target", metadata={"route": "a"})
+
+    with pytest.raises(UnsupportedOperation, match="Route 'plain' does not support atomic acyclic links"):
+        mixed.protect_relation("derived_from")
+    assert mixed.add_link(source, target, "derived_from").relation == "derived_from"
 
 
 def test_routed_acyclic_links_use_a_capable_shared_link_store() -> None:
@@ -741,8 +819,10 @@ def test_routed_acyclic_links_use_a_capable_shared_link_store() -> None:
     source = memory.put(type="dataset", value="raw", metadata={"route": "a"})
     target = memory.put(type="model", value="model", metadata={"route": "b"})
 
+    memory.protect_relation("derived_from")
     edge = LineageDAG(memory, relation="derived_from").add(source, target)
 
+    assert link_store.protected_relations == ["derived_from"]
     assert link_store.acyclic_link_ids == [edge.id]
     assert memory.list_links(source) == [edge]
 
@@ -755,6 +835,8 @@ def test_routed_acyclic_links_refuse_a_shared_store_without_the_capability() -> 
     first = memory.put(type="artifact", value="first")
     second = memory.put(type="artifact", value="second")
 
+    with pytest.raises(UnsupportedOperation, match="shared link store does not support atomic acyclic links"):
+        memory.protect_relation("derived_from")
     with pytest.raises(UnsupportedOperation, match="shared link store does not support atomic acyclic links"):
         LineageDAG(memory, relation="derived_from").add(first, second)
     assert link_store.list_links(first.id, direction="both") == []

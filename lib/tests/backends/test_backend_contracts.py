@@ -1287,12 +1287,102 @@ class AcyclicLinkStoreContract(StructureBackendContract):
         backend.add_link(existing)
         created = MemoryLink(second.id, third.id, relation)
 
+        store.protect_relation(relation)
         assert store.add_acyclic_link(created) == created
         with pytest.raises(MemoryConflict):
             store.add_acyclic_link(MemoryLink(third.id, first.id, relation))
         with pytest.raises(MemoryConflict):
             backend.add_link(MemoryLink(first.id, third.id, relation))
         assert backend.list_links(first.id, relation=relation) == [existing]
+
+    def test_acyclic_link_store_needs_a_protected_relation(self) -> None:
+        """`add_acyclic_link` does not protect a relation: it rejects an unprotected relation, stores nothing, and a plain `add_link` still works."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, AcyclicLinkStore)
+        store = cast(AcyclicLinkStore, backend)
+        first, second = self.put_blocks(backend, "mem_first", "mem_second")
+
+        with pytest.raises(MemoryConflict, match="not protected"):
+            store.add_acyclic_link(MemoryLink(first.id, second.id, "supports"))
+
+        assert backend.list_links(first.id, relation="supports") == []
+        plain = MemoryLink(first.id, second.id, "supports")
+        assert backend.add_link(plain) == plain
+
+    def test_protect_relation_rejects_a_cyclic_relation(self) -> None:
+        """A relation with a stored cycle stays without protection, so plain links still work and acyclic inserts still fail."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, AcyclicLinkStore)
+        store = cast(AcyclicLinkStore, backend)
+        first, second, third = self.put_blocks(backend, "mem_first", "mem_second", "mem_third")
+        relation = "derived_into"
+        backend.add_link(MemoryLink(first.id, second.id, relation))
+        backend.add_link(MemoryLink(second.id, first.id, relation))
+
+        with pytest.raises(MemoryConflict, match="already contains a cycle"):
+            store.protect_relation(relation)
+
+        plain = MemoryLink(second.id, third.id, relation)
+        assert backend.add_link(plain) == plain
+        with pytest.raises(MemoryConflict, match="not protected"):
+            store.add_acyclic_link(MemoryLink(first.id, third.id, relation))
+
+    def test_protect_relation_is_repeatable_and_needs_no_links(self) -> None:
+        """A relation with no links can be protected, a second call changes nothing, and other relations stay unprotected."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, AcyclicLinkStore)
+        store = cast(AcyclicLinkStore, backend)
+        first, second = self.put_blocks(backend, "mem_first", "mem_second")
+
+        store.protect_relation("derived_into")
+        store.protect_relation("derived_into")
+
+        with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+            backend.add_link(MemoryLink(first.id, second.id, "derived_into"))
+        created = MemoryLink(first.id, second.id, "derived_into")
+        assert store.add_acyclic_link(created) == created
+        store.protect_relation("derived_into")
+        assert backend.list_links(first.id, relation="derived_into") == [created]
+        plain = MemoryLink(second.id, first.id, "supports")
+        assert backend.add_link(plain) == plain
+
+    def test_protect_relation_and_plain_link_are_atomic(self) -> None:
+        """A protection and a concurrent plain link that closes a cycle cannot both commit."""
+
+        backend = self.make_backend()
+        assert isinstance(backend, AcyclicLinkStore)
+        store = cast(AcyclicLinkStore, backend)
+        first, second = self.put_blocks(backend, "mem_first", "mem_second")
+        relation = "derived_into"
+        backend.add_link(MemoryLink(first.id, second.id, relation))
+        barrier = Barrier(2)
+
+        def protect() -> bool:
+            barrier.wait()
+            try:
+                store.protect_relation(relation)
+            except MemoryConflict:
+                return False
+            return True
+
+        def close_cycle() -> bool:
+            barrier.wait()
+            try:
+                backend.add_link(MemoryLink(second.id, first.id, relation))
+            except MemoryConflict:
+                return False
+            return True
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            protected = executor.submit(protect)
+            closed = executor.submit(close_cycle)
+            outcomes = [protected.result(), closed.result()]
+
+        assert outcomes.count(True) == 1
+        assert [link.target_id for link in backend.list_links(second.id, relation=relation)] == ([] if outcomes[0] else [first.id])
 
     def test_acyclic_link_check_and_insert_is_atomic(self) -> None:
         """Two opposite concurrent edges cannot both commit."""
@@ -1301,6 +1391,7 @@ class AcyclicLinkStoreContract(StructureBackendContract):
         assert isinstance(backend, AcyclicLinkStore)
         store = cast(AcyclicLinkStore, backend)
         first, second = self.put_blocks(backend, "mem_first", "mem_second")
+        store.protect_relation("derived_into")
         barrier = Barrier(2)
 
         def add(link: MemoryLink) -> bool:
@@ -1327,6 +1418,7 @@ class AcyclicLinkStoreContract(StructureBackendContract):
         assert isinstance(backend, AcyclicLinkStore)
         store = cast(AcyclicLinkStore, backend)
         source, target = self.put_blocks(backend, "mem_source", "mem_target")
+        store.protect_relation("derived_into")
 
         with pytest.raises(MemoryConflict):
             store.add_acyclic_link(

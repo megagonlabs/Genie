@@ -504,6 +504,13 @@ class MemoryHandle:
     ) -> MemoryLink:
         """Create an acyclic typed link inside this handle, in one atomic step.
 
+        - **Protected relation only:** trusted code protects the relation
+          first with `Memory.protect_relation`. A handle cannot start the
+          protection.
+        - **Cycle check:** it includes all stored links of the relation, also
+          links outside the handle boundary. So a refusal can show a path
+          through blocks that the handle cannot reach.
+
         Args:
             source: Source block or id inside the handle boundary.
             target: Target block or id inside the handle boundary.
@@ -516,7 +523,8 @@ class MemoryHandle:
         Raises:
             AccessDenied: If an endpoint is outside the handle boundary, or a
                 policy denies the operation.
-            MemoryConflict: If the link makes a cycle.
+            MemoryConflict: If the relation is not protected, or the link
+                makes a cycle.
             MemoryNotFound: If an unbounded handle gets an endpoint id that
                 does not exist.
             TypeError: If `source` or `target` is not a block or string id,

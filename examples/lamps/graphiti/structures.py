@@ -82,6 +82,9 @@ class GraphitiStructures:
         - **Why a scan:** the anchors have generated ids, because a handle
           without `allow_custom_ids` refuses a caller-provided id. So the
           method finds each anchor by its type and its tier value.
+        - **Succession protection:** the method protects
+          `SUPERSEDED_BY_RELATION` through `store`, because a handle cannot.
+          A repeated call changes nothing.
 
         Args:
             memory: Handle rooted at the block that owns the whole graph.
@@ -92,11 +95,14 @@ class GraphitiStructures:
             The structure bundle for that graph.
 
         Raises:
+            MemoryConflict: If the stored links of `SUPERSEDED_BY_RELATION`
+                contain a cycle.
             ValueError: If the handle is unbounded.
         """
 
         if memory.root_id is None:
             raise ValueError("GraphitiStructures requires a bounded MemoryHandle.")
+        store.protect_relation(SUPERSEDED_BY_RELATION)
         tiers = OwnershipTree(memory, root=memory.root_id)
 
         def anchor(name: str, *, parent: MemoryBlock | None = None) -> MemoryBlock:

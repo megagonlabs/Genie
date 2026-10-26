@@ -835,13 +835,32 @@ class InMemoryBackend:
             self._validate_new_link(link)
             return self._store_new_link(link)
 
-    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Add a link in one atomic step, if its relation stays acyclic.
+    def protect_relation(self, relation: str) -> None:
+        """Protect a relation as an acyclic graph, in one atomic step.
 
-        - **Adoption:** on the first call, the backend adopts the current links
-          with the same relation only when they already form a DAG.
+        - **Adoption:** the backend adopts the current links with the same
+          relation only when they already form a DAG.
         - **Protection:** after that, ordinary link inserts cannot use the
           relation. The protection stays for the life of the backend.
+        - **Repeated call:** a call for a protected relation changes nothing.
+
+        Args:
+            relation: Relation that identifies the protected graph.
+
+        Raises:
+            MemoryConflict: If the current links of the relation contain a
+                cycle.
+        """
+
+        with self._structure_lock:
+            if relation in self._acyclic_relations:
+                return
+            if self._relation_has_cycle(relation):
+                raise MemoryConflict(f"Link relation {relation!r} already contains a cycle.")
+            self._acyclic_relations.add(relation)
+
+    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
+        """Add a link to a protected relation in one atomic step, if the relation stays acyclic.
 
         Args:
             link: Link to store. Its relation identifies the protected graph of
@@ -852,21 +871,20 @@ class InMemoryBackend:
 
         Raises:
             MemoryConflict: If the link id already exists, an endpoint does not
-                exist, the relation already contains a cycle, or the new link
-                makes one.
+                exist, the relation is not protected, or the new link makes a
+                cycle.
         """
 
         with self._structure_lock:
             self._validate_new_link(link)
-            if link.relation not in self._acyclic_relations and self._relation_has_cycle(link.relation):
-                raise MemoryConflict(f"Link relation {link.relation!r} already contains a cycle.")
+            if link.relation not in self._acyclic_relations:
+                raise MemoryConflict(f"Link relation {link.relation!r} is not protected as an acyclic graph; call protect_relation first.")
             if link.source_id == link.target_id or self._link_path_exists(
                 link.target_id,
                 link.source_id,
                 relation=link.relation,
             ):
                 raise MemoryConflict(f"Link {link.source_id!r} -> {link.target_id!r} would create " f"a cycle in relation {link.relation!r}.")
-            self._acyclic_relations.add(link.relation)
             return self._store_new_link(link)
 
     def _validate_new_link(self, link: MemoryLink) -> None:

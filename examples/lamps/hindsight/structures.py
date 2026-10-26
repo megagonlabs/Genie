@@ -97,6 +97,9 @@ class HindsightStructures:
         - **Why a scan:** the anchors have generated ids, because a handle
           without `allow_custom_ids` refuses a caller-provided id. So the
           method finds each anchor by its type and its tier metadata.
+        - **Lineage protection:** the method protects
+          `DERIVED_FROM_RELATION` through `store`, because a handle cannot.
+          A repeated call changes nothing.
 
         Args:
             memory: Handle with its root at the block that owns the whole bank.
@@ -107,11 +110,14 @@ class HindsightStructures:
             The structure bundle for that bank.
 
         Raises:
+            MemoryConflict: If the stored links of `DERIVED_FROM_RELATION`
+                contain a cycle.
             ValueError: If the handle is unbounded (it has no root).
         """
 
         if memory.root_id is None:
             raise ValueError("HindsightStructures requires a bounded MemoryHandle.")
+        store.protect_relation(DERIVED_FROM_RELATION)
         tiers = OwnershipTree(memory, root=memory.root_id)
         anchors = {name: _anchor(tiers, name) for name in TIERS}
         return cls(

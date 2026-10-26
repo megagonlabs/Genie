@@ -244,6 +244,7 @@ def test_sqlite_backend_coordinates_separate_connections(tmp_path: Path) -> None
 
         left = first.put_block(MemoryBlock(id="left", type="node", value={}))
         right = first.put_block(MemoryBlock(id="right", type="node", value={}))
+        first.protect_relation("derived_into")
         barrier = Barrier(2)
 
         def add_edge(backend: SQLiteBackend, link: MemoryLink) -> bool:
@@ -271,6 +272,10 @@ def test_sqlite_backend_coordinates_separate_connections(tmp_path: Path) -> None
                 )
             )
         assert outcomes.count(True) == 1
+        # The protection is stored in the database, so the other instance
+        # refuses a plain link with the relation.
+        with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+            second.add_link(MemoryLink(left.id, right.id, "derived_into"))
     finally:
         first.close()
         second.close()

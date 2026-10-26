@@ -1147,14 +1147,38 @@ class Neo4jBackend:
 
         return self._write(operation)
 
-    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Add a link in one atomic step, unless it makes a directed cycle.
+    def protect_relation(self, relation: str) -> None:
+        """Protect a relation as an acyclic graph, in one atomic step.
 
-        - **Current links:** before the relation is protected, the cycle check
-          includes the current links with the same relation. The method adopts
-          them only if they already form a DAG.
-        - **Protection:** after the first insert, ordinary link inserts with
-          this relation fail.
+        - **Current links:** the method adopts the current links with the same
+          relation only if they already form a DAG.
+        - **Protection:** after that, ordinary link inserts with this relation
+          fail.
+        - **Repeated call:** a call for a protected relation changes nothing.
+
+        Args:
+            relation: Relation that identifies the protected graph.
+
+        Raises:
+            MemoryConflict: If the current links of the relation contain a
+                cycle.
+        """
+
+        def operation(tx: Any) -> None:
+            if self._relation_is_protected(tx, relation):
+                return
+            if _edges_have_cycle(self._relation_edges(tx, relation)):
+                raise MemoryConflict(f"Link relation {relation!r} already contains a cycle.")
+            _consume(
+                tx,
+                "MERGE (:GenieAcyclicRelation {relation: $relation})",
+                relation=relation,
+            )
+
+        self._write(operation)
+
+    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
+        """Add a link to a protected relation in one atomic step, unless it makes a directed cycle.
 
         Args:
             link: Link to store. Its relation identifies the protected graph
@@ -1165,29 +1189,17 @@ class Neo4jBackend:
 
         Raises:
             MemoryConflict: If the link id already exists, an endpoint does not
-                exist, the relation already contains a cycle, or the new link
-                makes one.
+                exist, the relation is not protected, or the new link makes a
+                cycle.
         """
 
         def operation(tx: Any) -> MemoryLink:
             self._validate_new_link(tx, link)
-            edges = [
-                (str(record["source_id"]), str(record["target_id"]))
-                for record in _records(
-                    tx,
-                    "MATCH (l:GenieLink {relation: $relation}) RETURN l.source_id AS source_id, l.target_id AS target_id",
-                    relation=link.relation,
-                )
-            ]
-            if not self._relation_is_protected(tx, link.relation) and _edges_have_cycle(edges):
-                raise MemoryConflict(f"Link relation {link.relation!r} already contains a cycle.")
+            if not self._relation_is_protected(tx, link.relation):
+                raise MemoryConflict(f"Link relation {link.relation!r} is not protected as an acyclic graph; call protect_relation first.")
+            edges = self._relation_edges(tx, link.relation)
             if link.source_id == link.target_id or _edge_path_exists(edges, link.target_id, link.source_id):
                 raise MemoryConflict(f"Link {link.source_id!r} -> {link.target_id!r} would create a cycle in relation {link.relation!r}.")
-            _consume(
-                tx,
-                "MERGE (:GenieAcyclicRelation {relation: $relation})",
-                relation=link.relation,
-            )
             return self._insert_link(tx, link)
 
         return self._write(operation)
@@ -1833,6 +1845,18 @@ class Neo4jBackend:
             )
             is not None
         )
+
+    def _relation_edges(self, tx: Any, relation: str) -> list[tuple[str, str]]:
+        """Return the source and target ids of each stored link of one relation."""
+
+        return [
+            (str(record["source_id"]), str(record["target_id"]))
+            for record in _records(
+                tx,
+                "MATCH (l:GenieLink {relation: $relation}) RETURN l.source_id AS source_id, l.target_id AS target_id",
+                relation=relation,
+            )
+        ]
 
     def _scope_candidate_records(self, tx: Any, query: MemoryQuery) -> list[dict[str, Any]]:
         """Return raw candidate block records for one query scope."""

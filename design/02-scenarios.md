@@ -345,6 +345,7 @@ churn = memory.put(parent=research, type="claim", value="Monthly churn fell from
 seats = memory.put(parent=research, type="claim", value="Enterprise seats grew 18% in Q2")
 summary = memory.put(parent=research, type="summary", value="Retention improved in Q2")
 
+memory.protect_relation("derived_into")
 lineage = LineageDAG(memory, relation="derived_into")
 lineage.add(transcript, churn)
 lineage.add(note, seats)
@@ -371,6 +372,10 @@ graph.add_edge(survey, seats, "contradicts", metadata={"note": "survey shows sea
 - **`LineageDAG` is a `PropertyGraph` on one relation, with a cycle check.**
   The check and the insert occur in one `AcyclicLinkStore` step. So 2
   concurrent inserts cannot close a cycle together.
+- **Trusted code protects the relation once.** `memory.protect_relation`
+  comes before the first `lineage.add`. After it, a plain `add_link` with
+  `derived_into` raises `MemoryConflict`. So no caller can close a cycle
+  around the check.
 - **Other relations share the same blocks.** `contradicts` goes through
   `PropertyGraph`. It stays outside the `derived_into` walk.
 - **Walks are bounded.** `max_depth` and `limit` set their limits. Walks return

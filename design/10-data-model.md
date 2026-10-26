@@ -135,7 +135,9 @@ The table shows the stored records and the question that each record answers:
 - **Only `metadata` changes.** `Memory.update_link` merges new metadata into
   it.
 - **`LinkRelations.MOUNT` (`"genie.mount"`) is reserved for mounts.**
-  `add_acyclic_link` refuses it.
+  `add_acyclic_link` and `protect_relation` refuse it.
+- **A protected relation is stored state of the backend.** It is not a field
+  of a link. `protect_relation` adds it, and no call removes it.
 
 ### `MemoryPolicy`
 
@@ -221,7 +223,8 @@ The table shows the stored records and the question that each record answers:
   was added, removed, or changed after that snapshot. A block that was
   deleted and created again with the same id is a changed block.
 - **The store does the atomic steps.** The store checks these cases inside one
-  store call. It refuses a bind to an address that is in use. It refuses a link
+  store call. It refuses a bind to an address that is in use. It refuses the
+  protection of a relation whose links contain a cycle. It refuses a link
   that closes a cycle in an acyclic relation. It refuses a second add of a block
   to one temporal collection. It also allocates a log sequence inside one store
   call.

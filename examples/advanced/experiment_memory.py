@@ -41,6 +41,9 @@ def main() -> None:
     backend = InMemoryBackend()
     memory = Memory(backend=backend)
     workspace = memory.put(type="workspace", value="retrieval experiments")
+    # Only trusted code can protect a lineage relation. So it does this before
+    # it creates the handle.
+    memory.protect_relation("derived_into")
     handle = memory.get_handle(root=workspace, allow_up=True)
     tree = OwnershipTree(handle, root=workspace)
 

@@ -34,6 +34,7 @@ def test_lineage_dag_uses_graph_edges_and_forward_lineage_traversal() -> None:
     b = memory.put(type="artifact", value="B")
     c = memory.put(type="artifact", value="C")
     d = memory.put(type="artifact", value="D")
+    memory.protect_relation("derived_into")
     lineage = LineageDAG(memory, relation="derived_into")
     first = lineage.add(a, b, metadata={"method": "extract"})
     branch = lineage.add(a, c)
@@ -70,6 +71,7 @@ def test_lineage_dag_rejects_self_links_and_closing_edges() -> None:
     a = memory.put(type="artifact", value="A")
     b = memory.put(type="artifact", value="B")
     c = memory.put(type="artifact", value="C")
+    memory.protect_relation("derived_into")
     lineage = LineageDAG(memory, relation="derived_into")
     lineage.add(a, b)
     lineage.add(b, c)
@@ -90,6 +92,7 @@ def test_lineage_relation_is_independent_from_other_graph_relations() -> None:
     memory = Memory()
     a = memory.put(type="artifact", value="A")
     b = memory.put(type="artifact", value="B")
+    memory.protect_relation("derived_into")
     lineage = LineageDAG(memory, relation="derived_into")
     lineage.add(a, b)
 
@@ -99,17 +102,21 @@ def test_lineage_relation_is_independent_from_other_graph_relations() -> None:
     assert PropertyGraph(memory).edges(b, relation="references") == [unrelated]
 
 
-def test_first_lineage_write_adopts_existing_acyclic_relation_edges() -> None:
-    """If the links that already use the relation have no cycle, the first lineage write adds them to the protected relation."""
+def test_protection_adopts_existing_acyclic_relation_edges() -> None:
+    """If the links that already use the relation have no cycle, `protect_relation` adds them to the protected relation."""
 
     memory = Memory()
     a = memory.put(type="artifact", value="A")
     b = memory.put(type="artifact", value="B")
     c = memory.put(type="artifact", value="C")
     existing = memory.add_link(a, b, "derived_into")
+    memory.protect_relation("derived_into")
     lineage = LineageDAG(memory, relation="derived_into")
 
     created = lineage.add(b, c)
+
+    with pytest.raises(MemoryConflict, match="would create a cycle"):
+        lineage.add(c, a)
 
     assert lineage.edges(a) == [existing]
     assert lineage.edges(b) == [created]
@@ -117,8 +124,8 @@ def test_first_lineage_write_adopts_existing_acyclic_relation_edges() -> None:
         memory.add_link(a, c, "derived_into")
 
 
-def test_lineage_dag_refuses_to_adopt_an_existing_cyclic_relation() -> None:
-    """A relation that already contains a cycle cannot become a lineage DAG."""
+def test_protection_refuses_to_adopt_an_existing_cyclic_relation() -> None:
+    """A relation that already contains a cycle cannot become a lineage DAG, so its lineage writes stay refused."""
 
     memory = Memory()
     a = memory.put(type="artifact", value="A")
@@ -129,7 +136,87 @@ def test_lineage_dag_refuses_to_adopt_an_existing_cyclic_relation() -> None:
     lineage = LineageDAG(memory, relation="derived_into")
 
     with pytest.raises(MemoryConflict, match="already contains a cycle"):
+        memory.protect_relation("derived_into")
+    with pytest.raises(MemoryConflict, match="not protected"):
         lineage.add(b, c)
+
+
+def test_lineage_add_needs_a_protected_relation() -> None:
+    """`add` never protects a relation: it refuses an unprotected relation, stores no edge, and plain links keep working."""
+
+    memory = Memory()
+    a = memory.put(type="artifact", value="A")
+    b = memory.put(type="artifact", value="B")
+    lineage = LineageDAG(memory, relation="derived_into")
+
+    with pytest.raises(MemoryConflict, match="not protected"):
+        lineage.add(a, b)
+
+    assert lineage.edges(a) == []
+    assert memory.add_link(a, b, "derived_into").relation == "derived_into"
+
+
+def test_a_handle_cannot_lock_a_relation_for_other_callers() -> None:
+    """A rooted handle cannot protect a relation, so plain links of the same relation stay open to the other callers of the backend."""
+
+    memory = Memory(principal="svc")
+    sandbox = memory.put(type="sandbox", value=1, policy=MemoryPolicy.public())
+    agent = memory.get_handle(root=sandbox, principal="agent")
+    first = agent.put(type="node", value=1)
+    second = agent.put(type="node", value=2)
+
+    with pytest.raises(MemoryConflict, match="not protected"):
+        agent.add_acyclic_link(first, second, "supports")
+    with pytest.raises(MemoryConflict, match="not protected"):
+        LineageDAG(agent, relation="supports").add(first, second)
+
+    requirement = memory.put(type="requirement", value="r")
+    proposal = memory.put(type="proposal", value="p")
+    assert PropertyGraph(memory).add_edge(requirement, proposal, "supports").relation == "supports"
+    assert PropertyGraph(memory).add_edge(proposal, requirement, "supports").relation == "supports"
+
+
+def test_protection_before_handles_stops_cycles_from_plain_links() -> None:
+    """After trusted code protects the relation, a handle cannot close a cycle with plain links, so another tenant can still add lineage edges."""
+
+    memory = Memory(principal="svc")
+    memory.protect_relation("derived_from")
+    sandbox = memory.put(type="sandbox", value=1, policy=MemoryPolicy.public())
+    agent = memory.get_handle(root=sandbox, principal="agent")
+    first = agent.put(type="node", value=1)
+    second = agent.put(type="node", value=2)
+
+    with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+        agent.add_link(first, second, "derived_from")
+    agent_edge = LineageDAG(agent, relation="derived_from").add(first, second)
+    with pytest.raises(MemoryConflict, match="would create a cycle"):
+        LineageDAG(agent, relation="derived_from").add(second, first)
+
+    tenant = memory.put(type="tenant", value=1)
+    draft = memory.put(parent=tenant, type="doc", value="a")
+    final = memory.put(parent=tenant, type="doc", value="b")
+    tenant_edge = LineageDAG(memory, relation="derived_from").add(draft, final)
+
+    assert agent.list_links(first, relation="derived_from") == [agent_edge]
+    assert memory.list_links(draft, relation="derived_from") == [tenant_edge]
+
+
+def test_cycle_check_includes_links_that_the_caller_cannot_read() -> None:
+    """The cycle check covers the whole relation, so a handle gets a refusal for a path through a block that it cannot read."""
+
+    memory = Memory(principal="svc")
+    memory.protect_relation("derived_from")
+    sandbox = memory.put(type="sandbox", value=1, policy=MemoryPolicy.public())
+    first = memory.put(parent=sandbox, type="node", value="first", policy=MemoryPolicy.public())
+    second = memory.put(parent=sandbox, type="node", value="second", policy=MemoryPolicy.public())
+    hidden = memory.put(type="secret", value="hidden")
+    memory.add_acyclic_link(second, hidden, "derived_from")
+    memory.add_acyclic_link(hidden, first, "derived_from")
+    agent = memory.get_handle(root=sandbox, principal="agent")
+
+    assert agent.list_links(second, relation="derived_from") == []
+    with pytest.raises(MemoryConflict, match="would create a cycle"):
+        agent.add_acyclic_link(first, second, "derived_from")
 
 
 def test_opposite_concurrent_edges_cannot_both_commit() -> None:
@@ -138,6 +225,7 @@ def test_opposite_concurrent_edges_cannot_both_commit() -> None:
     memory = Memory()
     a = memory.put(type="artifact", value="A")
     b = memory.put(type="artifact", value="B")
+    memory.protect_relation("derived_into")
     lineage = LineageDAG(memory, relation="derived_into")
     barrier = Barrier(2)
 
@@ -165,6 +253,7 @@ def test_three_concurrent_edges_cannot_commit_a_cycle() -> None:
 
     memory = Memory()
     nodes = [memory.put(type="artifact", value=value) for value in "ABC"]
+    memory.protect_relation("derived_into")
     lineage = LineageDAG(memory, relation="derived_into")
     barrier = Barrier(3)
 
@@ -196,6 +285,7 @@ def test_lineage_dag_preserves_handle_scope_and_endpoint_policy() -> None:
         policy=MemoryPolicy(write=AccessRule.deny()),
     )
     outside = memory.put(type="artifact", value="outside")
+    memory.protect_relation("derived_into")
     scoped = LineageDAG(memory.get_handle(root=root), relation="derived_into")
 
     scoped.add(first, second)
@@ -215,6 +305,8 @@ def test_lineage_dag_reports_missing_atomic_backend_capability() -> None:
     second = memory.put(type="artifact", value="second")
     lineage = LineageDAG(memory, relation="derived_into")
 
+    with pytest.raises(UnsupportedOperation, match="atomic acyclic"):
+        memory.protect_relation("derived_into")
     with pytest.raises(UnsupportedOperation, match="atomic acyclic"):
         lineage.add(first, second)
     assert memory.list_links(first) == []

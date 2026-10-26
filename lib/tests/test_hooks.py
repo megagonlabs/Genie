@@ -36,6 +36,7 @@ from genie import (
     MemoryPolicy,
     MemoryQuery,
     Operation,
+    RelationProtection,
     Scope,
     SearchResult,
     StructureAction,
@@ -44,6 +45,7 @@ from genie import (
     SuppressionScope,
     Traversal,
     TraversalKind,
+    UnsupportedOperation,
 )
 from genie.structures import (
     EventLog,
@@ -53,6 +55,7 @@ from genie.structures import (
     TemporalCollection,
     VersionedRecords,
 )
+from tests.backends.test_backend_contracts import CoreOnlyBackend
 
 
 def test_default_hook_is_a_complete_noop_extension() -> None:
@@ -78,6 +81,8 @@ def test_default_hook_is_a_complete_noop_extension() -> None:
     assert memory.list_mounts(note) == [mount]
     assert memory.discover_mounts(root) == [mount]
     assert memory.resolve_mount(mount) == target
+    memory.protect_relation("derived_into")
+    assert memory.add_acyclic_link(note, target, "derived_into").relation == "derived_into"
 
     keyed = KeyedCollection(memory, cast(KeyedStore, memory.backend), collection=root)
     address = MemoryAddress((), "target")
@@ -1394,6 +1399,7 @@ def test_link_hooks_cover_regular_acyclic_mount_and_update_operations() -> None:
     mounted = memory.put(type="root", value="mounted")
 
     regular = memory.add_link(source, target, "supports")
+    memory.protect_relation("derived_into")
     memory.add_acyclic_link(source, target, "derived_into")
     memory.add_mount(source, mounted)
     updated = memory.update_link(regular, metadata={"confidence": 0.9})
@@ -1546,6 +1552,7 @@ def test_after_hooks_run_only_after_successful_mutations() -> None:
     second = memory.put(type="node", value="second")
     collection = memory.put(type="collection", value="keys")
 
+    memory.protect_relation("derived_into")
     memory.add_acyclic_link(first, second, "derived_into")
     with pytest.raises(MemoryConflict):
         memory.add_acyclic_link(second, first, "derived_into")
@@ -2214,6 +2221,142 @@ def test_operation_end_separates_refusals_from_other_failures() -> None:
         (HookOutcome.ERROR, "TypeError"),
         (HookOutcome.ERROR, "MemoryConflict"),
     ]
+
+
+def test_protect_relation_reports_one_terminal_event_for_each_call() -> None:
+    """`protect_relation` has no paired callbacks, so each call reaches hooks as one terminal event with the acting principal."""
+
+    hook = RecordingTerminalHook()
+    memory = Memory(principal="service:setup", hooks=[hook])
+    first = memory.put(type="note", value="first")
+    second = memory.put(type="note", value="second")
+    memory.add_link(first, second, "supports")
+    memory.add_link(second, first, "supports")
+
+    memory.protect_relation("derived_into")
+    with pytest.raises(MemoryConflict, match="already contains a cycle"):
+        memory.protect_relation("supports")
+
+    protections = [(event, context) for event, context in zip(hook.events, hook.contexts, strict=True) if event[0] == HookOperation.PROTECT_RELATION]
+    assert [event for event, _ in protections] == [
+        (HookOperation.PROTECT_RELATION, HookOutcome.SUCCESS, None),
+        (HookOperation.PROTECT_RELATION, HookOutcome.ERROR, "MemoryConflict"),
+    ]
+    assert {context.principal_id for _, context in protections} == {"service:setup"}
+
+
+class RecordingProtectionHook(MemoryHook):
+    """Record each relation protection that the paired callbacks report."""
+
+    def __init__(self) -> None:
+        self.before: list[tuple[HookContext, RelationProtection]] = []
+        self.after: list[tuple[HookContext, RelationProtection]] = []
+
+    def before_protect_relation(self, context: HookContext, protection: RelationProtection) -> None:
+        """Record the requested protection."""
+
+        self.before.append((context, protection))
+
+    def after_protect_relation(self, context: HookContext, protection: RelationProtection) -> None:
+        """Record the committed protection."""
+
+        self.after.append((context, protection))
+
+
+def test_protect_relation_hooks_name_the_relation() -> None:
+    """The paired callbacks get a `RelationProtection` that names the relation, and the relation stays out of the inherited attributes."""
+
+    hook = RecordingProtectionHook()
+    memory = Memory(principal="service:setup", hooks=[hook], attributes={"service": "memory"})
+    first = memory.put(type="note", value="first")
+    second = memory.put(type="note", value="second")
+    memory.add_link(first, second, "supports")
+    memory.add_link(second, first, "supports")
+
+    memory.protect_relation("derived_into")
+    memory.protect_relation("derived_into")
+    with pytest.raises(MemoryConflict, match="already contains a cycle"):
+        memory.protect_relation("supports")
+    with pytest.raises(ValueError, match="relation must not be empty"):
+        memory.protect_relation("")
+
+    protections = [protection for _, protection in hook.before]
+    assert protections == [
+        RelationProtection("derived_into"),
+        RelationProtection("derived_into"),
+        RelationProtection("supports"),
+    ]
+    assert [protection for _, protection in hook.after] == protections[:2]
+    assert [context.operation_id for context, _ in hook.before[:2]] == [context.operation_id for context, _ in hook.after]
+    assert {context.operation for context, _ in hook.before} == {HookOperation.PROTECT_RELATION}
+    assert {context.principal_id for context, _ in hook.before} == {"service:setup"}
+    assert all(dict(context.attributes) == {"service": "memory"} for context, _ in hook.before)
+
+
+def test_protect_relation_hooks_do_not_run_without_the_capability() -> None:
+    """A backend without `AcyclicLinkStore` raises `UnsupportedOperation` before any protection callback."""
+
+    hook = RecordingProtectionHook()
+    memory = Memory(backend=CoreOnlyBackend(), hooks=[hook])
+
+    with pytest.raises(UnsupportedOperation, match="atomic acyclic"):
+        memory.protect_relation("derived_into")
+
+    assert (hook.before, hook.after) == ([], [])
+
+
+def test_before_protect_relation_can_refuse_a_protection() -> None:
+    """A hook that raises in `before_protect_relation` stops the call before the backend protects the relation."""
+
+    class ProtectionAllowlist(MemoryHook):
+        """Allow only the relation names that the application declares."""
+
+        def before_protect_relation(self, context: HookContext, protection: RelationProtection) -> None:
+            """Refuse each relation outside the allowlist."""
+
+            if protection.relation != "billing.derived_from":
+                raise PermissionError(f"Relation {protection.relation!r} is not declared.")
+
+    hook = RecordingTerminalHook()
+    memory = Memory(hooks=[ProtectionAllowlist(), hook])
+    first = memory.put(type="note", value="first")
+    second = memory.put(type="note", value="second")
+
+    memory.protect_relation("billing.derived_from")
+    with pytest.raises(PermissionError, match="not declared"):
+        memory.protect_relation("supports")
+
+    assert memory.add_link(first, second, "supports").relation == "supports"
+    with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+        memory.add_link(first, second, "billing.derived_from")
+    assert [event for event in hook.events if event[0] == HookOperation.PROTECT_RELATION] == [
+        (HookOperation.PROTECT_RELATION, HookOutcome.SUCCESS, None),
+        (HookOperation.PROTECT_RELATION, HookOutcome.ERROR, "PermissionError"),
+    ]
+
+
+def test_after_protect_relation_is_isolated_from_a_broken_sink() -> None:
+    """A failing `after_protect_relation` does not take the record away from other hooks, and the protection stays committed."""
+
+    class BrokenProtectionSink(MemoryHook):
+        """Audit sink that is not available."""
+
+        def after_protect_relation(self, context: HookContext, protection: RelationProtection) -> None:
+            """Fail on each committed protection."""
+
+            raise RuntimeError("sink down")
+
+    recording = RecordingProtectionHook()
+    memory = Memory(hooks=[BrokenProtectionSink(), recording])
+    first = memory.put(type="note", value="first")
+    second = memory.put(type="note", value="second")
+
+    with pytest.raises(RuntimeError, match="sink down"):
+        memory.protect_relation("derived_into")
+
+    assert [protection for _, protection in recording.after] == [RelationProtection("derived_into")]
+    with pytest.raises(MemoryConflict, match="protected as an acyclic graph"):
+        memory.add_link(first, second, "derived_into")
 
 
 def test_operation_end_always_releases_state_stashed_by_a_before_callback() -> None:

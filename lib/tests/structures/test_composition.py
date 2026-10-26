@@ -42,6 +42,7 @@ def test_one_block_can_participate_in_all_seven_structures() -> None:
     keyed = KeyedCollection(memory, backend, collection=catalog_root)
     events = EventLog(memory, backend, log=events_root)
     timeline = TemporalCollection(memory, backend, collection=timeline_root)
+    memory.protect_relation("derived_into")
     lineage = LineageDAG(memory, relation="derived_into")
     versions = VersionedRecords(memory, backend, collection=versions_root)
     catalog_address = MemoryAddress(("experiments",), "current")

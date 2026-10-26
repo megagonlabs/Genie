@@ -31,6 +31,7 @@ edge = memory.update_link(edge, metadata={"confidence": 0.9})
 - **`update_link` merges metadata.** It keeps the id, endpoints, relation, and creation time.
 - **Choice by intent:** ownership for containment and lifecycle. Links for references, provenance, and relationships across the tree.
 - **The whole backend shares relation names.** One name means the same relation for all blocks, tenants, and handles. A prefix of your own, such as `"billing.derived_from"`, keeps the names apart when 2 parts of an application can choose the same name.
+- **`protect_relation` makes a relation acyclic for the whole backend.** Only `Memory` has it, so trusted code calls it before it gives out handles. After it, a plain `add_link` with the relation raises `MemoryConflict`, and only `add_acyclic_link` adds links with that relation. `add_acyclic_link` raises `MemoryConflict` for a relation that is not protected. See [structures](../structures/README.md#ownership-and-graphs).
 
 ## Trusted and restricted access
 
@@ -38,6 +39,7 @@ edge = memory.update_link(edge, metadata={"confidence": 0.9})
 
 - **Holds:** one backend, `Principal`, `PolicyEngine`, `default_policy`, `CodecRegistry`, `HookRegistry`, and the `attributes` that it reports to hooks.
 - **Offers:** block CRUD, traversal, links, mounts, search, access checks, and handle creation.
+- **Only here:** `protect_relation`. A `MemoryHandle` cannot protect a relation, because the protection changes link writes for all callers.
 - **`hooks` is read-only.** To change which hooks run, you edit that registry. You cannot replace it, so nobody can detach a mandatory hook. See [hooks](../hooks/README.md#the-registry).
 
 ```python
@@ -71,7 +73,7 @@ mount = memory.add_mount(local_root, remote_root)
 target = memory.resolve_mount(mount)
 ```
 
-- **Only `add_mount` creates one.** `add_link` and `add_acyclic_link` raise `ValueError` for the `genie.mount` relation.
+- **Only `add_mount` creates one.** `add_link`, `add_acyclic_link`, and `protect_relation` raise `ValueError` for the `genie.mount` relation.
 - **Not followed** by subtree traversal, subtree search, or delete.
 - **`links` search:** a `links` search counts a mount as a link. So it finds the mount target itself, but not the blocks below the target.
 - **Discovery** finds mount links, but it does not go into their targets.

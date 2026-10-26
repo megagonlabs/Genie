@@ -16,7 +16,7 @@ All examples run from the repository root.
 3. **[`basic/search_filters.py`](basic/search_filters.py)** — search with friendly arguments, portable queries and results, scopes, types, and metadata filters.
 4. **[`basic/scoped_agents.py`](basic/scoped_agents.py)** — bounded handles for agents and sub-agents.
 5. **[`basic/links.py`](basic/links.py)** — typed links, metadata updates, mounts, and linked search.
-6. **[`basic/acyclic_links.py`](basic/acyclic_links.py)** — keep one relation free of cycles with atomic inserts that check for cycles.
+6. **[`basic/acyclic_links.py`](basic/acyclic_links.py)** — protect one relation, then keep it free of cycles with atomic inserts that check for cycles.
 7. **[`basic/mounted_handles.py`](basic/mounted_handles.py)** — `allow_mounts` as a handle capability that does not widen the subtree.
 8. **[`basic/policies.py`](basic/policies.py)** — the `MemoryPolicy.owner_private()` default (only the creator of a block has access), and how to share access.
 9. **[`basic/hook_audit.py`](basic/hook_audit.py)** — the hook audit surface: scopes, traversal and terminal events, refusals, mandatory hooks, suppression windows, and `fail_open`.

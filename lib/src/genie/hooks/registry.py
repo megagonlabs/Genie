@@ -16,6 +16,7 @@ from genie.hooks.events import (
     HookOperation,
     HookOrigin,
     HookOutcome,
+    RelationProtection,
     StructureChange,
     Suppression,
     SuppressionScope,
@@ -58,9 +59,10 @@ class HookRegistry:
     Isolated callbacks:
         - Each hook gets `after_put`, `after_update`, `after_get`,
           `after_traverse`, `after_add_link`, `after_update_link`,
-          `after_structure_change`, `after_delete`, `on_denied`, and
-          `on_operation_end`, also when another hook raises. A recursive delete
-          reports each removed block before any failure surfaces.
+          `after_protect_relation`, `after_structure_change`, `after_delete`,
+          `on_denied`, and `on_operation_end`, also when another hook raises.
+          A recursive delete reports each removed block before any failure
+          surfaces.
         - These callbacks report work that is already decided. A stop at the
           first failure only takes the records away from the other hooks and
           blocks.
@@ -716,6 +718,27 @@ class HookRegistry:
         """
 
         self._dispatch_observers(context, "after_update_link", previous, stored)
+
+    def before_protect_relation(self, context: HookContext, protection: RelationProtection) -> None:
+        """Dispatch `before_protect_relation` in registration order.
+
+        Args:
+            context: Active operation context.
+            protection: Protection before the backend runs it.
+        """
+
+        for hook in self._hooks_for(context):
+            self._invoke(context, hook, "before_protect_relation", protection)
+
+    def after_protect_relation(self, context: HookContext, protection: RelationProtection) -> None:
+        """Dispatch `after_protect_relation` in registration order.
+
+        Args:
+            context: Active operation context.
+            protection: Committed protection.
+        """
+
+        self._dispatch_observers(context, "after_protect_relation", protection)
 
     def before_structure_change(
         self,

@@ -17,6 +17,7 @@ from genie.hooks import (
     HookOperation,
     HookRegistry,
     MemoryHook,
+    RelationProtection,
     Traversal,
     TraversalKind,
     freeze_attributes,
@@ -467,9 +468,8 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write the source or read the
                 target.
-            MemoryConflict: If an earlier `add_acyclic_link` protects
-                `relation`. Then only `add_acyclic_link` can add links with
-                that relation.
+            MemoryConflict: If `protect_relation` protects `relation`. Then
+                only `add_acyclic_link` can add links with that relation.
             MemoryNotFound: If an endpoint does not exist.
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON
@@ -548,6 +548,52 @@ class Memory:
             self.hooks.after_update_link(context, stored, persisted)
             return persisted
 
+    def protect_relation(self, relation: str) -> None:
+        """Protect a link relation as an acyclic graph, in one atomic step.
+
+        - **Trusted setup step:** only `Memory` has this method. So code with
+          a `MemoryHandle` cannot start the protection of a relation that all
+          callers share.
+        - **Order:** call it before handles can write links with the relation.
+          After the call, a plain `add_link` with the relation raises
+          `MemoryConflict` for all blocks and principals. So no caller can
+          close a cycle with plain links.
+        - **Current links:** the backend adopts them only when they already
+          form a DAG. The check includes links that the principal cannot read.
+        - **Repeated call:** a call for a protected relation changes nothing.
+        - **Permanent:** Genie has no call that removes a protection.
+        - **No policy check:** the protection belongs to the relation in the
+          whole backend, not to a block.
+        - **Hooks:** `before_protect_relation` and `after_protect_relation`
+          get a `RelationProtection` that names the relation. So an audit
+          trail can record who protected which relation. A hook that raises
+          in `before_protect_relation` stops the protection. A direct backend
+          call skips the hooks.
+
+        Args:
+            relation: Application-defined relation that identifies the DAG.
+
+        Raises:
+            MemoryConflict: If the current links of the relation contain a
+                cycle. The relation then stays without protection.
+            TypeError: If `relation` is not a string.
+            UnsupportedOperation: If the backend cannot insert DAG links
+                atomically.
+            ValueError: If `relation` is empty or is the reserved mount
+                relation.
+        """
+
+        if relation == LinkRelations.MOUNT:
+            raise ValueError("The reserved mount relation cannot be protected as an acyclic graph.")
+        with self._operation(HookOperation.PROTECT_RELATION) as context:
+            require_non_empty_str(relation, field_name="relation")
+            if not isinstance(self.backend, AcyclicLinkStore):
+                raise UnsupportedOperation("The configured backend does not support atomic acyclic links.")
+            protection = RelationProtection(relation=relation)
+            self.hooks.before_protect_relation(context, protection)
+            self.backend.protect_relation(relation)
+            self.hooks.after_protect_relation(context, protection)
+
     def add_acyclic_link(
         self,
         source: str | MemoryBlock,
@@ -556,14 +602,16 @@ class Memory:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryLink:
-        """Create a typed link in one atomic step, unless the link makes a cycle.
+        """Create a link in a protected relation in one atomic step, unless the link makes a cycle.
 
+        - **Protected relation only:** `protect_relation` protects the
+          relation first. This call never starts the protection.
         - **Cycle check:** it includes all stored links with the exact same
-          relation.
+          relation, also links that the principal cannot read. So a refusal
+          shows that a path between the 2 endpoints exists, also when the path
+          goes through blocks that the principal cannot read.
         - **One operation:** the backend does the reachability check and the
           insert as one operation.
-        - **Protected relation:** after the first acyclic link, a plain
-          `add_link` with the same relation raises `MemoryConflict`.
 
         Args:
             source: Source block or id.
@@ -577,8 +625,8 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write the source or read the
                 target.
-            MemoryConflict: If the current links and the new link contain a
-                cycle.
+            MemoryConflict: If the relation is not protected, or the current
+                links and the new link contain a cycle.
             MemoryNotFound: If an endpoint does not exist.
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON
@@ -629,8 +677,9 @@ class Memory:
         Raises:
             AccessDenied: If the principal cannot write the source or read the
                 target.
-            MemoryConflict: If `acyclic` is true and the link would form a
-                cycle.
+            MemoryConflict: If `acyclic` is true and the relation is not
+                protected or the link would form a cycle. If `acyclic` is
+                false and the relation is protected.
             MemoryNotFound: If either endpoint is missing.
             TypeError: If `source` or `target` is not a block or string id,
                 `relation` is not a string, or metadata is not a strict JSON

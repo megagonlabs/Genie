@@ -83,8 +83,9 @@ place where a test checks it.
   succeeds, and the other callers raise `MemoryConflict`. The stored state holds
   exactly one result.
 - **The contracts hold the capability atomicity tests,** for example
-  `test_keyed_store_bind_is_atomic` and
-  `test_acyclic_link_check_and_insert_is_atomic`. Each adapter that claims the
+  `test_keyed_store_bind_is_atomic`,
+  `test_acyclic_link_check_and_insert_is_atomic`, and
+  `test_protect_relation_and_plain_link_are_atomic`. Each adapter that claims the
   capability runs them.
 - **`test_structure_concurrency.py` holds the races that cross facades.** An
   example is a `PropertyGraph` edge and a `LineageDAG` edge that close a cycle

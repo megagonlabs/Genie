@@ -11,7 +11,7 @@ service.
 | `search_filters.py` | `MemoryQuery`, `Scope`, `SearchResult` | Friendly and explicit queries, normalized filters, search by scope and by type, scores and reasons |
 | `scoped_agents.py` | `MemoryHandle` | Bounded and nested handles, deliberate global access, scope enforcement |
 | `links.py` | `MemoryLink`, `LinkRelations` | Typed links, metadata updates, link search, symbolic mount discovery and lifecycle |
-| `acyclic_links.py` | `Memory.add_acyclic_link` | Atomic inserts that check for cycles, cycle detection per relation, the reserved mount relation |
+| `acyclic_links.py` | `Memory.protect_relation`, `Memory.add_acyclic_link` | Relation protection, atomic inserts that check for cycles, cycle detection per relation, the reserved mount relation |
 | `mounted_handles.py` | `MemoryHandle` `allow_mounts` | `allow_mounts` as an opt-in capability, explicit resolution outside the subtree, no escalation through sub-handles |
 | `policies.py` | `Principal`, `MemoryPolicy`, `AccessRule`, `PolicyEngine` | The `MemoryPolicy.owner_private()` default, shared access by principal and by role, custom operations, block overrides |
 | `hook_audit.py` | `MemoryHook`, `HookRegistry`, `HookContext`, `Traversal`, `Suppression` | Scopes, traversal and terminal events, refusals, mandatory hooks, suppression windows, fail-open sinks |

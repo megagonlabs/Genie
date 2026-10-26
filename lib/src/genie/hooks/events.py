@@ -49,6 +49,7 @@ class HookOperation(StrEnum):
     CONTAINS = "contains"
     ADD_LINK = "link.add"
     ADD_ACYCLIC_LINK = "link.add_acyclic"
+    PROTECT_RELATION = "link.protect_relation"
     ADD_MOUNT = "mount.add"
     UPDATE_LINK = "link.update"
     LIST_LINKS = "link.list"
@@ -310,6 +311,23 @@ class Traversal:
     blocks: tuple[MemoryBlock, ...] = ()
     links: tuple[MemoryLink, ...] = ()
     contained: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RelationProtection:
+    """One request to protect a link relation as an acyclic graph.
+
+    - **Whole backend:** the protection changes link writes for all callers.
+      So an audit trail can record which principal protected which relation.
+    - **Same value for both callbacks:** the before callback sees the request
+      before the backend runs it. The after callback sees the same value after
+      the protection commits.
+
+    Attributes:
+        relation: Relation that the call protects.
+    """
+
+    relation: str
 
 
 class SuppressionScope(StrEnum):

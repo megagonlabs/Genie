@@ -36,6 +36,8 @@ class AcyclicLinkStore(Protocol):
 
     - **One graph for each relation:** the exact link relation identifies one
       protected graph.
+    - **Explicit protection:** only `protect_relation` starts the protection
+      of a relation. `add_acyclic_link` never starts it.
     - **Serialized check:** the contract requires that implementations
       serialize the reachability check and the insert with each link write for
       that relation.
@@ -43,11 +45,26 @@ class AcyclicLinkStore(Protocol):
       `add_link` call rejects the relation or applies the same cycle check.
     """
 
-    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
-        """Add a link in one atomic step, unless it closes a directed cycle.
+    def protect_relation(self, relation: str) -> None:
+        """Protect a relation as an acyclic graph, in one atomic step.
 
-        Current links with the same relation are part of the graph. The first
-        protected insert adopts them only when they are already acyclic.
+        - **Current links:** the protection adopts the stored links with the
+          same relation only when they already form a DAG.
+        - **Repeated call:** a call for a protected relation changes nothing.
+        - **Permanent:** the protection stays for the life of the stored data.
+
+        Args:
+            relation: Relation that identifies the protected graph.
+
+        Raises:
+            MemoryConflict: If the stored links of the relation contain a
+                cycle. The relation then stays without protection.
+        """
+
+        ...
+
+    def add_acyclic_link(self, link: MemoryLink) -> MemoryLink:
+        """Add a link to a protected relation in one atomic step, unless it closes a directed cycle.
 
         Args:
             link: Link to store. Its relation identifies the protected graph of
@@ -57,8 +74,8 @@ class AcyclicLinkStore(Protocol):
             Stored link.
 
         Raises:
-            MemoryConflict: If the relation already contains a cycle or the
-                new link would create one.
+            MemoryConflict: If the relation is not protected, or the new link
+                would create a cycle.
         """
 
         ...
