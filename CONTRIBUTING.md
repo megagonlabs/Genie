@@ -14,9 +14,10 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install -e ".[dev]"
 ```
 
-- **`dev` installs `pytest` and `ruff`,** the only two tools this repository
-  runs.
-- **Backend adapters are extras.** Add the ones you are working on:
+- **`dev` installs `pyright`, `pytest`, and `ruff`,** the only tools this
+  repository runs.
+- **Backend adapters are extras.** Add the ones you are working on.
+  `python -m pyright` and `./lib/scripts/test_full.sh` need all 4:
   `python -m pip install -e ".[dev,mongodb,neo4j,postgres,redis]"`.
 
 ## Run the checks
@@ -24,6 +25,7 @@ python -m pip install -e ".[dev]"
 ```bash
 python -m pytest
 python -m ruff check .
+python -m pyright
 python -m compileall -q lib/src/genie lib/tests examples
 ```
 
@@ -34,6 +36,9 @@ python -m compileall -q lib/src/genie lib/tests examples
   what an example prints, and commit the result.
 - **Keep `ruff check .` clean.** Line length is 193, set in `ruff.toml`.
   Ruff also sorts imports, so there is no separate formatter to run.
+- **Keep `python -m pyright` clean.** `pyrightconfig.json` sets the `standard`
+  mode and Python 3.11. Pyright needs the 4 adapter extras, because it checks
+  the adapter code against the types of each driver.
 
 ## Tests that need a server
 
@@ -42,10 +47,10 @@ running server. Those tests run only when the adapter's optional driver is
 installed and its `GENIE_*` connection variables are set.
 
 - **Report a plain run as partial,** not as a full pass. It looks like
-  `1133 passed, 220 skipped`.
+  `1359 passed, 320 skipped`.
 - **`./lib/scripts/test_full.sh` runs everything** against disposable
   PostgreSQL, Neo4j, MongoDB, and Redis containers. It needs Docker, finishes in
-  under two minutes, and gives `1353 passed`. It removes its containers when it exits.
+  under two minutes, and gives `1679 passed`. It removes its containers when it exits.
 - **The script uses the Python already on your `PATH`,** so activate your
   environment first. `GENIE_TEST_PYTHON` overrides that interpreter and
   `GENIE_TEST_COMMAND` overrides what runs once the servers are ready.
@@ -141,11 +146,11 @@ Apply these in proportion to the size and user-facing impact of the change.
   the `genie` package and points at the source with
   `[tool.setuptools.packages.find] where = ["lib/src"]`. It has to be at the
   root, because `readme` and `license-files` are resolved next to it and cannot
-  point outside its directory. `pytest.ini` and `ruff.toml` are there for their
-  own reasons: they cover `examples/` as well as `lib/`, and `ruff` finds its
-  settings by walking up from each file. Install the package with
-  `python -m pip install -e .`, and run `pytest` and `ruff` from the repository
-  root.
+  point outside its directory. `pytest.ini`, `ruff.toml`, and
+  `pyrightconfig.json` are there for their own reasons: they cover `examples/`
+  as well as `lib/`, and `ruff` finds its settings by walking up from each file.
+  Install the package with `python -m pip install -e .`, and run `pytest`,
+  `ruff`, and `pyright` from the repository root.
 - **The benchmark harness stays out of `lib/tests/`** so a plain `pytest` run
   does not time operations.
 - **Examples run from the repository root** and use plain assertions. Keep them
@@ -161,7 +166,7 @@ Apply these in proportion to the size and user-facing impact of the change.
 ## Sending a change
 
 - **Branch off `dev`.**
-- **Run `python -m pytest` and `python -m ruff check .`,** plus
+- **Run `python -m pytest`, `python -m ruff check .`, and `python -m pyright`,** plus
   `./lib/scripts/test_full.sh` when your change touches an adapter.
 - **Say what you ran** in the pull request, and mark a plain `pytest` run as
   partial.

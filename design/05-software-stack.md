@@ -13,6 +13,7 @@ also lists the ones that Genie leaves out on purpose.
 | Local persistence | `sqlite3`, which is part of Python | No extra package |
 | Server adapters | `psycopg`, `neo4j`, `pymongo`, `redis` | Only with the extra for that adapter |
 | Lint and import sort | `ruff>=0.16` | `dev` extra |
+| Type check | `pyright[nodejs]>=1.1.414` | `dev` extra |
 | Tests | `pytest>=8` | `dev` extra |
 | Disposable test servers | Docker | Only for the full suite |
 | Benchmarks | Standard library only | No extra package |
@@ -21,7 +22,7 @@ also lists the ones that Genie leaves out on purpose.
 
 - **Python 3.11 or newer,** set by `requires-python = ">=3.11"`. The classifiers list 3.11, 3.12, and 3.13.
 - **Why 3.11:** the code uses `typing.Self`, `enum.StrEnum`, and `datetime.UTC`. Python 3.11 added all 3.
-- **The package is typed.** The package includes `py.typed`, and the `Typing :: Typed` classifier states this.
+- **The package is typed.** The package includes `py.typed`, and the `Typing :: Typed` classifier states this. Pyright checks the annotations.
 
 ## Core package
 
@@ -98,12 +99,15 @@ function that needs it. If the driver is not installed, the call raises
 | --- | --- | --- |
 | Lint and import sort | `ruff check .` | `ruff.toml`: `line-length = 193`, `src = ["lib/src", "lib", "."]` |
 | Format | None, by choice | — |
-| Type check | None | — |
+| Type check | `python -m pyright` | `pyrightconfig.json`: `include`, `extraPaths`, `pythonVersion = "3.11"`, `typeCheckingMode = "standard"` |
 | Tests | `pytest` | `pytest.ini`: `testpaths` and `pythonpath` |
 | Syntax | `python -m compileall` | — |
 | Lint report | `lib/scripts/ruff_report.sh` | Writes `ruff_report.txt`. Git ignores this file |
 
-- **`dev` holds only tools that the repository runs:** `pytest` and `ruff`. A tool goes into `dev` only if a script or a documented check uses it.
+- **`dev` holds only tools that the repository runs:** `pytest`, `ruff`, and `pyright`. A tool goes into `dev` only if a script or a documented check uses it.
+- **`pyright` comes with its `nodejs` extra.** That extra installs Node.js as a wheel. So a Pyright run needs no system Node.js.
+- **Pyright needs the 4 adapter extras.** It checks the adapter code against the types of each driver. If a driver is not installed, Pyright reports its imports as errors.
+- **`pythonVersion = "3.11"`** is the oldest version in `requires-python`. So Pyright reports a call to a newer standard library function that has no version check.
 - **Config is at the repository root** because it covers `examples/` and `lib/`.
 - **No CI configuration is in the repository.** The checks run locally, and `test_full.sh` is the complete run.
 - **Rules for the use of the tools** are in [Coding style](08-coding-style.md).
@@ -120,7 +124,7 @@ function that needs it. If the driver is not installed, the call raises
 | `MongoDBBackend` | `GENIE_MONGODB_URI` | `GENIE_MONGODB_DATABASE` |
 | `RedisBackend` | `GENIE_REDIS_URL` | `GENIE_REDIS_USER`, `GENIE_REDIS_PASSWORD`, `GENIE_REDIS_KEY_PREFIX`, `GENIE_REDIS_REPLICA_URL` (replica tests) |
 
-- **`lib/scripts/test_full.sh` is the complete suite.** It needs Docker and the 4 drivers (`pip install -e ".[dev,mongodb,neo4j,postgres,redis]"`). It runs `compileall`, then starts disposable containers bound to `127.0.0.1`. Then it sets the variables and runs `pytest`. It stops the containers on exit.
+- **`lib/scripts/test_full.sh` is the complete suite.** It needs Docker and the 4 drivers (`pip install -e ".[dev,mongodb,neo4j,postgres,redis]"`). It runs `compileall` and `pyright`, then starts disposable containers bound to `127.0.0.1`. Then it sets the variables and runs `pytest`. It stops the containers on exit.
 - **Test ports are not the default ports:** `15432`, `17687`, `17017`, `16379`, and `16380` for the Redis replica. Each `GENIE_TEST_*_HOST_PORT` variable overrides one port.
 - **Each image is replaceable** through `GENIE_TEST_<SERVER>_IMAGE`, for example `GENIE_TEST_MONGODB_IMAGE`.
 - **`GENIE_TEST_PYTHON` and `GENIE_TEST_COMMAND`** choose the interpreter and the command. So the same container setup can run a command other than `pytest`.
@@ -148,7 +152,6 @@ function that needs it. If the driver is not installed, the call raises
 | A default server database | Server adapters are extras. The defaults are in-process or a local file |
 | An ORM or query builder | Each adapter writes the queries that its store understands. It also keeps the exact schema checks |
 | A formatter | A `ruff format` run rewrites most files. Small changes then become hard to find in the diff |
-| A type checker | Code review checks the types. No type checker is configured |
 
 ## Adding to the stack
 

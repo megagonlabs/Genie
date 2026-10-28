@@ -19,6 +19,7 @@ Genie/
 ├── lib/                # the library itself, and its tests, benchmarks, and scripts
 ├── LICENSE             # license text, named by `license-files` in `pyproject.toml`
 ├── pyproject.toml      # `genie` package metadata, extras, and build settings
+├── pyrightconfig.json  # repo-wide Pyright settings: checked folders, import paths, and Python 3.11
 ├── pytest.ini          # repo-wide pytest settings: `testpaths` and `pythonpath`
 ├── README.md           # what Genie is, how to install it, and a first example
 ├── requirements.txt    # a note only: the core has no third-party runtime dependencies
@@ -28,7 +29,7 @@ Genie/
 
 - **The content is in 3 trees:** `lib/`, `examples/`, and `design/`. All other files at the root are configuration or project text.
 - **`LICENSE` holds the BSD 3-Clause text** for the `1.0.0` release. `pyproject.toml` refers to it with `license-files = ["LICENSE"]`. So the file stays at the root.
-- **`requirements.txt` declares nothing.** Its only purpose is to answer the usual question about dependencies. The core has no runtime dependencies, and `pytest` and `ruff` come from the `dev` extra in `pyproject.toml`.
+- **`requirements.txt` declares nothing.** Its only purpose is to answer the usual question about dependencies. The core has no runtime dependencies, and `pyright`, `pytest`, and `ruff` come from the `dev` extra in `pyproject.toml`.
 
 ## `lib/` — the library
 
@@ -222,10 +223,11 @@ examples/lamps/<name>/
 | File | Reason it cannot move into `lib/` |
 | --- | --- |
 | `pyproject.toml` | `readme` and `license-files` resolve in its directory and cannot refer to a path outside it |
+| `pyrightconfig.json` | It covers `examples/` and `lib/`. It sets `extraPaths` to `lib/src`, `lib`, and `.`, the same paths as `pytest.ini` |
 | `pytest.ini` | It covers `examples/` and `lib/`. It sets `pythonpath` to `lib/src`, `lib`, and `.` |
 | `ruff.toml` | Ruff looks for settings in the folder of each file and then in each parent folder. So a config inside `lib/` never applies to `examples/` |
 
-- **All commands run from the repository root:** `python -m pip install -e .`, `python -m pytest`, `python -m ruff check .`.
+- **All commands run from the repository root:** `python -m pip install -e .`, `python -m pytest`, `python -m ruff check .`, `python -m pyright`.
 - **`pyproject.toml` is at the root but refers to the real source** with `[tool.setuptools.packages.find] where = ["lib/src"]`. So the root config and the nested layout agree.
 
 ## Where a new file goes

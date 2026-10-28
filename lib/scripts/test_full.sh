@@ -162,6 +162,11 @@ require_free_container "$GENIE_TEST_REDIS_REPLICA_CONTAINER"
 echo "Compiling Genie..."
 "$GENIE_TEST_PYTHON" -m compileall -q lib/src/genie lib/tests lib/benchmarks examples
 
+echo "Type checking Genie..."
+# Pyright reads the packages of the test interpreter, not the packages of the
+# first `python` on `PATH`. So it finds the same drivers as the tests.
+"$GENIE_TEST_PYTHON" -m pyright --pythonpath "$("$GENIE_TEST_PYTHON" -c 'import sys; print(sys.executable)')"
+
 echo "Starting disposable PostgreSQL container..."
 docker run --rm -d \
     --name "$GENIE_TEST_POSTGRES_CONTAINER" \

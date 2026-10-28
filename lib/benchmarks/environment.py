@@ -87,7 +87,7 @@ def read_commit(root: Path) -> str | None:
 def _usable_cpu_count() -> int | None:
     """Return the number of CPUs that this process can use."""
 
-    if hasattr(os, "process_cpu_count"):
+    if sys.version_info >= (3, 13):
         return os.process_cpu_count()
     return os.cpu_count()
 

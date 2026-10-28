@@ -151,12 +151,15 @@ from genie import EventLog, OwnershipTree
 
 ## Develop
 
-Install the development extra, then run the checks from the repository root:
+Install the development extra and the 4 adapter extras. Then run the checks from
+the repository root. Pyright needs the adapter extras, because it checks the
+adapter code against the types of each driver.
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,mongodb,neo4j,postgres,redis]"
 python -m pytest
 python -m ruff check .
+python -m pyright
 python -m compileall -q lib/src/genie lib/tests examples
 ```
 

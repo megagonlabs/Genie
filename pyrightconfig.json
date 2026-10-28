@@ -1,0 +1,17 @@
+// Repo-wide Pyright settings.
+//
+// These stay at the repository root because they cover `examples/` as well as
+// `lib/`. The `genie` package metadata lives in `pyproject.toml`, also at the
+// root.
+{
+  // What a bare `pyright` run checks.
+  "include": ["lib", "examples"],
+
+  // Import paths for code that is not installed as a package. They are the
+  // same as `pythonpath` in `pytest.ini`.
+  "extraPaths": ["lib/src", "lib", "."],
+
+  // The oldest Python version that `pyproject.toml` supports.
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "standard"
+}

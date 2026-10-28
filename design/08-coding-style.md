@@ -5,7 +5,7 @@ can use them to look like the code around it.
 
 The note contains 2 kinds of conventions, and they have different weight:
 
-- **Hard rules.** `ruff check .` fails, or `CONTRIBUTING.md` requires them. The
+- **Hard rules.** `ruff check .` or `pyright` fails, or `CONTRIBUTING.md` requires them. The
   text says which conventions are hard rules.
 - **House habits.** Code that matches them stays consistent. But a habit is not
   a reason to reject a sensible alternative.
@@ -18,13 +18,14 @@ The note contains 2 kinds of conventions, and they have different weight:
 | --- | --- | --- |
 | Lint and import sort | `ruff check .`, from `ruff>=0.16` in the `dev` extra | `ruff.toml`, at the repository root |
 | Format | none, by choice | — |
-| Type check | none | — |
+| Type check | `pyright`, from `pyright[nodejs]>=1.1.414` in the `dev` extra | `pyrightconfig.json`, at the repository root |
 | Tests | `pytest`, from `pytest>=8` in the `dev` extra | `pytest.ini`, at the repository root |
 | Syntax | `compileall`, from the standard library | — |
 
 ```bash
 python -m pytest
 python -m ruff check .
+python -m pyright
 python -m compileall -q lib/src/genie lib/tests examples
 ```
 
@@ -37,10 +38,13 @@ python -m compileall -q lib/src/genie lib/tests examples
 - **Ruff does not check the line length.** `E501` is not in the active set. So
   the author keeps each line inside the budget of 193 by hand. No line in the
   package reaches it.
-- **No tool checks types or docstrings.** The repository configures no type
-  checker, and ruff runs no `ANN` rules and no `D1xx` rules. `CONTRIBUTING.md`
-  asks for typed public APIs with Google-style docstrings. So code review
-  checks that rule.
+- **Pyright checks the types in `standard` mode.** It checks `lib/` and
+  `examples/` against Python 3.11. It needs the 4 adapter extras, because it
+  checks the adapter code against the types of each driver.
+- **No tool checks that annotations and docstrings exist.** The `standard` mode
+  of Pyright accepts a function without annotations, and ruff runs no `ANN`
+  rules and no `D1xx` rules. `CONTRIBUTING.md` asks for typed public APIs with
+  Google-style docstrings. So code review checks that rule.
 - **The author formats code by hand.** A `ruff format` run rewrites most of the
   repository. A small change then disappears among unrelated diff lines.
 - **A suppression names its rule and its reason.** Nearly every `noqa` comment

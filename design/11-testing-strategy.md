@@ -163,7 +163,7 @@ place where a test checks it.
 
 | Change touches | Run |
 | --- | --- |
-| Anything | `python -m pytest`, `python -m ruff check .`, `python -m compileall -q lib/src/genie lib/tests examples` |
+| Anything | `python -m pytest`, `python -m ruff check .`, `python -m pyright`, `python -m compileall -q lib/src/genie lib/tests examples` |
 | An adapter, the backend contracts, or concurrency behavior | Also `./lib/scripts/test_full.sh` |
 | The output of an example, on purpose | Also `python lib/scripts/capture_example_output.py`, then a review of the diff in `examples/expected/` |
 
@@ -195,7 +195,6 @@ place where a test checks it.
 | **Server versions outside the `test_full.sh` images** | No test run covers them. The adapter README gives the server requirements |
 | **Scale-out deployments,** for example Redis Cluster | Out of scope for the shipped adapters |
 | **Agent behavior and model output** | Genie stores values. The application decides what they mean |
-| **Type checking** | The repository configures no type checker. Code review checks the types |
 | **CI** | The repository has no CI configuration. The checks run locally |
 
 ## Related reading
