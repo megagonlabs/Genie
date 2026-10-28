@@ -1,9 +1,13 @@
 # Genie
 
-Typed building blocks for developers who build their own memory systems: memory
-blocks, parent/child ownership, typed relationships, scoped access, and optional
-structure views. Genie does not depend on any agent framework, database, memory
-taxonomy, retrieval strategy, or stored value type.
+Typed building blocks for developers who build their own memory systems.
+
+Genie gives you memory blocks, parent/child ownership, typed relationships,
+scoped access, and optional structure views, with no dependency on an agent
+framework, database, memory taxonomy, retrieval strategy, or stored value type.
+Each memory system runs and plans its agents, creates embeddings, hosts a
+database, and defines a memory schema in its own way, so Genie leaves these
+decisions to your application.
 
 ## What it provides
 
@@ -14,9 +18,6 @@ taxonomy, retrieval strategy, or stored value type.
 - **Structure facades** — `OwnershipTree`, `PropertyGraph`, `KeyedCollection`, `EventLog`, `TemporalCollection`, `LineageDAG`, and `VersionedRecords`.
 - **Storage protocols** — `InMemoryBackend` and `SQLiteBackend` need no extra package; `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, and `RedisBackend` are optional; `RoutedBackend` combines several of them.
 - **Separate extension points** — policies, hooks, queries, and codecs.
-
-Genie does not run agents, plan their work, create embeddings, host a database,
-or define one memory schema for everyone.
 
 ## Install
 
@@ -49,7 +50,7 @@ requirement = memory.put(
 )
 
 agent_memory = memory.get_handle(root=workspace, principal="agent:planner")
-agent_memory.put(type="observation", value="Use short sections.")
+observation = agent_memory.put(type="observation", value="Use short sections.")
 
 results = agent_memory.search("concise")
 assert results[0].block.id == requirement.id
@@ -64,7 +65,7 @@ assert results[0].block.id == requirement.id
 - **`InMemoryBackend`** is the reference backend. No extra packages, so it suits tests, examples, and prototypes.
 - **`SQLiteBackend`** adds local persistent storage through the driver that ships with Python. You do not need the SQLite command-line program.
 - **Optional adapters** need their extra: `postgres`, `neo4j`, `mongodb`, or `redis`.
-- **Every persistent adapter** supports all seven structure facades.
+- **Every persistent adapter** supports all seven [structure facades](#structure-facades).
 
 ```python
 from genie import Memory, SQLiteBackend
@@ -78,37 +79,56 @@ with SQLiteBackend("memory.db") as backend:
 The [backend guide](lib/src/genie/backend/README.md) explains the storage contracts, how
 each adapter works, and what to think about in production.
 
-## Model and structures
+## Model
+
+The blocks of the Quick start, with one link added:
 
 ```text
-Memory
-  project
-    requirement
-    observation
+Ownership (parent/child)
+  project "Write proposal"
+    requirement "Keep the proposal concise."
+    observation "Use short sections."
 
-MemoryLink
-  requirement --supports--> observation
+Relationship (MemoryLink)
+  observation --supports--> requirement
 ```
 
-- **Ownership** decides scope and lifecycle.
-- **Links** describe relationships without ownership.
-- **Meaning** of block types, values, metadata, and links is your application's choice.
-
-| Facade | Purpose |
-| --- | --- |
-| `OwnershipTree` | Rooted ownership hierarchies |
-| `PropertyGraph` | Typed relationships and traversal |
-| `KeyedCollection` | Namespaced key lookup |
-| `EventLog` | Stable append order |
-| `TemporalCollection` | Event time and validity periods |
-| `LineageDAG` | Derivation history, protected from cycles |
-| `VersionedRecords` | Stable identities and ordered revisions |
-
-All facades point at the same blocks. Combine them freely; they keep the normal
-handle scope and policy checks.
+- **`MemoryBlock`** is one stored value. Each `put` creates one, with an `id`, a `type`, a `value`, and a `MemoryPolicy`.
+- **Parent/child ownership** decides scope and lifecycle. Each child has one parent. A handle with a block as its root reaches the blocks below it, and a delete of a block also deletes them.
+- **`MemoryLink`** is a directed, typed relationship from a source block to a target block. It does not make the target a child, and it does not give access to the target. Use links for references, provenance, and relationships across the tree.
+- **Meaning** of block types, values, metadata, and relation names such as `"supports"` is your application's choice.
 
 ```python
-from genie import EventLog, OwnershipTree
+link = agent_memory.add_link(observation, requirement, "supports")
+assert agent_memory.list_links(requirement, direction="in") == [link]
+```
+
+## Structure facades
+
+- **A structure facade** is an optional class that you build over a `Memory` or a `MemoryHandle`. It organizes blocks that already exist into one shape, such as a graph, a keyed map, or a log. It adds the operations for that shape.
+- **References, not copies:** a facade refers to blocks by id. It does not copy or change their values. So one block can be in several facades at the same time.
+- **Same access checks:** a facade checks access through its `Memory` or `MemoryHandle`. So the handle scope and the policy checks still apply.
+- **Not required:** `Memory` and handles work without facades. Use none, one, or several of them on the same blocks.
+
+| Facade | Organizes blocks as |
+| --- | --- |
+| `OwnershipTree` | A tree of parents and children below one root block |
+| `PropertyGraph` | A graph: blocks are nodes, and `MemoryLink` values are typed edges |
+| `KeyedCollection` | A map from namespaced keys to blocks |
+| `EventLog` | A list of blocks in the order that you append them |
+| `TemporalCollection` | Blocks with an event time and a validity period |
+| `LineageDAG` | A derivation history for one relation, with no cycles |
+| `VersionedRecords` | One stable identity with an ordered list of revisions |
+
+`PropertyGraph` reads the link from the Model example as a graph edge:
+
+```python
+from genie import PropertyGraph
+
+
+graph = PropertyGraph(agent_memory)
+path = graph.walk(observation, relation="supports")[0]
+assert path.block_ids == (observation.id, requirement.id)
 ```
 
 - **Every public name imports from `genie`,** and also from its focused
