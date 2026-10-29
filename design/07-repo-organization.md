@@ -23,7 +23,7 @@ Genie/
 ├── pytest.ini          # repo-wide pytest settings: `testpaths` and `pythonpath`
 ├── README.md           # what Genie is, how to install it, and a first example
 ├── requirements.txt    # a note only: the core has no third-party runtime dependencies
-├── ruff.toml           # repo-wide ruff settings: line length 193 and first-party roots
+├── ruff.toml           # repo-wide ruff settings: line length 193, first-party roots, and all `DTZ` rules
 └── SECURITY.md         # how to report a vulnerability, and what is in scope
 ```
 

@@ -9,3 +9,8 @@ line-length = 193
 
 # First-party import roots, so import sorting groups them correctly.
 src = ["lib/src", "lib", "."]
+
+[lint]
+# Genie requires timezone-aware datetimes. The default rule set of ruff changes
+# between versions, so this turns on all `DTZ` rules explicitly.
+extend-select = ["DTZ"]

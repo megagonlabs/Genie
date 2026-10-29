@@ -35,7 +35,9 @@ python -m compileall -q lib/src/genie lib/tests examples
   output of every example under `examples/expected/`. Run it when you change
   what an example prints, and commit the result.
 - **Keep `ruff check .` clean.** Line length is 193, set in `ruff.toml`.
-  Ruff also sorts imports, so there is no separate formatter to run.
+  `ruff.toml` also turns on all `DTZ` rules, because Genie requires
+  timezone-aware datetimes. Ruff also sorts imports, so there is no separate
+  formatter to run.
 - **Keep `python -m pyright` clean.** `pyrightconfig.json` sets the `standard`
   mode and Python 3.11. Pyright needs the 4 adapter extras, because it checks
   the adapter code against the types of each driver.

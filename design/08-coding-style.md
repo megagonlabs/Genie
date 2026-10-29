@@ -29,10 +29,13 @@ python -m pyright
 python -m compileall -q lib/src/genie lib/tests examples
 ```
 
-- **`ruff.toml` sets only 2 values:** `line-length = 193` and
-  `src = ["lib/src", "lib", "."]`. All other settings are the default rule
-  selection of ruff. So the active rule set changes with the ruff version in
-  the `dev` extra.
+- **`ruff.toml` sets only 3 values:** `line-length = 193`,
+  `src = ["lib/src", "lib", "."]`, and `extend-select = ["DTZ"]`. All other
+  settings are ruff defaults. So the active rule set, except `DTZ`, changes
+  with the ruff version in the `dev` extra.
+- **All `DTZ` rules are active.** Genie requires timezone-aware datetimes.
+  The default rule set of ruff changes between versions, so `extend-select`
+  turns on all `DTZ` rules explicitly.
 - **Ruff checks the import order.** `I001` is active, so an import block in the
   wrong order fails `ruff check .`. There is no separate `isort` step.
 - **Ruff does not check the line length.** `E501` is not in the active set. So

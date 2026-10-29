@@ -97,7 +97,7 @@ function that needs it. If the driver is not installed, the call raises
 
 | Job | Tool | Config |
 | --- | --- | --- |
-| Lint and import sort | `ruff check .` | `ruff.toml`: `line-length = 193`, `src = ["lib/src", "lib", "."]` |
+| Lint and import sort | `ruff check .` | `ruff.toml`: `line-length = 193`, `src = ["lib/src", "lib", "."]`, `extend-select = ["DTZ"]` |
 | Format | None, by choice | — |
 | Type check | `python -m pyright` | `pyrightconfig.json`: `include`, `extraPaths`, `pythonVersion = "3.11"`, `typeCheckingMode = "standard"` |
 | Tests | `pytest` | `pytest.ini`: `testpaths` and `pythonpath` |
