@@ -29,7 +29,7 @@ from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import AccessDenied, Operation, PolicyEngine
 from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
-from genie.query import MemoryQuery, Scope, SearchResult
+from genie.query import MemoryQuery, Scope, SearchCursor, SearchResult
 from genie.query.filters import normalize_filters
 
 if TYPE_CHECKING:
@@ -965,6 +965,7 @@ class Memory:
         types: list[str] | tuple[str, ...] = (),
         filters: dict[str, Any] | None = None,
         limit: int = 20,
+        after: SearchCursor | None = None,
     ) -> list[SearchResult]:
         """Search memory blocks.
 
@@ -974,8 +975,10 @@ class Memory:
         - **More backend calls:** when many matching blocks are hidden, the
           search calls the backend again until it has `limit` visible results
           or the backend has no more results. There is no cap.
-        - **Next page:** a `MemoryQuery` with `after` set to the `cursor` of
-          the last result returns the results that come after it.
+        - **Next page:** set `after` to the `cursor` of the last result. The
+          search returns the results that come after it.
+        - **Default scope:** `global`. A `MemoryQuery` with no scope also uses
+          `global`.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
@@ -985,6 +988,8 @@ class Memory:
             types: Optional block types to include.
             filters: Optional metadata or block-field filters.
             limit: Maximum number of visible results.
+            after: Optional `SearchCursor`. The search returns only the
+                results after it.
 
         Returns:
             Search results with decoded blocks, in search order. Genie decodes
@@ -994,9 +999,9 @@ class Memory:
             AccessDenied: If the principal cannot search or traverse from the
                 query root.
             MemoryNotFound: If the query root does not exist.
-            TypeError: If the text, root, types, filters, or limit arguments
-                have the wrong type, or no registered codec can decode a
-                visible result.
+            TypeError: If the text, root, types, filters, limit, or after
+                arguments have the wrong type, or no registered codec can
+                decode a visible result.
             ValueError: If the scope is invalid, the limit is negative, the
                 root id is empty, a non-global scope has no root, or a filter
                 uses an unknown operator.
@@ -1010,6 +1015,7 @@ class Memory:
             types=types,
             filters=filters,
             limit=limit,
+            after=after,
         )
 
     def _search(
@@ -1022,6 +1028,7 @@ class Memory:
         types: list[str] | tuple[str, ...],
         filters: dict[str, Any] | None,
         limit: int,
+        after: SearchCursor | None,
         boundary: Callable[[HookContext, MemoryQuery], None] | None = None,
         keep: Callable[[MemoryQuery, str], bool] | None = None,
     ) -> list[SearchResult]:
@@ -1035,6 +1042,8 @@ class Memory:
             types: Optional block types to include.
             filters: Optional metadata or block-field filters.
             limit: Maximum result count.
+            after: Optional position. The search returns only the results
+                after it.
             boundary: Optional extra check for the query that `before_search`
                 hooks return. It runs inside this operation, before the query
                 is authorized again, and it raises `AccessDenied` to refuse.
@@ -1058,13 +1067,20 @@ class Memory:
                 types=types,
                 filters=filters,
                 limit=limit,
+                after=after,
             )
             self._authorize_query(context, memory_query)
             memory_query = self.hooks.before_search(context, memory_query)
             # Hooks can return a new query. Normalize it again, so backends get
-            # canonical filter operators. Then check access again, so hooks
-            # cannot pass a wider query root or scope.
-            memory_query = replace(memory_query, filters=normalize_filters(memory_query.filters))
+            # canonical filter operators and a scope. A query with no scope
+            # gets `global`, so a handle refuses it unless it allows global
+            # search. Then check access again, so hooks cannot pass a wider
+            # query root or scope.
+            memory_query = replace(
+                memory_query,
+                scope=memory_query.scope or Scope.GLOBAL,
+                filters=normalize_filters(memory_query.filters),
+            )
             if boundary is not None:
                 boundary(context, memory_query)
             self._authorize_query(context, memory_query)
@@ -1372,38 +1388,46 @@ class Memory:
         types: list[str] | tuple[str, ...],
         filters: dict[str, Any] | None,
         limit: int,
+        after: SearchCursor | None,
     ) -> MemoryQuery:
-        """Change friendly search arguments into a `MemoryQuery`."""
+        """Change friendly search arguments into a `MemoryQuery`, with `global` for a query with no scope."""
 
         if isinstance(query, MemoryQuery):
-            return query
-        if isinstance(query, str):
-            text = query
-        return MemoryQuery(
-            text=text,
-            root_id=_block_id(root) if root is not None else None,
-            scope=scope,
-            types=types,
-            filters={} if filters is None else filters,
-            limit=limit,
-        )
+            memory_query = query
+        else:
+            if isinstance(query, str):
+                text = query
+            memory_query = MemoryQuery(
+                text=text,
+                root_id=_block_id(root) if root is not None else None,
+                scope=scope,
+                types=types,
+                filters={} if filters is None else filters,
+                limit=limit,
+                after=after,
+            )
+        if memory_query.scope is None:
+            memory_query = replace(memory_query, scope=Scope.GLOBAL)
+        return memory_query
 
     def _authorize_query(self, context: HookContext, query: MemoryQuery) -> None:
         """Raise an error if the principal does not have the access that the query root and scope need."""
 
+        # `_search` already gives `global` to a query with no scope.
+        scope = query.scope or Scope.GLOBAL
         if query.root_id is None:
-            if query.scope != Scope.GLOBAL:
+            if scope != Scope.GLOBAL:
                 raise ValueError(
-                    f"Search scope {query.scope.value!r} requires a root block."
+                    f"Search scope {scope.value!r} requires a root block."
                 )
             return
         root = self._require_raw(query.root_id)
         self._require_access(context, Operation.SEARCH, root)
-        if query.scope == Scope.SUBTREE:
+        if scope == Scope.SUBTREE:
             self._require_access(context, Operation.TRAVERSE_DOWN, root)
-        elif query.scope == Scope.ANCESTORS:
+        elif scope == Scope.ANCESTORS:
             self._require_access(context, Operation.TRAVERSE_UP, root)
-        elif query.scope == Scope.LINKS:
+        elif scope == Scope.LINKS:
             self._require_access(context, Operation.READ, root)
 
     def _operation(

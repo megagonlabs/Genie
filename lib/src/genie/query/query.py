@@ -17,7 +17,9 @@ class MemoryQuery:
     Attributes:
         text: Optional text query.
         root_id: Optional block id that is the anchor of a scoped search.
-        scope: Search scope as a `Scope` value.
+        scope: Search scope as a `Scope` value, or `None` for the default
+            scope of the caller. `Memory` uses `global`, and a `MemoryHandle`
+            uses its `default_scope`. `Memory` gives hooks and backends a `Scope`.
         types: Optional block types, as a tuple.
         filters: Metadata or block-field filters. Friendly operators change to
             canonical `$...` operator names.
@@ -31,7 +33,7 @@ class MemoryQuery:
 
     text: str | None = None
     root_id: str | None = None
-    scope: Scope = Scope.GLOBAL
+    scope: Scope | None = None
     types: tuple[str, ...] = ()
     filters: dict[str, Any] = field(default_factory=dict)
     limit: int = 20
@@ -41,7 +43,7 @@ class MemoryQuery:
         self,
         text: str | None = None,
         root_id: str | None = None,
-        scope: Scope | str = Scope.GLOBAL,
+        scope: Scope | str | None = None,
         types: list[str] | tuple[str, ...] = (),
         filters: dict[str, Any] | None = None,
         limit: int = 20,
@@ -52,7 +54,8 @@ class MemoryQuery:
         Args:
             text: Optional text query.
             root_id: Optional block id that is the anchor of a scoped search.
-            scope: Search scope as a `Scope` value or a string.
+            scope: Search scope as a `Scope` value or a string, or `None`
+                for the default scope of the caller.
             types: Optional block types, as a list or a tuple.
             filters: Metadata or block-field filters.
             limit: Maximum number of results.
@@ -70,7 +73,7 @@ class MemoryQuery:
             raise TypeError("MemoryQuery text must be a string or None.")
         if root_id is not None and not isinstance(root_id, str):
             raise TypeError("MemoryQuery root_id must be a string or None.")
-        normalized_scope = Scope(scope)
+        normalized_scope = None if scope is None else Scope(scope)
         if not isinstance(types, list | tuple):
             raise TypeError("MemoryQuery types must be a list or tuple of strings.")
         if any(not isinstance(type_name, str) for type_name in types):

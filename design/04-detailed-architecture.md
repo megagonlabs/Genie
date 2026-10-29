@@ -397,7 +397,9 @@ order:
 ## Query normalization
 
 - **`MemoryQuery` normalizes its fields in `__init__`,** and it is frozen after
-  that. The scope becomes a `Scope`. The types become a tuple. `MemoryQuery`
+  that. A scope that is not `None` becomes a `Scope`. `None` means the
+  default scope of the caller, and `Memory` sets it before hooks and backends
+  see the query. The types become a tuple. `MemoryQuery`
   rewrites the filters. A negative limit raises `ValueError`, but `0` is
   permitted.
 - **`MemoryQuery` rewrites operator aliases** to the canonical names that

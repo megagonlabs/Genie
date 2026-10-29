@@ -16,7 +16,7 @@ results = memory.search(
 )
 ```
 
-- **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. The query has optional `text`, an optional `root_id`, one `Scope`, optional `types` and `filters`, a `limit` that cannot be negative, and an optional `after` cursor.
+- **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. The query has optional `text`, an optional `root_id`, an optional `Scope`, optional `types` and `filters`, a `limit` that cannot be negative, and an optional `after` cursor.
 - **Results are ranked `SearchResult` values.** Each one holds a `block`, a finite numeric `score`, and an optional `reason`. Its `cursor` property gives the position after it.
 - **A new query checks runtime types.** It also copies the type lists and the nested filter operands that the caller owns.
 
@@ -26,13 +26,14 @@ results = memory.search(
 - **`limit` counts visible results.** `Memory` removes the results that the principal cannot `search` or `read`, and the results outside the query `Scope`, before it counts. So blocks that the caller cannot see do not change which visible results it gets.
 - **`Memory` gets backend pages.** The first page has at most `limit` results. Each next page starts after the last result and is 2 times larger. `Memory` stops when it has `limit` visible results, or when the backend has no more results. There is no cap, because a cap would let hidden blocks change the results again.
 - **The cost:** if the caller can see only a few of many matching blocks, one search calls the backend many times.
-- **Next page:** set `after` to the `cursor` of the last result.
+- **Next page:** set `after` to the `cursor` of the last result, and keep the other arguments. `MemoryQuery` also has an `after` field.
 
 ```python
 first = memory.search("concise", limit=20)
-second = memory.search(MemoryQuery("concise", limit=20, after=first[-1].cursor))
+second = memory.search("concise", limit=20, after=first[-1].cursor)
 ```
 
+- **A handle pages the same way.** A search with no scope, as a keyword or in a `MemoryQuery`, uses the `default_scope` of the handle.
 - **A cursor is only a position.** A `SearchCursor` holds a `score`, a `created_at`, and a block id. It can name a block that the caller cannot see, and it shows nothing about that block.
 - **Pages are not a snapshot.** A block that changes between 2 calls can move in the order. One search counts each block one time. But a block can be missing from a later page, or it can be on 2 pages.
 
@@ -44,6 +45,7 @@ second = memory.search(MemoryQuery("concise", limit=20, after=first[-1].cursor))
 | `links` | The root and the blocks linked to it, in either direction. A mount target is in scope, but its subtree is not |
 | `global` | All blocks that the backend can see |
 
+- **`scope=None` (the default of `MemoryQuery`) means the default scope of the caller.** `Memory` uses `global`, and a `MemoryHandle` uses its `default_scope`. `Memory` gives hooks and backends a `Scope`. A `before_search` hook that returns `scope=None` gets `global`.
 - **Each `Scope` except `global` needs a `root`** when you search through `Memory`. Without one, `Memory.search` raises `ValueError`.
 - **Scopes resolve from stored state, not from the query.** `subtree` and `ancestors` come from stored parents, and `links` comes from stored links. A search index that holds neither one needs traversal and link access to resolve them.
 - **No scope resolves structure membership.** Key bindings, log entries, temporal entries, and revisions record membership by block id, and they do not change stored parents. So a search with a container block as its root finds only the members that the application also created as children of that container.

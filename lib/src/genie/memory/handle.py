@@ -16,7 +16,7 @@ from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import AccessDenied, Operation
 from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
-from genie.query import MemoryQuery, Scope, SearchResult
+from genie.query import MemoryQuery, Scope, SearchCursor, SearchResult
 
 if TYPE_CHECKING:
     from genie.hooks import HookContext
@@ -41,8 +41,8 @@ class MemoryHandle:
         root_id: Block id that is the boundary of the handle, or `None` when
             the handle is unbounded.
         principal: Principal that all operations through this handle act as.
-        default_scope: Search scope when the caller gives no `scope` and no
-            `MemoryQuery`.
+        default_scope: Search scope when neither the `scope` argument nor
+            the `MemoryQuery` sets one.
         allow_up: Whether ancestor traversal and search are allowed.
         allow_global: Whether global search is allowed.
         allow_mounts: Whether symbolic mount operations are allowed.
@@ -70,8 +70,8 @@ class MemoryHandle:
             root_id: Optional handle root block id. `None` means an explicit
                 unbounded handle.
             principal: Principal for operations through this handle.
-            default_scope: Search scope when the caller gives no search
-                `scope` argument.
+            default_scope: Search scope when neither the `scope` argument
+                nor the `MemoryQuery` sets one.
             allow_up: Whether ancestor traversal and search are allowed.
             allow_global: Whether global search is allowed.
             allow_mounts: Whether this handle can create, list, discover,
@@ -755,11 +755,13 @@ class MemoryHandle:
         types: list[str] | tuple[str, ...] = (),
         filters: dict[str, Any] | None = None,
         limit: int = 20,
+        after: SearchCursor | None = None,
     ) -> list[SearchResult]:
         """Search through this handle.
 
-        - **Scope:** `scope` wins. Without it, a `MemoryQuery` keeps its own
-          scope, and other calls use `default_scope`.
+        - **Scope:** `scope` wins. Without it, the scope of a `MemoryQuery`,
+          then `default_scope`. So a `MemoryQuery` with no scope uses
+          `default_scope`.
         - **Root:** `root` wins. Without it, the root of a `MemoryQuery`, then
           the handle root. A rooted handle accepts only a root inside the
           handle, for each scope. This includes `global`.
@@ -769,6 +771,8 @@ class MemoryHandle:
           does not filter `global` and `ancestors` results.
         - **`limit` counts results that the handle returns.** A dropped result
           does not use part of the limit.
+        - **Next page:** set `after` to the `cursor` of the last result, as a
+          keyword or in a `MemoryQuery`. Keep the other arguments.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
@@ -778,6 +782,8 @@ class MemoryHandle:
             types: Optional block types to include.
             filters: Optional metadata or block-field filters.
             limit: Maximum number of visible results.
+            after: Optional `SearchCursor`. The search returns only the
+                results after it.
 
         Returns:
             Search results that the handle can see.
@@ -791,7 +797,7 @@ class MemoryHandle:
             MemoryNotFound: If an unbounded handle gets a query root that does
                 not exist.
             TypeError: If `root` is not a block or string id, the text, types,
-                filters, or limit arguments have the wrong type, or no
+                filters, limit, or after arguments have the wrong type, or no
                 registered codec can decode a visible result.
             ValueError: If the scope is not valid, the root id is empty, the
                 limit is negative, a filter uses an unknown operator, or a
@@ -799,7 +805,7 @@ class MemoryHandle:
         """
 
         if isinstance(query, MemoryQuery):
-            selected_scope = Scope(scope or query.scope)
+            selected_scope = Scope(scope or query.scope or self.default_scope)
             root_id = _block_id(root) if root is not None else query.root_id or self.root_id
             query = replace(query, root_id=root_id, scope=selected_scope)
         else:
@@ -829,6 +835,7 @@ class MemoryHandle:
             types=types,
             filters=filters,
             limit=limit,
+            after=after,
             boundary=self._require_hooked_search_inside,
             keep=self._search_result_inside,
         )
@@ -1168,7 +1175,9 @@ class MemoryHandle:
                 allow, or a root outside this handle.
         """
 
-        refusal = self._search_refusal(query.scope, query.root_id)
+        # `Memory` already gives `global` to a query with no scope. So a hook
+        # that clears the scope gets the `global` check, not `default_scope`.
+        refusal = self._search_refusal(query.scope or Scope.GLOBAL, query.root_id)
         if refusal is None:
             return
         capability, subject_id, message = refusal

@@ -476,6 +476,26 @@ def test_before_search_hook_cannot_widen_handle_search() -> None:
     assert rewriting.outcomes == [HookOutcome.DENIED] * len(attempts)
 
 
+def test_before_search_hook_that_clears_the_scope_gets_global() -> None:
+    """A hook that returns a query with no scope gets `global`, not the `default_scope` of the handle. A handle without `allow_global` refuses it."""
+
+    rewriting = RewritingSearchHook()
+    denials = RecordingDenialHook()
+    memory = Memory(principal="owner", hooks=[rewriting, denials])
+    root = memory.put(type="root", value="needle root")
+    task = memory.put(parent=root, type="task", value="needle task")
+    outside = memory.put(type="note", value="needle outside")
+    rewriting.rewrite = lambda query: MemoryQuery(text=query.text, root_id=query.root_id, limit=query.limit)
+
+    with pytest.raises(AccessDenied, match="global search"):
+        memory.get_handle(root=task).search("needle")
+    results = memory.get_handle(root=task, allow_global=True).search("needle")
+
+    assert denials.denials == [(HookOperation.SEARCH, HandleCapability.GLOBAL_SEARCH, task.id)]
+    assert rewriting.outcomes == [HookOutcome.DENIED, HookOutcome.SUCCESS]
+    assert sorted(result.block.id for result in results) == sorted([root.id, task.id, outside.id])
+
+
 def test_handle_search_filters_results_by_the_rewritten_scope() -> None:
     """A rewrite that the handle allows returns the same results as the equivalent direct search."""
 

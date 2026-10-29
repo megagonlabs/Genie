@@ -11,12 +11,14 @@ from typing import Any, cast
 import pytest
 
 from genie import (
+    AccessDenied,
     InMemoryBackend,
     Memory,
     MemoryBackend,
     MemoryBlock,
     MemoryPolicy,
     MemoryQuery,
+    Scope,
     SearchCursor,
     SearchResult,
     SQLiteBackend,
@@ -196,6 +198,62 @@ def test_search_after_returns_the_next_visible_page() -> None:
 
     assert [len(page) for page in pages] == [2, 2, 1]
     assert [block_id for page in pages for block_id in page] == _ids(memory.search("zz", limit=10))
+
+
+def test_search_after_keyword_matches_the_query_field() -> None:
+    """The `after` keyword of `Memory.search` gives the same page as `MemoryQuery.after`, and it checks its type."""
+
+    memory = Memory(principal="owner")
+    for score in range(1, 6):
+        memory.put(type="note", value=" ".join(["zz"] * score))
+    first = memory.search("zz", limit=2)
+
+    second = memory.search("zz", limit=2, after=first[-1].cursor)
+
+    assert _ids(second) == _ids(memory.search(MemoryQuery("zz", limit=2, after=first[-1].cursor)))
+    assert _ids(first + second) == _ids(memory.search("zz", limit=4))
+    with pytest.raises(TypeError, match="after must be a SearchCursor"):
+        memory.search("zz", after=cast(Any, "mem_a"))
+
+
+def test_handle_search_pages_in_the_default_scope() -> None:
+    """A rooted handle pages in its `default_scope`, with the `after` keyword or with a `MemoryQuery` that has no scope."""
+
+    memory = Memory(principal="owner")
+    root = memory.put(type="root", value="workspace")
+    memory.put(type="note", value="zz zz zz")
+    for score in range(1, 6):
+        memory.put(parent=root, type="note", value=" ".join(["zz"] * score))
+    handle = memory.get_handle(root=root)
+
+    pages: list[list[str]] = []
+    after: SearchCursor | None = None
+    while page := handle.search("zz", limit=2, after=after):
+        pages.append(_ids(page))
+        after = page[-1].cursor
+
+    assert [len(page) for page in pages] == [2, 2, 1]
+    assert [block_id for page in pages for block_id in page] == _ids(memory.search("zz", root=root, scope="subtree", limit=10))
+    first = handle.search("zz", limit=2)
+    assert _ids(handle.search(MemoryQuery("zz", limit=2, after=first[-1].cursor))) == pages[1]
+    assert _ids(handle.search(MemoryQuery("zz", limit=2, after=first[-1].cursor, scope="subtree"))) == pages[1]
+    with pytest.raises(AccessDenied, match="global search"):
+        handle.search(MemoryQuery("zz", limit=2, after=first[-1].cursor, scope="global"))
+
+
+def test_backend_gets_a_scope_for_a_query_with_no_scope() -> None:
+    """`Memory` and a handle give the backend a `Scope`, also for a `MemoryQuery` with no scope."""
+
+    backend = _RecordingBackend()
+    memory = Memory(backend=backend, principal="owner")
+    root = memory.put(type="root", value="zz")
+    memory.put(parent=root, type="note", value="zz")
+
+    memory.search(MemoryQuery("zz"))
+    memory.get_handle(root=root).search(MemoryQuery("zz"))
+
+    assert MemoryQuery("zz").scope is None
+    assert [query.scope for query in backend.queries] == [Scope.GLOBAL, Scope.SUBTREE]
 
 
 def test_search_counts_a_block_once_when_it_moves_past_the_cursor() -> None:

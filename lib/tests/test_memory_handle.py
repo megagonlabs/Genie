@@ -11,6 +11,7 @@ from genie import (
     AccessRule,
     Memory,
     MemoryConflict,
+    MemoryHandle,
     MemoryNotFound,
     MemoryPolicy,
     MemoryQuery,
@@ -340,6 +341,32 @@ def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
     results = global_scope.search(MemoryQuery(text="outside", scope=Scope.GLOBAL))
 
     assert [result.block.id for result in results] == [outside.id]
+
+
+def test_memory_query_with_no_scope_uses_the_handle_default_scope() -> None:
+    """A `MemoryQuery` with no scope uses the `default_scope` of each handle. A child handle uses its own default, never the wider default of its parent."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="needle root")
+    child = memory.put(parent=root, type="child", value="needle child")
+    outside = memory.put(type="note", value="needle outside")
+    rooted = memory.get_handle(root=root)
+    self_scoped = memory.get_handle(root=root, default_scope="self")
+    global_parent = memory.get_handle(root=root, default_scope="global", allow_global=True)
+    child_handle = global_parent.get_handle(root=child)
+    query = MemoryQuery(text="needle")
+
+    def result_ids(handle: MemoryHandle, search_query: MemoryQuery) -> list[str]:
+        return sorted(result.block.id for result in handle.search(search_query))
+
+    assert result_ids(rooted, query) == sorted([root.id, child.id])
+    assert result_ids(self_scoped, query) == [root.id]
+    assert result_ids(global_parent, query) == sorted([root.id, child.id, outside.id])
+    assert child_handle.default_scope == Scope.SUBTREE
+    assert result_ids(child_handle, query) == [child.id]
+    for handle in (rooted, child_handle):
+        with pytest.raises(AccessDenied, match="global search"):
+            handle.search(MemoryQuery(text="needle", scope=Scope.GLOBAL))
 
 
 def test_global_search_accepts_only_a_root_inside_the_handle() -> None:
