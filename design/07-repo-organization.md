@@ -19,7 +19,7 @@ Genie/
 ├── lib/                # the library itself, and its tests, benchmarks, and scripts
 ├── LICENSE             # license text, named by `license-files` in `pyproject.toml`
 ├── pyproject.toml      # `genie` package metadata, extras, and build settings
-├── pyrightconfig.json  # repo-wide Pyright settings: checked folders, import paths, and Python 3.11
+├── pyrightconfig.json  # repo-wide Pyright settings: checked folders, import paths, and Python 3.12
 ├── pytest.ini          # repo-wide pytest settings: `testpaths` and `pythonpath`
 ├── README.md           # what Genie is, how to install it, and a first example
 ├── requirements.txt    # a note only: the core has no third-party runtime dependencies

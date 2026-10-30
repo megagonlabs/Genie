@@ -21,7 +21,7 @@ decisions to your application.
 
 ## Install
 
-- **Python 3.11 or newer**, with no required runtime dependencies.
+- **Python 3.12 or 3.13**, with no required runtime dependencies.
 - **From a cloned repository**, in a fresh virtual environment:
 
 ```bash

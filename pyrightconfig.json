@@ -12,6 +12,6 @@
   "extraPaths": ["lib/src", "lib", "."],
 
   // The oldest Python version that `pyproject.toml` supports.
-  "pythonVersion": "3.11",
+  "pythonVersion": "3.12",
   "typeCheckingMode": "standard"
 }

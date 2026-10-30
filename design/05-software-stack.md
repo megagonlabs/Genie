@@ -7,7 +7,7 @@ also lists the ones that Genie leaves out on purpose.
 
 | Layer | Choice | When it is used |
 | --- | --- | --- |
-| Language | Python 3.11 or newer | Always |
+| Language | Python 3.12 or 3.13 | Always |
 | Core runtime dependencies | None. Standard library only | Always |
 | Build | `setuptools>=77`, `setuptools.build_meta` | To build or install |
 | Local persistence | `sqlite3`, which is part of Python | No extra package |
@@ -20,8 +20,8 @@ also lists the ones that Genie leaves out on purpose.
 
 ## Language and runtime
 
-- **Python 3.11 or newer,** set by `requires-python = ">=3.11"`. The classifiers list 3.11, 3.12, and 3.13.
-- **Why 3.11:** the code uses `typing.Self`, `enum.StrEnum`, and `datetime.UTC`. Python 3.11 added all 3.
+- **Python 3.12 or 3.13,** set by `requires-python = ">=3.12,<3.14"`. The classifiers list 3.12 and 3.13.
+- **Why 3.12 and 3.13:** these are the versions on which the whole DI 1.0 family installs and runs together. The code itself uses `typing.Self`, `enum.StrEnum`, and `datetime.UTC`, which Python 3.11 added.
 - **The package is typed.** The package includes `py.typed`, and the `Typing :: Typed` classifier states this. Pyright checks the annotations.
 
 ## Core package
@@ -99,7 +99,7 @@ function that needs it. If the driver is not installed, the call raises
 | --- | --- | --- |
 | Lint and import sort | `ruff check .` | `ruff.toml`: `line-length = 193`, `src = ["lib/src", "lib", "."]`, `extend-select = ["DTZ"]` |
 | Format | None, by choice | — |
-| Type check | `python -m pyright` | `pyrightconfig.json`: `include`, `extraPaths`, `pythonVersion = "3.11"`, `typeCheckingMode = "standard"` |
+| Type check | `python -m pyright` | `pyrightconfig.json`: `include`, `extraPaths`, `pythonVersion = "3.12"`, `typeCheckingMode = "standard"` |
 | Tests | `pytest` | `pytest.ini`: `testpaths` and `pythonpath` |
 | Syntax | `python -m compileall` | — |
 | Lint report | `lib/scripts/ruff_report.sh` | Writes `ruff_report.txt`. Git ignores this file |
@@ -107,7 +107,7 @@ function that needs it. If the driver is not installed, the call raises
 - **`dev` holds only tools that the repository runs:** `pytest`, `ruff`, and `pyright`. A tool goes into `dev` only if a script or a documented check uses it.
 - **`pyright` comes with its `nodejs` extra.** That extra installs Node.js as a wheel. So a Pyright run needs no system Node.js.
 - **Pyright needs the 4 adapter extras.** It checks the adapter code against the types of each driver. If a driver is not installed, Pyright reports its imports as errors.
-- **`pythonVersion = "3.11"`** is the oldest version in `requires-python`. So Pyright reports a call to a newer standard library function that has no version check.
+- **`pythonVersion = "3.12"`** is the oldest version in `requires-python`. So Pyright reports a call to a newer standard library function that has no version check.
 - **Config is at the repository root** because it covers `examples/` and `lib/`.
 - **No CI configuration is in the repository.** The checks run locally, and `test_full.sh` is the complete run.
 - **Rules for the use of the tools** are in [Coding style](08-coding-style.md).
