@@ -39,7 +39,8 @@ class EventLog:
       object checks it. So a principal that can only read the log cannot add to
       it.
     - **Unreadable members:** `get` raises `AccessDenied`. `read` and `tail` skip
-      them.
+      them. They get each member with `get`, so the access object reports each
+      unreadable member to `on_denied`.
     """
 
     __slots__ = (

@@ -61,11 +61,14 @@ class OwnershipTree:
     - **Root boundary:** it keeps each operation inside its root.
     - **Access object does the work:** reads, writes, traversal, policy checks,
       and recursive delete go to the `Memory` or `MemoryHandle` access object.
-    - **Member checks:** each method that takes a member asks the access
-      object whether the root `contains` it, then gets the member. The tree
+    - **Member checks:** each method that takes a member gets the member from
+      the access object, then asks whether the root `contains` it. The tree
       root itself needs only a `get`. The check does not walk the tree. So
       the policies of other branches do not affect it. A block outside the
       tree, or a block that the principal cannot read, raises `AccessDenied`.
+    - **Refusal reports:** the `get` comes first. So the access object
+      reports a member that the principal cannot read, or a block outside a
+      handle, to `on_denied`. The tree does not report its own root bound.
     """
 
     __slots__ = ("_access", "root_id")
@@ -233,7 +236,9 @@ class OwnershipTree:
         """Return visible descendants in depth-first pre-order.
 
         - **Closed branches:** a block below the selected block that denies
-          `traverse_down` is in the result, but its descendants are not.
+          `traverse_down` is in the result, but its descendants are not. The
+          walk calls `children` on that block, so the access object reports a
+          `traverse_down` refusal to `on_denied`.
         - **Selected block:** a denied `traverse_down` on the selected block
           raises `AccessDenied`.
 
@@ -300,13 +305,21 @@ class OwnershipTree:
         self._access.delete(member)
 
     def _require_member(self, block: BlockRef) -> MemoryBlock:
-        """Return a visible member, or raise `AccessDenied` for a block outside the facade root."""
+        """Return a visible member, or raise `AccessDenied` for a block outside the facade root.
+
+        - **Get first:** the access object refuses and reports a block that the
+          principal cannot read, or a block outside a handle. A `contains`
+          check first would hide that block as a filtered read, with no report.
+        - **Root bound second:** the tree refuses a block outside its root and
+          does not report it. The caller already holds the access object, so
+          this bound cannot widen access.
+        """
 
         block_id = _block_id(block)
         if block_id == self.root_id:
             return self.root
-        member = self._access.get(block_id) if self._access.contains(self.root_id, block_id) else None
-        if member is None:
+        member = self._access.get(block_id)
+        if member is None or not self._access.contains(self.root_id, block_id):
             raise AccessDenied(
                 f"Memory block {block_id!r} is outside ownership tree root {self.root_id!r}."
             )

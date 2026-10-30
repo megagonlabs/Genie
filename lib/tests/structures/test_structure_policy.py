@@ -262,3 +262,51 @@ def test_handle_membership_changes_require_write_on_the_container() -> None:
     ]
     assert keyed.items() == []
     assert events.read() == []
+
+
+def test_structure_listings_report_each_hidden_member() -> None:
+    """A facade listing gets each member through the access object, so each hidden member reports a refusal."""
+
+    backend = InMemoryBackend()
+    hook = _DenialHook()
+    owner = Memory(backend=backend, principal="agent:owner")
+    public = MemoryPolicy.public()
+    root = owner.put(type="workspace", value="root", policy=public)
+    hidden = owner.put(parent=root, type="fact", value="hidden")
+    closed = owner.put(
+        parent=root,
+        type="branch",
+        value="closed",
+        policy=MemoryPolicy(
+            read=AccessRule.allow(),
+            write=AccessRule.owner(),
+            search=AccessRule.allow(),
+            traverse_up=AccessRule.allow(),
+            traverse_down=AccessRule.owner(),
+        ),
+    )
+    owner.put(parent=closed, type="fact", value="behind closed", policy=public)
+    catalog_root = owner.put(parent=root, type="collection", value="catalog", policy=public)
+    events_root = owner.put(parent=root, type="log", value="events", policy=public)
+    timeline_root = owner.put(parent=root, type="timeline", value="timeline", policy=public)
+    KeyedCollection(owner, backend, collection=catalog_root).bind(MemoryAddress((), "hidden"), hidden)
+    EventLog(owner, backend, log=events_root).append(hidden)
+    TemporalCollection(owner, backend, collection=timeline_root).add(hidden, occurred_at=datetime(2026, 1, 1, tzinfo=UTC))
+    reader = Memory(backend=backend, principal="agent:reader", hooks=[hook])
+
+    assert KeyedCollection(reader, backend, collection=catalog_root).items() == []
+    assert EventLog(reader, backend, log=events_root).read() == []
+    assert TemporalCollection(reader, backend, collection=timeline_root).scan() == []
+    assert [block.id for block in OwnershipTree(reader, root=root).descendants()] == [
+        closed.id,
+        catalog_root.id,
+        events_root.id,
+        timeline_root.id,
+    ]
+
+    assert hook.denials == [
+        (HookOperation.GET, Operation.READ, hidden.id),
+        (HookOperation.GET, Operation.READ, hidden.id),
+        (HookOperation.GET, Operation.READ, hidden.id),
+        (HookOperation.CHILDREN, Operation.TRAVERSE_DOWN, closed.id),
+    ]

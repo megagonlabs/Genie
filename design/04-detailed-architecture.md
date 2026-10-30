@@ -309,9 +309,11 @@ order:
 - **Isolated callbacks report work that already occurred.** An early stop does
   not undo the work. It only takes the record away from the hooks that did not run.
   So the registry collects the failures. If an exception already leaves the
-  operation, the registry attaches the failures to it as notes. If the
-  operation succeeded, the registry raises the first failure and attaches the
-  others to it as notes.
+  operation, the registry attaches the failures to it as notes. It also logs
+  them, because code can catch that exception and drop it. A structure listing
+  drops the refusal of each hidden member, because a raised error would show
+  that the member exists. If the operation succeeded, the registry raises the
+  first failure and attaches the others to it as notes.
 - **The registry logs and ignores the failure of a `fail_open` hook,** but only
   for isolated callbacks.
 - **The registry skips a reentrant call and does not refuse it.** `_invoke`
@@ -636,8 +638,11 @@ same tasks:
   fails and the route does not hold the block, it releases the claim. A claim
   that stays without a block only refuses later puts of that id.
 - **Authorization uses the stored state,** never an object from the caller.
-- **Each refusal goes to `on_denied`.** Each started operation closes with
-  exactly one terminal event.
+- **Each policy refusal and each handle refusal goes to `on_denied`.** A
+  filtered read of `Memory` or a handle does not report the items that it
+  leaves out. A structure facade listing gets each member through the access
+  object, so it reports each hidden member. Each started operation closes
+  with exactly one terminal event.
 - **`Memory` validates each hook return value** before it reaches the
   backend. `before_put` can change only the value, metadata, content type, and
   policy. `before_update` can change only the value, metadata, and content

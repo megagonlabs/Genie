@@ -50,7 +50,8 @@ class TemporalCollection:
     - **Unreadable blocks:** `get` raises `AccessDenied` for a block that the
       principal cannot read, also when the block is not a member. So `get`
       does not show the membership of a hidden block. The scan methods skip
-      unreadable members.
+      unreadable members. They get each member with `get`, so the access
+      object reports each unreadable member to `on_denied`.
     """
 
     __slots__ = (

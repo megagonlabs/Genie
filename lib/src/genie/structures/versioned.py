@@ -49,8 +49,9 @@ class VersionedRecords:
       of the revision log.
     - **Reads:** a read needs only `read` on those blocks and on each revision.
       If the principal cannot read the collection or the identity, a read
-      raises `AccessDenied`. A listing skips revisions that the principal
-      cannot read.
+      raises `AccessDenied`. A listing and `current` skip revisions that the
+      principal cannot read. They get each revision with `get`, so the access
+      object reports each unreadable revision to `on_denied`.
     """
 
     __slots__ = ("_access", "_hooks", "_identities", "_store", "collection_id")

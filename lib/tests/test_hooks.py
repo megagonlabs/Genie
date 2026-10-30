@@ -2528,6 +2528,41 @@ def test_fail_open_contains_terminal_and_denial_failures(
     assert sum("on_denied" in record.getMessage() for record in caplog.records) == 1
 
 
+def test_a_listing_that_drops_a_refusal_keeps_the_hook_failure_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed refusal report is a note and a log record, so a listing that drops the refusal cannot lose it."""
+
+    class AlertHook(MemoryHook):
+        """Security alert hook that sees only refusals, with a sink that is down."""
+
+        def on_denied(self, context: HookContext, operation, subject_id, reason) -> None:
+            """Fail during the report of a refusal."""
+
+            raise RuntimeError("alert sink down")
+
+    backend = InMemoryBackend()
+    owner = Memory(backend=backend, principal="owner")
+    catalog = owner.put(type="catalog", value="catalog", policy=MemoryPolicy.public())
+    hidden = owner.put(parent=catalog, type="note", value="secret")
+    visible = owner.put(parent=catalog, type="note", value="open", policy=MemoryPolicy.public())
+    keyed = KeyedCollection(owner, backend, collection=catalog)
+    keyed.bind(MemoryAddress((), "hidden"), hidden)
+    keyed.bind(MemoryAddress((), "visible"), visible)
+    reader = Memory(backend=backend, principal="reader", hooks=[AlertHook()])
+
+    with caplog.at_level(logging.ERROR, logger="genie.hooks.registry"):
+        items = KeyedCollection(reader, backend, collection=catalog).items()
+        with pytest.raises(AccessDenied) as refusal:
+            reader.get(hidden)
+
+    assert [item.block.id for item in items] == [visible.id]
+    assert any("alert sink down" in note for note in refusal.value.__notes__)
+    logged = [record for record in caplog.records if "on_denied" in record.getMessage()]
+    assert len(logged) == 2
+    assert all(record.exc_info is not None and "alert sink down" in str(record.exc_info[1]) for record in logged)
+
+
 def test_operation_end_respects_suppression() -> None:
     """Suppressed hooks skip the operations inside a window, not the window."""
 
@@ -3033,6 +3068,38 @@ def test_on_denied_is_not_dispatched_for_allowed_or_filtered_operations() -> Non
 
     assert len(results) == 1
     assert hook.denials == []
+
+
+def test_ownership_tree_reports_access_refusals_but_not_its_root_bound() -> None:
+    """A tree member check lets the access object report its refusals, and does not report the tree bound."""
+
+    hook = RecordingDenialHook()
+    owner = Memory(principal="owner")
+    root = owner.put(type="root", value="root", policy=MemoryPolicy.public())
+    hidden = owner.put(parent=root, type="note", value="secret")
+    reader = Memory(
+        backend=owner.backend,
+        principal="reader",
+        policy_engine=owner.policy_engine,
+        hooks=[hook],
+        codecs=owner.codecs,
+    )
+    outside = reader.put(type="note", value="outside")
+    tree = OwnershipTree(reader, root=root)
+    handle_tree = OwnershipTree(reader.get_handle(root=root), root=root)
+
+    with pytest.raises(AccessDenied):
+        tree.delete_subtree(hidden)
+    with pytest.raises(AccessDenied, match="outside ownership tree root"):
+        tree.children(outside)
+    with pytest.raises(AccessDenied):
+        handle_tree.children(outside)
+
+    assert hook.denials == [
+        (HookOperation.GET, Operation.READ, hidden.id),
+        (HookOperation.GET, HandleCapability.SUBTREE, outside.id),
+    ]
+    assert owner.get(hidden) is not None
 
 
 def test_on_denied_respects_suppression() -> None:

@@ -26,7 +26,7 @@ from genie import OwnershipTree
 
 - **Access object:** a facade takes a `Memory` or a `MemoryHandle`. A handle keeps its usual subtree and policy limits.
 - **A membership change needs `write` on the container.** `bind`, `rebind`, `unbind`, `append`, `add`, `replace`, and `remove` call `require_access` on the access object before they touch the store. So a principal that can only read a container cannot change what it holds. A refusal gets to `on_denied` under the `access.require` operation.
-- **A read needs `read` on the container and on each member.** An exact lookup raises `AccessDenied` for a member that the principal cannot read. A listing skips that member. `TemporalCollection.get` takes a block id, so it checks that block before the membership lookup. It also raises `AccessDenied` for an unreadable block that is not a member, so it does not show the membership of a hidden block.
+- **A read needs `read` on the container and on each member.** An exact lookup raises `AccessDenied` for a member that the principal cannot read. A listing skips that member, but it gets each member with `get` on the access object. So each hidden member reports a refusal to `on_denied`. `TemporalCollection.get` takes a block id, so it checks that block before the membership lookup. It also raises `AccessDenied` for an unreadable block that is not a member, so it does not show the membership of a hidden block.
 - **`VersionedRecords` splits the rule.** `register` needs `write` on the collection block. `append` needs `write` on the identity block, because the identity is the anchor of the revision log.
 - **Hook reuse:** key, log, and temporal changes through a facade use the hook registry, the principal, and the hook context attributes of the access object, if it has them. A `hooks=` argument replaces the registry. With no registry, the facade sends no structure events.
 
@@ -72,8 +72,8 @@ note = tree.create_child(parent=task, type="note", value="Keep it short")
 ```
 
 - **It never goes above its `root`.**
-- **A member check reads only the root and the member.** It calls `contains` on the access object. So the policies of other branches have no effect on it.
-- **`descendants` skips a closed branch.** A block that denies `traverse_down` is in the result, but its descendants are not.
+- **A member check reads only the root and the member.** It calls `get` and then `contains` on the access object. So the policies of other branches have no effect on it, and the access object reports a member that the principal cannot read.
+- **`descendants` skips a closed branch.** A block that denies `traverse_down` is in the result, but its descendants are not. The walk calls `children` on that block, so the closed branch reports a `traverse_down` refusal to `on_denied`.
 - **Ownership controls lifecycle.** So a delete of a parent deletes its descendants.
 
 **`PropertyGraph`** treats blocks as nodes and `MemoryLink` values as directed,

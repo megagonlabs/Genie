@@ -106,7 +106,7 @@ of all 7 facades.
 ### Extension points
 
 - **Policies** decide who can act on a block.
-- **Hooks** observe the block lifecycle, search, link mutations, and structural changes. Each operation that starts reports exactly one outcome event. Each refusal reports its subject and the check that caused it.
+- **Hooks** observe the block lifecycle, search, link mutations, and structural changes. Each operation that starts reports exactly one outcome event. Each policy refusal and each handle refusal reports its subject and the check that caused it.
 - **Queries** give a portable description of a search. So the same `MemoryQuery` works on different backends.
 - **Codecs** translate values at the storage boundary.
 
@@ -143,7 +143,7 @@ of all 7 facades.
 - **Composition, not duplication.** `LineageDAG` reuses `PropertyGraph`. `VersionedRecords` reuses keyed identity and an event log. A new structure reuses the facades over the same blocks and does not add a second storage model.
 - **Stale work is refused, not committed.** Block updates use optimistic versions. A recursive delete verifies the exact subtree snapshot that it observed. A block that is deleted and created again with the same id is a different block, also at the same version. A concurrent change raises `MemoryConflict`.
 - **Atomic behavior belongs in the backend contract.** Some operations cannot be a safe portable read followed by a write. Such an operation becomes an atomic backend capability with contract and concurrency tests. It is not a best-effort sequence in a facade.
-- **Denials stay observable.** Hooks report each policy refusal and each handle refusal with its subject and check. So a filtered result is auditable and not silent.
+- **Denials stay observable.** Hooks report each policy refusal and each handle refusal with its subject and check. A filtered read is not a refusal. The list, traversal, and search calls of `Memory` and handles leave out the items that the caller cannot see, and `contains` returns `False` for them. Hooks get no report about these items. So `on_denied` stays a signal and does not become a stream. A structure facade listing is different. It asks the access object for each member, so each hidden member reports a refusal.
 - **Explicit over hidden.** Genie has no hidden global state. Tests and examples have no non-deterministic behavior. Public APIs are typed. Exceptions are predictable where they affect users.
 
 ## Related reading

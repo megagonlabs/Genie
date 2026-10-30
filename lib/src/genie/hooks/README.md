@@ -101,8 +101,8 @@ class MetricsHook(MemoryHook):
 
 ## Refusals
 
-`on_denied` reports each refusal that Genie raises, with the block that it
-applies to and the check that caused it. It is only an observation. The refusal
+`on_denied` reports each policy refusal and each handle refusal, with the block
+that it applies to and the check that caused it. It is only an observation. The refusal
 stays, and a hook cannot undo it.
 
 ```python
@@ -128,8 +128,10 @@ class SecurityHook(MemoryHook):
 
 - **The security boundary has complete coverage.** Genie reports policy refusals for block operations, search, links, mounts, traversal, listing, `contains`, handle creation, and `require_access` checks. Structure facades run these checks before they change membership. Genie reports handle refusals for each boundary and capability check, also for child handles that try to widen access. Each refusal comes with a `denied` terminal event that has the same operation id.
 - **A refusal can be too deep to report.** Mount resolution, handle creation, and `require_access` open an operation to report a refusal. If that operation starts inside a hook above `max_depth`, hooks do not get the refusal, and the `AccessDenied` carries a note about it.
-- **Ordinary visibility filters are not refusals.** Search and traversal leave out results that a principal cannot read, and Genie reports nothing about them. So `on_denied` stays a signal and does not become a stream.
-- **Genie does not report refusals inside an `OwnershipTree` facade root.** That bound is a view over an access object that the caller already holds, so an exit from it cannot widen access. The underlying handle and policy still refuse.
+- **Ordinary visibility filters are not refusals.** The search and traversal calls of `Memory` and handles leave out results that a principal cannot see, and Genie reports nothing about them. So `on_denied` stays a signal and does not become a stream.
+- **Structure facade listings report each hidden member.** `KeyedCollection.items`, `EventLog.read` and `tail`, the `TemporalCollection` scans, and `VersionedRecords.identities`, `current`, and `history` get each member with `get` on the access object. So the trail shows one refused `get` for each hidden member, also when the caller asked only for the listing. `OwnershipTree.descendants` calls `children` on each block, so each closed branch reports a `traverse_down` refusal.
+- **A listing does not raise a failed refusal report.** If a hook fails while it reports a hidden member, the listing still returns the visible members. An error there would show the caller that a hidden member exists. The registry logs the failure instead, as the next section describes.
+- **Genie does not report the root bound of an `OwnershipTree`.** That bound is a view over an access object that the caller already holds, so an exit from it cannot widen access. The tree gets each member through the access object before it checks the bound. So the access object reports a member that the principal cannot read, or a block outside a handle.
 
 ## Writing a hook
 
@@ -352,7 +354,7 @@ outcome:
 - **The commit point is the moment when the backend writes the change to storage.** A failure before it is a veto, so it stops everything. An aborted `put` stores nothing. A failed `after_search` returns no results, and not results that a redaction hook never reviewed.
 - **The observing callbacks report work that is already decided.** A stop there cannot undo the work. It only removes the records of the other hooks and blocks. So dispatch continues, and the registry reports the collected failures when dispatch is complete.
 - **The registry collects only `Exception` failures.** A `BaseException`, such as `KeyboardInterrupt`, stops dispatch at once.
-- **How the registry reports collected failures:** if the caller already gets an exception, the registry attaches the failures to it as notes. If not, it raises the first failure, with the others as notes on it, so that no failure hides another. A failed `on_denied` still lets the `AccessDenied` through, and a failed `on_operation_end` still lets the error of the operation through.
+- **How the registry reports collected failures:** if the caller already gets an exception, the registry attaches the failures to it as notes. It also logs each of these failures with its traceback to the `genie.hooks.registry` logger, because code can catch the exception and drop it. A structure listing does this for each hidden member. If not, it raises the first failure, with the others as notes on it, so that no failure hides another. A failed `on_denied` still lets the `AccessDenied` through, and a failed `on_operation_end` still lets the error of the operation through.
 - **`on_suppressed` is the one exception, and the same reason explains it.** It is isolated like the other observing callbacks, so each hook gets it before the registry reports anything. But the work that it reports has not happened yet. A failure keeps dispatch on and does not run the suppressed body. This callback exists to prevent a suppression that no hook can record.
 
 ### `fail_open`

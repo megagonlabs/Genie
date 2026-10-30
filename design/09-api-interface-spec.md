@@ -77,6 +77,10 @@ keys.get(MemoryAddress(("tickets",), "T-4471")).value     # {"number": "T-4471",
   `ancestors`, `list_links`, `search`, and the list calls of the structures
   remove the items that the principal cannot read. `get`, `set`, and exact
   lookups raise `AccessDenied` instead.
+- **Only `Memory` and handle list calls filter with no report.** A structure
+  list call gets each member with `get` on the access object. So each hidden
+  member reports a refusal to `on_denied`, also when the caller asked only for
+  the list.
 - **Only `get` gives `None` for a block that does not exist.** `Memory.get`
   and the structure `get` methods return `None` for an unknown key. A call that
   needs a block raises `MemoryNotFound` if the block does not exist.
@@ -437,13 +441,17 @@ page_results(results, query)
 | `delete_subtree(block)` | `None` |
 
 - **A block outside the tree raises `AccessDenied`.**
-- **A member check calls `contains` and `get` on the access object.** It
+- **A member check calls `get` and then `contains` on the access object.** It
   needs `traverse_down` on the tree root and `read` on the member. The tree
   root itself needs only `read`. The policies of other blocks have no effect
-  on the check, and it does not walk the tree.
+  on the check, and it does not walk the tree. The `get` comes first, so the
+  access object reports a member that the principal cannot read to
+  `on_denied`. The tree does not report its own root bound.
 - **`descendants` skips a closed branch.** A block that denies
-  `traverse_down` is in the result, but its descendants are not. A denied
-  `traverse_down` on the selected block raises `AccessDenied`.
+  `traverse_down` is in the result, but its descendants are not. The walk
+  calls `children` on each block, so each closed branch reports a
+  `traverse_down` refusal to `on_denied`. A denied `traverse_down` on the
+  selected block raises `AccessDenied`.
 
 ### `PropertyGraph` and `LineageDAG`
 
