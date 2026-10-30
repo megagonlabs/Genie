@@ -174,9 +174,15 @@ class Neo4jBackend:
         self._driver: Any | None = None
         self._bookmark_manager = graph_database.bookmark_manager()
 
+        # The server does not send `UNRECOGNIZED` notifications.
+        # - Genie queries name labels, relationship types, and properties
+        #   that a new database does not have yet. This is expected.
+        # - The driver logs each such notification as a warning, and an
+        #   application without a logging setup prints it to stderr.
         driver_options: dict[str, Any] = {
             "connection_timeout": self.connection_timeout,
             "max_transaction_retry_time": self.max_transaction_retry_time,
+            "notifications_disabled_classifications": ["UNRECOGNIZED"],
         }
         if encrypted is not None:
             driver_options["encrypted"] = encrypted

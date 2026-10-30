@@ -379,7 +379,7 @@ def test_neo4j_backend_translates_driver_close_failures() -> None:
 def test_neo4j_backend_forwards_production_driver_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Connection, retry, encryption, and auth settings reach the driver."""
+    """Connection, retry, notification, encryption, and auth settings reach the driver."""
 
     calls: dict[str, Any] = {}
 
@@ -422,6 +422,7 @@ def test_neo4j_backend_forwards_production_driver_configuration(
         "options": {
             "connection_timeout": 4.5,
             "max_transaction_retry_time": 12.0,
+            "notifications_disabled_classifications": ["UNRECOGNIZED"],
             "encrypted": True,
         },
         "verified": True,
@@ -1123,3 +1124,27 @@ def test_live_neo4j_backend_rejects_wrong_credentials() -> None:
             connection_timeout=1.0,
             max_transaction_retry_time=1.0,
         )
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_does_not_log_unrecognized_name_notifications(caplog: pytest.LogCaptureFixture) -> None:
+    """A query that names a label, relationship type, or property that does not exist logs no driver warning.
+
+    - **Why:** Genie queries name tokens that a new database does not have yet.
+    - **Unknown tokens:** no Genie code writes these names. Neo4j keeps a token after its data is deleted, so a name that other tests write cannot show this.
+    """
+
+    backend = _live_backend()
+    try:
+        with caplog.at_level("WARNING", logger="neo4j.notifications"):
+            record = backend._raw_read(
+                lambda tx: neo4j_module._single(
+                    tx,
+                    "MATCH (n:GenieUnknownLabelProbe)-[:GENIE_UNKNOWN_TYPE_PROBE]->() RETURN n.genie_unknown_property_probe AS value",
+                )
+            )
+    finally:
+        backend.close()
+
+    assert record is None
+    assert [entry for entry in caplog.records if entry.name == "neo4j.notifications"] == []
