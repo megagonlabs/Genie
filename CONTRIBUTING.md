@@ -5,7 +5,7 @@ public interfaces is welcome.
 
 ## Set up
 
-- **Python 3.11 or newer.** The core package has no third-party runtime
+- **Python 3.12 or 3.13.** The core package has no third-party runtime
   dependencies, so a plain virtual environment is enough.
 
 ```bash
@@ -39,7 +39,7 @@ python -m compileall -q lib/src/genie lib/tests examples
   timezone-aware datetimes. Ruff also sorts imports, so there is no separate
   formatter to run.
 - **Keep `python -m pyright` clean.** `pyrightconfig.json` sets the `standard`
-  mode and Python 3.11. Pyright needs the 4 adapter extras, because it checks
+  mode and Python 3.12. Pyright needs the 4 adapter extras, because it checks
   the adapter code against the types of each driver.
 
 ## Tests that need a server

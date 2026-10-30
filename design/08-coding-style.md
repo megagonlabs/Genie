@@ -42,7 +42,7 @@ python -m compileall -q lib/src/genie lib/tests examples
   the author keeps each line inside the budget of 193 by hand. No line in the
   package reaches it.
 - **Pyright checks the types in `standard` mode.** It checks `lib/` and
-  `examples/` against Python 3.11. It needs the 4 adapter extras, because it
+  `examples/` against Python 3.12. It needs the 4 adapter extras, because it
   checks the adapter code against the types of each driver.
 - **No tool checks that annotations and docstrings exist.** The `standard` mode
   of Pyright accepts a function without annotations, and ruff runs no `ANN`
@@ -62,8 +62,8 @@ python -m compileall -q lib/src/genie lib/tests examples
 
 ## Language level
 
-- **The code needs Python 3.11 or newer.** `requires-python = ">=3.11"` sets
-  this.
+- **The code supports Python 3.12 and 3.13.** `requires-python =
+  ">=3.12,<3.14"` sets this.
 - **Built-in generics and `|` unions:** `dict[str, Any]`, `str | None`,
   `Mapping[str, int]`.
 - **The code uses these 3.11 features:** `Self` for methods that return their

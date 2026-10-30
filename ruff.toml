@@ -14,3 +14,7 @@ src = ["lib/src", "lib", "."]
 # Genie requires timezone-aware datetimes. The default rule set of ruff changes
 # between versions, so this turns on all `DTZ` rules explicitly.
 extend-select = ["DTZ"]
+
+# The PEP 695 rewrites change runtime behavior (a `type` alias is a
+# `TypeAliasType`, not the aliased type), so they stay off with the 3.12 floor.
+extend-ignore = ["UP040", "UP046", "UP047"]
