@@ -15,6 +15,9 @@ src = ["lib/src", "lib", "."]
 # between versions, so this turns on all `DTZ` rules explicitly.
 extend-select = ["DTZ"]
 
-# The PEP 695 rewrites change runtime behavior (a `type` alias is a
-# `TypeAliasType`, not the aliased type), so they stay off with the 3.12 floor.
-extend-ignore = ["UP040", "UP046", "UP047"]
+# Python 3.12 turns on the PEP 695 rules. They stay off:
+# - `UP040`: a `type` alias is a `TypeAliasType`, not the aliased type. Public
+#   aliases such as `BlockRef` then fail in `isinstance()` and `get_args()`.
+# - `UP046`, `UP047`: PEP 695 type parameters infer variance, and the code
+#   keeps one `TypeVar` style.
+ignore = ["UP040", "UP046", "UP047"]
