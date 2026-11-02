@@ -97,16 +97,16 @@ class TemporalCollection:
         """
 
         missing_message = f"Temporal collection block {_block_id(collection)!r} does not exist."
-        store = resolve_store(store, collection, missing_message=missing_message)
+        stored_collection = access.get(collection)
+        if stored_collection is None:
+            raise MemoryNotFound(missing_message)
+        store = resolve_store(store, stored_collection, missing_message=missing_message)
         if not isinstance(store, TemporalStore):
             raise UnsupportedOperation("The configured store does not support temporal collections.")
         if index is not None:
-            index = resolve_store(index, collection, missing_message=missing_message)
+            index = resolve_store(index, stored_collection, missing_message=missing_message)
             if not isinstance(index, TemporalIndex):
                 raise UnsupportedOperation("The configured index does not support temporal queries.")
-        stored_collection = access.get(collection)
-        if stored_collection is None:
-            raise MemoryNotFound(f"Temporal collection block {_block_id(collection)!r} does not exist.")
         self._access = access
         self._store = store
         self._hooks = resolve_hooks(access, hooks)

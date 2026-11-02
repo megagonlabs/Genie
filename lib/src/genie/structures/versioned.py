@@ -83,11 +83,11 @@ class VersionedRecords:
                 capabilities.
         """
 
-        store = resolve_store(
-            store,
-            collection,
-            missing_message=f"Versioned collection block {_block_id(collection)!r} does not exist.",
-        )
+        missing_message = f"Versioned collection block {_block_id(collection)!r} does not exist."
+        stored_collection = access.get(collection)
+        if stored_collection is None:
+            raise MemoryNotFound(missing_message)
+        store = resolve_store(store, stored_collection, missing_message=missing_message)
         if not isinstance(store, VersionedStore):
             raise UnsupportedOperation(
                 "The configured store does not support keyed versioned records."
@@ -98,7 +98,7 @@ class VersionedRecords:
         self._identities = KeyedCollection(
             access,
             store,
-            collection=collection,
+            collection=stored_collection,
             hooks=self._hooks,
         )
         self.collection_id = self._identities.collection_id

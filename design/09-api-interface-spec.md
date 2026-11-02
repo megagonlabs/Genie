@@ -409,10 +409,17 @@ page_results(results, query)
 - **Facades that keep records also take a store.** The store is a backend with
   the named capability, or a `BlockRouter`. A `BlockRouter` resolves to the
   route that owns the container block.
-- **Construction checks the capability.** The constructor raises
-  `UnsupportedOperation` if the store does not have the capability. It also
-  resolves the container block through the access object. So a container that
-  the caller cannot see raises `MemoryNotFound`.
+- **Construction gets the container first, through the access object.** Then
+  it resolves the store and checks the capability. So the error does not
+  depend on the store type.
+- **A missing container raises `MemoryNotFound`** through a `Memory`. A rooted
+  handle raises `AccessDenied`, because it checks its root before it gets the
+  block.
+- **A container that the caller cannot read, or that is outside the handle
+  root, raises `AccessDenied`.** So only a `Memory`, in trusted code, can tell
+  a missing container from a hidden one.
+- **A store without the capability raises `UnsupportedOperation`** at
+  construction, not at the first use.
 - **`hooks=None`** uses the registry of the access object.
 - **A paged `limit` counts visible items,** as in search. The default is
   `100`. `EventLog.tail` uses `20`.

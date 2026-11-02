@@ -159,13 +159,14 @@ records.append(address, second_revision)
 | `TemporalIndex` | Optional temporal optimization |
 
 - **A capability that the store does not have raises `UnsupportedOperation`** when the facade is built. The exception is `LineageDAG`: it checks nothing when it is built. `Memory.protect_relation` and the first `add` raise `UnsupportedOperation`.
+- **A facade gets its container through the access object first,** before it uses the store. A missing container raises `MemoryNotFound` through a `Memory`. A container that the caller cannot read, or that is outside the handle root, raises `AccessDenied`. A rooted handle also raises `AccessDenied` for a missing container. So the error does not depend on the store type.
 - **The store is a separate argument from the access object,** because an access object does not expose a backend. A `MemoryHandle` hides its backend on purpose: with the backend, a caller can go around the scope of the handle.
 
 ### Composite backends
 
 - **A composite such as `RoutedBackend` owns no structural state.** So it cannot hold records itself.
 - **It implements `BlockRouter`.** As the store, it resolves to the route that owns the container block. A route is one named backend inside the composite.
-- **An unknown container raises `MemoryNotFound`,** not `UnsupportedOperation`.
+- **An unknown container raises `MemoryNotFound` through a `Memory`,** not `UnsupportedOperation`. A rooted handle raises `AccessDenied`, as it does with a plain store.
 - **Structure membership stays inside the resolved route.** See the [composite guide](../backend/composite/README.md).
 - **`LineageDAG` takes no store.** It writes through `Memory`. `RoutedBackend` implements `AcyclicLinkStore`: it sends each acyclic link to the store that holds its links.
 

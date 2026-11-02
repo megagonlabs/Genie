@@ -435,19 +435,31 @@ order:
 
 ### Construction
 
-1. **Resolve the store.** `resolve_store` returns the store without change if
+1. **Resolve the container through the access object.** A missing container
+   raises `MemoryNotFound` through a `Memory`. A container that the caller
+   cannot read, or that is outside the handle root, raises `AccessDenied`. A
+   rooted handle also raises `AccessDenied` for a missing container, because
+   it checks its root before it gets the block.
+2. **Resolve the store.** `resolve_store` returns the store without change if
    it is not a `BlockRouter`. For a `BlockRouter`, the facade binds to the
    backend that owns the container block. A container and its subtree use one
    route.
-2. **Check the capability.** The facade uses `isinstance` with the
+3. **Check the capability.** The facade uses `isinstance` with the
    `runtime_checkable` protocol. If the store does not have the capability,
    the facade raises `UnsupportedOperation`. This check occurs at construction, not at
    the first use.
-3. **Resolve the container through the access object.** So if the caller
-   cannot see the container, the facade raises `MemoryNotFound`.
 4. **Resolve the hooks:** the explicit registry, or `access.hooks`, or the
    registry of the `_memory` of a handle. A facade without a registry uses
    `nullcontext` and dispatches no events.
+
+- **The container comes before the store.** The route lookup of a
+  `BlockRouter` reads the backend directly, with no handle or policy check. If
+  it ran first, a rooted handle would raise `MemoryNotFound` for a missing id
+  outside its root, and `AccessDenied` for an id that exists. The error would
+  then show whether the block exists.
+- **`VersionedRecords` gets the container 2 times.** It gets it once for its
+  own checks, and its inner `KeyedCollection` gets it again. So the hooks see
+  2 `get` events.
 
 ### Writing
 
