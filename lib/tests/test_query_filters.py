@@ -309,6 +309,60 @@ def test_memory_search_preserves_query_validation_at_the_public_boundary() -> No
         memory.search(filters=cast(Any, []))
 
 
+class _QueryRecordingHook(MemoryHook):
+    """Hook that records the query that each search gets after the merge of its arguments."""
+
+    def __init__(self) -> None:
+        self.queries: list[MemoryQuery] = []
+
+    def before_search(self, context: HookContext, query: MemoryQuery) -> MemoryQuery:
+        """Record the query, and return it with no change."""
+
+        self.queries.append(query)
+        return query
+
+
+def test_search_keywords_replace_the_fields_of_a_memory_query() -> None:
+    """Each keyword that is not `None` replaces the same field of a `MemoryQuery`, on `Memory` and on a handle. A `None` keyword keeps the field."""
+
+    recorder = _QueryRecordingHook()
+    memory = Memory(hooks=[recorder])
+    root = memory.put(type="root", value="alpha")
+    child = memory.put(parent=root, type="note", value="alpha")
+    cursor = memory.search("alpha", limit=1)[0].cursor
+    base = MemoryQuery("beta", root_id=child.id, scope="self", types=["root"], filters={"owner": "team"}, limit=5)
+    keywords: dict[str, Any] = {
+        "text": "alpha",
+        "root": root,
+        "scope": "subtree",
+        "types": ["note"],
+        "filters": {"owner": "other"},
+        "limit": 1,
+        "after": cursor,
+    }
+    recorder.queries.clear()
+
+    memory.search(base, **keywords)
+    memory.get_handle(root=root).search(base, **keywords)
+    memory.search(base, text=None, root=None, scope=None, types=None, filters=None, limit=None, after=None)
+
+    merged = MemoryQuery("alpha", root_id=root.id, scope="subtree", types=["note"], filters={"owner": "other"}, limit=1, after=cursor)
+    assert recorder.queries == [merged, merged, base]
+
+
+def test_search_refuses_text_given_twice_and_a_query_of_the_wrong_type() -> None:
+    """`Memory.search` and `MemoryHandle.search` raise `TypeError` for a string query with `text`, and for a query that is not a `MemoryQuery`, a string, or `None`."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="alpha")
+
+    for search in (memory.search, memory.get_handle(root=root).search):
+        with pytest.raises(TypeError, match="query string or as text, not both"):
+            search("alpha", text="beta")
+        with pytest.raises(TypeError, match="must be a MemoryQuery, a string, or None"):
+            search(cast(Any, 5))
+
+
 def test_query_copies_nested_filter_operands_and_type_lists() -> None:
     """A change to the lists of the caller cannot change a query after construction."""
 

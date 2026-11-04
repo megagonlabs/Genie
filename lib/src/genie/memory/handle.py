@@ -752,19 +752,22 @@ class MemoryHandle:
         text: str | None = None,
         scope: Scope | str | None = None,
         root: str | MemoryBlock | None = None,
-        types: list[str] | tuple[str, ...] = (),
+        types: list[str] | tuple[str, ...] | None = None,
         filters: dict[str, Any] | None = None,
-        limit: int = 20,
+        limit: int | None = None,
         after: SearchCursor | None = None,
     ) -> list[SearchResult]:
         """Search through this handle.
 
-        - **Scope:** `scope` wins. Without it, the scope of a `MemoryQuery`,
-          then `default_scope`. So a `MemoryQuery` with no scope uses
+        - **Keywords win:** as for `Memory.search`, a keyword that is not
+          `None` replaces the same field of a `MemoryQuery`. So
+          `search(query, after=cursor)` returns the next page of `query`.
+        - **Scope:** `scope`, then the scope of a `MemoryQuery`, then
+          `default_scope`. So a `MemoryQuery` with no scope uses
           `default_scope`.
-        - **Root:** `root` wins. Without it, the root of a `MemoryQuery`, then
-          the handle root. A rooted handle accepts only a root inside the
-          handle, for each scope. This includes `global`.
+        - **Root:** `root`, then the root of a `MemoryQuery`, then the handle
+          root. A rooted handle accepts only a root inside the handle, for
+          each scope. This includes `global`.
         - **Result filter:** for a rooted handle, the results of a `self`,
           `subtree`, or `links` search stay inside the handle root. So a
           `links` search drops linked blocks outside the root. The handle root
@@ -776,12 +779,13 @@ class MemoryHandle:
 
         Args:
             query: Optional `MemoryQuery` or text query string.
-            text: Text query when `query` is not a string.
+            text: Text query. Do not give it with a string `query`.
             scope: Optional search scope. It overrides the default scope.
             root: Optional root inside this handle.
             types: Optional block types to include.
             filters: Optional metadata or block-field filters.
-            limit: Maximum number of visible results.
+            limit: Optional maximum number of visible results. The default is
+                `20`.
             after: Optional `SearchCursor`. The search returns only the
                 results after it.
 
@@ -796,22 +800,30 @@ class MemoryHandle:
                 root id as outside the handle.
             MemoryNotFound: If an unbounded handle gets a query root that does
                 not exist.
-            TypeError: If `root` is not a block or string id, the text, types,
-                filters, limit, or after arguments have the wrong type, or no
-                registered codec can decode a visible result.
+            TypeError: If `query` is not a `MemoryQuery`, a string, or `None`,
+                a string `query` comes with `text`, `root` is not a block or
+                string id, the text, types, filters, limit, or after arguments
+                have the wrong type, or no registered codec can decode a
+                visible result.
             ValueError: If the scope is not valid, the root id or a `types`
                 entry is empty, the limit is negative, a filter uses an
                 unknown operator, or a `before_search` hook returns a
                 non-global query with no root.
         """
 
-        if isinstance(query, MemoryQuery):
-            selected_scope = Scope(scope or query.scope or self.default_scope)
-            root_id = _block_id(root) if root is not None else query.root_id or self.root_id
-            query = replace(query, root_id=root_id, scope=selected_scope)
-        else:
-            selected_scope = Scope(scope or self.default_scope)
-            root_id = _block_id(root) if root is not None else self.root_id
+        query = self._memory._coerce_query(
+            query,
+            text=text,
+            root=root,
+            scope=scope,
+            types=types,
+            filters=filters,
+            limit=limit,
+            after=after,
+        )
+        selected_scope = query.scope or self.default_scope
+        root_id = query.root_id or self.root_id
+        query = replace(query, root_id=root_id, scope=selected_scope)
         refusal = self._search_refusal(selected_scope, root_id)
         if refusal is not None:
             self._deny(HookOperation.SEARCH, *refusal)
@@ -830,13 +842,6 @@ class MemoryHandle:
         # - The result filter follows the scope that actually ran.
         return self._as_principal()._search(
             query,
-            text=text,
-            root=root_id,
-            scope=selected_scope,
-            types=types,
-            filters=filters,
-            limit=limit,
-            after=after,
             boundary=self._require_hooked_search_inside,
             keep=self._search_result_inside,
         )

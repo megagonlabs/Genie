@@ -345,8 +345,9 @@ order:
 
 ## Search pipeline
 
-1. **Convert** a string, keyword arguments, or a `MemoryQuery` into one
-   normalized `MemoryQuery`.
+1. **Merge** a string or a `MemoryQuery` with the keyword arguments into one
+   normalized `MemoryQuery`. A keyword that is not `None` replaces the same
+   field of the query.
 2. **Authorize the root:** `search`, and also `traverse_down` for `subtree`,
    `traverse_up` for `ancestors`, and `read` for `links`. A scope other than
    `global` with no root raises `ValueError`.

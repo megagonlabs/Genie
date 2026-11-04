@@ -343,6 +343,26 @@ def test_scope_search_cannot_escape_through_memory_query_objects() -> None:
     assert [result.block.id for result in results] == [outside.id]
 
 
+def test_scope_search_cannot_escape_through_keywords_next_to_a_memory_query() -> None:
+    """A `root` or `scope` keyword next to a `MemoryQuery` replaces the query field, and the handle checks the merged query."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root needle")
+    child = memory.put(parent=root, type="child", value="child needle")
+    outside = memory.put(type="note", value="outside needle")
+    handle = memory.get_handle(root=root)
+
+    with pytest.raises(AccessDenied, match="outside memory handle root"):
+        handle.search(MemoryQuery(text="needle"), root=outside)
+    with pytest.raises(AccessDenied, match="global search"):
+        handle.search(MemoryQuery(text="needle"), scope="global")
+    with pytest.raises(AccessDenied, match="ancestor search"):
+        handle.search(MemoryQuery(text="needle", root_id=child.id), scope="ancestors")
+    results = handle.search(MemoryQuery(text="needle", root_id=outside.id, scope=Scope.GLOBAL), root=child, scope="self")
+
+    assert [result.block.id for result in results] == [child.id]
+
+
 def test_memory_query_with_no_scope_uses_the_handle_default_scope() -> None:
     """A `MemoryQuery` with no scope uses the `default_scope` of each handle. A child handle uses its own default, never the wider default of its parent."""
 

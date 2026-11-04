@@ -16,7 +16,7 @@ results = memory.search(
 )
 ```
 
-- **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. The query has optional `text`, an optional `root_id`, an optional `Scope`, optional `types` and `filters`, a `limit` that cannot be negative, and an optional `after` cursor.
+- **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. Next to a `MemoryQuery`, each keyword that is not `None` replaces the same field of the query. The query has optional `text`, an optional `root_id`, an optional `Scope`, optional `types` and `filters`, a `limit` that cannot be negative, and an optional `after` cursor.
 - **Results are ranked `SearchResult` values.** Each one holds a `block`, a finite numeric `score`, and an optional `reason`. Its `cursor` property gives the position after it.
 - **A new query checks runtime types.** It also copies the type lists and the nested filter operands that the caller owns.
 - **A new query refuses empty values.** An empty `root_id` or `types` entry, or one of only whitespace, raises `ValueError`, as an empty id or block type does in the rest of the API.
@@ -27,7 +27,7 @@ results = memory.search(
 - **`limit` counts visible results.** `Memory` removes the results that the principal cannot `search` or `read`, and the results outside the query `Scope`, before it counts. So blocks that the caller cannot see do not change which visible results it gets.
 - **`Memory` gets backend pages.** The first page has at most `limit` results. Each next page starts after the last result and is 2 times larger. `Memory` stops when it has `limit` visible results, or when the backend has no more results. There is no cap, because a cap would let hidden blocks change the results again.
 - **The cost:** if the caller can see only a few of many matching blocks, one search calls the backend many times.
-- **Next page:** set `after` to the `cursor` of the last result, and keep the other arguments. `MemoryQuery` also has an `after` field.
+- **Next page:** set `after` to the `cursor` of the last result, and keep the other arguments. `MemoryQuery` also has an `after` field. With a `MemoryQuery`, `search(query, after=cursor)` also works, because a search keyword replaces the same field of the query.
 
 ```python
 first = memory.search("concise", limit=20)

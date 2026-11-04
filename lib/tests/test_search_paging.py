@@ -241,6 +241,29 @@ def test_handle_search_pages_in_the_default_scope() -> None:
         handle.search(MemoryQuery("zz", limit=2, after=first[-1].cursor, scope="global"))
 
 
+def test_search_pages_a_memory_query_with_the_after_keyword() -> None:
+    """`search(query, after=cursor)` returns the next page of `query` on `Memory` and on a handle, so a paging loop ends."""
+
+    memory = Memory(principal="owner")
+    root = memory.put(type="root", value="workspace")
+    memory.put(type="note", value="zz zz zz")
+    for score in range(1, 6):
+        memory.put(parent=root, type="note", value=" ".join(["zz"] * score))
+    query = MemoryQuery("zz", root_id=root.id, scope="subtree", limit=2)
+    expected = _ids(memory.search(replace(query, limit=10)))
+
+    for search in (memory.search, memory.get_handle(root=root).search):
+        pages: list[list[str]] = []
+        after: SearchCursor | None = None
+        # The page count check stops the loop if `after` is lost.
+        while (page := search(query, after=after)) and len(pages) < 5:
+            pages.append(_ids(page))
+            after = page[-1].cursor
+
+        assert [len(page) for page in pages] == [2, 2, 1]
+        assert [block_id for page in pages for block_id in page] == expected
+
+
 def test_backend_gets_a_scope_for_a_query_with_no_scope() -> None:
     """`Memory` and a handle give the backend a `Scope`, also for a `MemoryQuery` with no scope."""
 

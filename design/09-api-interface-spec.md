@@ -204,11 +204,19 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 ### Search
 
 ```python
-search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filters=None, limit=20, after=None)
+search(query=None, *, text=None, root=None, scope=None, types=None, filters=None, limit=None, after=None)
 ```
 
 - **3 input forms:** a `MemoryQuery`, a text string as `query`, or keyword
-  arguments. Genie changes each form into one `MemoryQuery`.
+  arguments. Genie merges them into one `MemoryQuery`.
+- **Keywords win:** a keyword that is not `None` replaces the same field of
+  a `MemoryQuery`. `types` and `filters` replace the full field. A keyword
+  with the value `None` keeps the field, so `after=None` does not remove the
+  cursor of a query.
+- **Defaults:** if no keyword and no `MemoryQuery` gives a value, the scope
+  is `global`, `limit` is `20`, and the search has no `types` and no
+  `filters`.
+- **Text given 2 times:** a string `query` with `text` raises `TypeError`.
 - **Returns** `list[SearchResult]`. Each result is inside the scope, and the
   principal can `search` and `read` it.
 - **`limit` counts visible results.** Hidden results do not use part of it.
@@ -217,13 +225,15 @@ search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filter
 - **Order:** `score` from high to low, then `created_at` from old to new, then
   block id.
 - **Next page:** `after=results[-1].cursor`, as a keyword or in a
-  `MemoryQuery`.
+  `MemoryQuery`. So `search(query, after=cursor)` returns the next page of
+  `query`.
 - **Genie filters before it decodes.** It decodes only the results that the
   policy and scope filters keep. So a hidden block with a content type that
   this `Memory` cannot decode does not change the results.
 - **Raises:** `AccessDenied` (the root is not searchable or not traversable),
-  `MemoryNotFound` (root), `TypeError` (bad argument, or no codec for a visible
-  result), `ValueError` (unknown scope, negative limit, a non-global scope
+  `MemoryNotFound` (root), `TypeError` (bad argument, a `query` that is not a
+  `MemoryQuery`, a string, or `None`, text given 2 times, or no codec for a
+  visible result), `ValueError` (unknown scope, negative limit, a non-global scope
   with no root, or an unknown filter operator).
 
 ### Handles
@@ -247,7 +257,7 @@ ownership, link, mount, and search methods as `Memory`, with these differences:
 | --- | --- |
 | **Boundary** | The handle accepts only ids inside the root. It refuses an unknown id as "outside the handle" before any lookup, so it does not show if that block exists |
 | **Optional root argument** | `children()`, `ancestors()`, and `discover_mounts()` use the handle root by default. On an unbounded handle, a call without this argument raises `AccessDenied` |
-| **Search** | A search with no scope uses `default_scope`. This is true for the `scope` keyword and for a `MemoryQuery` with `scope=None`. An explicit scope that the handle does not allow raises `AccessDenied`. A `root` is accepted only inside the handle, for each scope, also `global`. The handle builds the query again, so a prebuilt `MemoryQuery` cannot widen it. The handle checks a query that `before_search` rewrote against the handle again |
+| **Search** | Keywords replace the fields of a `MemoryQuery`, as for `Memory`. A search with no scope uses `default_scope`. This is true for the `scope` keyword and for a `MemoryQuery` with `scope=None`. An explicit scope that the handle does not allow raises `AccessDenied`. A `root` is accepted only inside the handle, for each scope, also `global`. The handle builds the query again, so a prebuilt `MemoryQuery` cannot widen it. The handle checks a query that `before_search` rewrote against the handle again |
 | **Explicit policy** | `put(policy=...)` needs `allow_policy_override` |
 | **Caller-provided id** | `put(id=...)` needs `allow_custom_ids`. Without it, the handle refuses the id before any lookup. With it, a taken id raises `MemoryConflict`, also when the block is outside the root |
 | **`contains` candidate** | The handle checks only `root` against the boundary. A candidate outside the handle is also outside `root`, so it gives `False` |
