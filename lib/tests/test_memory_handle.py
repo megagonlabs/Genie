@@ -363,6 +363,20 @@ def test_scope_search_cannot_escape_through_keywords_next_to_a_memory_query() ->
     assert [result.block.id for result in results] == [child.id]
 
 
+def test_handle_search_refuses_an_empty_scope() -> None:
+    """An empty `scope` raises `ValueError`, as on `Memory.search`. It does not fall back to `default_scope`."""
+
+    memory = Memory()
+    root = memory.put(type="root", value="root needle")
+    memory.put(parent=root, type="child", value="child needle")
+    handle = memory.get_handle(root=root)
+
+    with pytest.raises(ValueError, match="not a valid Scope"):
+        handle.search("needle", scope="")
+    with pytest.raises(ValueError, match="not a valid Scope"):
+        handle.search(MemoryQuery(text="needle"), scope="")
+
+
 def test_memory_query_with_no_scope_uses_the_handle_default_scope() -> None:
     """A `MemoryQuery` with no scope uses the `default_scope` of each handle. A child handle uses its own default, never the wider default of its parent."""
 
