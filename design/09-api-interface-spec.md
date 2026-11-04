@@ -175,9 +175,9 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 
 | Method | Returns | Checked | Raises |
 | --- | --- | --- | --- |
-| `add_link(source, target, relation, *, metadata=None)` | `MemoryLink` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
+| `add_link(source, target, relation, *, metadata=None)` | `MemoryLink` | `write` on source, `read` on target | `AccessDenied`, `MemoryConflict` (protected relation), `MemoryNotFound`, `TypeError`, `ValueError` |
 | `protect_relation(relation)` | `None` | none. Only `Memory` has it | `MemoryConflict` (the links already contain a cycle), `TypeError`, `UnsupportedOperation` (no `AcyclicLinkStore`), `ValueError` (empty or mount relation) |
-| `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | the same as `add_link` | also `MemoryConflict` (relation not protected, or cycle), `UnsupportedOperation` (no `AcyclicLinkStore`) |
+| `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | the same as `add_link` | `AccessDenied`, `MemoryConflict` (relation not protected, or cycle), `MemoryNotFound`, `TypeError`, `UnsupportedOperation` (no `AcyclicLinkStore`), `ValueError` |
 | `update_link(link, *, metadata)` | `MemoryLink` | `write` then `read` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `list_links(block_id, *, relation=None, direction="out")` | `list[MemoryLink]` | `read` on the block and on the 2 ends of each link | `AccessDenied`, `MemoryNotFound`, `ValueError` (direction) |
 | `add_mount(source, target, *, metadata=None)` | `MemoryLink` with relation `"genie.mount"` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
@@ -223,8 +223,8 @@ search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filter
   this `Memory` cannot decode does not change the results.
 - **Raises:** `AccessDenied` (the root is not searchable or not traversable),
   `MemoryNotFound` (root), `TypeError` (bad argument, or no codec for a visible
-  result), `ValueError` (unknown scope, negative limit, or a non-global scope
-  with no root).
+  result), `ValueError` (unknown scope, negative limit, a non-global scope
+  with no root, or an unknown filter operator).
 
 ### Handles
 
@@ -303,6 +303,9 @@ MemoryQuery(text=None, root_id=None, scope=None, types=(), filters=None, limit=2
   hook that returns `scope=None` gets `global`.
 - **`limit`:** `0` is permitted. A negative value raises `ValueError`.
 - **`after`:** a `SearchCursor` or `None`. Another type raises `TypeError`.
+- **`root_id` and each `types` entry:** an empty string, or a string of only
+  whitespace, raises `ValueError` when the query is built. So a query that a
+  `before_search` hook returns cannot send one to the backend either.
 - **The backend decides the meaning of `text`.** `InMemoryBackend` matches a
   case-insensitive substring. A search adapter can rank with its own method.
 
@@ -474,7 +477,7 @@ page_results(results, query)
 | `LineageDAG` method | Returns |
 | --- | --- |
 | `add(predecessor, successor, *, metadata=None)` | `MemoryLink`. `MemoryConflict` for a cycle |
-| `update_edge(edge, *, metadata)` | `MemoryLink`. `MemoryConflict` for an edge of a different relation |
+| `update_edge(edge, *, metadata)` | `MemoryLink`. `ValueError` for an edge of a different relation |
 | `edges(block, *, direction="out")` | `list[MemoryLink]` |
 | `predecessors(block)`, `successors(block)` | `list[GraphNeighbor]` |
 | `walk_predecessors(block, *, max_depth=6, limit=100)`, `walk_successors(...)` | `list[GraphPath]` |

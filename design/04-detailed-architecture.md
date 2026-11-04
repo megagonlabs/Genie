@@ -44,7 +44,8 @@ and their boundaries.
   `Memory.update_link` builds the link again with the merged metadata. The
   backend rejects a change to any other field.
 - **`LinkRelations.MOUNT` (`"genie.mount"`) is reserved.** It marks a mount.
-  `add_acyclic_link` and `protect_relation` refuse it.
+  `add_link`, `add_acyclic_link`, and `protect_relation` refuse it with
+  `ValueError`. Only `add_mount` creates a link with it.
 
 ## The `Memory` operation template
 

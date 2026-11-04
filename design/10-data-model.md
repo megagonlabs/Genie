@@ -135,7 +135,8 @@ The table shows the stored records and the question that each record answers:
 - **Only `metadata` changes.** `Memory.update_link` merges new metadata into
   it.
 - **`LinkRelations.MOUNT` (`"genie.mount"`) is reserved for mounts.**
-  `add_acyclic_link` and `protect_relation` refuse it.
+  `add_link`, `add_acyclic_link`, and `protect_relation` refuse it with
+  `ValueError`. Only `add_mount` creates a link with it.
 - **A protected relation is stored state of the backend.** It is not a field
   of a link. `protect_relation` adds it, and no call removes it.
 

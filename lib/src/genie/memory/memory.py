@@ -1003,8 +1003,8 @@ class Memory:
                 arguments have the wrong type, or no registered codec can
                 decode a visible result.
             ValueError: If the scope is invalid, the limit is negative, the
-                root id is empty, a non-global scope has no root, or a filter
-                uses an unknown operator.
+                root id or a `types` entry is empty, a non-global scope has no
+                root, or a filter uses an unknown operator.
         """
 
         return self._search(

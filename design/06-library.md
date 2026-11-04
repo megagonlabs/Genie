@@ -59,7 +59,7 @@ with SQLiteBackend("helpdesk.db") as backend:
 
 with SQLiteBackend("helpdesk.db") as backend:  # a later run of the same service
     desk = DeskMemory(Memory(backend=backend, principal="service:helpdesk"), "billing")
-    desk.ticket("T-4471")   # {'status': 'open', 'subject': 'Refund email never arrived'}
+    desk.ticket("T-4471")   # {'subject': 'Refund email never arrived', 'status': 'open'}
     desk.recent_notes()     # ['T-4471: customer asked again from a second address']
     desk.ticket("T-4490")   # None
 
@@ -161,7 +161,9 @@ The repository uses the other 3 layers to keep Genie details out of agent code.
 - **Genie has no async API.** An `asyncio` application runs Genie calls outside the event loop, for example with `asyncio.to_thread`.
 - **Threads can share one `Memory` and one backend.** The concurrency tests and the benchmark workers use this configuration. `SQLiteBackend`, `PostgresBackend`, and `Neo4jBackend` make a second writer wait. `RedisBackend` and `MongoDBBackend` retry the writer that lost.
 - **Genie has no global state.** An import of `genie` configures nothing, and the package reads no environment variable. One process can hold 2 `Memory` objects with different principals, policies, or hooks. They work together on one backend or on several backends.
-- **Genie reports through hooks, not logs.** The `genie.hooks.registry` logger writes the only log record, at `ERROR` level. It writes it when an observer callback of a hook with `fail_open = True` fails, and the registry contains the failure.
+- **Genie reports through hooks, not logs.** Only these loggers write log records:
+  - **`genie.hooks.registry`, at `ERROR` level:** an observer callback of a hook with `fail_open = True` fails, and the registry contains the failure. Or the registry attaches a hook failure as a note to an exception that the caller already gets. Code can catch that exception and drop it, so the log keeps the failure.
+  - **`genie.backend.composite.routed`, at `WARNING` level:** `RoutedBackend` cannot release a route catalog entry after a failed write or after a delete. The entry stays. The write still raises its error, and the delete still succeeds.
 - **A backend that holds a connection closes explicitly.** `SQLiteBackend`, `PostgresBackend`, `Neo4jBackend`, `MongoDBBackend`, and `RedisBackend` have `close()`, and each one works as a context manager. After `close`, their calls raise `RuntimeError`. `InMemoryBackend` has nothing to close. `RoutedBackend` does not close its routed backends. The application closes each one.
 - **Server checks run at construction.** For example, `PostgresBackend`, `MongoDBBackend`, and `RedisBackend` refuse a server that reports that it does not accept writes, for example a replica. Each `verify_*` flag disables one check. On the server adapters, `initialize_schema=False` uses the layout that is already in the store and does not create it.
 - **The application finds data again by id.** The application keeps a generated `mem_` id in its own configuration, or it gives a stable id to `put(id=...)`. A second `put` with the same id raises `MemoryConflict`.

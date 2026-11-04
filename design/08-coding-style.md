@@ -77,10 +77,9 @@ python -m compileall -q lib/src/genie lib/tests examples
 
 ## Imports
 
-- **`from __future__ import annotations` is the first import** in each module
-  that has annotations. The modules without it are the `__init__.py` re-export
-  modules, `memory/errors.py`, and `query/scope.py`. These modules have no
-  annotations to defer.
+- **`from __future__ import annotations` is the first import** in each module,
+  except the `__init__.py` modules, `memory/errors.py`, and `query/scope.py`.
+  These modules have no annotation that needs it.
 - **Internal imports are absolute.** Each one has the form
   `from genie.<area> import <name>`. The package has no relative imports. So a
   reader sees the dependencies of a module and does not need to know where the
@@ -88,8 +87,8 @@ python -m compileall -q lib/src/genie lib/tests examples
 - **An import of several names uses parentheses and one name on each line.**
   This is the shape that the import sort of ruff makes.
 - **Type-only imports go inside `if TYPE_CHECKING:`.** Most of them are in
-  adapters. These adapters use the structure record types in annotations but
-  cannot import them at runtime.
+  adapters. These adapters use the structure record types in annotations. A
+  function that builds a record imports the record type inside the function.
 - **The adapter imports an optional driver inside the function that needs it,**
   not at module scope. So an import of the adapter never fails because of a
   missing package. `CONTRIBUTING.md` makes this a hard rule: a missing driver
@@ -100,8 +99,16 @@ python -m compileall -q lib/src/genie lib/tests examples
 - **Each module starts with a docstring.** A large adapter uses labelled
   paragraphs (`Storage layout:`, `Writes:`, `Reads:`, `Search:`). They explain
   its strategy one time at the top, so the methods do not repeat it.
-- **`__init__.py` only re-exports names.** It contains a one-line docstring,
-  the imports, and a sorted `__all__`.
+- **`__init__.py` re-exports names.** It contains a docstring, the imports,
+  and `__all__`. The current `__all__` lists are sorted, with constants such
+  as `MAX_NESTING_DEPTH` first. `ruff.toml` does not turn on a rule that
+  checks the order.
+  - **Docstring:** one line in each subpackage. The root `genie/__init__.py`
+    docstring is longer. It summarizes the library and the 2 import styles.
+  - **Lazy imports:** `memory/__init__.py` and `policy/__init__.py` also
+    define a module `__getattr__`. It imports `Memory`, `MemoryHandle`,
+    `AccessDenied`, `Operation`, and `PolicyEngine` on first use, so that
+    there is no import cycle.
 - **Each public name is also in the root `__all__`.**
   `lib/tests/test_public_imports.py` fails if a subpackage exports a name that
   the root `__all__` does not contain. A caller can import a name as
