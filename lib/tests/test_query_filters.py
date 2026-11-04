@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import math
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from typing import Any, cast
 
 import pytest
 
-from genie import InMemoryBackend, Memory, MemoryBlock, MemoryQuery, Scope, SearchResult
+from genie import HookContext, InMemoryBackend, Memory, MemoryBlock, MemoryHook, MemoryQuery, Scope, SearchResult
 from genie.query.filters import matches_filters, normalize_filters
 
 
@@ -241,6 +241,61 @@ def test_query_rejects_invalid_runtime_field_types(
 
     with pytest.raises(error):
         MemoryQuery(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"root_id": ""}, "MemoryQuery root_id must not be empty"),
+        ({"root_id": "  "}, "MemoryQuery root_id must not be empty"),
+        ({"types": ("note", "")}, "MemoryQuery types entry must not be empty"),
+        ({"types": [" \t"]}, "MemoryQuery types entry must not be empty"),
+    ],
+)
+def test_query_rejects_empty_root_id_and_type_entries(kwargs: dict[str, Any], message: str) -> None:
+    """`MemoryQuery` raises `ValueError` for an empty root id or `types` entry, as the rest of the API does for ids and types."""
+
+    with pytest.raises(ValueError, match=message):
+        MemoryQuery(**kwargs)
+
+
+def test_search_refuses_empty_root_id_and_type_entries_before_any_backend_runs() -> None:
+    """`Memory.search`, `MemoryHandle.search`, and a `before_search` hook cannot send an empty root id or type to the backend."""
+
+    class RecordingBackend(InMemoryBackend):
+        """Backend that counts the searches it receives."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.searches = 0
+
+        def search(self, query: MemoryQuery) -> list[SearchResult]:
+            """Count the search, then search through the in-memory backend."""
+
+            self.searches += 1
+            return super().search(query)
+
+    class EmptyRootHook(MemoryHook):
+        """Hook that tries to replace the search root with an empty id."""
+
+        def before_search(self, context: HookContext, query: MemoryQuery) -> MemoryQuery:
+            """Return the query with an empty root id."""
+
+            return replace(query, root_id="")
+
+    backend = RecordingBackend()
+    memory = Memory(backend=backend)
+    root = memory.put(type="note", value="root")
+    handle = memory.get_handle(root=root)
+
+    with pytest.raises(ValueError, match="types entry must not be empty"):
+        memory.search("root", types=["note", ""])
+    with pytest.raises(ValueError, match="types entry must not be empty"):
+        handle.search("root", types=[" "])
+    memory.hooks.register(EmptyRootHook())
+    with pytest.raises(ValueError, match="root_id must not be empty"):
+        memory.search("root")
+    assert backend.searches == 0
 
 
 def test_memory_search_preserves_query_validation_at_the_public_boundary() -> None:

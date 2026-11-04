@@ -39,6 +39,11 @@ def resolve_store(store: Any, container: BlockRef, *, missing_message: str) -> A
     - **Other stores:** this function returns them with no change.
     - **One route:** a container and its subtree always share one route. So the
       resolved backend owns each block that the structure can hold.
+    - **Call order:** a facade calls this function after it gets the container
+      through its access object. The route lookup has no handle or policy
+      check. If it ran first, a rooted handle would raise `MemoryNotFound` for
+      a missing id outside its root and `AccessDenied` for an id that exists.
+      The error would then show whether the block exists.
 
     Args:
         store: Store or routing backend from the caller.

@@ -22,6 +22,7 @@ with Neo4jBackend(
 
 - **`"password"` is a placeholder.** Your own Neo4j password goes in its place. Neo4j asks for a new password the first time a server starts, so no default password works here. The URI and the `neo4j` user name are real defaults.
 - **No driver:** without the `neo4j` package, the constructor raises `UnsupportedOperation`.
+- **Neo4j server 5.7 or newer:** this is the database version, not the `neo4j` driver version. The backend asks the server not to send `UNRECOGNIZED` notifications (see the next section). Older servers do not support this request, so on an older server the constructor raises `BackendError`.
 
 ## Behavior
 
@@ -31,6 +32,7 @@ with Neo4jBackend(
 - **Atomicity matches SQLite:** managed transactions, uniqueness constraints, stable sequence counters, and one database mutation guard. This includes compare-and-swap updates, conditional subtree delete, and DAG insert.
 - **A shared bookmark manager** keeps the read-after-write order when operations use different sessions in a cluster.
 - **Construction checks the schema:** identity, version, constraint type, index type, entity type, and index state. Versioned migrations are idempotent. So a second run is safe, and schema statements (DDL) that stopped before the end can continue. `initialize_schema=False` checks the schema and runs no DDL.
+- **No warnings for names that do not exist yet.** Genie queries name labels, relationship types, and properties that a new database does not have. Neo4j sends an `UNRECOGNIZED` notification for each of these, and the driver logs it as a `WARNING` on the `neo4j.notifications` logger. The backend turns off this classification for its own driver. Other notifications, for example `DEPRECATION`, stay on.
 - **Driver failures map to stable Genie error types.** Most become a `BackendError` subclass, and a constraint violation becomes `MemoryConflict`. The original error stays available as `__cause__`.
 - **`close()` waits for active operations** before it closes the shared driver.
 

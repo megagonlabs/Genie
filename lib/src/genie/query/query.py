@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from genie.memory._validation import require_non_empty_str
 from genie.query.filters import normalize_filters
 from genie.query.result import SearchCursor
 from genie.query.scope import Scope
@@ -65,19 +66,24 @@ class MemoryQuery:
         Raises:
             TypeError: If text, root, types, filters, limit, or after have
                 runtime types that are not valid.
-            ValueError: If `scope` is not a known scope, `limit` is negative,
-                or a filter uses an unknown operator.
+            ValueError: If `root_id` or an entry of `types` is empty or
+                contains only whitespace, `scope` is not a known scope,
+                `limit` is negative, or a filter uses an unknown operator.
         """
 
         if text is not None and not isinstance(text, str):
             raise TypeError("MemoryQuery text must be a string or None.")
         if root_id is not None and not isinstance(root_id, str):
             raise TypeError("MemoryQuery root_id must be a string or None.")
+        if root_id is not None:
+            require_non_empty_str(root_id, field_name="MemoryQuery root_id")
         normalized_scope = None if scope is None else Scope(scope)
         if not isinstance(types, list | tuple):
             raise TypeError("MemoryQuery types must be a list or tuple of strings.")
         if any(not isinstance(type_name, str) for type_name in types):
             raise TypeError("MemoryQuery types must contain only strings.")
+        for type_name in types:
+            require_non_empty_str(type_name, field_name="MemoryQuery types entry")
         normalized_types = tuple(types)
         normalized_filters = normalize_filters(filters)
         if isinstance(limit, bool) or not isinstance(limit, int):

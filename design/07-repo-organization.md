@@ -13,6 +13,7 @@ editor or agent files. They are not part of the layout.
 Genie/
 ├── .claudeignore       # paths that Claude Code does not index (caches, builds, .git)
 ├── .gitignore          # ignored paths: caches, coverage, reports, local agent files
+├── CODE_OF_CONDUCT.md  # Contributor Covenant 2.0: expected conduct, and how to report a problem
 ├── CONTRIBUTING.md     # setup, the checks to run, and where a new file goes
 ├── design/             # these design notes, numbered `NN-topic.md`
 ├── examples/           # runnable examples, lamps, and their captured output
@@ -178,9 +179,9 @@ lib/scripts/
 
 ```text
 examples/
-├── basic/              # 17 single-file examples, one topic each
-├── advanced/           # 7 single-file examples that combine several ideas
-├── lamps/              # 5 package-sized architectural demonstrations
+├── basic/              # single-file examples, one topic each
+├── advanced/           # single-file examples that combine several ideas
+├── lamps/              # package-sized architectural demonstrations
 ├── expected/           # captured stdout: basic/, advanced/, lamps/
 ├── _bootstrap.py       # puts `lib/src` and the root on `sys.path` before install
 ├── _catalog.py         # finds the examples and the location of their output

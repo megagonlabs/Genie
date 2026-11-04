@@ -67,7 +67,8 @@ class HookRegistry:
           first failure only takes the records away from the other hooks and
           blocks.
         - The registry still reports collected failures. It attaches them as
-          notes to an exception that the caller already gets. If there is no
+          notes to an exception that the caller already gets, and logs them,
+          because code can catch that exception and drop it. If there is no
           such exception, it raises them. For hooks that declare `fail_open`,
           it only logs them.
         - The registry collects only `Exception` failures. A `BaseException`,
@@ -810,8 +811,8 @@ class HookRegistry:
 
         The refusal gets to the caller with no change. So the registry calls
         each hook, also when one raises. If `error` has a value, the registry
-        attaches the failures to it as notes. It raises them only when the
-        caller gets no refusal.
+        attaches the failures to it as notes and logs them. It raises them
+        only when the caller gets no refusal.
 
         Args:
             context: Active operation context.
@@ -1016,6 +1017,11 @@ def _report_failures(
 ) -> None:
     """Report collected callback failures, with no failure lost or replaced.
 
+    - **Notes and a log:** a failure that becomes a note on `error` also goes
+      to the log. Code between the registry and the caller can catch `error`
+      and drop it. For example, a structure listing drops the refusal of each
+      hidden member, because a raised error would show that the member exists.
+
     Args:
         failures: Failures collected from hooks that are not fail-open.
         callback: Callback that failed. The reported notes name it.
@@ -1034,6 +1040,12 @@ def _report_failures(
     if error is not None:
         for failure in failures:
             error.add_note(f"{callback} hook failed: {failure!r}")
+            _LOGGER.error(
+                "Attached %s failure to %s.",
+                callback,
+                type(error).__name__,
+                exc_info=failure,
+            )
         return
     first, *rest = failures
     for failure in rest:

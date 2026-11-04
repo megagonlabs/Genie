@@ -125,7 +125,7 @@ engine.require("export", block, principal)
 - **`get` on a known id raises `AccessDenied`.**
 - **`children`, `ancestors`, and `search` stay quiet.** They leave out the blocks that a principal cannot read, and they do not raise. So the caller gets a short list, not a refusal.
 - **That is the symptom to look for.** When an orchestrator cannot see what its sub-agents wrote, the results look empty, not forbidden.
-- **Refusals get to `on_denied`, but this filter does not,** because it is normal visibility and not a refusal.
+- **Refusals get to `on_denied`, but this filter does not,** because it is normal visibility and not a refusal. A structure facade listing is different. It gets each member with `get`, so each hidden member reports a refusal.
 
 ### Missing versus forbidden
 

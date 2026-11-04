@@ -43,11 +43,13 @@ edge = memory.update_link(edge, metadata={"confidence": 0.9})
 - **`hooks` is read-only.** To change which hooks run, you edit that registry. You cannot replace it, so nobody can detach a mandatory hook. See [hooks](../hooks/README.md#the-registry).
 
 ```python
-from genie import InMemoryBackend, Memory
+from genie import InMemoryBackend, Memory, MemoryPolicy
 
 
 memory = Memory(backend=InMemoryBackend(), principal="service:memory")
-root = memory.put(type="project", value={"name": "Atlas"})
+for_planner = MemoryPolicy.owner_or(principals={"agent:planner"})
+root = memory.put(type="project", value={"name": "Atlas"}, policy=for_planner)
+task = memory.put(parent=root, type="task", value="Draft outline", policy=for_planner)
 ```
 
 **`MemoryHandle`** is the restricted interface for agents, tools, and services:

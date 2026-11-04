@@ -41,7 +41,8 @@ class KeyedCollection:
       collection block. The access object checks it. So a principal that can
       only read the collection cannot change what its addresses point to.
     - **Unreadable members:** `get` and `get_item` raise `AccessDenied`. `items`
-      skips them.
+      skips them. It gets each member with `get`, so the access object reports
+      each unreadable member to `on_denied`.
     """
 
     __slots__ = (
@@ -79,18 +80,18 @@ class KeyedCollection:
             UnsupportedOperation: If `store` does not have the keyed capability.
         """
 
-        store = resolve_store(
-            store,
-            collection,
-            missing_message=f"Keyed collection block {_block_id(collection)!r} does not exist.",
-        )
-        if not isinstance(store, KeyedStore):
-            raise UnsupportedOperation("The configured store does not support keyed collections.")
         stored_collection = access.get(collection)
         if stored_collection is None:
             raise MemoryNotFound(
                 f"Keyed collection block {_block_id(collection)!r} does not exist."
             )
+        store = resolve_store(
+            store,
+            stored_collection,
+            missing_message=f"Keyed collection block {_block_id(collection)!r} does not exist.",
+        )
+        if not isinstance(store, KeyedStore):
+            raise UnsupportedOperation("The configured store does not support keyed collections.")
         self._access = access
         self._store = store
         self._hooks = resolve_hooks(access, hooks)

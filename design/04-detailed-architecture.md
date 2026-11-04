@@ -44,7 +44,8 @@ and their boundaries.
   `Memory.update_link` builds the link again with the merged metadata. The
   backend rejects a change to any other field.
 - **`LinkRelations.MOUNT` (`"genie.mount"`) is reserved.** It marks a mount.
-  `add_acyclic_link` and `protect_relation` refuse it.
+  `add_link`, `add_acyclic_link`, and `protect_relation` refuse it with
+  `ValueError`. Only `add_mount` creates a link with it.
 
 ## The `Memory` operation template
 
@@ -309,9 +310,11 @@ order:
 - **Isolated callbacks report work that already occurred.** An early stop does
   not undo the work. It only takes the record away from the hooks that did not run.
   So the registry collects the failures. If an exception already leaves the
-  operation, the registry attaches the failures to it as notes. If the
-  operation succeeded, the registry raises the first failure and attaches the
-  others to it as notes.
+  operation, the registry attaches the failures to it as notes. It also logs
+  them, because code can catch that exception and drop it. A structure listing
+  drops the refusal of each hidden member, because a raised error would show
+  that the member exists. If the operation succeeded, the registry raises the
+  first failure and attaches the others to it as notes.
 - **The registry logs and ignores the failure of a `fail_open` hook,** but only
   for isolated callbacks.
 - **The registry skips a reentrant call and does not refuse it.** `_invoke`
@@ -433,19 +436,31 @@ order:
 
 ### Construction
 
-1. **Resolve the store.** `resolve_store` returns the store without change if
+1. **Resolve the container through the access object.** A missing container
+   raises `MemoryNotFound` through a `Memory`. A container that the caller
+   cannot read, or that is outside the handle root, raises `AccessDenied`. A
+   rooted handle also raises `AccessDenied` for a missing container, because
+   it checks its root before it gets the block.
+2. **Resolve the store.** `resolve_store` returns the store without change if
    it is not a `BlockRouter`. For a `BlockRouter`, the facade binds to the
    backend that owns the container block. A container and its subtree use one
    route.
-2. **Check the capability.** The facade uses `isinstance` with the
+3. **Check the capability.** The facade uses `isinstance` with the
    `runtime_checkable` protocol. If the store does not have the capability,
    the facade raises `UnsupportedOperation`. This check occurs at construction, not at
    the first use.
-3. **Resolve the container through the access object.** So if the caller
-   cannot see the container, the facade raises `MemoryNotFound`.
 4. **Resolve the hooks:** the explicit registry, or `access.hooks`, or the
    registry of the `_memory` of a handle. A facade without a registry uses
    `nullcontext` and dispatches no events.
+
+- **The container comes before the store.** The route lookup of a
+  `BlockRouter` reads the backend directly, with no handle or policy check. If
+  it ran first, a rooted handle would raise `MemoryNotFound` for a missing id
+  outside its root, and `AccessDenied` for an id that exists. The error would
+  then show whether the block exists.
+- **`VersionedRecords` gets the container 2 times.** It gets it once for its
+  own checks, and its inner `KeyedCollection` gets it again. So the hooks see
+  2 `get` events.
 
 ### Writing
 
@@ -636,8 +651,11 @@ same tasks:
   fails and the route does not hold the block, it releases the claim. A claim
   that stays without a block only refuses later puts of that id.
 - **Authorization uses the stored state,** never an object from the caller.
-- **Each refusal goes to `on_denied`.** Each started operation closes with
-  exactly one terminal event.
+- **Each policy refusal and each handle refusal goes to `on_denied`.** A
+  filtered read of `Memory` or a handle does not report the items that it
+  leaves out. A structure facade listing gets each member through the access
+  object, so it reports each hidden member. Each started operation closes
+  with exactly one terminal event.
 - **`Memory` validates each hook return value** before it reaches the
   backend. `before_put` can change only the value, metadata, content type, and
   policy. `before_update` can change only the value, metadata, and content

@@ -77,6 +77,10 @@ keys.get(MemoryAddress(("tickets",), "T-4471")).value     # {"number": "T-4471",
   `ancestors`, `list_links`, `search`, and the list calls of the structures
   remove the items that the principal cannot read. `get`, `set`, and exact
   lookups raise `AccessDenied` instead.
+- **Only `Memory` and handle list calls filter with no report.** A structure
+  list call gets each member with `get` on the access object. So each hidden
+  member reports a refusal to `on_denied`, also when the caller asked only for
+  the list.
 - **Only `get` gives `None` for a block that does not exist.** `Memory.get`
   and the structure `get` methods return `None` for an unknown key. A call that
   needs a block raises `MemoryNotFound` if the block does not exist.
@@ -171,9 +175,9 @@ Memory(*, backend=None, principal=None, policy_engine=None, hooks=None, codecs=N
 
 | Method | Returns | Checked | Raises |
 | --- | --- | --- | --- |
-| `add_link(source, target, relation, *, metadata=None)` | `MemoryLink` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
+| `add_link(source, target, relation, *, metadata=None)` | `MemoryLink` | `write` on source, `read` on target | `AccessDenied`, `MemoryConflict` (protected relation), `MemoryNotFound`, `TypeError`, `ValueError` |
 | `protect_relation(relation)` | `None` | none. Only `Memory` has it | `MemoryConflict` (the links already contain a cycle), `TypeError`, `UnsupportedOperation` (no `AcyclicLinkStore`), `ValueError` (empty or mount relation) |
-| `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | the same as `add_link` | also `MemoryConflict` (relation not protected, or cycle), `UnsupportedOperation` (no `AcyclicLinkStore`) |
+| `add_acyclic_link(source, target, relation, *, metadata=None)` | `MemoryLink` | the same as `add_link` | `AccessDenied`, `MemoryConflict` (relation not protected, or cycle), `MemoryNotFound`, `TypeError`, `UnsupportedOperation` (no `AcyclicLinkStore`), `ValueError` |
 | `update_link(link, *, metadata)` | `MemoryLink` | `write` then `read` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
 | `list_links(block_id, *, relation=None, direction="out")` | `list[MemoryLink]` | `read` on the block and on the 2 ends of each link | `AccessDenied`, `MemoryNotFound`, `ValueError` (direction) |
 | `add_mount(source, target, *, metadata=None)` | `MemoryLink` with relation `"genie.mount"` | `write` on source, `read` on target | `AccessDenied`, `MemoryNotFound`, `TypeError`, `ValueError` |
@@ -219,8 +223,8 @@ search(query=None, *, text=None, root=None, scope=Scope.GLOBAL, types=(), filter
   this `Memory` cannot decode does not change the results.
 - **Raises:** `AccessDenied` (the root is not searchable or not traversable),
   `MemoryNotFound` (root), `TypeError` (bad argument, or no codec for a visible
-  result), `ValueError` (unknown scope, negative limit, or a non-global scope
-  with no root).
+  result), `ValueError` (unknown scope, negative limit, a non-global scope
+  with no root, or an unknown filter operator).
 
 ### Handles
 
@@ -299,6 +303,9 @@ MemoryQuery(text=None, root_id=None, scope=None, types=(), filters=None, limit=2
   hook that returns `scope=None` gets `global`.
 - **`limit`:** `0` is permitted. A negative value raises `ValueError`.
 - **`after`:** a `SearchCursor` or `None`. Another type raises `TypeError`.
+- **`root_id` and each `types` entry:** an empty string, or a string of only
+  whitespace, raises `ValueError` when the query is built. So a query that a
+  `before_search` hook returns cannot send one to the backend either.
 - **The backend decides the meaning of `text`.** `InMemoryBackend` matches a
   case-insensitive substring. A search adapter can rank with its own method.
 
@@ -405,10 +412,17 @@ page_results(results, query)
 - **Facades that keep records also take a store.** The store is a backend with
   the named capability, or a `BlockRouter`. A `BlockRouter` resolves to the
   route that owns the container block.
-- **Construction checks the capability.** The constructor raises
-  `UnsupportedOperation` if the store does not have the capability. It also
-  resolves the container block through the access object. So a container that
-  the caller cannot see raises `MemoryNotFound`.
+- **Construction gets the container first, through the access object.** Then
+  it resolves the store and checks the capability. So the error does not
+  depend on the store type.
+- **A missing container raises `MemoryNotFound`** through a `Memory`. A rooted
+  handle raises `AccessDenied`, because it checks its root before it gets the
+  block.
+- **A container that the caller cannot read, or that is outside the handle
+  root, raises `AccessDenied`.** So only a `Memory`, in trusted code, can tell
+  a missing container from a hidden one.
+- **A store without the capability raises `UnsupportedOperation`** at
+  construction, not at the first use.
 - **`hooks=None`** uses the registry of the access object.
 - **A paged `limit` counts visible items,** as in search. The default is
   `100`. `EventLog.tail` uses `20`.
@@ -437,13 +451,17 @@ page_results(results, query)
 | `delete_subtree(block)` | `None` |
 
 - **A block outside the tree raises `AccessDenied`.**
-- **A member check calls `contains` and `get` on the access object.** It
+- **A member check calls `get` and then `contains` on the access object.** It
   needs `traverse_down` on the tree root and `read` on the member. The tree
   root itself needs only `read`. The policies of other blocks have no effect
-  on the check, and it does not walk the tree.
+  on the check, and it does not walk the tree. The `get` comes first, so the
+  access object reports a member that the principal cannot read to
+  `on_denied`. The tree does not report its own root bound.
 - **`descendants` skips a closed branch.** A block that denies
-  `traverse_down` is in the result, but its descendants are not. A denied
-  `traverse_down` on the selected block raises `AccessDenied`.
+  `traverse_down` is in the result, but its descendants are not. The walk
+  calls `children` on each block, so each closed branch reports a
+  `traverse_down` refusal to `on_denied`. A denied `traverse_down` on the
+  selected block raises `AccessDenied`.
 
 ### `PropertyGraph` and `LineageDAG`
 
@@ -459,7 +477,7 @@ page_results(results, query)
 | `LineageDAG` method | Returns |
 | --- | --- |
 | `add(predecessor, successor, *, metadata=None)` | `MemoryLink`. `MemoryConflict` for a cycle |
-| `update_edge(edge, *, metadata)` | `MemoryLink`. `MemoryConflict` for an edge of a different relation |
+| `update_edge(edge, *, metadata)` | `MemoryLink`. `ValueError` for an edge of a different relation |
 | `edges(block, *, direction="out")` | `list[MemoryLink]` |
 | `predecessors(block)`, `successors(block)` | `list[GraphNeighbor]` |
 | `walk_predecessors(block, *, max_depth=6, limit=100)`, `walk_successors(...)` | `list[GraphPath]` |

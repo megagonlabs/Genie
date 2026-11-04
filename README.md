@@ -35,29 +35,67 @@ python -m pip install -e .
 ## Quick start
 
 ```python
-from genie import InMemoryBackend, Memory
+from genie import AccessDenied, InMemoryBackend, Memory, MemoryHandle, MemoryPolicy
 
+# Scenario: an application runs an LLM agent that writes a proposal.
+# The application owns the memory. The agent gets a handle to one project only.
 
-memory = Memory(
-    backend=InMemoryBackend(),
-    principal="agent:planner",
-)
-workspace = memory.put(type="project", value={"name": "Write proposal"})
+# --- Application side (trusted code) ---
+memory = Memory(backend=InMemoryBackend(), principal="app")
+
+# New blocks use `owner_private` by default: only their creator can use them.
+# `owner_or` also lets "agent:writer" use the blocks of the proposal project.
+writer_access = MemoryPolicy.owner_or(principals={"agent:writer"})
+proposal = memory.put(type="project", value={"name": "Write proposal"}, policy=writer_access)
 requirement = memory.put(
-    parent=workspace,
+    parent=proposal,
     type="requirement",
     value="Keep the proposal concise.",
+    policy=writer_access,
 )
+budget = memory.put(type="project", value={"name": "Budget review"})  # owner_private: "app" only
 
-agent_memory = memory.get_handle(root=workspace, principal="agent:planner")
-observation = agent_memory.put(type="observation", value="Use short sections.")
 
-results = agent_memory.search("concise")
-assert results[0].block.id == requirement.id
+# --- Agent side: it sees only the handle that it gets ---
+class Agent:
+    def __init__(self, memory: MemoryHandle) -> None:
+        self.memory = memory
+
+    # Tools that an LLM can call
+    def memorize(self, text: str) -> str:
+        self.memory.put(type="observation", value=text)
+        return "Saved."
+
+    def recall(self, query: str) -> str:
+        results = self.memory.search(query)  # list[SearchResult]
+        return "\n".join(f"- [{r.block.type}] {r.block.value}" for r in results)
+
+
+agent = Agent(memory.get_handle(root=proposal, principal="agent:writer"))
+print(agent.memorize("Use short sections."))  # Saved.
+print(agent.recall("concise"))  # - [requirement] Keep the proposal concise.
+
+# Handle scope: the budget project is outside the handle root.
+try:
+    agent.memory.get(budget)
+except AccessDenied:
+    print("Agent reads budget: AccessDenied")
+
+# Policy: the budget project is owner_private, so "agent:writer" cannot get a handle to it.
+try:
+    memory.get_handle(root=budget, principal="agent:writer")
+except AccessDenied:
+    print("Handle on budget: AccessDenied")
 ```
 
+- **Runnable copy:** `python examples/basic/quick_start.py` runs this code. [`examples/expected/basic/quick_start.out`](examples/expected/basic/quick_start.out) shows its output.
 - **`Principal`** is whoever is acting: a user, an agent, or a service. Genie checks it against each block's `MemoryPolicy` on every operation.
 - **Default policy** is `MemoryPolicy.owner_private()`, so only the creator can `read`, `write`, `search`, `traverse_up`, and `traverse_down` a new block.
+- **`MemoryPolicy.owner_or(principals=..., roles=...)`** allows these operations to the creator, the listed principals, and the listed roles.
+- **`memory.get_handle(root=..., principal=...)`** returns a `MemoryHandle`. All operations through the handle act as that principal. The handle reaches only its root block and the blocks below the root.
+- **Two checks:** a handle operation succeeds only if the block is inside the handle root and the block policy allows the principal. Each check raises `AccessDenied` when it fails.
+- **Blocks that the agent creates:** a handle cannot set a policy (`allow_policy_override=False` by default). So a new block gets the `default_policy` of `Memory`, with the agent as its creator. In the example, `app` cannot read the observation. To let `app` read agent blocks, give `Memory` a `default_policy` such as `MemoryPolicy.owner_or(principals={"app"})`.
+- **`SearchResult`:** `search` returns a list of `SearchResult` values, higher `score` first. Each one has the matching `block`, a `score` that the backend defines, and an optional `reason` text.
 - **Trust boundary:** keep the full `Memory` object and the backend inside trusted application code. Give agents handles rooted at one block, or tools that you write yourself.
 
 ## Storage
@@ -88,6 +126,7 @@ Ownership (parent/child)
   project "Write proposal"
     requirement "Keep the proposal concise."
     observation "Use short sections."
+  project "Budget review"
 
 Relationship (MemoryLink)
   observation --supports--> requirement
@@ -99,8 +138,9 @@ Relationship (MemoryLink)
 - **Meaning** of block types, values, metadata, and relation names such as `"supports"` is your application's choice.
 
 ```python
-link = agent_memory.add_link(observation, requirement, "supports")
-assert agent_memory.list_links(requirement, direction="in") == [link]
+observation = agent.memory.search("sections")[0].block  # the block that memorize created
+link = agent.memory.add_link(observation, requirement, "supports")
+assert agent.memory.list_links(requirement, direction="in") == [link]
 ```
 
 ## Structure facades
@@ -126,7 +166,7 @@ assert agent_memory.list_links(requirement, direction="in") == [link]
 from genie import PropertyGraph
 
 
-graph = PropertyGraph(agent_memory)
+graph = PropertyGraph(agent.memory)
 path = graph.walk(observation, relation="supports")[0]
 assert path.block_ids == (observation.id, requirement.id)
 ```

@@ -73,9 +73,11 @@ describes module internals and algorithms.
 - **`genie.codecs` depends on no other Genie package.** It is a standalone
   translation layer. So an application can register its own codec and change
   nothing else.
-- **`genie.backend` never imports `genie.structures`.** Structure facades
+- **`genie.backend` imports no structure facade.** Structure facades
   depend on backend capability protocols. The backend does not depend on the
-  facades.
+  facades. The adapters and the structure capability protocols import only the
+  record types from `genie.structures.records`, for example `LogEntry` and
+  `KeyBinding`. The structure capabilities return these records.
 
 ## Dependency direction
 
@@ -171,7 +173,7 @@ A search through a bounded handle shows how the 2 checks work together:
 
 | Boundary | Enforced by | What crosses it |
 | --- | --- | --- |
-| Public API | `genie.__init__` | Each exported name. No other import is supported |
+| Public API | `genie.__init__` | Each exported name. It also imports from its subpackage, and the 2 imports give the same object |
 | Access | `MemoryHandle` plus `MemoryPolicy` | Only blocks inside the handle root with a policy that permits the principal that acts |
 | Storage | `MemoryBackend` and the capability protocols | Encoded `MemoryBlock` and `MemoryLink` values, `MemoryQuery`, `SearchResult` |
 | Value | `MemoryCodec` | The application value goes in. Storage data plus a content type come out |
@@ -237,8 +239,11 @@ A search through a bounded handle shows how the 2 checks work together:
   not inherit through ownership. A policy is fixed at the creation of the
   block.
 - **Observability** goes through hooks. Each operation that starts reports
-  exactly one outcome event. Each refusal reports its subject and the check
-  that caused it. So a filtered result is auditable and not silent.
+  exactly one outcome event. Each policy refusal and each handle refusal
+  reports its subject and the check that caused it. A filtered read of
+  `Memory` or a handle is not a refusal, so hooks get no report about the
+  items that it leaves out. A structure facade listing asks for each member,
+  so it reports each hidden member.
 - **Consistency** is optimistic. Block updates carry an expected version. A
   recursive delete sends the exact subtree snapshot that it observed. A
   concurrent change raises `MemoryConflict`, and the stale work does not

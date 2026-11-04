@@ -68,7 +68,7 @@ function that needs it. If the driver is not installed, the call raises
 | `InMemoryBackend` | — | — | None. In-process | — |
 | `SQLiteBackend` | — | built-in `sqlite3` | None. A local file or `:memory:` | — |
 | `PostgresBackend` | `postgres` | `psycopg[binary]>=3.1,<4` | A writable primary, not a replica | `postgres:16-alpine` |
-| `Neo4jBackend` | `neo4j` | `neo4j>=5.26,<7` | Permission to create and inspect constraints and indexes | `neo4j:5-community` |
+| `Neo4jBackend` | `neo4j` | `neo4j>=5.26,<7` | Neo4j server 5.7 or newer. Permission to create and inspect constraints and indexes | `neo4j:5-community` |
 | `MongoDBBackend` | `mongodb` | `pymongo>=4.7,<5` | MongoDB 4.4 or newer, as a replica set or a sharded cluster | `mongo:7`, single-member replica set `rs0` |
 | `RedisBackend` | `redis` | `redis>=5.0,<6` | One logical database, not a Redis Cluster. `maxmemory-policy noeviction` | `redis:7-alpine`, a primary plus one replica |
 | `RoutedBackend` | — | — | The needs of its routed backends | — |

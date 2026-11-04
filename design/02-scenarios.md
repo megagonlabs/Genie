@@ -589,7 +589,7 @@ ben = memory.put(type="traveler", value={"name": "Ben Okafor"}, metadata={"regio
 
 | Question | Call | Answer |
 | --- | --- | --- |
-| Do blocks stay after a restart on SQLite? | Close the first `SQLiteBackend`, open a new `SQLiteBackend("trips.db")`, then call `memory.get(ana_id)` | Yes: `{"name": "Ana Souza"}`, with its preference as a child |
+| Do blocks stay after a restart on SQLite? | Close the first `SQLiteBackend`, open a new `SQLiteBackend("trips.db")`, then call `memory.get(ana_id)` | Yes: `{"name": "Ana Souza"}`, with its trip as a child |
 | What occurs if the PostgreSQL driver is not installed? | `PostgresBackend(...)` | `UnsupportedOperation`: `PostgresBackend requires the optional 'psycopg' package. In the Genie clone, run: python -m pip install -e '.[postgres]'` |
 | Where is the trip of Ana stored? | `backend.route_for_block(trip.id)` | `eu`, the route of its parent, although the trip has no `region` |
 | Can the application send a child of Ana to the US store? | `memory.put(parent=ana, ..., metadata={"region": "us"})` | `MemoryConflict`: `Child route 'us' does not match parent route 'eu'.` |

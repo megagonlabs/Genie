@@ -799,9 +799,10 @@ class MemoryHandle:
             TypeError: If `root` is not a block or string id, the text, types,
                 filters, limit, or after arguments have the wrong type, or no
                 registered codec can decode a visible result.
-            ValueError: If the scope is not valid, the root id is empty, the
-                limit is negative, a filter uses an unknown operator, or a
-                `before_search` hook returns a non-global query with no root.
+            ValueError: If the scope is not valid, the root id or a `types`
+                entry is empty, the limit is negative, a filter uses an
+                unknown operator, or a `before_search` hook returns a
+                non-global query with no root.
         """
 
         if isinstance(query, MemoryQuery):

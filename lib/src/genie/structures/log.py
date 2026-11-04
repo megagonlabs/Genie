@@ -39,7 +39,8 @@ class EventLog:
       object checks it. So a principal that can only read the log cannot add to
       it.
     - **Unreadable members:** `get` raises `AccessDenied`. `read` and `tail` skip
-      them.
+      them. They get each member with `get`, so the access object reports each
+      unreadable member to `on_denied`.
     """
 
     __slots__ = (
@@ -76,12 +77,12 @@ class EventLog:
                 capability.
         """
 
-        store = resolve_store(store, log, missing_message=f"Event log block {_block_id(log)!r} does not exist.")
-        if not isinstance(store, SequenceStore):
-            raise UnsupportedOperation("The configured store does not support event logs.")
         stored_log = access.get(log)
         if stored_log is None:
             raise MemoryNotFound(f"Event log block {_block_id(log)!r} does not exist.")
+        store = resolve_store(store, stored_log, missing_message=f"Event log block {_block_id(log)!r} does not exist.")
+        if not isinstance(store, SequenceStore):
+            raise UnsupportedOperation("The configured store does not support event logs.")
         self._access = access
         self._store = store
         self._hooks = resolve_hooks(access, hooks)

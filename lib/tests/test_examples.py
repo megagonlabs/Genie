@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from examples._catalog import (
+    EXAMPLES_ROOT,
     EXPECTED_ROOT,
     command_for,
     discover_examples,
@@ -20,7 +22,11 @@ from genie import InMemoryBackend, Memory
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_SCRIPT = "python lib/scripts/capture_example_output.py"
+QUICK_START_EXAMPLE = "basic/quick_start.py"
+# The first Python block in the Quick start section. The search stops at the next `## ` heading.
+README_QUICK_START = re.compile(r"^## Quick start\n(?:(?!^## ).)*?^```python\n(.*?)^```", flags=re.MULTILINE | re.DOTALL)
 RUNNABLE_EXAMPLES = [
+    "basic/quick_start.py",
     "basic/crud_blocks.py",
     "basic/block_presence.py",
     "basic/scoped_agents.py",
@@ -129,6 +135,17 @@ def test_example_matches_its_captured_output(example: str) -> None:
         f"{example} no longer prints what {expected.relative_to(REPO_ROOT)} holds. "
         f"If the change is intended, refresh it with: {CAPTURE_SCRIPT}"
     )
+
+
+def test_readme_quick_start_is_the_code_of_its_example() -> None:
+    """The README Quick start shows the code of `examples/basic/quick_start.py`, so the captured-output test also covers the README code."""
+
+    match = README_QUICK_START.search((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    assert match, "README.md has no Python block under its Quick start heading."
+    # The example is its bootstrap header, then the README code.
+    _, _, code = (EXAMPLES_ROOT / QUICK_START_EXAMPLE).read_text(encoding="utf-8").partition("\nensure_repo_on_path()\n\n")
+
+    assert code == match.group(1), f"The README Quick start and the code after `ensure_repo_on_path()` in examples/{QUICK_START_EXAMPLE} are different. Make them the same."
 
 
 def test_every_example_script_has_smoke_coverage() -> None:

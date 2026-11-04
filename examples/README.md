@@ -11,6 +11,8 @@ All examples run from the repository root.
 
 ## Basic reading order
 
+Start with **[`basic/quick_start.py`](basic/quick_start.py)**, the code of the [README Quick start](../README.md#quick-start).
+
 1. **[`basic/crud_blocks.py`](basic/crud_blocks.py)** — block CRUD (create, read, update, delete), versions, ownership traversal, and recursive delete.
 2. **[`basic/block_presence.py`](basic/block_presence.py)** — subtree membership tests, and when a missing block is an answer and not an error.
 3. **[`basic/search_filters.py`](basic/search_filters.py)** — search with friendly arguments, portable queries and results, scopes, types, and metadata filters.

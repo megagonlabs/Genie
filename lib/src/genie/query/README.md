@@ -19,6 +19,7 @@ results = memory.search(
 - **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. The query has optional `text`, an optional `root_id`, an optional `Scope`, optional `types` and `filters`, a `limit` that cannot be negative, and an optional `after` cursor.
 - **Results are ranked `SearchResult` values.** Each one holds a `block`, a finite numeric `score`, and an optional `reason`. Its `cursor` property gives the position after it.
 - **A new query checks runtime types.** It also copies the type lists and the nested filter operands that the caller owns.
+- **A new query refuses empty values.** An empty `root_id` or `types` entry, or one of only whitespace, raises `ValueError`, as an empty id or block type does in the rest of the API.
 
 ### Search order, `limit`, and `after`
 

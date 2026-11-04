@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -14,9 +15,12 @@ from genie import (
     HookOperation,
     InMemoryBackend,
     Memory,
+    MemoryHandle,
     MemoryHook,
+    MemoryNotFound,
     MemoryPolicy,
     Operation,
+    RoutedBackend,
 )
 from genie.structures import (
     EventLog,
@@ -46,6 +50,22 @@ class _DenialHook(MemoryHook):
         """Record the attempted operation, the check that denied it, and the subject."""
 
         self.denials.append((context.operation, str(operation), subject_id))
+
+
+_Store = InMemoryBackend | RoutedBackend
+
+_STORES: dict[str, Callable[[], _Store]] = {
+    "plain": InMemoryBackend,
+    "routed": lambda: RoutedBackend({"a": InMemoryBackend()}),
+}
+
+_CONTAINER_FACADES: dict[str, Callable[[Memory | MemoryHandle, _Store, str], object]] = {
+    "OwnershipTree": lambda access, store, container: OwnershipTree(access, root=container),
+    "KeyedCollection": lambda access, store, container: KeyedCollection(access, store, collection=container),
+    "EventLog": lambda access, store, container: EventLog(access, store, log=container),
+    "TemporalCollection": lambda access, store, container: TemporalCollection(access, store, collection=container, index=store),
+    "VersionedRecords": lambda access, store, container: VersionedRecords(access, store, collection=container),
+}
 
 
 def test_compound_facades_apply_one_handle_scope_and_block_policy() -> None:
@@ -262,3 +282,98 @@ def test_handle_membership_changes_require_write_on_the_container() -> None:
     ]
     assert keyed.items() == []
     assert events.read() == []
+
+
+def test_structure_listings_report_each_hidden_member() -> None:
+    """A facade listing gets each member through the access object, so each hidden member reports a refusal."""
+
+    backend = InMemoryBackend()
+    hook = _DenialHook()
+    owner = Memory(backend=backend, principal="agent:owner")
+    public = MemoryPolicy.public()
+    root = owner.put(type="workspace", value="root", policy=public)
+    hidden = owner.put(parent=root, type="fact", value="hidden")
+    closed = owner.put(
+        parent=root,
+        type="branch",
+        value="closed",
+        policy=MemoryPolicy(
+            read=AccessRule.allow(),
+            write=AccessRule.owner(),
+            search=AccessRule.allow(),
+            traverse_up=AccessRule.allow(),
+            traverse_down=AccessRule.owner(),
+        ),
+    )
+    owner.put(parent=closed, type="fact", value="behind closed", policy=public)
+    catalog_root = owner.put(parent=root, type="collection", value="catalog", policy=public)
+    events_root = owner.put(parent=root, type="log", value="events", policy=public)
+    timeline_root = owner.put(parent=root, type="timeline", value="timeline", policy=public)
+    KeyedCollection(owner, backend, collection=catalog_root).bind(MemoryAddress((), "hidden"), hidden)
+    EventLog(owner, backend, log=events_root).append(hidden)
+    TemporalCollection(owner, backend, collection=timeline_root).add(hidden, occurred_at=datetime(2026, 1, 1, tzinfo=UTC))
+    reader = Memory(backend=backend, principal="agent:reader", hooks=[hook])
+
+    assert KeyedCollection(reader, backend, collection=catalog_root).items() == []
+    assert EventLog(reader, backend, log=events_root).read() == []
+    assert TemporalCollection(reader, backend, collection=timeline_root).scan() == []
+    assert [block.id for block in OwnershipTree(reader, root=root).descendants()] == [
+        closed.id,
+        catalog_root.id,
+        events_root.id,
+        timeline_root.id,
+    ]
+
+    assert hook.denials == [
+        (HookOperation.GET, Operation.READ, hidden.id),
+        (HookOperation.GET, Operation.READ, hidden.id),
+        (HookOperation.GET, Operation.READ, hidden.id),
+        (HookOperation.CHILDREN, Operation.TRAVERSE_DOWN, closed.id),
+    ]
+
+
+@pytest.mark.parametrize("store_kind", sorted(_STORES))
+@pytest.mark.parametrize("facade", sorted(_CONTAINER_FACADES))
+def test_facade_construction_through_memory_tells_missing_from_unreadable(facade: str, store_kind: str) -> None:
+    """Through a `Memory`, a missing container raises `MemoryNotFound` and an unreadable one raises `AccessDenied`, with each store type."""
+
+    backend = _STORES[store_kind]()
+    owner = Memory(backend=backend, principal="agent:owner")
+    private = owner.put(type="container", value="private")
+    reader = Memory(backend=backend, principal="agent:reader")
+    build = _CONTAINER_FACADES[facade]
+
+    with pytest.raises(MemoryNotFound):
+        build(reader, backend, "mem_missing")
+    with pytest.raises(AccessDenied):
+        build(reader, backend, private.id)
+
+
+@pytest.mark.parametrize("store_kind", sorted(_STORES))
+@pytest.mark.parametrize("facade", sorted(_CONTAINER_FACADES))
+def test_facade_construction_through_a_rooted_handle_does_not_show_existence(facade: str, store_kind: str) -> None:
+    """A rooted handle raises `AccessDenied` for a missing, an outside, and an unreadable container, with each store type.
+
+    - **Subtree check first:** for a missing id and an id outside the root, the
+      handle reports its subtree check. So a route lookup did not answer first.
+    """
+
+    backend = _STORES[store_kind]()
+    hook = _DenialHook()
+    owner = Memory(backend=backend, principal="agent:owner", hooks=[hook])
+    public = MemoryPolicy.public()
+    root = owner.put(type="workspace", value="root", policy=public)
+    hidden = owner.put(parent=root, type="container", value="hidden")
+    outside = owner.put(type="container", value="outside", policy=public)
+    handle = owner.get_handle(root=root, principal="agent:reader")
+    build = _CONTAINER_FACADES[facade]
+
+    for container in ("mem_missing", outside.id, hidden.id):
+        with pytest.raises(AccessDenied):
+            build(handle, backend, container)
+
+    assert hook.denials == [
+        (HookOperation.GET, HandleCapability.SUBTREE, "mem_missing"),
+        (HookOperation.GET, HandleCapability.SUBTREE, outside.id),
+        (HookOperation.GET, Operation.READ, hidden.id),
+    ]
