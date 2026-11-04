@@ -6,6 +6,7 @@ service.
 
 | Example | Components | Capabilities shown |
 | --- | --- | --- |
+| `quick_start.py` | `Memory`, `MemoryHandle`, `MemoryPolicy` | The README Quick start: memory that the application owns, an agent with `memorize` and `recall` tools, a refusal by handle scope and a refusal by policy |
 | `crud_blocks.py` | `Memory`, `MemoryBlock` | CRUD, dictionary and metadata updates, versions, ownership traversal, recursive delete |
 | `block_presence.py` | `Memory.contains`, `MemoryNotFound` | Subtree membership at any depth, absence as a returned value versus operations that raise `MemoryNotFound` |
 | `search_filters.py` | `MemoryQuery`, `Scope`, `SearchResult` | Friendly and explicit queries, normalized filters, search by scope and by type, scores and reasons |
@@ -27,6 +28,6 @@ service.
 
 - **Core hook callbacks:** `hook_audit.py`, `write_hooks.py`, and `search_hooks.py` cover them.
 - **The structural pair** `before_structure_change` and `after_structure_change` comes only from the optional `genie.structures` facades. So [`advanced/structure_hooks.py`](../advanced/structure_hooks.py) covers it.
-- **Each script contains assertions,** and most scripts use `InMemoryBackend`.
+- **Each script contains assertions,** except `quick_start.py`, which prints its results as the README does. Most scripts use `InMemoryBackend`.
 - **The storage examples are different on purpose.** They use routed stores, SQLite, or traversal and search components that the application supplies.
 - **Run commands and shared conventions** are in the [examples guide](../README.md).
