@@ -161,13 +161,23 @@ class MemoryHook:
     ) -> list[SearchResult]:
         """Run after `Memory` decodes the search results and filters them by policy.
 
+        - **Stored blocks:** each result holds the block from the block store,
+          not the copy from the search index.
+        - **Changes:** a hook can rerank, filter, or add results. It can also
+          change the content of a result, for example to redact a value.
+        - **Check after the hook:** `Memory` checks the id of each returned
+          result against the stored block, and removes a result that the
+          principal cannot see. It does not check or change the content.
+        - **Search only:** `after_get` only observes. So `get` returns the
+          stored value, also when an `after_search` hook redacts it.
+
         Args:
             context: Operation context that the paired before callback shares.
             query: Query that ran.
             results: Search results.
 
         Returns:
-            Results to return to the caller. A hook can rerank or filter them.
+            Results to return to the caller.
         """
 
         return results

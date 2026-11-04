@@ -506,3 +506,99 @@ def test_search_visibility_is_decided_again_for_every_search() -> None:
     second = memory.search("needle", root=root, scope=Scope.SUBTREE)
 
     assert second == []
+
+
+class _StaleSearchBackend(InMemoryBackend):
+    """In-memory backend whose search returns the block copies of its last index refresh.
+
+    - **Old index:** it acts as a separate search index that the application
+      did not refresh after the last change.
+    - **Matches:** it finds blocks by their current content, then returns the
+      old copy with its own `score` and `reason`.
+    """
+
+    def __init__(self) -> None:
+        """Start with an empty index."""
+
+        super().__init__()
+        self.indexed: dict[str, MemoryBlock] = {}
+
+    def refresh_index(self, block_id: str) -> None:
+        """Copy the current stored block of one id into the index."""
+
+        stored = self.get_block(block_id)
+        assert stored is not None
+        self.indexed[block_id] = stored
+
+    def search(self, query: MemoryQuery) -> list[SearchResult]:
+        """Search normally, then return the indexed copy of each result."""
+
+        return [
+            replace(result, block=self.indexed.get(result.block.id, result.block), score=7.5, reason="old index copy")
+            for result in super().search(query)
+        ]
+
+
+def test_search_returns_the_stored_block_not_the_index_copy() -> None:
+    """`Memory.search` returns the stored block that it checked, not the copy from the search index.
+
+    - **Old index:** the index returns a copy from before the last change. The
+      caller gets the current value, metadata, and version.
+    - **Index fields stay:** `score` and `reason` come from the index.
+    - **Handles:** a handle search gets the same stored block.
+    """
+
+    backend = _StaleSearchBackend()
+    memory = Memory(backend=backend, principal="owner")
+    root = memory.put(type="root", value="workspace")
+    note = memory.put(parent=root, type="note", value="needle in Paris", metadata={"city": "Paris"})
+    backend.refresh_index(note.id)
+    memory.set(note, "needle in Berlin")
+    current = memory.update(note, metadata={"city": "Berlin"})
+
+    results = memory.search("needle")
+    handle_results = memory.get_handle(root=root).search("needle")
+
+    for found in (results, handle_results):
+        assert [result.block for result in found] == [current]
+        assert [(result.score, result.reason) for result in found] == [(7.5, "old index copy")]
+
+
+def test_after_search_hook_gets_the_stored_block_and_its_redaction_reaches_the_caller() -> None:
+    """`after_search` gets the stored block, and the content that it returns gets to the caller.
+
+    - **Stored content:** the hook gets the current value, not the index copy.
+    - **Redaction:** the filter after the hook checks only the result id. So
+      the redacted value that the hook returns is the value that the caller
+      gets.
+    - **Store does not change:** `get` still returns the stored value.
+    """
+
+    class PhoneRedactor(MemoryHook):
+        """Hook that records each value that it gets and masks one phone number."""
+
+        def __init__(self) -> None:
+            """Start with an empty record."""
+
+            self.seen: list[Any] = []
+
+        def after_search(self, context: HookContext, query: MemoryQuery, results: list[SearchResult]) -> list[SearchResult]:
+            """Record each value, then return the results with the phone number masked."""
+
+            self.seen.extend(result.block.value for result in results)
+            return [replace(result, block=result.block.with_updates(value=result.block.value.replace("555-0199", "[redacted]"))) for result in results]
+
+    backend = _StaleSearchBackend()
+    redactor = PhoneRedactor()
+    memory = Memory(backend=backend, principal="owner", hooks=[redactor])
+    note = memory.put(type="note", value="Alice lives in Paris. Phone 555-0142")
+    backend.refresh_index(note.id)
+    memory.set(note, "Alice moved to Berlin. Phone 555-0199")
+
+    results = memory.search("Alice")
+
+    assert redactor.seen == ["Alice moved to Berlin. Phone 555-0199"]
+    assert [result.block.value for result in results] == ["Alice moved to Berlin. Phone [redacted]"]
+    stored = memory.get(note)
+    assert stored is not None
+    assert stored.value == "Alice moved to Berlin. Phone 555-0199"

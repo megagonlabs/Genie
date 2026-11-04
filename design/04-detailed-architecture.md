@@ -357,12 +357,13 @@ order:
 4. **Get backend pages** in `_collect_visible_results`. The backend
    resolves the scope, finds the matches, and returns at most the batch size
    of results after the cursor, in search order.
-5. **Filter** each result with `_is_visible_result`, and **decode** only the
-   results that it keeps. Continue until there are `query.limit` visible
-   results.
+5. **Filter** each result with `_visible_stored_block`. For each result that
+   it keeps, **decode the stored block** and put it in the result in place of
+   the backend copy. Continue until there are `query.limit` visible results.
 6. **Run `after_search`**, then **filter again** with the same verdict cache.
+   The second filter only removes results. It does not change them.
 
-`_can_return_search_result` reads the stored block again by id. It checks
+`_read_searchable_block` reads the stored block again by id. It checks
 `search`, then `read`, then scope membership:
 
 | Scope | Membership test |
@@ -380,6 +381,14 @@ order:
   filter after `after_search` share a dict, so `Memory` reads each block one
   time. A verdict depends only on the id and the stored block, never on the
   other results. So a reused verdict is as strict as a new check.
+- **The stored block goes into the result.** A verdict keeps the stored block
+  of a visible result, and step 5 returns it with the `score` and `reason`
+  from the backend. So a separate search index that is behind the store
+  cannot return old content. Its matches are only as current as the index.
+- **Hooks can change the content.** `after_search` gets the stored blocks,
+  and its return value goes to the caller after the second filter. So a
+  trusted hook can redact a value. The second filter checks the id of each
+  result, not its content.
 - **A side effect:** if a hook deletes a block inside `after_search`, the
   result for that block stays on the current page.
 - **`limit` counts visible results.** So blocks that the caller cannot see

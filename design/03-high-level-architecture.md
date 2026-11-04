@@ -155,11 +155,14 @@ A search through a bounded handle shows how the 2 checks work together:
 4. **The backend returns one page** of results in the search order.
 5. **`Memory` filters and decodes the page.** It filters the results against
    block policies and checks the query scope again. Then it decodes the
-   results that it keeps. It gets the next page until it has `limit` visible
+   results that it keeps. Each result holds the stored block, not the copy from
+   the search index. It gets the next page until it has `limit` visible
    results, or until the backend has no more results.
-6. **`after_search` can change the list.** Then the same filter runs a second
-   time over the list that the hooks returned. `Memory` keeps one verdict for
-   each block id, so it reads a block once for both passes.
+6. **`after_search` can change the list and the content of each result,** for
+   example to redact a value. Then the same filter runs a second time over the
+   list that the hooks returned. It removes results, and it does not change
+   them. `Memory` keeps one verdict for each block id, so it reads a block once
+   for both passes.
 
 - **The limit counts visible results.** The filter runs before the count.
   So blocks that the caller cannot see do not change which visible results

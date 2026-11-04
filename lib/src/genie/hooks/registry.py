@@ -595,9 +595,9 @@ class HookRegistry:
     ) -> list[SearchResult]:
         """Dispatch `after_search` in registration order.
 
-        These hooks can rerank and filter what the caller gets. So a failure
-        stops dispatch, and results that a hook did not review do not get to
-        the caller.
+        These hooks can rerank, filter, and change what the caller gets. So a
+        failure stops dispatch, and results that a hook did not review do not
+        get to the caller.
 
         Args:
             context: Active operation context.

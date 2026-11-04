@@ -338,6 +338,8 @@ class AuditHook(MemoryHook):
 ## Authorization and failures
 
 - **Hooks cannot widen normal access.** `before_put` cannot change the authorized parent. Genie authorizes a changed search again, and it filters the final search results again.
+- **`after_search` gets the stored blocks.** Each result holds the block from the block store, not the copy from the search index. A hook can rerank, filter, or add results, and it can change their content, for example to redact a value. Genie checks the id of each final result against the stored block. It does not check or change the content.
+- **Redaction in `after_search` covers search only.** `after_get` only observes. So `get` returns the stored value to a principal that can read the block.
 - **Genie checks a changed handle search against the handle again.** If `before_search` turns a handle search into a `global` or `ancestors` search that the handle does not allow, or moves the root outside the handle, the search raises `AccessDenied`.
 - **Hooks are trusted extensions** with access to application data.
 - **Dispatch is synchronous.** Genie does not retry hooks, and it does not include their external effects in backend transactions. So a hook that is slow, not safe to repeat, or not reliable has a direct effect on each operation that dispatches it.
