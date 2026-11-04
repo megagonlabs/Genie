@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import sys
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -376,10 +377,22 @@ def test_neo4j_backend_translates_driver_close_failures() -> None:
     assert backend._closing is False
 
 
+@pytest.mark.parametrize(
+    ("driver_version", "filter_option"),
+    [
+        ("5.28.8", "notifications_disabled_categories"),
+        ("6.4.1", "notifications_disabled_classifications"),
+    ],
+)
 def test_neo4j_backend_forwards_production_driver_configuration(
     monkeypatch: pytest.MonkeyPatch,
+    driver_version: str,
+    filter_option: str,
 ) -> None:
-    """Connection, retry, notification, encryption, and auth settings reach the driver."""
+    """Connection, retry, notification, encryption, and auth settings reach the driver.
+
+    - **Notification filter:** the option name follows the driver major version.
+    """
 
     calls: dict[str, Any] = {}
 
@@ -403,7 +416,7 @@ def test_neo4j_backend_forwards_production_driver_configuration(
     monkeypatch.setattr(
         neo4j_module,
         "_load_neo4j_driver",
-        lambda: (FakeGraphDatabase, ()),
+        lambda: (FakeGraphDatabase, (), driver_version),
     )
     monkeypatch.setattr(Neo4jBackend, "_initialize_schema", lambda self: None)
 
@@ -422,12 +435,32 @@ def test_neo4j_backend_forwards_production_driver_configuration(
         "options": {
             "connection_timeout": 4.5,
             "max_transaction_retry_time": 12.0,
-            "notifications_disabled_classifications": ["UNRECOGNIZED"],
+            filter_option: ["UNRECOGNIZED"],
             "encrypted": True,
         },
         "verified": True,
         "closed": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("driver_version", "filter_option"),
+    [
+        ("5.26.0", "notifications_disabled_categories"),
+        ("5.28.8", "notifications_disabled_categories"),
+        ("6.0.0a1", "notifications_disabled_classifications"),
+        ("6.4.1", "notifications_disabled_classifications"),
+        ("", "notifications_disabled_classifications"),
+        ("dev", "notifications_disabled_classifications"),
+    ],
+)
+def test_neo4j_notification_filter_option_follows_driver_major_version(driver_version: str, filter_option: str) -> None:
+    """Each driver major version gets the filter option that it accepts without a Python warning.
+
+    - **Unknown version:** a version that does not start with a number gets the 6.x name.
+    """
+
+    assert neo4j_module._notification_filter_option(driver_version) == filter_option
 
 
 def test_neo4j_backend_discards_driver_after_unexpected_initialization_error(
@@ -456,7 +489,7 @@ def test_neo4j_backend_discards_driver_after_unexpected_initialization_error(
     monkeypatch.setattr(
         neo4j_module,
         "_load_neo4j_driver",
-        lambda: (FakeGraphDatabase, ()),
+        lambda: (FakeGraphDatabase, (), "6.4.1"),
     )
     monkeypatch.setattr(
         Neo4jBackend,
@@ -1148,3 +1181,17 @@ def test_live_neo4j_backend_does_not_log_unrecognized_name_notifications(caplog:
 
     assert record is None
     assert [entry for entry in caplog.records if entry.name == "neo4j.notifications"] == []
+
+
+@pytest.mark.skipif(not (_LIVE_URI and _LIVE_DRIVER_AVAILABLE), reason=_LIVE_REASON)
+def test_live_neo4j_backend_construction_makes_no_python_warning() -> None:
+    """Construction and close make no Python warning with the installed driver, so they also work under `python -W error`.
+
+    - **Why:** each driver major version warns on one of the 2 names of the notification filter option.
+    """
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _live_backend().close()
+
+    assert [f"{entry.category.__name__}: {entry.message}" for entry in caught] == []

@@ -160,7 +160,7 @@ class Neo4jBackend:
         if not isinstance(initialize_schema, bool):
             raise TypeError("initialize_schema must be a boolean.")
 
-        graph_database, exception_types = _load_neo4j_driver()
+        graph_database, exception_types, driver_version = _load_neo4j_driver()
         self.uri = uri
         self.database = database
         self.connection_timeout = float(connection_timeout)
@@ -179,10 +179,12 @@ class Neo4jBackend:
         #   that a new database does not have yet. This is expected.
         # - The driver logs each such notification as a warning, and an
         #   application without a logging setup prints it to stderr.
+        # - The name of this option is different in each driver major
+        #   version. See `_notification_filter_option`.
         driver_options: dict[str, Any] = {
             "connection_timeout": self.connection_timeout,
             "max_transaction_retry_time": self.max_transaction_retry_time,
-            "notifications_disabled_classifications": ["UNRECOGNIZED"],
+            _notification_filter_option(driver_version): ["UNRECOGNIZED"],
         }
         if encrypted is not None:
             driver_options["encrypted"] = encrypted
@@ -2377,8 +2379,8 @@ def _validate_timeout(value: object, *, name: str) -> None:
         raise ValueError(f"{name} must be a finite number greater than or equal to zero.")
 
 
-def _load_neo4j_driver() -> tuple[Any, tuple[type[BaseException], ...]]:
-    """Import the optional driver and return it with its exception types."""
+def _load_neo4j_driver() -> tuple[Any, tuple[type[BaseException], ...], str]:
+    """Import the optional driver and return it with its exception types and its version."""
 
     try:
         import neo4j
@@ -2394,7 +2396,22 @@ def _load_neo4j_driver() -> tuple[Any, tuple[type[BaseException], ...]]:
             if isinstance(exception_type, type)
         )
     )
-    return neo4j.GraphDatabase, exception_types
+    return neo4j.GraphDatabase, exception_types, str(getattr(neo4j, "__version__", ""))
+
+
+def _notification_filter_option(driver_version: str) -> str:
+    """Return the driver option that turns off notification classifications.
+
+    - **Driver 5.x:** `notifications_disabled_categories`. On 5.x, `notifications_disabled_classifications` is a preview feature, and it makes a `PreviewWarning`.
+    - **Driver 6.x:** `notifications_disabled_classifications`. On 6.x, `notifications_disabled_categories` is deprecated, and it makes a `DeprecationWarning`.
+    - **Same server request:** driver 5.x sends the categories as classifications. So the server gets the same filter from both names.
+    - **Unknown version:** if `driver_version` does not start with a number, the 6.x name is used.
+    """
+
+    major = driver_version.split(".", 1)[0]
+    if major.isdecimal() and int(major) < 6:
+        return "notifications_disabled_categories"
+    return "notifications_disabled_classifications"
 
 
 def _translate_neo4j_error(error: BaseException) -> GenieError:

@@ -22,6 +22,7 @@ with Neo4jBackend(
 
 - **`"password"` is a placeholder.** Your own Neo4j password goes in its place. Neo4j asks for a new password the first time a server starts, so no default password works here. The URI and the `neo4j` user name are real defaults.
 - **No driver:** without the `neo4j` package, the constructor raises `UnsupportedOperation`.
+- **Driver 5.x and 6.x:** the option that turns off `UNRECOGNIZED` notifications has a different name in each driver major version. The backend uses the name that the installed driver accepts without a Python warning. So the constructor also works under `python -W error`.
 - **Neo4j server 5.7 or newer:** this is the database version, not the `neo4j` driver version. The backend asks the server not to send `UNRECOGNIZED` notifications (see the next section). Older servers do not support this request, so on an older server the constructor raises `BackendError`.
 
 ## Behavior
