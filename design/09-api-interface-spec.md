@@ -233,8 +233,9 @@ search(query=None, *, text=None, root=None, scope=None, types=None, filters=None
 - **Raises:** `AccessDenied` (the root is not searchable or not traversable),
   `MemoryNotFound` (root), `TypeError` (bad argument, a `query` that is not a
   `MemoryQuery`, a string, or `None`, text given 2 times, or no codec for a
-  visible result), `ValueError` (unknown scope, negative limit, a non-global scope
-  with no root, or an unknown filter operator).
+  visible result), `ValueError` (unknown scope, negative limit, an empty root id
+  or `types` entry, a non-global scope with no root, or an unknown filter
+  operator).
 
 ### Handles
 

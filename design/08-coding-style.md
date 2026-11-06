@@ -29,10 +29,13 @@ python -m pyright
 python -m compileall -q lib/src/genie lib/tests examples
 ```
 
-- **`ruff.toml` sets only 3 values:** `line-length = 193`,
-  `src = ["lib/src", "lib", "."]`, and `extend-select = ["DTZ"]`. All other
-  settings are ruff defaults. So the active rule set, except `DTZ`, changes
-  with the ruff version in the `dev` extra.
+- **`ruff.toml` sets `line-length`, `src`, `extend-select`, and `ignore`.**
+  All other settings are ruff defaults. So the active rule set, except the
+  `DTZ` rules and the ignored `UP` rules, changes with the ruff version in
+  the `dev` extra.
+- **`UP040`, `UP046`, and `UP047` are off.** A `type` alias is a
+  `TypeAliasType`, so public aliases such as `BlockRef` fail in
+  `isinstance()`. The code also keeps one `TypeVar` style.
 - **All `DTZ` rules are active.** Genie requires timezone-aware datetimes.
   The default rule set of ruff changes between versions, so `extend-select`
   turns on all `DTZ` rules explicitly.

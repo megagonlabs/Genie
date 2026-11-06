@@ -48,11 +48,10 @@ A plain `pytest` run **skips** the live tests of every adapter that needs a
 running server. Those tests run only when the adapter's optional driver is
 installed and its `GENIE_*` connection variables are set.
 
-- **Report a plain run as partial,** not as a full pass. It looks like
-  `1359 passed, 320 skipped`.
+- **Report a plain run as partial,** not as a full pass.
 - **`./lib/scripts/test_full.sh` runs everything** against disposable
-  PostgreSQL, Neo4j, MongoDB, and Redis containers. It needs Docker, finishes in
-  under two minutes, and gives `1679 passed`. It removes its containers when it exits.
+  PostgreSQL, Neo4j, MongoDB, and Redis containers. It needs Docker. It
+  removes its containers when it exits.
 - **The script uses the Python already on your `PATH`,** so activate your
   environment first. `GENIE_TEST_PYTHON` overrides that interpreter and
   `GENIE_TEST_COMMAND` overrides what runs once the servers are ready.
