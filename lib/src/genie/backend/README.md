@@ -69,7 +69,7 @@ one backend object.
 
 1. **Traversal defines scope.** `Memory` finds ownership only through `TraversalIndex`, and it never reads `parent_id` itself. So a separate traversal index decides subtree scope, traversal, and recursive delete, and it has to agree with the block store.
 2. **A rebuild happens outside these contracts.** They have no method that lists all blocks. So a rebuild needs native storage access, or a set of root ids that the application keeps.
-3. **A search index decides the matches, and the store gives the content.** `Memory.search` returns the stored block of each result id, with the `score` and `reason` from the index. So an index that is behind the store cannot return old content. But it can match a block on old content, or miss a block that it did not index yet. The application keeps the index current.
+3. **A search index decides the matches, and the store gives the content.** `Memory.search` returns the stored block of each result id, with the `score` and `reason` from the index. So an index that is behind the store cannot return old content. But it can match a block on old content, or miss a block that it did not index yet. The application keeps the index current. The index also gives the order: the `cursor` of each result is the position of its index row. So paging with `after=results[-1].cursor` loses no result when the index copy has a different `created_at`, for example at millisecond precision.
 
 ## Implementations
 

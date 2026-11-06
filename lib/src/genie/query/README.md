@@ -17,7 +17,7 @@ results = memory.search(
 ```
 
 - **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. Next to a `MemoryQuery`, each keyword that is not `None` replaces the same field of the query. The query has optional `text`, an optional `root_id`, an optional `Scope`, optional `types` and `filters`, a `limit` that cannot be negative, and an optional `after` cursor.
-- **Results are ranked `SearchResult` values.** Each one holds a `block`, a finite numeric `score`, and an optional `reason`. Its `cursor` property gives the position after it.
+- **Results are ranked `SearchResult` values.** Each one holds a `block`, a finite numeric `score`, an optional `reason`, and an optional keyword-only `position`. Its `cursor` property gives the position after it: `position` if it is set, or else a position from `score`, `block.created_at`, and `block.id`. Equality ignores `position`.
 - **A new query checks runtime types.** It also copies the type lists and the nested filter operands that the caller owns.
 - **A new query refuses empty values.** An empty `root_id` or `types` entry, or one of only whitespace, raises `ValueError`, as an empty id or block type does in the rest of the API.
 
@@ -35,7 +35,9 @@ second = memory.search("concise", limit=20, after=first[-1].cursor)
 ```
 
 - **A handle pages the same way.** A search with no scope, as a keyword or in a `MemoryQuery`, uses the `default_scope` of the handle.
-- **A cursor is only a position.** A `SearchCursor` holds a `score`, a `created_at`, and a block id. It can name a block that the caller cannot see, and it shows nothing about that block.
+- **The cursor follows the backend order.** `Memory.search` puts the stored block in each result, and it sets `position` to the place of the backend result. A separate search index can keep a different `created_at`, for example at millisecond precision, or an old copy of a block id. The cursor then still names a place that the index uses, so no result is lost.
+- **A cursor is only a position.** A `SearchCursor` holds a `score`, a `created_at`, and a block id. It can name a block that the caller cannot see, and it shows nothing about that block. With a separate search index, its `score` and `created_at` come from the index copy.
+- **`page_results` sorts by `cursor`.** So an application can merge the pages of 2 `Memory` searches with it, and page the merged list with the same cursor.
 - **Pages are not a snapshot.** A block that changes between 2 calls can move in the order. One search counts each block one time. But a block can be missing from a later page, or it can be on 2 pages.
 
 | Scope | Search area |

@@ -991,8 +991,15 @@ class Memory:
           from the search index. The `score` and `reason` come from the index.
           So the content is current, but a match is only as current as the
           index.
+        - **Index position:** the `position` of each result is its place in
+          the search order of the index. So `cursor` gives the next page, also
+          when the index copy has a different `created_at` from the stored
+          block.
         - **Hooks:** `after_search` hooks get these results, and the caller
-          gets what the hooks return, for example a redacted value.
+          gets what the hooks return, for example a redacted value. A result
+          that a hook returns with no `position` gets the index position of
+          its block id. A hook that changes the order of the results breaks
+          paging with `after=results[-1].cursor`.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
@@ -1107,11 +1114,15 @@ class Memory:
             # read, not the copy from the search index.
             verdicts: dict[str, MemoryBlock | None] = {}
             visible_results = self._collect_visible_results(memory_query, verdicts, keep)
+            # A hook that builds a new result drops `position`. Keep the index
+            # position of each block id, so the caller cursor stays correct.
+            positions = {result.block.id: result.cursor for result in visible_results}
             hooked_results = self.hooks.after_search(
                 context,
                 memory_query,
                 visible_results,
             )
+            hooked_results = _restore_index_positions(hooked_results, positions)
             return self._filter_visible_results(memory_query, hooked_results, verdicts, keep)
 
     def _collect_visible_results(
@@ -1139,6 +1150,11 @@ class Memory:
           the check read, not the block from the backend page. So a search
           index that is behind the store cannot return old content. The
           `score` and `reason` of the result stay.
+        - **Index position:** each visible result keeps the `cursor` of its
+          backend result in `position`. The stored block can have a different
+          `created_at` from the index copy. So without `position`, the caller
+          cursor would point to a place that the index does not use, and the
+          next page could lose results.
         - **Decode after the filter:** so a hidden block with a codec that
           this `Memory` does not have cannot make the search fail.
 
@@ -1166,7 +1182,7 @@ class Memory:
                 seen.add(block_id)
                 stored = self._visible_stored_block(query, result, verdicts, keep)
                 if stored is not None:
-                    visible.append(replace(result, block=self._decode_block(stored)))
+                    visible.append(replace(result, block=self._decode_block(stored), position=result.cursor))
                     if len(visible) == query.limit:
                         break
             if len(page) < batch:
@@ -1830,3 +1846,28 @@ def _block_id(block: str | MemoryBlock) -> str:
     if not isinstance(block, str):
         raise TypeError("A block reference must be a MemoryBlock or a string id.")
     return require_non_empty_str(block, field_name="Block id")
+
+
+def _restore_index_positions(results: list[SearchResult], positions: Mapping[str, SearchCursor]) -> list[SearchResult]:
+    """Give the index position back to each `after_search` result that has none.
+
+    - **Why:** a hook that builds a new `SearchResult` drops `position`. Then
+      `cursor` uses the stored block, and the next page can lose results.
+    - **Fill only:** a `position` that a hook sets stays. A result for a block
+      id that the backend did not return stays without one.
+    - **No content change:** `block`, `score`, and `reason` stay as the hook
+      returned them.
+
+    Args:
+        results: Results that the `after_search` hooks returned.
+        positions: Index position of each visible block id, from the backend
+            pages.
+
+    Returns:
+        The results, in the same order.
+    """
+
+    return [
+        replace(result, position=positions[result.block.id]) if result.position is None and result.block.id in positions else result
+        for result in results
+    ]

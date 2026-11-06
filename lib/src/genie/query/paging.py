@@ -16,6 +16,10 @@ def page_results(results: Iterable[SearchResult], query: MemoryQuery) -> list[Se
       to new, then block id in ascending order. So results with the same
       score come in creation order. Each block id occurs one time, so 2
       results never tie.
+    - **Position:** each result sorts by its `cursor`. So a result with a
+      `position` sorts by it, and the sort agrees with the cursor that the
+      caller gets. An application can merge the pages of 2 `Memory` searches
+      with this helper.
     - **Cursor:** drops each result at or before `query.after`.
     - **Limit:** keeps the first `query.limit` of the remaining results.
     - **Shared:** each shipped adapter uses this helper after it scores its
@@ -38,6 +42,7 @@ def page_results(results: Iterable[SearchResult], query: MemoryQuery) -> list[Se
 
 
 def _order_key(result: SearchResult) -> tuple[float, datetime, str]:
-    """Return the sort key of a result in the search order."""
+    """Return the sort key of a result in the search order, from its `cursor`."""
 
-    return (-result.score, result.block.created_at, result.block.id)
+    cursor = result.cursor
+    return (-cursor.score, cursor.created_at, cursor.block_id)

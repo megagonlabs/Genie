@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from genie.memory._validation import require_non_empty_str
@@ -64,11 +64,23 @@ class SearchCursor:
 class SearchResult:
     """A block that a search operation returns.
 
+    - **Position:** `Memory.search` sets `position` to the place of the
+      backend result in the backend search order. Then it puts the stored
+      block in `block`. So `cursor` follows the backend order, also when the
+      copy of a search index has a different `created_at`.
+    - **`dataclasses.replace` keeps `position`.** A new `SearchResult` has no
+      `position`. Its `cursor` then uses `score`, `block.created_at`, and
+      `block.id`.
+    - **Equality ignores `position`.** 2 results with the same `block`,
+      `score`, and `reason` are equal.
+
     Attributes:
         block: Matching memory block.
         score: Ranking score that the backend defines. `SearchResult` stores it
             as a `float`. Higher scores come first.
         reason: Optional human-readable reason for the match.
+        position: Optional keyword-only `SearchCursor` that `cursor` returns.
+            Genie does not check that it names `block`.
 
     Raises:
         TypeError: If a field has a runtime type that is not valid, or `score`
@@ -79,6 +91,7 @@ class SearchResult:
     block: MemoryBlock
     score: float = 1.0
     reason: str | None = None
+    position: SearchCursor | None = field(default=None, kw_only=True, compare=False)
 
     def __post_init__(self) -> None:
         """Check the portable result shape that crosses backend boundaries, and store `score` as a `float`."""
@@ -88,10 +101,19 @@ class SearchResult:
         normalized_score = _finite_score(self.score, owner="SearchResult")
         if self.reason is not None and not isinstance(self.reason, str):
             raise TypeError("SearchResult reason must be a string or None.")
+        if self.position is not None and not isinstance(self.position, SearchCursor):
+            raise TypeError("SearchResult position must be a SearchCursor or None.")
         object.__setattr__(self, "score", normalized_score)
 
     @property
     def cursor(self) -> SearchCursor:
-        """Return the position directly after this result, for `MemoryQuery.after`."""
+        """Return the position directly after this result, for `MemoryQuery.after`.
 
+        - **With `position`:** returns `position`.
+        - **Without `position`:** builds the position from `score`,
+          `block.created_at`, and `block.id`.
+        """
+
+        if self.position is not None:
+            return self.position
         return SearchCursor(score=self.score, created_at=self.block.created_at, block_id=self.block.id)

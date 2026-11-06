@@ -359,9 +359,13 @@ order:
    of results after the cursor, in search order.
 5. **Filter** each result with `_visible_stored_block`. For each result that
    it keeps, **decode the stored block** and put it in the result in place of
-   the backend copy. Continue until there are `query.limit` visible results.
-6. **Run `after_search`**, then **filter again** with the same verdict cache.
-   The second filter only removes results. It does not change them.
+   the backend copy. Put the `cursor` of the backend result in `position`.
+   Continue until there are `query.limit` visible results.
+6. **Run `after_search`**, then **restore positions** with
+   `_restore_index_positions`, then **filter again** with the same verdict
+   cache. The restore step gives the position of the same block id to each
+   result that has no `position`. The second filter only removes results. It
+   does not change them.
 
 `_read_searchable_block` reads the stored block again by id. It checks
 `search`, then `read`, then scope membership:
@@ -385,6 +389,18 @@ order:
   of a visible result, and step 5 returns it with the `score` and `reason`
   from the backend. So a separate search index that is behind the store
   cannot return old content. Its matches are only as current as the index.
+- **The position comes from the backend result.** The index copy can have a
+  different `created_at` from the stored block, for example at millisecond
+  precision, or from an old block with the same id. If `cursor` used the
+  stored block, the caller cursor would name a place that the index does not
+  use, and the next page could lose results. `position` keeps the place of
+  the index row, so `cursor` follows the index order.
+- **Hooks keep the position.** `dataclasses.replace` keeps `position`. For a
+  new `SearchResult` with no `position`, the restore step gives back the
+  position of the same block id. It never replaces a `position` that a hook
+  sets, and it does not change `block`, `score`, or `reason`. A hook that
+  changes the order of the results still breaks paging with
+  `after=results[-1].cursor`.
 - **Hooks can change the content.** `after_search` gets the stored blocks,
   and its return value goes to the caller after the second filter. So a
   trusted hook can redact a value. The second filter checks the id of each
@@ -394,7 +410,8 @@ order:
 - **`limit` counts visible results.** So blocks that the caller cannot see
   do not change which visible results it gets.
 - **Search order:** `score` from high to low, then `created_at` from old to
-  new, then block id. `page_results` applies it in each shipped adapter.
+  new, then block id. `page_results` applies it in each shipped adapter. It
+  sorts by the `cursor` of each result, so a `position` decides the place.
 - **Page size:** the first backend page asks for `query.limit` results. Each
   next page starts after the `cursor` of the last result and asks for 2 times
   as many. So the number of backend calls grows with the log of the number of

@@ -168,6 +168,15 @@ class MemoryHook:
         - **Check after the hook:** `Memory` checks the id of each returned
           result against the stored block, and removes a result that the
           principal cannot see. It does not check or change the content.
+        - **Index position:** each result has a `position`, its place in the
+          search order of the index. `cursor` returns it. If a hook returns a
+          result with no `position`, `Memory` gives it the position of the
+          same block id. A `position` that a hook sets stays.
+        - **Reorder breaks paging:** a caller gets the next page with
+          `after=results[-1].cursor`. If a hook changes the order, the last
+          result is not the last position of the page. So the next page starts
+          too early, and the caller gets the same results again. No result is
+          lost.
         - **Search only:** `after_get` only observes. So `get` returns the
           stored value, also when an `after_search` hook redacts it.
 

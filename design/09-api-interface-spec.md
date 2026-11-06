@@ -227,6 +227,13 @@ search(query=None, *, text=None, root=None, scope=None, types=None, filters=None
 - **Next page:** `after=results[-1].cursor`, as a keyword or in a
   `MemoryQuery`. So `search(query, after=cursor)` returns the next page of
   `query`.
+- **The cursor follows the backend order.** Each result holds the stored
+  block, and its `position` is the place of the backend result. So a search
+  index whose copy has a different `created_at` does not make a page lose
+  results.
+- **`after_search` hooks:** a result that a hook returns with no `position`
+  gets the position of the same block id. A hook that changes the order of
+  the results breaks paging with `after=results[-1].cursor`.
 - **Genie filters before it decodes.** It decodes only the results that the
   policy and scope filters keep. So a hidden block with a content type that
   this `Memory` cannot decode does not change the results.
@@ -347,8 +354,15 @@ MemoryQuery(text=None, root_id=None, scope=None, types=(), filters=None, limit=2
 ### `SearchResult`
 
 - **Fields:** `block` (`MemoryBlock`), `score` (`float`, default `1.0`),
-  `reason` (`str | None`).
-- **`cursor` property:** the `SearchCursor` directly after this result.
+  `reason` (`str | None`), and the keyword-only `position`
+  (`SearchCursor | None`, default `None`).
+- **`cursor` property:** the `SearchCursor` directly after this result. It is
+  `position` if it is set. Else it comes from `score`, `block.created_at`, and
+  `block.id`.
+- **`position`:** `Memory.search` sets it to the place of the backend result.
+  `dataclasses.replace` keeps it. Equality ignores it. Genie does not check
+  that it names `block`. A value that is not a `SearchCursor` raises
+  `TypeError`.
 - **The backend decides the meaning of a score.** A score uses only the block
   and the query, and it is the same on each call.
 - **`RoutedBackend` compares raw scores across routes.** Without a shared
@@ -378,6 +392,9 @@ page_results(results, query)
 
 - **Sorts** scored results in the search order, drops the results at or
   before `query.after`, and keeps the first `query.limit`.
+- **Sorts by `cursor`.** So a result with a `position` sorts by it. The
+  merged pages of 2 `Memory` searches sort in the order that their cursors
+  give.
 - **Each shipped adapter uses it** after it scores its candidates.
 
 ## Policy
