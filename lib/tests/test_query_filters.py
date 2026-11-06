@@ -48,7 +48,7 @@ def test_search_filters_types_scopes_and_limits() -> None:
     assert [result.block.id for result in results] == [high.id]
     assert results[0].score == 2.0
     assert [result.block.id for result in memory.search(root=high, scope="self")] == [high.id]
-    assert memory.search("alpha", limit=0) == []
+    assert list(memory.search("alpha", limit=0)) == []
 
     with pytest.raises(ValueError):
         memory.search("alpha", limit=-1)
@@ -71,7 +71,7 @@ def test_filter_operators_cover_common_comparisons() -> None:
     )
 
     assert [result.block.id for result in results] == [mid.id]
-    assert memory.search(filters={"owner": {"in": 3}}) == []
+    assert list(memory.search(filters={"owner": {"in": 3}})) == []
 
 
 def test_unknown_filter_operators_raise_before_any_backend_runs() -> None:
@@ -216,7 +216,7 @@ def test_filter_incompatible_comparisons_fail_closed() -> None:
     memory = Memory()
     memory.put(type="note", value="note", metadata={"priority": "high"})
 
-    assert memory.search(filters={"metadata.priority": {">": 1}}) == []
+    assert list(memory.search(filters={"metadata.priority": {">": 1}})) == []
 
 
 @pytest.mark.parametrize(
@@ -399,8 +399,8 @@ def test_portable_in_filters_require_a_collection_and_empty_operators_fail_close
     memory = Memory()
     memory.put(type="note", value="value", metadata={"owner": "team"})
 
-    assert memory.search(filters={"owner": {"$in": "other-team"}}) == []
-    assert memory.search(filters={"owner": {}}) == []
+    assert list(memory.search(filters={"owner": {"$in": "other-team"}})) == []
+    assert list(memory.search(filters={"owner": {}})) == []
 
 
 def test_portable_filter_matching_fails_closed_for_non_string_keys() -> None:
@@ -505,7 +505,7 @@ def test_search_visibility_is_decided_again_for_every_search() -> None:
     memory.delete(note)
     second = memory.search("needle", root=root, scope=Scope.SUBTREE)
 
-    assert second == []
+    assert list(second) == []
 
 
 class _StaleSearchBackend(InMemoryBackend):

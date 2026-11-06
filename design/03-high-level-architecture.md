@@ -157,14 +157,16 @@ A search through a bounded handle shows how the 2 checks work together:
    block policies and checks the query scope again. Then it decodes the
    results that it keeps. Each result holds the stored block, not the copy from
    the search index. Its `position` keeps the place of the backend result, so
-   the caller cursor follows the index order. It gets the next page until it
-   has `limit` visible results, or until the backend has no more results.
+   the cursor of each result follows the index order. It gets the next page
+   until it has `limit` visible results, or until the backend has no more
+   results. The `next_cursor` of the page comes from this scan.
 6. **`after_search` can change the list and the content of each result,** for
    example to redact a value. A result that a hook returns with no `position`
    gets the position of the same block id. Then the same filter runs a second
    time over the list that the hooks returned. It removes results, and it does
    not change them. `Memory` keeps one verdict for each block id, so it reads
-   a block once for both passes.
+   a block once for both passes. The hooks cannot change `next_cursor`, so
+   paging does not depend on what they return.
 
 - **The limit counts visible results.** The filter runs before the count.
   So blocks that the caller cannot see do not change which visible results

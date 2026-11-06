@@ -161,7 +161,7 @@ def main() -> None:
     print(f"results mentioning the embargoed finding: {len(wide)}")
     print(f"results withheld by the redactor: {redactor.removed}")
 
-    assert wide == []
+    assert list(wide) == []
     assert redactor.removed >= 1
     # The block itself stays readable. The redactor reviews only search results.
     assert memory.get(secret) is not None

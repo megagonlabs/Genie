@@ -315,7 +315,7 @@ def test_scope_list_links_and_link_search_stay_inside_scope() -> None:
     assert [result.block.id for result in memory.search("outside", root=child, scope="links")] == [
         outside.id
     ]
-    assert scope.search("outside", root=child, scope="links") == []
+    assert list(scope.search("outside", root=child, scope="links")) == []
 
 
 def test_links_reject_invalid_directions() -> None:
@@ -357,7 +357,7 @@ def test_mounts_are_symbolic_and_not_recursive_ownership() -> None:
 
     assert mount.relation == LinkRelations.MOUNT
     assert memory.list_mounts(mount_source) == [mount]
-    assert subtree_results == []
+    assert list(subtree_results) == []
     assert [result.block.id for result in link_results] == [remote_root.id]
     assert resolved is not None
     assert resolved.id == remote_root.id

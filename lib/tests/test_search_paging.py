@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterator
+import random
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -24,6 +25,7 @@ from genie import (
     RoutedBackend,
     Scope,
     SearchCursor,
+    SearchPage,
     SearchResult,
     SQLiteBackend,
     page_results,
@@ -33,7 +35,7 @@ _FIRST = datetime(2026, 1, 1, tzinfo=UTC)
 _SECOND = datetime(2026, 1, 2, tzinfo=UTC)
 
 
-def _ids(results: list[SearchResult]) -> list[str]:
+def _ids(results: Iterable[SearchResult]) -> list[str]:
     """Return the block ids of search results, in result order."""
 
     return [result.block.id for result in results]
@@ -178,7 +180,7 @@ def test_search_limit_counts_visible_results_and_doubles_each_batch() -> None:
     assert _ids(owner.search("zz", limit=5)) == [first.id, second.id, third.id]
 
     backend.queries.clear()
-    assert owner.search("zz", limit=0) == []
+    assert list(owner.search("zz", limit=0)) == []
     assert backend.queries == []
 
 
@@ -215,7 +217,7 @@ def test_search_after_keyword_matches_the_query_field() -> None:
     second = memory.search("zz", limit=2, after=first[-1].cursor)
 
     assert _ids(second) == _ids(memory.search(MemoryQuery("zz", limit=2, after=first[-1].cursor)))
-    assert _ids(first + second) == _ids(memory.search("zz", limit=4))
+    assert _ids([*first, *second]) == _ids(memory.search("zz", limit=4))
     with pytest.raises(TypeError, match="after must be a SearchCursor"):
         memory.search("zz", after=cast(Any, "mem_a"))
 
@@ -418,8 +420,14 @@ def _store_notes(backend: MemoryBackend, index: _CopyIndex, count: int, *, prefi
     return ids
 
 
-def _page_ids(search: Callable[..., list[SearchResult]], *, limit: int) -> list[str]:
-    """Page through a search as a caller does, with `after=page[-1].cursor`, and return the block ids of all pages.
+def _page_ids(search: Callable[..., SearchPage], *, limit: int, last_result_cursor: bool = False) -> list[str]:
+    """Page through a search as a caller does, and return the block ids of all pages.
+
+    - **Default:** the next page starts at `page.next_cursor`, and the loop
+      ends when it is `None`.
+    - **`last_result_cursor`:** the next page starts at `page[-1].cursor`,
+      and the loop ends at an empty page. This is correct only when no hook
+      changes the list.
 
     Raises:
         AssertionError: If the paging does not end after 100 pages.
@@ -429,10 +437,15 @@ def _page_ids(search: Callable[..., list[SearchResult]], *, limit: int) -> list[
     after: SearchCursor | None = None
     for _ in range(100):
         page = search(limit=limit, after=after)
-        if not page:
-            return ids
         ids.extend(_ids(page))
-        after = page[-1].cursor
+        if last_result_cursor:
+            if not page:
+                return ids
+            after = page[-1].cursor
+        else:
+            after = page.next_cursor
+            if after is None:
+                return ids
     raise AssertionError("The paging did not end.")
 
 
@@ -448,6 +461,20 @@ class _EditEachResult(MemoryHook):
         """Return each result after the change."""
 
         return [self.edit(result) for result in results]
+
+
+class _EditResults(MemoryHook):
+    """`after_search` hook that changes the list of results with one function."""
+
+    def __init__(self, edit: Callable[[list[SearchResult]], list[SearchResult]]) -> None:
+        """Keep the function that changes the list."""
+
+        self.edit = edit
+
+    def after_search(self, context: HookContext, query: MemoryQuery, results: list[SearchResult]) -> list[SearchResult]:
+        """Return the list after the change."""
+
+        return self.edit(results)
 
 
 def _redacted(result: SearchResult) -> MemoryBlock:
@@ -489,7 +516,7 @@ def test_caller_paging_follows_an_index_that_keeps_millisecond_created_at() -> N
     expected = _store_notes(backend, backend.copy_index, 20)
     memory = Memory(backend=backend, principal="owner")
 
-    assert _page_ids(partial(memory.search, "zz"), limit=3) == expected
+    assert _page_ids(partial(memory.search, "zz"), limit=3, last_result_cursor=True) == expected
     second = memory.search("zz", limit=2)[1]
     assert second.block.created_at == _FIRST + timedelta(microseconds=100)
     assert second.cursor.created_at == _FIRST
@@ -510,7 +537,7 @@ def test_caller_paging_follows_the_shared_search_index_of_a_routed_backend() -> 
     expected = _store_notes(backend, index, 20)
     memory = Memory(backend=backend, principal="owner")
 
-    assert _page_ids(partial(memory.search, "zz"), limit=3) == expected
+    assert _page_ids(partial(memory.search, "zz"), limit=3, last_result_cursor=True) == expected
 
 
 @pytest.mark.parametrize(
@@ -535,7 +562,7 @@ def test_caller_paging_follows_the_index_after_an_after_search_hook(edit: Callab
     expected = _store_notes(backend, backend.copy_index, 20)
     memory = Memory(backend=backend, principal="owner", hooks=[_EditEachResult(edit)])
 
-    assert _page_ids(partial(memory.search, "zz"), limit=3) == expected
+    assert _page_ids(partial(memory.search, "zz"), limit=3, last_result_cursor=True) == expected
 
 
 def test_caller_paging_keeps_the_backend_score_after_a_hook_changes_it(make_backend: Callable[[], MemoryBackend]) -> None:
@@ -553,7 +580,7 @@ def test_caller_paging_keeps_the_backend_score_after_a_hook_changes_it(make_back
     memory = Memory(backend=backend, principal="owner", hooks=[_EditEachResult(lambda result: replace(result, score=result.score / 2))])
 
     assert len(expected) == 7
-    assert _page_ids(partial(memory.search, "zz"), limit=3) == expected
+    assert _page_ids(partial(memory.search, "zz"), limit=3, last_result_cursor=True) == expected
 
 
 def test_after_search_position_is_filled_only_when_it_is_missing() -> None:
@@ -609,10 +636,14 @@ def test_page_results_merges_the_pages_of_2_memory_searches() -> None:
     right = Memory(backend=right_backend, principal="owner")
 
     def merged(*, limit: int, after: SearchCursor | None) -> list[SearchResult]:
-        pages = left.search("zz", limit=limit, after=after) + right.search("zz", limit=limit, after=after)
+        pages = [*left.search("zz", limit=limit, after=after), *right.search("zz", limit=limit, after=after)]
         return page_results(pages, MemoryQuery(limit=limit, after=after))
 
-    paged = _page_ids(merged, limit=3)
+    paged: list[str] = []
+    after: SearchCursor | None = None
+    while page := merged(limit=3, after=after):
+        paged.extend(_ids(page))
+        after = page[-1].cursor
 
     assert sorted(paged) == sorted(all_ids)
     assert paged == _ids(merged(limit=100, after=None))
@@ -638,7 +669,222 @@ def test_caller_paging_follows_an_index_that_has_an_old_copy_of_a_block_id() -> 
     backend.put_block(MemoryBlock(id="a", type="note", value="zz a again", created_at=_SECOND, created_by="owner"))
 
     assert _page_ids(partial(memory.search, "zz"), limit=1) == ["a", "b", "c", "d"]
+    assert _page_ids(partial(memory.search, "zz"), limit=1, last_result_cursor=True) == ["a", "b", "c", "d"]
     first = memory.search("zz", limit=1)[0]
     assert first.block.value == "zz a again"
     assert first.block.created_at == _SECOND
     assert first.cursor.created_at == _FIRST
+
+
+# Caller paging with `page.next_cursor`.
+
+
+def test_search_page_is_a_sequence_with_a_next_cursor() -> None:
+    """`SearchPage` is a read-only sequence of results. It checks its fields, and equality compares the results and `next_cursor`."""
+
+    first = SearchResult(MemoryBlock(id="mem_a", type="note", value="a", created_at=_FIRST))
+    second = SearchResult(MemoryBlock(id="mem_b", type="note", value="b", created_at=_SECOND))
+    cursor = SearchCursor(score=1, created_at=_SECOND, block_id="mem_b")
+
+    page = SearchPage((first, second), next_cursor=cursor)
+
+    assert len(page) == 2
+    assert page[0] == first
+    assert page[-1] == second
+    assert page[1:] == (second,)
+    assert list(page) == [first, second]
+    assert second in page
+    assert page.next_cursor == cursor
+    assert page == SearchPage((first, second), next_cursor=cursor)
+    assert page != SearchPage((first, second))
+    assert page != [first, second]
+    assert not SearchPage(())
+    assert SearchPage(()).next_cursor is None
+    with pytest.raises(TypeError, match="results must be SearchResult values"):
+        SearchPage(cast(Any, (first.block,)))
+    with pytest.raises(TypeError, match="next_cursor must be a SearchCursor or None"):
+        SearchPage((first,), next_cursor=cast(Any, "mem_b"))
+
+
+def test_next_cursor_names_the_last_backend_result_or_the_end() -> None:
+    """`next_cursor` is the position of the last backend result that the search consumed, or `None` when the backend returned no result.
+
+    - **Limit reached:** the page has a `next_cursor`, also when the limit
+      was reached on a short backend page.
+    - **Short page:** a page shorter than its batch ends the scan of one
+      call, but it does not show that the backend has no more results. So the
+      page has a `next_cursor`, and the next call gets an empty page with no
+      `next_cursor`.
+    - **`limit=0`:** no backend page is read, and there is no `next_cursor`.
+    - **Order:** each note has a different score, so the order does not
+      depend on the clock.
+    """
+
+    backend = _RecordingBackend()
+    owner = Memory(backend=backend, principal="owner")
+    other = Memory(backend=backend, principal="other")
+    first = owner.put(type="note", value="zz zz zz zz zz")
+    second = owner.put(type="note", value="zz zz zz zz")
+    other.put(type="note", value="zz zz zz")
+    third = owner.put(type="note", value="zz zz")
+    fourth = owner.put(type="note", value="zz")
+
+    # The limit is reached on the full page [first, second].
+    page = owner.search("zz", limit=2)
+    assert isinstance(page, SearchPage)
+    assert _ids(page) == [first.id, second.id]
+    assert page.next_cursor == page[-1].cursor
+    # The next search reads the full page [hidden, third], then the short page
+    # [fourth]. The limit is reached on the last result of the short page. The
+    # page keeps a cursor, and the next page is empty.
+    page = owner.search("zz", limit=2, after=page.next_cursor)
+    assert _ids(page) == [third.id, fourth.id]
+    assert page.next_cursor == page[-1].cursor
+    page = owner.search("zz", limit=2, after=page.next_cursor)
+    assert list(page) == []
+    assert page.next_cursor is None
+    # The limit is reached on the full page [fourth]. The next page is empty.
+    page = owner.search("zz", limit=1, after=owner.search("zz", limit=3).next_cursor)
+    assert _ids(page) == [fourth.id]
+    assert page.next_cursor == page[-1].cursor
+    page = owner.search("zz", limit=1, after=page.next_cursor)
+    assert list(page) == []
+    assert page.next_cursor is None
+    # The backend has fewer results than the limit. The short page ends the
+    # scan with a cursor, and the next page is empty.
+    page = owner.search("zz", limit=10)
+    assert _ids(page) == [first.id, second.id, third.id, fourth.id]
+    assert page.next_cursor == page[-1].cursor
+    page = owner.search("zz", limit=10, after=page.next_cursor)
+    assert list(page) == []
+    assert page.next_cursor is None
+    # No limit, no page.
+    backend.queries.clear()
+    page = owner.search("zz", limit=0)
+    assert list(page) == []
+    assert page.next_cursor is None
+    assert backend.queries == []
+
+
+@pytest.mark.parametrize("change", ["reverse", "shuffle", "add", "remove-page", "remove-all", "set-position"])
+def test_caller_paging_with_next_cursor_does_not_depend_on_after_search(change: str) -> None:
+    """Caller paging with `page.next_cursor` gets each result one time, and it ends, whatever an `after_search` hook does to the list.
+
+    - **`reverse`, `shuffle`:** the last result of a page is not its last
+      position. Paging with `page[-1].cursor` repeated results.
+    - **`add`:** the hook adds a result for a block that the index did not
+      return. Paging with `page[-1].cursor` skipped results, and it never
+      ended.
+    - **`remove-page`:** the hook removes each result of the second page.
+      Paging that stopped at an empty page lost the later pages.
+    - **`remove-all`:** each page is empty. The loop still ends.
+    - **`set-position`:** the hook sets a `position` after all results on
+      each result. It does not change `next_cursor`.
+    """
+
+    backend = _IndexCopyBackend()
+    expected = _store_notes(backend, backend.copy_index, 20)
+    extra = backend.put_block(MemoryBlock(id="mem_extra", type="note", value="not a match", created_at=_SECOND, created_by="owner"))
+    far = SearchCursor(score=0, created_at=_SECOND, block_id="mem_zz")
+    shuffle = random.Random(7)
+    edits: dict[str, Callable[[list[SearchResult]], list[SearchResult]]] = {
+        "reverse": lambda results: list(reversed(results)),
+        "shuffle": lambda results: shuffle.sample(results, len(results)),
+        "add": lambda results: [*results, SearchResult(extra)],
+        "remove-page": lambda results: [result for result in results if result.block.id not in expected[3:6]],
+        "remove-all": lambda results: [],
+        "set-position": lambda results: [replace(result, position=far) for result in results],
+    }
+    memory = Memory(backend=backend, principal="owner", hooks=[_EditResults(edits[change])])
+
+    paged = _page_ids(partial(memory.search, "zz"), limit=3)
+
+    if change in {"reverse", "shuffle"}:
+        assert sorted(paged) == sorted(expected)
+    elif change == "add":
+        assert [block_id for block_id in paged if block_id != extra.id] == expected
+        assert paged.count(extra.id) == 8
+    elif change == "remove-page":
+        assert paged == expected[:3] + expected[6:]
+    elif change == "remove-all":
+        assert paged == []
+    else:
+        assert paged == expected
+
+
+def test_handle_paging_with_next_cursor_does_not_depend_on_after_search() -> None:
+    """A rooted handle pages with `page.next_cursor`, also when an `after_search` hook reverses each page."""
+
+    memory = Memory(principal="owner", hooks=[_EditResults(lambda results: list(reversed(results)))])
+    root = memory.put(type="root", value="workspace")
+    memory.put(type="note", value="zz")
+    inside = [memory.put(parent=root, type="note", value="zz") for _ in range(7)]
+    handle = memory.get_handle(root=root)
+
+    paged = _page_ids(partial(handle.search, "zz"), limit=3)
+
+    assert isinstance(handle.search("zz"), SearchPage)
+    assert sorted(paged) == sorted(block.id for block in inside)
+
+
+def test_routed_backend_paging_with_next_cursor_does_not_depend_on_after_search() -> None:
+    """On a `RoutedBackend` with a shared `search_index`, caller paging with `page.next_cursor` gets each result one time when a hook reverses each page."""
+
+    store = InMemoryBackend()
+    index = _CopyIndex()
+    backend = RoutedBackend({"a": store}, search_index=index)
+    expected = _store_notes(store, index, 20)
+    memory = Memory(backend=backend, principal="owner", hooks=[_EditResults(lambda results: list(reversed(results)))])
+
+    paged = _page_ids(partial(memory.search, "zz"), limit=3)
+
+    assert sorted(paged) == sorted(expected)
+    assert len(paged) == 20
+
+
+def test_paging_continues_when_a_backend_returns_fewer_results_than_asked() -> None:
+    """A backend that returns at most 2 results for each call does not end caller paging early.
+
+    - **The bug this prevents:** a short backend page ended paging. A backend
+      with a page size below the batch size then lost each result after the
+      first page.
+    - **Rule:** `next_cursor` is `None` only after an empty backend page.
+    """
+
+    class CappingBackend(InMemoryBackend):
+        """Backend that returns at most 2 results, whatever the query limit is."""
+
+        def search(self, query: MemoryQuery) -> list[SearchResult]:
+            return super().search(query)[:2]
+
+    backend = CappingBackend()
+    memory = Memory(backend=backend, principal="owner")
+    expected = sorted(memory.put(type="note", value="zz").id for _ in range(7))
+
+    paged = _page_ids(partial(memory.search, "zz"), limit=3)
+
+    assert sorted(paged) == expected
+    assert len(paged) == 7
+
+
+def test_an_empty_page_with_a_next_cursor_is_not_the_end() -> None:
+    """A page can be empty with a `next_cursor`, when the backend page holds only blocks that the caller cannot see."""
+
+    backend = InMemoryBackend()
+    owner = Memory(backend=backend, principal="owner")
+    other = Memory(backend=backend, principal="other")
+    first = owner.put(type="note", value="zz zz zz zz zz")
+    second = owner.put(type="note", value="zz zz zz zz")
+    hidden = [other.put(type="note", value=" ".join(["zz"] * count)) for count in (3, 2, 1)]
+
+    page = owner.search("zz", limit=2)
+    assert _ids(page) == [first.id, second.id]
+    # The scan reads the full page [hidden, hidden], then the short page
+    # [hidden]. No result is visible, but the backend returned results.
+    page = owner.search("zz", limit=2, after=page.next_cursor)
+    assert list(page) == []
+    assert page.next_cursor is not None
+    assert page.next_cursor.block_id == hidden[-1].id
+    page = owner.search("zz", limit=2, after=page.next_cursor)
+    assert list(page) == []
+    assert page.next_cursor is None

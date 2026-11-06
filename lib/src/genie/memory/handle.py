@@ -16,7 +16,7 @@ from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import AccessDenied, Operation
 from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
-from genie.query import MemoryQuery, Scope, SearchCursor, SearchResult
+from genie.query import MemoryQuery, Scope, SearchCursor, SearchPage
 
 if TYPE_CHECKING:
     from genie.hooks import HookContext
@@ -756,7 +756,7 @@ class MemoryHandle:
         filters: dict[str, Any] | None = None,
         limit: int | None = None,
         after: SearchCursor | None = None,
-    ) -> list[SearchResult]:
+    ) -> SearchPage:
         """Search through this handle.
 
         - **Keywords win:** as for `Memory.search`, a keyword that is not
@@ -774,8 +774,9 @@ class MemoryHandle:
           does not filter `global` and `ancestors` results.
         - **`limit` counts results that the handle returns.** A dropped result
           does not use part of the limit.
-        - **Next page:** set `after` to the `cursor` of the last result, as a
-          keyword or in a `MemoryQuery`. Keep the other arguments.
+        - **Next page:** give the `next_cursor` of the page as `after`, as a
+          keyword or in a `MemoryQuery`. Keep the other arguments. Stop when
+          it is `None`.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
@@ -790,7 +791,8 @@ class MemoryHandle:
                 results after it.
 
         Returns:
-            Search results that the handle can see.
+            A `SearchPage` with the results that the handle can see, and the
+            `next_cursor` of the next page.
 
         Raises:
             AccessDenied: If the requested root or search mode goes outside

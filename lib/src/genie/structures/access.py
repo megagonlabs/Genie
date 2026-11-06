@@ -17,7 +17,7 @@ from genie.memory.links import MemoryLink
 from genie.policy.engine import Operation
 from genie.policy.policy import MemoryPolicy
 from genie.query.query import MemoryQuery
-from genie.query.result import SearchResult
+from genie.query.result import SearchPage
 
 BlockRef: TypeAlias = str | MemoryBlock
 """A memory block or its stable id."""
@@ -304,14 +304,14 @@ class AcyclicLinkWriter(Protocol):
 class SearchAccess(Protocol):
     """Search access for structures that have portable query fallbacks."""
 
-    def search(self, query: MemoryQuery) -> list[SearchResult]:
+    def search(self, query: MemoryQuery) -> SearchPage:
         """Run a normalized memory query through the access boundary.
 
         Args:
             query: Normalized memory query.
 
         Returns:
-            Visible search results.
+            A `SearchPage` with the visible search results.
         """
 
         ...

@@ -139,7 +139,7 @@ def main() -> None:
     assert [block.id for block in memory.children(us_project)] == [us_note.id]
     assert {result.block.id for result in global_results} >= {us_project.id, eu_note.id}
     assert [result.block.id for result in eu_results] == [eu_note.id]
-    assert us_results == []
+    assert list(us_results) == []
     assert [result.block.id for result in linked_results] == [eu_project.id]
     assert [result.block.id for result in apac_results] == [apac_note.id]
     assert eu_rollout_link.relation == LinkRelations.MOUNT

@@ -18,7 +18,7 @@ else:
 
 ensure_repo_on_path()
 
-from genie import InMemoryBackend, Memory, MemoryQuery, Scope, SearchResult
+from genie import InMemoryBackend, Memory, MemoryQuery, Scope, SearchPage
 
 
 def main() -> None:
@@ -61,7 +61,7 @@ def main() -> None:
         filters={"metadata.priority": {">=": 2}, "owner": {"in": ["team"]}},
         limit=10,
     )
-    results: list[SearchResult] = memory.search(query)
+    results: SearchPage = memory.search(query)
 
     print("query: 'proposal' in the project subtree, priority >= 2")
     print(f"normalized filters: {query.filters}")

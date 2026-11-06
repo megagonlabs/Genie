@@ -820,7 +820,7 @@ def test_observation_revisions_are_owned_by_their_belief() -> None:
 
     assert fixture.memory.get(observation.block.id) is None
     assert fixture.memory.get(observation.identity.id) is None
-    assert fixture.bank.memory.search(types=[OBSERVATION_REVISION_TYPE], limit=10) == []
+    assert list(fixture.bank.memory.search(types=[OBSERVATION_REVISION_TYPE], limit=10)) == []
 
 
 def test_demo_runs_as_a_module() -> None:

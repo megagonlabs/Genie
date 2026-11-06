@@ -172,11 +172,10 @@ class MemoryHook:
           search order of the index. `cursor` returns it. If a hook returns a
           result with no `position`, `Memory` gives it the position of the
           same block id. A `position` that a hook sets stays.
-        - **Reorder breaks paging:** a caller gets the next page with
-          `after=results[-1].cursor`. If a hook changes the order, the last
-          result is not the last position of the page. So the next page starts
-          too early, and the caller gets the same results again. No result is
-          lost.
+        - **Paging is not affected:** the `next_cursor` of the page comes
+          from the backend scan, before this callback runs. So a hook that
+          reorders, adds, or removes results does not change where the next
+          page starts.
         - **Search only:** `after_get` only observes. So `get` returns the
           stored value, also when an `after_search` hook redacts it.
 

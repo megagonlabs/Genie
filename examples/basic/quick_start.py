@@ -54,7 +54,7 @@ class Agent:
         return "Saved."
 
     def recall(self, query: str) -> str:
-        results = self.memory.search(query)  # list[SearchResult]
+        results = self.memory.search(query)  # SearchPage, a sequence of SearchResult
         return "\n".join(f"- [{r.block.type}] {r.block.value}" for r in results)
 
 

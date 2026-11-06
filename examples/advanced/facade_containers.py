@@ -114,7 +114,7 @@ def main() -> None:
     # The bind recorded membership and did not change ownership. So the ranker
     # is still a child of the workspace. Search scopes follow parents, so a
     # search from the catalog root does not find the ranker.
-    assert memory.search("candidate ranker", root=catalog_root, scope="subtree") == []
+    assert list(memory.search("candidate ranker", root=catalog_root, scope="subtree")) == []
     assert [
         result.block.id
         for result in memory.search("candidate ranker", root=workspace, scope="subtree")

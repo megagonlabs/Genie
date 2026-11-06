@@ -547,7 +547,7 @@ def main() -> None:
     assert blocks.get_block(agnostic.id) is None
     assert graph.descendants(project.id, include_self=True) == []
     assert memory.list_links(glossary, direction="in") == []
-    assert memory.search("agnostic database", scope="global") == []
+    assert list(memory.search("agnostic database", scope="global")) == []
     assert memory.get(glossary) is not None
 
 

@@ -46,7 +46,7 @@ from genie import (
     MemoryHandle,
     MemoryHook,
     MemoryPolicy,
-    SearchResult,
+    SearchPage,
 )
 from genie.codecs.stdlib import (
     DataclassCodec,
@@ -326,7 +326,7 @@ def section(title: str) -> None:
     print(f"\n== {title} ==")
 
 
-def print_results(results: list[SearchResult]) -> None:
+def print_results(results: SearchPage) -> None:
     """Print search results in a short form.
 
     Args:

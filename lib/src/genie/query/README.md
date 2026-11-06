@@ -17,6 +17,7 @@ results = memory.search(
 ```
 
 - **`Memory.search` normalizes** these friendly arguments into a `MemoryQuery`. Next to a `MemoryQuery`, each keyword that is not `None` replaces the same field of the query. The query has optional `text`, an optional `root_id`, an optional `Scope`, optional `types` and `filters`, a `limit` that cannot be negative, and an optional `after` cursor.
+- **`Memory.search` returns a `SearchPage`.** It is a read-only sequence of `SearchResult` values: `len`, an index, a slice, iteration, and `bool` work on it. Its `next_cursor` is the position of the next page, or `None` at the end.
 - **Results are ranked `SearchResult` values.** Each one holds a `block`, a finite numeric `score`, an optional `reason`, and an optional keyword-only `position`. Its `cursor` property gives the position after it: `position` if it is set, or else a position from `score`, `block.created_at`, and `block.id`. Equality ignores `position`.
 - **A new query checks runtime types.** It also copies the type lists and the nested filter operands that the caller owns.
 - **A new query refuses empty values.** An empty `root_id` or `types` entry, or one of only whitespace, raises `ValueError`, as an empty id or block type does in the rest of the API.
@@ -27,15 +28,20 @@ results = memory.search(
 - **`limit` counts visible results.** `Memory` removes the results that the principal cannot `search` or `read`, and the results outside the query `Scope`, before it counts. So blocks that the caller cannot see do not change which visible results it gets.
 - **`Memory` gets backend pages.** The first page has at most `limit` results. Each next page starts after the last result and is 2 times larger. `Memory` stops when it has `limit` visible results, or when the backend has no more results. There is no cap, because a cap would let hidden blocks change the results again.
 - **The cost:** if the caller can see only a few of many matching blocks, one search calls the backend many times.
-- **Next page:** set `after` to the `cursor` of the last result, and keep the other arguments. `MemoryQuery` also has an `after` field. With a `MemoryQuery`, `search(query, after=cursor)` also works, because a search keyword replaces the same field of the query.
+- **Next page:** give the `next_cursor` of the page as `after`, and keep the other arguments. Stop when it is `None`. `MemoryQuery` also has an `after` field. With a `MemoryQuery`, `search(query, after=cursor)` also works, because a search keyword replaces the same field of the query.
 
 ```python
-first = memory.search("concise", limit=20)
-second = memory.search("concise", limit=20, after=first[-1].cursor)
+after = None
+while True:
+    page = memory.search("concise", limit=20, after=after)
+    ...
+    if (after := page.next_cursor) is None:
+        break
 ```
 
+- **`None` is the only end signal.** `next_cursor` comes from the backend scan, before the `after_search` hooks run. So a hook that reorders, adds, or removes results does not change it. An empty page is not the end: a hook can remove each result of a page, and a backend page can hold only hidden blocks. The last page of a loop is empty, because `next_cursor` is `None` only after the backend returned no result.
 - **A handle pages the same way.** A search with no scope, as a keyword or in a `MemoryQuery`, uses the `default_scope` of the handle.
-- **The cursor follows the backend order.** `Memory.search` puts the stored block in each result, and it sets `position` to the place of the backend result. A separate search index can keep a different `created_at`, for example at millisecond precision, or an old copy of a block id. The cursor then still names a place that the index uses, so no result is lost.
+- **The cursor of one result follows the backend order.** `Memory.search` puts the stored block in each result, and it sets `position` to the place of the backend result. A separate search index can keep a different `created_at`, for example at millisecond precision, or an old copy of a block id. `result.cursor` then still names a place that the index uses. With no `after_search` hook that changes the list, `after=page[-1].cursor` gives the same results as `next_cursor`.
 - **A cursor is only a position.** A `SearchCursor` holds a `score`, a `created_at`, and a block id. It can name a block that the caller cannot see, and it shows nothing about that block. With a separate search index, its `score` and `created_at` come from the index copy.
 - **`page_results` sorts by `cursor`.** So an application can merge the pages of 2 `Memory` searches with it, and page the merged list with the same cursor.
 - **Pages are not a snapshot.** A block that changes between 2 calls can move in the order. One search counts each block one time. But a block can be missing from a later page, or it can be on 2 pages.

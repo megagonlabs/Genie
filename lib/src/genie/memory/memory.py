@@ -29,7 +29,7 @@ from genie.memory.links import LinkRelations, MemoryLink
 from genie.policy.engine import AccessDenied, Operation, PolicyEngine
 from genie.policy.policy import MemoryPolicy
 from genie.policy.principal import Principal
-from genie.query import MemoryQuery, Scope, SearchCursor, SearchResult
+from genie.query import MemoryQuery, Scope, SearchCursor, SearchPage, SearchResult
 from genie.query.filters import normalize_filters
 
 if TYPE_CHECKING:
@@ -966,7 +966,7 @@ class Memory:
         filters: dict[str, Any] | None = None,
         limit: int | None = None,
         after: SearchCursor | None = None,
-    ) -> list[SearchResult]:
+    ) -> SearchPage:
         """Search memory blocks.
 
         - **Keywords win:** a keyword that is not `None` replaces the same
@@ -985,21 +985,25 @@ class Memory:
         - **More backend calls:** when many matching blocks are hidden, the
           search calls the backend again until it has `limit` visible results
           or the backend has no more results. There is no cap.
-        - **Next page:** set `after` to the `cursor` of the last result. The
-          search returns the results that come after it.
+        - **Next page:** the page has a `next_cursor`. Give it as `after` to
+          get the results after it. `None` means the backend returned no
+          result after the last one that the search read. An empty page is
+          not the end: a hook can remove each result of a page, and a backend
+          page can hold only hidden blocks. The last page of a loop is empty.
         - **Stored content:** each result holds the stored block, not the copy
           from the search index. The `score` and `reason` come from the index.
           So the content is current, but a match is only as current as the
           index.
         - **Index position:** the `position` of each result is its place in
-          the search order of the index. So `cursor` gives the next page, also
-          when the index copy has a different `created_at` from the stored
-          block.
+          the search order of the index. So `result.cursor` names the place
+          after that one result, also when the index copy has a different
+          `created_at` from the stored block.
         - **Hooks:** `after_search` hooks get these results, and the caller
           gets what the hooks return, for example a redacted value. A result
           that a hook returns with no `position` gets the index position of
-          its block id. A hook that changes the order of the results breaks
-          paging with `after=results[-1].cursor`.
+          its block id. `next_cursor` comes from the backend scan, before the
+          hooks run. So a hook that reorders, adds, or removes results does
+          not change it.
 
         Args:
             query: Optional `MemoryQuery` or text query string.
@@ -1013,8 +1017,9 @@ class Memory:
                 results after it.
 
         Returns:
-            Search results with decoded blocks, in search order. Genie decodes
-            a result only after the policy and scope filters keep it.
+            A `SearchPage` with the visible results, in search order, and the
+            `next_cursor` of the next page. Genie decodes a result only after
+            the policy and scope filters keep it.
 
         Raises:
             AccessDenied: If the principal cannot search or traverse from the
@@ -1053,7 +1058,7 @@ class Memory:
         after: SearchCursor | None = None,
         boundary: Callable[[HookContext, MemoryQuery], None] | None = None,
         keep: Callable[[MemoryQuery, str], bool] | None = None,
-    ) -> list[SearchResult]:
+    ) -> SearchPage:
         """Run `search` with the optional checks of a `MemoryHandle`.
 
         Args:
@@ -1076,7 +1081,7 @@ class Memory:
                 gives one that keeps results inside the handle root.
 
         Returns:
-            The visible results.
+            A `SearchPage` with the visible results and the next cursor.
         """
 
         with self._operation(HookOperation.SEARCH) as context:
@@ -1113,9 +1118,10 @@ class Memory:
             # visible result, so the results hold the block that the check
             # read, not the copy from the search index.
             verdicts: dict[str, MemoryBlock | None] = {}
-            visible_results = self._collect_visible_results(memory_query, verdicts, keep)
+            visible_results, next_cursor = self._collect_visible_results(memory_query, verdicts, keep)
             # A hook that builds a new result drops `position`. Keep the index
-            # position of each block id, so the caller cursor stays correct.
+            # position of each block id, so the cursor of each result stays
+            # correct.
             positions = {result.block.id: result.cursor for result in visible_results}
             hooked_results = self.hooks.after_search(
                 context,
@@ -1123,14 +1129,17 @@ class Memory:
                 visible_results,
             )
             hooked_results = _restore_index_positions(hooked_results, positions)
-            return self._filter_visible_results(memory_query, hooked_results, verdicts, keep)
+            # The next cursor comes from the backend scan, before the hooks.
+            # So a hook that reorders, adds, or removes results cannot change
+            # where the next page starts.
+            return SearchPage(tuple(self._filter_visible_results(memory_query, hooked_results, verdicts, keep)), next_cursor=next_cursor)
 
     def _collect_visible_results(
         self,
         query: MemoryQuery,
         verdicts: dict[str, MemoryBlock | None],
         keep: Callable[[MemoryQuery, str], bool] | None,
-    ) -> list[SearchResult]:
+    ) -> tuple[list[SearchResult], SearchCursor | None]:
         """Get backend pages until there are `query.limit` visible results.
 
         - **Filter before count:** the policy, scope, and `keep` checks run on
@@ -1141,8 +1150,15 @@ class Memory:
         - **Batch size:** the first page asks for `query.limit` results, and
           each next page asks for 2 times as many. So the number of backend
           calls grows with the log of the number of hidden matches.
-        - **End:** the loop stops at `query.limit` visible results, or when a
-          page is shorter than its batch size.
+        - **End:** the loop stops at `query.limit` visible results, when a
+          page is empty, or when a page is shorter than its batch size.
+        - **Next cursor:** the `cursor` of the last backend result that the
+          loop consumed. It is `None` only when the backend returned an empty
+          page, or with `limit=0`, because then no page is read. A page
+          shorter than its batch size ends the loop of this call. It does not
+          show that the backend has no more results, for example when a
+          backend returns fewer results than asked. So the next call asks the
+          backend again, and it gets an empty page with no cursor.
         - **No cap:** a cap would let hidden blocks change the result again.
         - **Duplicates:** a block that changes between 2 pages can move past
           the cursor and come back. Only its first result counts.
@@ -1166,7 +1182,7 @@ class Memory:
 
         Returns:
             At most `query.limit` visible results with decoded stored blocks,
-            in search order.
+            in search order, and the next cursor.
         """
 
         visible: list[SearchResult] = []
@@ -1175,6 +1191,8 @@ class Memory:
         batch = query.limit
         while len(visible) < query.limit:
             page = self.backend.search(replace(query, after=after, limit=batch))
+            if not page:
+                return visible, None
             for result in page:
                 block_id = result.block.id
                 if block_id in seen:
@@ -1184,12 +1202,14 @@ class Memory:
                 if stored is not None:
                     visible.append(replace(result, block=self._decode_block(stored), position=result.cursor))
                     if len(visible) == query.limit:
-                        break
-            if len(page) < batch:
-                break
+                        return visible, result.cursor
             after = page[-1].cursor
+            if len(page) < batch:
+                # A short page ends this call. Only an empty page shows that
+                # the backend has no more results, so the cursor stays.
+                return visible, after
             batch *= 2
-        return visible
+        return visible, None
 
     def require_access(self, operation: Operation | str, block_id: str | MemoryBlock) -> None:
         """Raise `AccessDenied` if this principal cannot perform an operation on a block.

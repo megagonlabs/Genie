@@ -84,7 +84,7 @@ def main() -> None:
 
     # A resolve is explicit and does not make the boundary wider. For each
     # ordinary operation, the mounted tree stays outside the subtree of the handle.
-    assert linked.search("retention", scope="subtree") == []
+    assert list(linked.search("retention", scope="subtree")) == []
     assert [block.id for block in linked.children(project)] == [task.id]
     try:
         linked.get(reference_note)

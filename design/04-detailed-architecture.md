@@ -360,12 +360,15 @@ order:
 5. **Filter** each result with `_visible_stored_block`. For each result that
    it keeps, **decode the stored block** and put it in the result in place of
    the backend copy. Put the `cursor` of the backend result in `position`.
-   Continue until there are `query.limit` visible results.
+   Continue until there are `query.limit` visible results. Keep the
+   `next_cursor`: the `cursor` of the last backend result that the scan
+   consumed, or `None` when the backend returned an empty page.
 6. **Run `after_search`**, then **restore positions** with
    `_restore_index_positions`, then **filter again** with the same verdict
    cache. The restore step gives the position of the same block id to each
    result that has no `position`. The second filter only removes results. It
-   does not change them.
+   does not change them. Return a `SearchPage` with the filtered results and
+   the `next_cursor` from step 5.
 
 `_read_searchable_block` reads the stored block again by id. It checks
 `search`, then `read`, then scope membership:
@@ -398,9 +401,11 @@ order:
 - **Hooks keep the position.** `dataclasses.replace` keeps `position`. For a
   new `SearchResult` with no `position`, the restore step gives back the
   position of the same block id. It never replaces a `position` that a hook
-  sets, and it does not change `block`, `score`, or `reason`. A hook that
-  changes the order of the results still breaks paging with
-  `after=results[-1].cursor`.
+  sets, and it does not change `block`, `score`, or `reason`.
+- **The next cursor does not depend on the hooks.** `next_cursor` comes from
+  the backend scan in step 5. So a hook that reorders, adds, or removes
+  results does not change where the next page starts, and a page that a hook
+  empties still has a `next_cursor`. `None` is the only end signal.
 - **Hooks can change the content.** `after_search` gets the stored blocks,
   and its return value goes to the caller after the second filter. So a
   trusted hook can redact a value. The second filter checks the id of each
@@ -418,7 +423,12 @@ order:
   hidden matches.
 - **End:** the loop stops at `query.limit` visible results, or when a page is
   shorter than its size. There is no cap, because a cap would let hidden
-  blocks change the results again.
+  blocks change the results again. `next_cursor` is the `cursor` of the last
+  backend result that the loop consumed. It is `None` only when the backend
+  returned an empty page, or with `limit=0`. A short page ends the loop of
+  one call, but it does not show that the backend has no more results, for
+  example when a backend returns fewer results than asked. So the next call
+  asks the backend again, and it gets an empty page with no cursor.
 - **Duplicates:** a block that changes between 2 pages can move past the
   cursor and come back. Only its first result counts.
 - **A backend that ignores the cursor** still lets the loop end, because each

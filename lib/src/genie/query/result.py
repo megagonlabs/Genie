@@ -1,10 +1,12 @@
-"""Search result and search cursor models."""
+"""Search result, search cursor, and search page models."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import overload
 
 from genie.memory._validation import require_non_empty_str
 from genie.memory.block import MemoryBlock
@@ -117,3 +119,61 @@ class SearchResult:
         if self.position is not None:
             return self.position
         return SearchCursor(score=self.score, created_at=self.block.created_at, block_id=self.block.id)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPage(Sequence[SearchResult]):
+    """One page of search results, with the position of the next page.
+
+    - **A sequence:** `len`, an index, a slice, iteration, and `bool` work on
+      the results. `page[-1]` is the last result.
+    - **`next_cursor`:** `Memory.search` sets it from the backend scan, before
+      the `after_search` hooks run. So a hook that reorders, adds, or removes
+      results does not change it. `None` means the backend has no more
+      results after this page.
+    - **Paging:** give `next_cursor` as `after`, and stop when it is `None`.
+      An empty page is not the end: a hook can remove each result of a page,
+      and a backend page can hold only blocks that the caller cannot see. The
+      last page of a loop is empty, because `next_cursor` is `None` only
+      after the backend returned no result.
+    - **Equality** compares `results` and `next_cursor`. So a page is not
+      equal to a `list`.
+
+    Attributes:
+        results: Results of this page, as a tuple, in the order that the
+            caller gets them.
+        next_cursor: Position of the next page, or `None` at the end.
+
+    Raises:
+        TypeError: If `results` holds a value that is not a `SearchResult`,
+            or `next_cursor` is not a `SearchCursor` or `None`.
+    """
+
+    results: tuple[SearchResult, ...]
+    next_cursor: SearchCursor | None = None
+
+    def __post_init__(self) -> None:
+        """Check the fields, and store `results` as a tuple."""
+
+        results = tuple(self.results)
+        if any(not isinstance(result, SearchResult) for result in results):
+            raise TypeError("SearchPage results must be SearchResult values.")
+        if self.next_cursor is not None and not isinstance(self.next_cursor, SearchCursor):
+            raise TypeError("SearchPage next_cursor must be a SearchCursor or None.")
+        object.__setattr__(self, "results", results)
+
+    @overload
+    def __getitem__(self, index: int) -> SearchResult: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[SearchResult, ...]: ...
+
+    def __getitem__(self, index: int | slice) -> SearchResult | tuple[SearchResult, ...]:
+        """Return one result, or a tuple of results for a slice."""
+
+        return self.results[index]
+
+    def __len__(self) -> int:
+        """Return the number of results on this page."""
+
+        return len(self.results)

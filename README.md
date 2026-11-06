@@ -67,7 +67,7 @@ class Agent:
         return "Saved."
 
     def recall(self, query: str) -> str:
-        results = self.memory.search(query)  # list[SearchResult]
+        results = self.memory.search(query)  # SearchPage, a sequence of SearchResult
         return "\n".join(f"- [{r.block.type}] {r.block.value}" for r in results)
 
 
@@ -95,7 +95,7 @@ except AccessDenied:
 - **`memory.get_handle(root=..., principal=...)`** returns a `MemoryHandle`. All operations through the handle act as that principal. The handle reaches only its root block and the blocks below the root.
 - **Two checks:** a handle operation succeeds only if the block is inside the handle root and the block policy allows the principal. Each check raises `AccessDenied` when it fails.
 - **Blocks that the agent creates:** a handle cannot set a policy (`allow_policy_override=False` by default). So a new block gets the `default_policy` of `Memory`, with the agent as its creator. In the example, `app` cannot read the observation. To let `app` read agent blocks, give `Memory` a `default_policy` such as `MemoryPolicy.owner_or(principals={"app"})`.
-- **`SearchResult`:** `search` returns a list of `SearchResult` values, higher `score` first. Each one has the matching `block`, a `score` that the backend defines, and an optional `reason` text.
+- **`SearchResult`:** `search` returns a `SearchPage`, a read-only sequence of `SearchResult` values, higher `score` first. Each one has the matching `block`, a `score` that the backend defines, and an optional `reason` text. The `next_cursor` of the page gives the next page, and it is `None` at the end.
 - **Trust boundary:** keep the full `Memory` object and the backend inside trusted application code. Give agents handles rooted at one block, or tools that you write yourself.
 
 ## Storage

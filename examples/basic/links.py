@@ -62,7 +62,7 @@ def main() -> None:
     assert discovered_mounts == [mount]
     assert mounted_root is not None
     assert mounted_root.id == remote_root.id
-    assert subtree == []
+    assert list(subtree) == []
     memory.delete(requirement)
     assert memory.get(remote_note) is not None
     print("deleting the mount source deletes the mounted memory: no")

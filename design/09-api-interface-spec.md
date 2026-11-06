@@ -217,23 +217,27 @@ search(query=None, *, text=None, root=None, scope=None, types=None, filters=None
   is `global`, `limit` is `20`, and the search has no `types` and no
   `filters`.
 - **Text given 2 times:** a string `query` with `text` raises `TypeError`.
-- **Returns** `list[SearchResult]`. Each result is inside the scope, and the
-  principal can `search` and `read` it.
+- **Returns** a `SearchPage`: a read-only sequence of `SearchResult` values
+  with a `next_cursor`. Each result is inside the scope, and the principal
+  can `search` and `read` it.
 - **`limit` counts visible results.** Hidden results do not use part of it.
   If many matching blocks are hidden, `Memory` calls the backend again. There
   is no cap.
 - **Order:** `score` from high to low, then `created_at` from old to new, then
   block id.
-- **Next page:** `after=results[-1].cursor`, as a keyword or in a
+- **Next page:** `after=page.next_cursor`, as a keyword or in a
   `MemoryQuery`. So `search(query, after=cursor)` returns the next page of
-  `query`.
-- **The cursor follows the backend order.** Each result holds the stored
-  block, and its `position` is the place of the backend result. So a search
-  index whose copy has a different `created_at` does not make a page lose
-  results.
+  `query`. `None` means the backend returned no more results. An empty page
+  is not the end, and the last page of a loop is empty.
+- **The cursor follows the backend order.** `next_cursor` is the position of
+  the last backend result that the search consumed. Each result holds the
+  stored block, and its `position` is the place of the backend result. So a
+  search index whose copy has a different `created_at` does not make a page
+  lose results.
 - **`after_search` hooks:** a result that a hook returns with no `position`
-  gets the position of the same block id. A hook that changes the order of
-  the results breaks paging with `after=results[-1].cursor`.
+  gets the position of the same block id. `next_cursor` comes from the
+  backend scan, before the hooks run. So a hook that reorders, adds, or
+  removes results does not change it.
 - **Genie filters before it decodes.** It decodes only the results that the
   policy and scope filters keep. So a hidden block with a content type that
   this `Memory` cannot decode does not change the results.
@@ -350,6 +354,23 @@ MemoryQuery(text=None, root_id=None, scope=None, types=(), filters=None, limit=2
 - **`normalize_filters(filters)`** returns the canonical form.
   **`matches_filters(block, filters)`** is the portable matcher that adapters
   reuse.
+
+### `SearchPage`
+
+```python
+SearchPage(results, next_cursor=None)
+```
+
+- **One page of `Memory.search` or `MemoryHandle.search`.** A read-only
+  sequence of `SearchResult` values: `len`, an index, a slice, iteration,
+  and `bool` work on it. `results` is a tuple.
+- **`next_cursor`:** the `SearchCursor` of the next page, or `None` at the
+  end. `Memory` sets it from the backend scan, before the `after_search`
+  hooks run.
+- **Checks:** a result that is not a `SearchResult`, or a `next_cursor` that
+  is not a `SearchCursor` or `None`, raises `TypeError`.
+- **Equality** compares the results and `next_cursor`. So a page is not
+  equal to a `list`.
 
 ### `SearchResult`
 

@@ -431,7 +431,7 @@ def test_put_rejects_invalid_type_id_and_parent(
     with pytest.raises(error, match=message):
         memory.put(value="invalid", **arguments)
 
-    assert memory.search() == []
+    assert list(memory.search()) == []
 
 
 def test_block_references_must_be_blocks_or_non_empty_string_ids() -> None:
