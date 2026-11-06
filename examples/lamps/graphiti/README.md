@@ -195,7 +195,7 @@ The agent ingests 4 episodes. Then it reports on Alice:
 
 References: [Graphiti repository](https://github.com/getzep/graphiti), [adding
 episodes](https://help.getzep.com/graphiti/core-concepts/adding-episodes),
-[bi-temporal model](https://mintlify.wiki/getzep/graphiti/concepts/temporal-model),
+[bi-temporal model (Zep paper)](https://arxiv.org/abs/2501.13956),
 and [communities](https://help.getzep.com/graphiti/core-concepts/communities).
 
 The [lamp guide](../README.md) describes the shared agent-demo output format.
