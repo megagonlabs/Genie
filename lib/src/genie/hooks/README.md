@@ -98,6 +98,7 @@ class MetricsHook(MemoryHook):
 
 - **A terminal event names the operation and the principal, not the target block.** `on_denied` gives the subject of a refusal, and the paired callbacks give the subject of successful work.
 - **An operation that is rejected before it starts has no terminal event.** So a call above `max_depth` raises `HookRecursionError` without one.
+- **A `MemoryHandle` checks its arguments before the `Memory` operation starts.** So a bad argument to a handle raises `TypeError` or `ValueError` with no terminal event. The same bad argument to `Memory` ends with an `error` terminal event.
 
 ## Refusals
 
