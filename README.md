@@ -277,11 +277,11 @@ While Megagon makes commercially reasonable efforts to ensure that citations in 
 document are complete and accurate, errors may occur. If you see any error or omission, please
 help us improve this document by sending information to contact_oss@megagon.ai.
 
-### Datasets
+## Datasets
 
 Genie uses no datasets. The benchmark suite and the examples make their own data.
 
-### Open Source Software (OSS) Components
+## Open Source Software (OSS) Components
 
 All OSS components used within the product are listed below (including their copyright holders and the license information).
 
