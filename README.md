@@ -276,3 +276,22 @@ terms or the lack of any warranty herein.
 While Megagon makes commercially reasonable efforts to ensure that citations in this
 document are complete and accurate, errors may occur. If you see any error or omission, please
 help us improve this document by sending information to contact_oss@megagon.ai.
+
+### Datasets
+
+Genie uses no datasets. The benchmark suite and the examples make their own data.
+
+### Open Source Software (OSS) Components
+
+All OSS components used within the product are listed below (including their copyright holders and the license information).
+
+For OSS components having different portions released under different licenses, please refer to the included Upstream link(s) specified for each of the respective OSS components for identifications of code files released under the identified licenses.
+
+The core package has no third-party runtime dependencies. Each component below is a database driver for one backend adapter. Only the `mongodb`, `neo4j`, `postgres`, or `redis` extra installs it.
+
+| ID  | OSS Component Name | Modified | Copyright Holder | Upstream Link | License  |
+|-----|----------------------------------|----------|------------------|-----------------------------------------------------------------------------------------------------------|--------------------|
+| 1 | neo4j | No | Neo4j Sweden AB | [link](https://github.com/neo4j/neo4j-python-driver) | Apache Software License (some files: Python Software Foundation License) |
+| 2 | psycopg (with psycopg-binary) | No | The Psycopg Team | [link](https://github.com/psycopg/psycopg) | GNU Lesser General Public License v3 (LGPL) |
+| 3 | pymongo (includes bson) | No | MongoDB, Inc. | [link](https://github.com/mongodb/mongo-python-driver) | Apache Software License |
+| 4 | redis | No | Redis, Inc. | [link](https://github.com/redis/redis-py) | MIT License |
