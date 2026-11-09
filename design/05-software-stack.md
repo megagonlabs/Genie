@@ -46,11 +46,12 @@ also lists the ones that Genie leaves out on purpose.
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| Build backend | `setuptools.build_meta`, `setuptools>=77` | 77 is the first release that reads `license-files` from `[project]` |
+| Build backend | `setuptools.build_meta`, `setuptools>=77` | 77 is the first release that reads `license` (an SPDX expression) and `license-files` from `[project]` |
 | Source root | `lib/src` | `[tool.setuptools.packages.find] where = ["lib/src"]`, so only `genie*` packages ship |
 | Package data | `py.typed`, `**/README.md` | The installed package includes the module guides |
 | Version | `1.0.0` |  |
 | License file | `LICENSE` | `license-files` names it. It holds the BSD 3-Clause text for the `1.0.0` release |
+| License expression | `LicenseRef-Megagon-BSD-3-Clause-Attribution` | `license` gives it. The text adds an attribution clause (clause 4) to BSD 3-Clause, so the SPDX identifier `BSD-3-Clause` does not match it. The wheel `METADATA` has it as `License-Expression:` |
 
 - **One `pyproject.toml` at the repository root.** `lib/` has no config of its own.
 - **`requirements.txt` declares nothing.** It is a note that refers to the `dev` extra.

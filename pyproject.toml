@@ -20,6 +20,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = []
+license = "LicenseRef-Megagon-BSD-3-Clause-Attribution"
 license-files = ["LICENSE"]
 
 [project.optional-dependencies]
